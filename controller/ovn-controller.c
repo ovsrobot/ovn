@@ -269,7 +269,7 @@ get_br_int(struct ovsdb_idl_txn *ovs_idl_txn,
 }
 
 static const char *
-get_chassis_id(const struct ovsrec_open_vswitch_table *ovs_table)
+get_ovs_chassis_id(const struct ovsrec_open_vswitch_table *ovs_table)
 {
     const struct ovsrec_open_vswitch *cfg
         = ovsrec_open_vswitch_table_first(ovs_table);
@@ -698,7 +698,7 @@ main(int argc, char *argv[])
                              ovsrec_bridge_table_get(ovs_idl_loop.idl),
                              ovsrec_open_vswitch_table_get(ovs_idl_loop.idl));
             const char *chassis_id
-                = get_chassis_id(ovsrec_open_vswitch_table_get(
+                = get_ovs_chassis_id(ovsrec_open_vswitch_table_get(
                                      ovs_idl_loop.idl));
 
             const struct sbrec_chassis *chassis = NULL;
@@ -706,6 +706,7 @@ main(int argc, char *argv[])
                 chassis = chassis_run(
                     ovnsb_idl_txn, sbrec_chassis_by_name,
                     ovsrec_open_vswitch_table_get(ovs_idl_loop.idl),
+                    sbrec_chassis_table_get(ovnsb_idl_loop.idl),
                     chassis_id, br_int, &transport_zones);
                 encaps_run(
                     ovs_idl_txn,
@@ -927,7 +928,7 @@ main(int argc, char *argv[])
             const struct ovsrec_bridge *br_int = get_br_int(ovs_idl_txn,
                                                             bridge_table,
                                                             ovs_table);
-            const char *chassis_id = get_chassis_id(ovs_table);
+            const char *chassis_id = chassis_get_id();
             const struct sbrec_chassis *chassis
                 = (chassis_id
                    ? chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id)
