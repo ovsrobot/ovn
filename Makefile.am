@@ -486,7 +486,7 @@ uninstall-local: $(UNINSTALL_LOCAL)
 
 modules_install:
 if LINUX_ENABLED
-	cd datapath/linux && $(MAKE) modules_install
+	cd ovs/datapath/linux && $(MAKE) modules_install
 endif
 
 dist-docs:
