@@ -5815,10 +5815,32 @@ build_static_route_flow(struct hmap *lflows, struct ovn_datapath *od,
             if (is_ipv4) {
                 if (out_port->lrp_networks.n_ipv4_addrs) {
                     lrp_addr_s = out_port->lrp_networks.ipv4_addrs[0].addr_s;
+
+                    /* Explicitly allow ARP replies for the next-hop. */
+                    struct ds match;
+                    ds_init(&match);
+                    ds_put_format(&match, "inport == %s && arp.op == 2 && "
+                                  "arp.spa == %s", out_port->json_key,
+                                  route->nexthop);
+                    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 90,
+                                  ds_cstr(&match),
+                                  "put_arp(inport, arp.spa, arp.sha);");
+                    ds_destroy(&match);
                 }
             } else {
                 if (out_port->lrp_networks.n_ipv6_addrs) {
                     lrp_addr_s = out_port->lrp_networks.ipv6_addrs[0].addr_s;
+
+                    /* Explicitly allow NA for the next-hop. */
+                    struct ds match;
+                    ds_init(&match);
+                    ds_put_format(&match, "inport == %s && nd_na && "
+                                  "ip6.src == %s", out_port->json_key,
+                                  route->nexthop);
+                    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 90,
+                                  ds_cstr(&match),
+                                  "put_nd(inport, nd.target, nd.tll);");
+                    ds_destroy(&match);
                 }
             }
         }
@@ -6159,10 +6181,6 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                       "ip4.dst == 0.0.0.0/8",
                       "drop;");
 
-        /* ARP reply handling.  Use ARP replies to populate the logical
-         * router's ARP table. */
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 90, "arp.op == 2",
-                      "put_arp(inport, arp.spa, arp.sha);");
 
         /* Drop Ethernet local broadcast.  By definition this traffic should
          * not be forwarded.*/
@@ -6175,16 +6193,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 30,
                       ds_cstr(&match), "drop;");
 
-        /* ND advertisement handling.  Use advertisements to populate
-         * the logical router's ARP/ND table. */
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 90, "nd_na",
-                      "put_nd(inport, nd.target, nd.tll);");
 
-        /* Lean from neighbor solicitations that were not directed at
-         * us.  (A priority-90 flow will respond to requests to us and
-         * learn the sender's mac address. */
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 80, "nd_ns",
-                      "put_nd(inport, ip6.src, nd.sll);");
 
         /* Pass other traffic not already handled to the next table for
          * routing. */
@@ -6320,14 +6329,33 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                           ds_cstr(&match), ds_cstr(&actions));
         }
 
+        /* ARP reply handling. Use ARP replies to populate the logical
+         * router's ARP table. */
+        for (int i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+            ds_clear(&match);
+            ds_put_format(&match, "inport == %s && arp.spa == %s/%u && "
+                          "arp.tpa == %s/%u && arp.op == 2",
+                          op->json_key,
+                          op->lrp_networks.ipv4_addrs[i].network_s,
+                          op->lrp_networks.ipv4_addrs[i].plen,
+                          op->lrp_networks.ipv4_addrs[i].network_s,
+                          op->lrp_networks.ipv4_addrs[i].plen);
+            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
+                          ds_cstr(&match),
+                          "put_arp(inport, arp.spa, arp.sha);");
+        }
+
         /* Learn from ARP requests that were not directed at us. A typical
          * use case is GARP request handling.  (A priority-90 flow will
          * respond to request to us and learn the sender's mac address.) */
         for (int i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
             ds_clear(&match);
             ds_put_format(&match,
-                          "inport == %s && arp.spa == %s/%u && arp.op == 1",
+                          "inport == %s && arp.spa == %s/%u && "
+                          "arp.tpa == %s/%u && arp.op == 1",
                           op->json_key,
+                          op->lrp_networks.ipv4_addrs[i].network_s,
+                          op->lrp_networks.ipv4_addrs[i].plen,
                           op->lrp_networks.ipv4_addrs[i].network_s,
                           op->lrp_networks.ipv4_addrs[i].plen);
             if (op->od->l3dgw_port && op == op->od->l3dgw_port
@@ -6667,6 +6695,45 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                           op->lrp_networks.ea_s);
             ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
                           ds_cstr(&match), ds_cstr(&actions));
+        }
+
+        /* NA reply handling. Use NA replies to populate the logical
+         * router's neighbor table. */
+        for (int i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
+            ds_clear(&match);
+            ds_put_format(&match, "inport == %s && nd_na && "
+                          "nd.target == %s/%u && ip6.src == %s/%u",
+                          op->json_key,
+                          op->lrp_networks.ipv6_addrs[i].network_s,
+                          op->lrp_networks.ipv6_addrs[i].plen,
+                          op->lrp_networks.ipv6_addrs[i].network_s,
+                          op->lrp_networks.ipv6_addrs[i].plen);
+            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
+                          ds_cstr(&match),
+                          "put_nd(inport, nd.target, nd.tll);");
+        }
+
+        /* Learn from ND requests that were not directed at us.
+         * (A priority-90 flow will respond to request to us and learn the
+         * sender's mac address.) */
+        for (int i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
+            ds_clear(&match);
+            ds_put_format(&match,
+                          "inport == %s && nd_ns && ip6.src == %s/%u && "
+                          "ip6.dst == %s/%u",
+                          op->json_key,
+                          op->lrp_networks.ipv6_addrs[i].network_s,
+                          op->lrp_networks.ipv6_addrs[i].plen,
+                          op->lrp_networks.ipv6_addrs[i].network_s,
+                          op->lrp_networks.ipv6_addrs[i].plen);
+            if (op->od->l3dgw_port && op == op->od->l3dgw_port
+                && op->od->l3redirect_port) {
+                ds_put_format(&match, " && is_chassis_resident(%s)",
+                              op->od->l3redirect_port->json_key);
+            }
+            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 80,
+                          ds_cstr(&match),
+                          "put_nd(inport, ip6.src, nd.sll);");
         }
 
         /* UDP/TCP port unreachable */
