@@ -20,8 +20,11 @@ struct ovsdb_idl;
 
 struct sbrec_datapath_binding;
 
-#define OVN_MCAST_FLOOD_TUNNEL_KEY   65535
-#define OVN_MCAST_UNKNOWN_TUNNEL_KEY (OVN_MCAST_FLOOD_TUNNEL_KEY - 1)
+#define OVN_MCAST_FLOOD_TUNNEL_KEY 65535
+#define OVN_MCAST_MROUTER_FLOOD_TUNNEL_KEY \
+    (OVN_MCAST_FLOOD_TUNNEL_KEY - 1)
+#define OVN_MCAST_UNKNOWN_TUNNEL_KEY \
+    (OVN_MCAST_MROUTER_FLOOD_TUNNEL_KEY - 1)
 
 struct ovsdb_idl_index *mcast_group_index_create(struct ovsdb_idl *);
 const struct sbrec_multicast_group *
