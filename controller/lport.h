@@ -48,5 +48,10 @@ const struct sbrec_datapath_binding *datapath_lookup_by_key(
 const struct sbrec_multicast_group *mcgroup_lookup_by_dp_name(
     struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath,
     const struct sbrec_datapath_binding *, const char *name);
+bool
+lport_is_chassis_resident(struct ovsdb_idl_index *sbrec_port_binding_by_name,
+                          const struct sbrec_chassis *chassis,
+                          const struct sset *active_tunnels,
+                          const char *port_name);
 
 #endif /* controller/lport.h */
