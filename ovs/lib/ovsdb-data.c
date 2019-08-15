@@ -1691,6 +1691,17 @@ ovsdb_datum_from_smap(struct ovsdb_datum *datum, const struct smap *smap)
     ovsdb_datum_sort_unique(datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
 }
 
+/* Initializes smap from a string-to-string datum map. */
+void
+ovsdb_datum_to_smap(struct smap *smap, const struct ovsdb_datum *datum)
+{
+    size_t i = 0;
+    for (; i < datum->n; i++) {
+        smap_add(smap, datum->keys[i].string,  datum->values[i].string);
+    }
+    ovs_assert(i == smap_count(smap));
+}
+
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 ovsdb_datum_convert(struct ovsdb_datum *dst,
                     const struct ovsdb_type *dst_type,
