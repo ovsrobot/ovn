@@ -27,7 +27,15 @@ EXTRA_DIST += \
     utilities/ovn-nbctl.8.xml \
     utilities/ovn-trace.8.xml \
     utilities/ovn-detrace.in \
-    utilities/ovndb-servers.ocf
+    utilities/ovndb-servers.ocf \
+    utilities/docker/Makefile \
+    utilities/docker/start-ovn \
+    utilities/docker/create_ovn_dbs.sh \
+    utilities/docker/ovn_default_nb_port \
+    utilities/docker/ovn_default_sb_port \
+    utilities/docker/ovn_default_northd_host \
+    utilities/docker/debian/Dockerfile \
+    utilities/docker/debian/build.sh
 
 CLEANFILES += \
     utilities/ovn-ctl.8 \
