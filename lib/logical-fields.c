@@ -57,6 +57,22 @@ add_ct_bit(const char *name, int index, struct shash *symtab)
     free(expansion);
 }
 
+static void
+ovn_init_ovnfields(void)
+{
+    static bool initialized = false;
+
+    if (!initialized) {
+        shash_init(&ovnfield_by_name);
+        for (int i = 0; i < OVN_FIELD_N_IDS; i++) {
+            const struct ovn_field *of = &ovn_fields[i];
+            ovs_assert(of->id == i); /* Fields must be in the enum order. */
+            shash_add_once(&ovnfield_by_name, of->name, of);
+        }
+        initialized = true;
+    }
+}
+
 void
 ovn_init_symtab(struct shash *symtab)
 {
@@ -220,12 +236,8 @@ ovn_init_symtab(struct shash *symtab)
     expr_symtab_add_field(symtab, "sctp.src", MFF_SCTP_SRC, "sctp", false);
     expr_symtab_add_field(symtab, "sctp.dst", MFF_SCTP_DST, "sctp", false);
 
-    shash_init(&ovnfield_by_name);
-    for (int i = 0; i < OVN_FIELD_N_IDS; i++) {
-        const struct ovn_field *of = &ovn_fields[i];
-        ovs_assert(of->id == i); /* Fields must be in the enum order. */
-        shash_add_once(&ovnfield_by_name, of->name, of);
-    }
+    ovn_init_ovnfields();
+
     expr_symtab_add_ovn_field(symtab, "icmp4.frag_mtu", OVN_ICMP4_FRAG_MTU);
 }
 
