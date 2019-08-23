@@ -266,10 +266,12 @@ put_replace_router_port_mac_flows(const struct
     }
 
     for (int i = 0; i < ld->n_peer_ports; i++) {
-        const struct sbrec_port_binding *rport_binding = ld->peer_ports[i];
+        const struct sbrec_port_binding *rport_binding;
         struct eth_addr router_port_mac;
         struct match match;
         struct ofpact_mac *replace_mac;
+
+        rport_binding = ld->peer_ports[i].remote;
 
         /* Table 65, priority 150.
          * =======================
