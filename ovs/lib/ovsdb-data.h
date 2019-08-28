@@ -191,6 +191,8 @@ void ovsdb_datum_to_bare(const struct ovsdb_datum *,
                          const struct ovsdb_type *, struct ds *);
 
 void ovsdb_datum_from_smap(struct ovsdb_datum *, const struct smap *);
+void ovsdb_datum_to_smap(struct smap *smap, const struct ovsdb_datum *datum);
+
 
 struct ovsdb_error *ovsdb_datum_convert(struct ovsdb_datum *dst,
                                         const struct ovsdb_type *dst_type,
