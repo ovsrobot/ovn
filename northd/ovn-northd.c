@@ -145,19 +145,21 @@ enum ovn_stage {
                                                                       \
     /* Logical router ingress stages. */                              \
     PIPELINE_STAGE(ROUTER, IN,  ADMISSION,      0, "lr_in_admission")    \
-    PIPELINE_STAGE(ROUTER, IN,  IP_INPUT,       1, "lr_in_ip_input")     \
-    PIPELINE_STAGE(ROUTER, IN,  DEFRAG,         2, "lr_in_defrag")       \
-    PIPELINE_STAGE(ROUTER, IN,  UNSNAT,         3, "lr_in_unsnat")       \
-    PIPELINE_STAGE(ROUTER, IN,  DNAT,           4, "lr_in_dnat")         \
-    PIPELINE_STAGE(ROUTER, IN,  ND_RA_OPTIONS,  5, "lr_in_nd_ra_options") \
-    PIPELINE_STAGE(ROUTER, IN,  ND_RA_RESPONSE, 6, "lr_in_nd_ra_response") \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,     7, "lr_in_ip_routing")   \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY,         8, "lr_in_policy")       \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,    9, "lr_in_arp_resolve")  \
-    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN   , 10, "lr_in_chk_pkt_len")   \
-    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,    11,"lr_in_larger_pkts")   \
-    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,    12, "lr_in_gw_redirect")  \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,    13, "lr_in_arp_request")  \
+    PIPELINE_STAGE(ROUTER, IN,  LOOKUP_ARP,     1, "lr_in_lookup_arp") \
+    PIPELINE_STAGE(ROUTER, IN,  PUT_ARP,        2, "lr_in_put_arp") \
+    PIPELINE_STAGE(ROUTER, IN,  IP_INPUT,       3, "lr_in_ip_input")     \
+    PIPELINE_STAGE(ROUTER, IN,  DEFRAG,         4, "lr_in_defrag")       \
+    PIPELINE_STAGE(ROUTER, IN,  UNSNAT,         5, "lr_in_unsnat")       \
+    PIPELINE_STAGE(ROUTER, IN,  DNAT,           6, "lr_in_dnat")         \
+    PIPELINE_STAGE(ROUTER, IN,  ND_RA_OPTIONS,  7, "lr_in_nd_ra_options") \
+    PIPELINE_STAGE(ROUTER, IN,  ND_RA_RESPONSE, 8, "lr_in_nd_ra_response") \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,     9, "lr_in_ip_routing")   \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY,         10, "lr_in_policy")       \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,    11, "lr_in_arp_resolve")  \
+    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN   , 12, "lr_in_chk_pkt_len")   \
+    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,    13,"lr_in_larger_pkts")   \
+    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,    14, "lr_in_gw_redirect")  \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,    15, "lr_in_arp_request")  \
                                                                       \
     /* Logical router egress stages. */                               \
     PIPELINE_STAGE(ROUTER, OUT, UNDNAT,    0, "lr_out_undnat")        \
@@ -196,6 +198,7 @@ enum ovn_stage {
 #define REGBIT_DISTRIBUTED_NAT  "reg9[2]"
 /* Register to store the result of check_pkt_larger action. */
 #define REGBIT_PKT_LARGER        "reg9[3]"
+#define REGBIT_LOOKUP_ARP_RESULT "reg9[4]"
 
 /* Returns an "enum ovn_stage" built from the arguments. */
 static enum ovn_stage
@@ -6375,7 +6378,105 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                       ds_cstr(&match), "next;");
     }
 
-    /* Logical router ingress table 1: IP Input. */
+    /* Logical router ingress table 1: LOOKUP_ARP and table 2: PUT_ARP. */
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        if (!od->nbr) {
+            continue;
+        }
+
+        /* Learn from ARP requests and ARP replies. A typical
+         * use case is GARP request handling.
+         * Table LOOKUP_ARP does a lookup for the (arp.spa, arp.sha)
+         * in the mac binding table using the 'lookup_arp' action.
+         * If it is present, then this action stores the mac in the eth.dst
+         * of the packet. Before calling 'lookup_arp' we store
+         * eth.dst in xxreg1. After 'lookup_arp' action is applied
+         * we store the searched mac - eth.dst in xxreg0 and restore
+         * eth.dst to its original value.
+         *
+         * Table PUT_ARP learns the mac using the action - 'put_arp'
+         * only if xxreg0 is 00:00:00:00:00:00. There is no need to learn
+         * the mac otherwise.
+         *
+         * The same thing will be done for IPv6 ND/NS packets.
+         * */
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_LOOKUP_ARP, 100, "arp",
+                      REGBIT_LOOKUP_ARP_RESULT" = "
+                      "lookup_arp(inport, arp.spa, arp.sha); next;");
+
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_PUT_ARP, 100,
+                      "arp.op == 2 && "REGBIT_LOOKUP_ARP_RESULT" == 0",
+                      "put_arp(inport, arp.spa, arp.sha);");
+
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_PUT_ARP, 90, "arp.op == 2",
+                      "drop;");
+
+        /* IPv6 ND/NS handling. */
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_LOOKUP_ARP, 100, "nd_na",
+                      REGBIT_LOOKUP_ARP_RESULT" = "
+                      "lookup_nd(inport, nd.target, nd.tll); next;");
+
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_LOOKUP_ARP, 100, "nd_ns",
+                      REGBIT_LOOKUP_ARP_RESULT" = "
+                      "lookup_nd(inport, ip6.src, nd.sll); next;");
+
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_PUT_ARP, 100,
+                      "nd_na && "REGBIT_LOOKUP_ARP_RESULT" == 0",
+                      "put_nd(inport, nd.target, nd.tll);");
+
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_PUT_ARP, 100,
+                      "nd_ns && "REGBIT_LOOKUP_ARP_RESULT" == 0",
+                      "put_nd(inport, ip6.src, nd.sll); next;");
+
+        /* Pass other traffic not already handled to the next table for
+         * routing. */
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_LOOKUP_ARP, 0, "1", "next;");
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_PUT_ARP, 0, "1", "next;");
+    }
+
+    HMAP_FOR_EACH (op, key_node, ports) {
+        if (!op->nbrp) {
+            continue;
+        }
+
+        for (int i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+            ds_clear(&match);
+            ds_put_format(&match,
+                          "inport == %s && arp.spa == %s/%u && arp.tpa == %s"
+                          " && arp.op == 1 && "
+                          REGBIT_LOOKUP_ARP_RESULT" == 0",
+                          op->json_key,
+                          op->lrp_networks.ipv4_addrs[i].network_s,
+                          op->lrp_networks.ipv4_addrs[i].plen,
+                          op->lrp_networks.ipv4_addrs[i].addr_s);
+            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_PUT_ARP, 100,
+                          ds_cstr(&match),
+                          "put_arp(inport, arp.spa, arp.sha); next; ");
+        }
+
+        /* Learn from ARP requests that were not directed at us. A typical
+         * use case is GARP request handling.  (A priority-90 flow will
+         * respond to request to us and learn the sender's mac address.) */
+        for (int i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+            ds_clear(&match);
+            ds_put_format(&match,
+                          "inport == %s && arp.spa == %s/%u && arp.op == 1 && "
+                          REGBIT_LOOKUP_ARP_RESULT" == 0",
+                          op->json_key,
+                          op->lrp_networks.ipv4_addrs[i].network_s,
+                          op->lrp_networks.ipv4_addrs[i].plen);
+            if (op->od->l3dgw_port && op == op->od->l3dgw_port
+                && op->od->l3redirect_port) {
+                ds_put_format(&match, " && is_chassis_resident(%s)",
+                              op->od->l3redirect_port->json_key);
+            }
+            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_PUT_ARP, 90,
+                          ds_cstr(&match),
+                          "put_arp(inport, arp.spa, arp.sha);");
+        }
+    }
+
+    /* Logical router ingress table 3: IP Input. */
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbr) {
             continue;
@@ -6397,11 +6498,6 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 95, "ip4.mcast",
                       od->mcast_info.rtr.relay ? "next;" : "drop;");
 
-        /* ARP reply handling.  Use ARP replies to populate the logical
-         * router's ARP table. */
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 90, "arp.op == 2",
-                      "put_arp(inport, arp.spa, arp.sha);");
-
         /* Drop Ethernet local broadcast.  By definition this traffic should
          * not be forwarded.*/
         ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 50,
@@ -6413,23 +6509,12 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 30,
                       ds_cstr(&match), "drop;");
 
-        /* ND advertisement handling.  Use advertisements to populate
-         * the logical router's ARP/ND table. */
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 90, "nd_na",
-                      "put_nd(inport, nd.target, nd.tll);");
-
-        /* Lean from neighbor solicitations that were not directed at
-         * us.  (A priority-90 flow will respond to requests to us and
-         * learn the sender's mac address. */
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 80, "nd_ns",
-                      "put_nd(inport, ip6.src, nd.sll);");
-
         /* Pass other traffic not already handled to the next table for
          * routing. */
         ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 0, "1", "next;");
     }
 
-    /* Logical router ingress table 1: IP Input for IPv4. */
+    /* Logical router ingress table 4: IP Input for IPv4. */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbrp) {
             continue;
@@ -6539,7 +6624,6 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
 
             ds_clear(&actions);
             ds_put_format(&actions,
-                "put_arp(inport, arp.spa, arp.sha); "
                 "eth.dst = eth.src; "
                 "eth.src = %s; "
                 "arp.op = 2; /* ARP reply */ "
@@ -6556,62 +6640,6 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                 op->json_key);
             ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
                           ds_cstr(&match), ds_cstr(&actions));
-        }
-
-        /* Learn from ARP requests that were not directed at us. A typical
-         * use case is GARP request handling.  (A priority-90 flow will
-         * respond to request to us and learn the sender's mac address.) */
-        for (int i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
-            ds_clear(&match);
-            ds_put_format(&match,
-                          "inport == %s && arp.spa == %s/%u && arp.op == 1",
-                          op->json_key,
-                          op->lrp_networks.ipv4_addrs[i].network_s,
-                          op->lrp_networks.ipv4_addrs[i].plen);
-            if (op->od->l3dgw_port && op == op->od->l3dgw_port
-                && op->od->l3redirect_port) {
-                ds_put_format(&match, " && is_chassis_resident(%s)",
-                              op->od->l3redirect_port->json_key);
-            }
-            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 80,
-                          ds_cstr(&match),
-                          "put_arp(inport, arp.spa, arp.sha);");
-
-        }
-
-        /* Handle GARP reply packets received on a distributed router gateway
-         * port. GARP reply broadcast packets could be sent by external
-         * switches. We don't want them to be handled by all the
-         * ovn-controllers if they receive it. So add a priority-92 flow to
-         * apply the put_arp action on a redirect chassis and drop it on
-         * other chassis.
-         * Note that we are already adding a priority-90 logical flow in the
-         * table S_ROUTER_IN_IP_INPUT to apply the put_arp action if
-         * arp.op == 2.
-         * */
-        if (op->od->l3dgw_port && op == op->od->l3dgw_port
-                && op->od->l3redirect_port) {
-            for (int i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
-                ds_clear(&match);
-                ds_put_format(&match,
-                              "inport == %s && is_chassis_resident(%s) && "
-                              "eth.bcast && arp.op == 2 && arp.spa == %s/%u",
-                              op->json_key, op->od->l3redirect_port->json_key,
-                              op->lrp_networks.ipv4_addrs[i].network_s,
-                              op->lrp_networks.ipv4_addrs[i].plen);
-                ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 92,
-                              ds_cstr(&match),
-                              "put_arp(inport, arp.spa, arp.sha);");
-                ds_clear(&match);
-                ds_put_format(&match,
-                              "inport == %s && !is_chassis_resident(%s) && "
-                              "eth.bcast && arp.op == 2 && arp.spa == %s/%u",
-                              op->json_key, op->od->l3redirect_port->json_key,
-                              op->lrp_networks.ipv4_addrs[i].network_s,
-                              op->lrp_networks.ipv4_addrs[i].plen);
-                ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 92,
-                              ds_cstr(&match), "drop;");
-            }
         }
 
         /* A set to hold all load-balancer vips that need ARP responses. */
@@ -6924,7 +6952,6 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
 
             ds_clear(&actions);
             ds_put_format(&actions,
-                          "put_nd(inport, ip6.src, nd.sll); "
                           "nd_na_router { "
                           "eth.src = %s; "
                           "ip6.src = %s; "

@@ -40,6 +40,9 @@ enum ovn_controller_event {
 #define MFF_LOG_INPORT     MFF_REG14  /* Logical input port (32 bits). */
 #define MFF_LOG_OUTPORT    MFF_REG15  /* Logical output port (32 bits). */
 
+#define MFF_LOG_LOOKUP_MAC MFF_REG2 /* Register to store the result of
+                                     * lookup_mac action. */
+
 /* Logical registers.
  *
  * Make sure these don't overlap with the logical fields! */
