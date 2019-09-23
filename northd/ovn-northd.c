@@ -3904,6 +3904,108 @@ has_stateful_acl(struct ovn_datapath *od)
 }
 
 static void
+build_lswitch_port_sec(struct hmap *ports, struct hmap *datapaths,
+                       struct hmap *lflows)
+{
+    struct ds match = DS_EMPTY_INITIALIZER;
+    struct ds actions = DS_EMPTY_INITIALIZER;
+    struct ovn_datapath *od;
+    struct ovn_port *op;
+
+    HMAP_FOR_EACH (op, key_node, ports) {
+        if (!op->nbsp) {
+            continue;
+        }
+
+        if (lsp_is_external(op->nbsp)) {
+            continue;
+        }
+
+        ds_clear(&match);
+        ds_put_format(&match, "outport == %s", op->json_key);
+
+        /* Egress table 8: Egress port security - IP (priorities 90 and 80)
+         * if port security enabled.
+         *
+         * Egress table 9: Egress port security - L2 (priorities 50 and 150).
+         *
+         * Priority 50 rules implement port security for enabled logical port.
+         *
+         * Priority 150 rules drop packets to disabled logical ports, so that
+         * they don't even receive multicast or broadcast packets.
+         */
+        if (!lsp_is_enabled(op->nbsp)) {
+            ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_PORT_SEC_L2, 150,
+                          ds_cstr(&match), "drop;");
+            build_port_security_ip(P_OUT, op, lflows);
+            continue;
+        }
+
+        ds_clear(&actions);
+        if (!strcmp(op->nbsp->type, "localnet")) {
+            const char *queue_id = smap_get(&op->sb->options,
+                                            "qdisc_queue_id");
+            if (queue_id) {
+                ds_put_format(&actions, "set_queue(%s); ", queue_id);
+            }
+        }
+        ds_put_cstr(&actions, "output;");
+        build_port_security_l2("eth.dst", op->ps_addrs, op->n_ps_addrs,
+                               &match);
+        ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_PORT_SEC_L2, 50,
+                          ds_cstr(&match), ds_cstr(&actions));
+
+        ds_clear(&match);
+        ds_clear(&actions);
+
+        /* Logical switch ingress table 0: Ingress port security - L2
+         *  (priority 50).
+         *  Ingress table 1: Ingress port security - IP (priority 90 and 80)
+         *  Ingress table 2: Ingress port security - ND (priority 90 and 80)
+         */
+        ds_put_format(&match, "inport == %s", op->json_key);
+        build_port_security_l2("eth.src", op->ps_addrs, op->n_ps_addrs,
+                               &match);
+
+        const char *queue_id = smap_get(&op->sb->options, "qdisc_queue_id");
+        if (queue_id) {
+            ds_put_format(&actions, "set_queue(%s); ", queue_id);
+        }
+        ds_put_cstr(&actions, "next;");
+        ovn_lflow_add(lflows, op->od, S_SWITCH_IN_PORT_SEC_L2, 50,
+                      ds_cstr(&match), ds_cstr(&actions));
+
+        if (op->nbsp->n_port_security) {
+            build_port_security_ip(P_IN, op, lflows);
+            build_port_security_ip(P_OUT, op, lflows);
+            build_port_security_nd(op, lflows);
+        }
+    }
+
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        if (!od->nbs) {
+            continue;
+        }
+
+        /* Ingress table 1 and 2: Port security - IP and ND, by default
+         * goto next. (priority 0)
+         */
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_PORT_SEC_ND, 0, "1", "next;");
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_PORT_SEC_IP, 0, "1", "next;");
+
+        /* Egress tables 8: Egress port security - IP (priority 0)
+         * Egress table 9: Egress port security L2 - multicast/broadcast
+         *                 (priority 100). */
+        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PORT_SEC_IP, 0, "1", "next;");
+        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PORT_SEC_L2, 100, "eth.mcast",
+                      "output;");
+    }
+
+    ds_destroy(&match);
+    ds_destroy(&actions);
+}
+
+static void
 build_pre_acls(struct ovn_datapath *od, struct hmap *lflows)
 {
     bool has_stateful = has_stateful_acl(od);
@@ -4974,61 +5076,12 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
          * to the next table if packet source is acceptable. */
     }
 
-    /* Logical switch ingress table 0: Ingress port security - L2
-     *  (priority 50).
-     *  Ingress table 1: Ingress port security - IP (priority 90 and 80)
-     *  Ingress table 2: Ingress port security - ND (priority 90 and 80)
-     */
-    struct ovn_port *op;
-    HMAP_FOR_EACH (op, key_node, ports) {
-        if (!op->nbsp) {
-            continue;
-        }
-
-        if (!lsp_is_enabled(op->nbsp)) {
-            /* Drop packets from disabled logical ports (since logical flow
-             * tables are default-drop). */
-            continue;
-        }
-
-        if (lsp_is_external(op->nbsp)) {
-            continue;
-        }
-
-        ds_clear(&match);
-        ds_clear(&actions);
-        ds_put_format(&match, "inport == %s", op->json_key);
-        build_port_security_l2("eth.src", op->ps_addrs, op->n_ps_addrs,
-                               &match);
-
-        const char *queue_id = smap_get(&op->sb->options, "qdisc_queue_id");
-        if (queue_id) {
-            ds_put_format(&actions, "set_queue(%s); ", queue_id);
-        }
-        ds_put_cstr(&actions, "next;");
-        ovn_lflow_add(lflows, op->od, S_SWITCH_IN_PORT_SEC_L2, 50,
-                      ds_cstr(&match), ds_cstr(&actions));
-
-        if (op->nbsp->n_port_security) {
-            build_port_security_ip(P_IN, op, lflows);
-            build_port_security_nd(op, lflows);
-        }
-    }
-
-    /* Ingress table 1 and 2: Port security - IP and ND, by default goto next.
-     * (priority 0)*/
-    HMAP_FOR_EACH (od, key_node, datapaths) {
-        if (!od->nbs) {
-            continue;
-        }
-
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_PORT_SEC_ND, 0, "1", "next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_PORT_SEC_IP, 0, "1", "next;");
-    }
+    build_lswitch_port_sec(ports, datapaths, lflows);
 
     /* Ingress table 11: ARP/ND responder, skip requests coming from localnet
      * and vtep ports. (priority 100); see ovn-northd.8.xml for the
      * rationale. */
+    struct ovn_port *op;
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbsp) {
             continue;
@@ -5648,50 +5701,6 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         if (od->has_unknown) {
             ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 0, "1",
                           "outport = \""MC_UNKNOWN"\"; output;");
-        }
-    }
-
-    /* Egress tables 8: Egress port security - IP (priority 0)
-     * Egress table 9: Egress port security L2 - multicast/broadcast
-     *                 (priority 100). */
-    HMAP_FOR_EACH (od, key_node, datapaths) {
-        if (!od->nbs) {
-            continue;
-        }
-
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PORT_SEC_IP, 0, "1", "next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PORT_SEC_L2, 100, "eth.mcast",
-                      "output;");
-    }
-
-    /* Egress table 8: Egress port security - IP (priorities 90 and 80)
-     * if port security enabled.
-     *
-     * Egress table 9: Egress port security - L2 (priorities 50 and 150).
-     *
-     * Priority 50 rules implement port security for enabled logical port.
-     *
-     * Priority 150 rules drop packets to disabled logical ports, so that they
-     * don't even receive multicast or broadcast packets. */
-    HMAP_FOR_EACH (op, key_node, ports) {
-        if (!op->nbsp || lsp_is_external(op->nbsp)) {
-            continue;
-        }
-
-        ds_clear(&match);
-        ds_put_format(&match, "outport == %s", op->json_key);
-        if (lsp_is_enabled(op->nbsp)) {
-            build_port_security_l2("eth.dst", op->ps_addrs, op->n_ps_addrs,
-                                   &match);
-            ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_PORT_SEC_L2, 50,
-                          ds_cstr(&match), "output;");
-        } else {
-            ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_PORT_SEC_L2, 150,
-                          ds_cstr(&match), "drop;");
-        }
-
-        if (op->nbsp->n_port_security) {
-            build_port_security_ip(P_OUT, op, lflows);
         }
     }
 
