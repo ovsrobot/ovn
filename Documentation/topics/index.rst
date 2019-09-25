@@ -41,6 +41,7 @@ OVN
    role-based-access-control
    ovn-news-2.8
    testing
+   ovs-compatibility
 
 .. list-table::
 

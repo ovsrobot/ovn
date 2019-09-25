@@ -55,6 +55,7 @@ DOC_SOURCE = \
 	Documentation/internals/contributing/documentation-style.rst \
 	Documentation/internals/contributing/libopenvswitch-abi.rst \
 	Documentation/internals/contributing/submitting-patches.rst \
+	Documentation/internals/contributing/ovs-ovn-compatibility.rst \
 	Documentation/requirements.txt \
 	$(addprefix Documentation/ref/,$(RST_MANPAGES) $(RST_MANPAGES_NOINST))
 FLAKE8_PYFILES += Documentation/conf.py
