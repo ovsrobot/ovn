@@ -82,7 +82,7 @@ static struct ovsdb_idl_txn *the_idl_txn;
 OVS_NO_RETURN static void sbctl_exit(int status);
 
 /* --leader-only, --no-leader-only: Only accept the leader in a cluster. */
-static int leader_only = true;
+static int leader_only = false;
 
 static void sbctl_cmd_init(void);
 OVS_NO_RETURN static void usage(void);

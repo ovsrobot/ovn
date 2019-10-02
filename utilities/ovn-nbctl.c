@@ -81,7 +81,7 @@ static struct ovsdb_idl_txn *the_idl_txn;
 OVS_NO_RETURN static void nbctl_exit(int status);
 
 /* --leader-only, --no-leader-only: Only accept the leader in a cluster. */
-static int leader_only = true;
+static int leader_only = false;
 
 /* --shuffle-remotes, --no-shuffle-remotes: Shuffle the order of remotes that
  * are specified in the connetion method string. */
@@ -188,6 +188,7 @@ main(int argc, char *argv[])
                       "(use --help for help)");
         }
         daemon_mode = true;
+        leader_only = true;
     }
     /* Initialize IDL. */
     idl = the_idl = ovsdb_idl_create_unconnected(&nbrec_idl_class, true);
