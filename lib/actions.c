@@ -871,6 +871,105 @@ ovnact_ct_nat_free(struct ovnact_ct_nat *ct_nat OVS_UNUSED)
 {
 }
 
+
+static void
+parse_replace_ip(struct action_context *ctx, struct ovnact_ip_replace *ipr)
+{
+    add_prerequisite(ctx, "ip");
+
+    if (lexer_match(ctx->lexer, LEX_T_LPAREN)) {
+        if (ctx->lexer->token.type != LEX_T_INTEGER
+            || ctx->lexer->token.format != LEX_F_IPV4) {
+            lexer_syntax_error(ctx->lexer, "expecting IPv4 address");
+            return;
+        }
+        ipr->ip = ctx->lexer->token.value.ipv4;
+        lexer_get(ctx->lexer);
+
+        if (!lexer_force_match(ctx->lexer, LEX_T_RPAREN)) {
+            return;
+        }
+    } else {
+        lexer_syntax_error(ctx->lexer, "Invalid token");
+    }
+}
+
+static void
+parse_REPLACE_DST_IP(struct action_context *ctx)
+{
+    parse_replace_ip(ctx, ovnact_put_REPLACE_DST_IP(ctx->ovnacts));
+}
+
+static void
+parse_REPLACE_SRC_IP(struct action_context *ctx)
+{
+    parse_replace_ip(ctx, ovnact_put_REPLACE_SRC_IP(ctx->ovnacts));
+}
+
+static void
+format_replace_ip(const struct ovnact_ip_replace *ipr,
+                  const char *name, struct ds *s)
+{
+    ds_put_cstr(s, name);
+    ds_put_format(s, "("IP_FMT")", IP_ARGS(ipr->ip));
+    ds_put_char(s, ';');
+}
+
+static void
+format_REPLACE_DST_IP(const struct ovnact_ip_replace *ipr, struct ds *s)
+{
+    format_replace_ip(ipr, "replace_dst_ip", s);
+}
+
+static void
+format_REPLACE_SRC_IP(const struct ovnact_ip_replace *ipr, struct ds *s)
+{
+    format_replace_ip(ipr, "replace_src_ip", s);
+}
+
+static void
+encode_replace_ip(const struct ovnact_ip_replace *ipr,
+                  const struct ovnact_encode_params *ep OVS_UNUSED,
+                  bool is_src, struct ofpbuf *ofpacts)
+{
+    struct ofpact_ipv4 *replace_ip;
+    const size_t ip_offset = ofpacts->size;
+    ofpbuf_pull(ofpacts, ip_offset);
+
+    if (!is_src) {
+        replace_ip = ofpact_put_SET_IPV4_DST(ofpacts);
+
+    } else {
+        replace_ip = ofpact_put_SET_IPV4_SRC(ofpacts);
+    }
+
+    replace_ip->ipv4 = ipr->ip;
+
+    ofpbuf_push_uninit(ofpacts, ip_offset);
+    ofpact_finish(ofpacts, &replace_ip->ofpact);
+}
+
+static void
+encode_REPLACE_SRC_IP(const struct ovnact_ip_replace *ipr,
+                      const struct ovnact_encode_params *ep,
+                      struct ofpbuf *ofpacts)
+{
+    encode_replace_ip(ipr, ep, true, ofpacts);
+}
+
+static void
+encode_REPLACE_DST_IP(const struct ovnact_ip_replace *ipr,
+                      const struct ovnact_encode_params *ep,
+                      struct ofpbuf *ofpacts)
+{
+    encode_replace_ip(ipr, ep, false, ofpacts);
+}
+
+static void
+ovnact_ip_replace_free(struct ovnact_ip_replace *ipr OVS_UNUSED)
+{
+}
+
 static void
 parse_ct_lb_action(struct action_context *ctx)
 {
@@ -2912,6 +3011,10 @@ parse_action(struct action_context *ctx)
         parse_trigger_event(ctx, ovnact_put_TRIGGER_EVENT(ctx->ovnacts));
     } else if (lexer_match_id(ctx->lexer, "bind_vport")) {
         parse_bind_vport(ctx);
+    } else if (lexer_match_id(ctx->lexer, "replace_src_ip")) {
+        parse_REPLACE_SRC_IP(ctx);
+    }  else if (lexer_match_id(ctx->lexer, "replace_dst_ip")) {
+        parse_REPLACE_DST_IP(ctx);
     } else {
         lexer_syntax_error(ctx->lexer, "expecting action");
     }

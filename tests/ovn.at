@@ -2592,6 +2592,32 @@ bind_vport("xyzzy",;
 bind_vport("xyzzy", inport;
     Syntax error at `;' expecting `)'.
 
+# replace_src_ip
+replace_src_ip(1.2.3.4);
+    encodes as mod_nw_src:1.2.3.4
+    has prereqs ip
+replace_src_ip;
+    Syntax error at `;' Invalid token.
+replace_src_ip(;
+    Syntax error at `;' expecting IPv4 address.
+replace_src_ip(";
+    Input ends inside quoted string.
+replace_src_ip(1.2.3);
+    Invalid numeric constant.
+
+# replace_dst_ip
+replace_dst_ip(1.2.3.4);
+    encodes as mod_nw_dst:1.2.3.4
+    has prereqs ip
+replace_dst_ip;
+    Syntax error at `;' Invalid token.
+replace_dst_ip(;
+    Syntax error at `;' expecting IPv4 address.
+replace_dst_ip(";
+    Input ends inside quoted string.
+replace_dst_ip(1.2.3);
+    Invalid numeric constant.
+
 # Miscellaneous negative tests.
 ;
     Syntax error at `;'.

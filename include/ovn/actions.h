@@ -88,7 +88,9 @@ struct ovn_extend_table;
     OVNACT(OVNFIELD_LOAD,     ovnact_load)            \
     OVNACT(CHECK_PKT_LARGER,  ovnact_check_pkt_larger) \
     OVNACT(TRIGGER_EVENT,     ovnact_controller_event) \
-    OVNACT(BIND_VPORT,        ovnact_bind_vport)
+    OVNACT(BIND_VPORT,        ovnact_bind_vport)      \
+    OVNACT(REPLACE_SRC_IP,    ovnact_ip_replace)      \
+    OVNACT(REPLACE_DST_IP,    ovnact_ip_replace)
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -288,6 +290,12 @@ struct ovnact_put_opts {
     struct expr_field dst;      /* 1-bit destination field. */
     struct ovnact_gen_option *options;
     size_t n_options;
+};
+
+/* OVNACT_REPLACE_SRC_IP, OVNACT_REPLACE_DST_IP. */
+struct ovnact_ip_replace {
+    struct ovnact ovnact;
+    ovs_be32 ip;
 };
 
 /* Valid arguments to SET_QUEUE action.
