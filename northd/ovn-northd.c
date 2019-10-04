@@ -6376,6 +6376,18 @@ copy_ra_to_sb(struct ovn_port *op, const char *address_mode)
     smap_destroy(&options);
 }
 
+static inline bool
+lrouter_nat_is_stateless(const struct nbrec_nat *nat)
+{
+    const char *is_stateless = smap_get(&nat->options, "is_stateless");
+
+    if (is_stateless && !strcmp(is_stateless, "true")) {
+        return true;
+    }
+
+    return false;
+}
+
 static void
 build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     struct hmap *lflows, struct shash *meter_groups)
@@ -7137,6 +7149,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             nat = od->nbr->nat[i];
 
             ovs_be32 ip, mask;
+            bool is_stateless = lrouter_nat_is_stateless(nat);
 
             char *error = ip_parse_masked(nat->external_ip, &ip, &mask);
             if (error || mask != OVS_BE32_MAX) {
@@ -7202,15 +7215,26 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                 if (!od->l3dgw_port) {
                     /* Gateway router. */
                     ds_clear(&match);
+                    ds_clear(&actions);
                     ds_put_format(&match, "ip && ip4.dst == %s",
                                   nat->external_ip);
+
+                    if (!strcmp(nat->type, "dnat_and_snat") && is_stateless) {
+                        ds_put_format(&actions, "replace_dst_ip(%s); next;",
+                                      nat->logical_ip);
+                    } else {
+                        ds_put_cstr(&actions, "ct_snat;");
+                    }
+
                     ovn_lflow_add(lflows, od, S_ROUTER_IN_UNSNAT, 90,
-                                  ds_cstr(&match), "ct_snat;");
+                                  ds_cstr(&match), ds_cstr(&actions));
                 } else {
                     /* Distributed router. */
 
                     /* Traffic received on l3dgw_port is subject to NAT. */
                     ds_clear(&match);
+                    ds_clear(&actions);
+
                     ds_put_format(&match, "ip && ip4.dst == %s"
                                           " && inport == %s",
                                   nat->external_ip,
@@ -7221,8 +7245,16 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                         ds_put_format(&match, " && is_chassis_resident(%s)",
                                       od->l3redirect_port->json_key);
                     }
+
+                    if (!strcmp(nat->type, "dnat_and_snat") && is_stateless) {
+                        ds_put_format(&actions, "replace_dst_ip(%s); next;",
+                                      nat->logical_ip);
+                    } else {
+                        ds_put_cstr(&actions, "ct_snat;");
+                    }
+
                     ovn_lflow_add(lflows, od, S_ROUTER_IN_UNSNAT, 100,
-                                  ds_cstr(&match), "ct_snat;");
+                                  ds_cstr(&match), ds_cstr(&actions));
 
                     /* Traffic received on other router ports must be
                      * redirected to the central instance of the l3dgw_port
@@ -7257,8 +7289,16 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                         ds_put_format(&actions,
                                       "flags.force_snat_for_dnat = 1; ");
                     }
-                    ds_put_format(&actions, "flags.loopback = 1; ct_dnat(%s);",
-                                  nat->logical_ip);
+
+                    if (!strcmp(nat->type, "dnat_and_snat") && is_stateless) {
+                        ds_put_format(&actions, "flags.loopback = 1; "
+                                      "replace_dst_ip(%s); next;",
+                                      nat->logical_ip);
+                    } else {
+                        ds_put_format(&actions, "flags.loopback = 1; ct_dnat(%s);",
+                                      nat->logical_ip);
+                    }
+
                     ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 100,
                                   ds_cstr(&match), ds_cstr(&actions));
                 } else {
@@ -7277,8 +7317,15 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                                       od->l3redirect_port->json_key);
                     }
                     ds_clear(&actions);
-                    ds_put_format(&actions, "ct_dnat(%s);",
-                                  nat->logical_ip);
+
+                    if (!strcmp(nat->type, "dnat_and_snat") && is_stateless) {
+                        ds_put_format(&actions, "replace_dst_ip(%s); next;",
+                                      nat->logical_ip);
+                    } else {
+                        ds_put_format(&actions, "ct_dnat(%s);",
+                                      nat->logical_ip);
+                    }
+
                     ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 100,
                                   ds_cstr(&match), ds_cstr(&actions));
 
@@ -7320,7 +7367,14 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     ds_put_format(&actions, "eth.src = "ETH_ADDR_FMT"; ",
                                   ETH_ADDR_ARGS(mac));
                 }
-                ds_put_format(&actions, "ct_dnat;");
+
+                if (!strcmp(nat->type, "dnat_and_snat") && is_stateless) {
+                    ds_put_format(&actions, "replace_src_ip(%s); next;",
+                                  nat->external_ip);
+                } else {
+                    ds_put_format(&actions, "ct_dnat;");
+                }
+
                 ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 100,
                               ds_cstr(&match), ds_cstr(&actions));
             }
@@ -7336,7 +7390,14 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     ds_put_format(&match, "ip && ip4.src == %s",
                                   nat->logical_ip);
                     ds_clear(&actions);
-                    ds_put_format(&actions, "ct_snat(%s);", nat->external_ip);
+
+                    if (!strcmp(nat->type, "dnat_and_snat") && is_stateless) {
+                        ds_put_format(&actions, "replace_src_ip(%s); next;",
+                                      nat->external_ip);
+                    } else {
+                        ds_put_format(&actions, "ct_snat(%s);",
+                                      nat->external_ip);
+                    }
 
                     /* The priority here is calculated such that the
                      * nat->logical_ip with the longest mask gets a higher
@@ -7365,7 +7426,14 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                         ds_put_format(&actions, "eth.src = "ETH_ADDR_FMT"; ",
                                       ETH_ADDR_ARGS(mac));
                     }
-                    ds_put_format(&actions, "ct_snat(%s);", nat->external_ip);
+
+                    if (!strcmp(nat->type, "dnat_and_snat") && is_stateless) {
+                        ds_put_format(&actions, "replace_src_ip(%s); next;",
+                                      nat->external_ip);
+                    } else {
+                        ds_put_format(&actions, "ct_snat(%s);",
+                                      nat->external_ip);
+                    }
 
                     /* The priority here is calculated such that the
                      * nat->logical_ip with the longest mask gets a higher
