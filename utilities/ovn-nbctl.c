@@ -124,17 +124,48 @@ static char * OVS_WARN_UNUSED_RESULT main_loop(const char *args,
 static void server_loop(struct ovsdb_idl *idl, int argc, char *argv[]);
 
 int
-main(int argc, char *argv[])
+main(int argc, char *argv_[])
 {
     struct ovsdb_idl *idl;
     struct shash local_options;
 
-    set_program_name(argv[0]);
+    set_program_name(argv_[0]);
     fatal_ignore_sigpipe();
     vlog_set_levels(NULL, VLF_CONSOLE, VLL_WARN);
     vlog_set_levels_from_string_assert("reconnect:warn");
 
     nbctl_cmd_init();
+
+    /* Check if options are set via env var. */
+    static int ops_passed = false;
+    int i, j = 0;
+    char *ovn_nbctl_options = getenv("OVN_NBCTL_OPTIONS");
+    char **argv = xcalloc(argc + 1, sizeof( *argv_) + 1);
+    if (ovn_nbctl_options) {
+        for (i = 0; i < argc; i++) {
+            if (strcmp(argv_[i], ovn_nbctl_options) == 0) {
+                ops_passed = true;
+                break;
+            }
+        }
+        /* if option not passed via cli, read env var set by user.*/
+        if (!ops_passed) {
+            for (i = 0, j = 0; i < argc; i++, j++) {
+                if (j == 1) {
+                    argv[j] = ovn_nbctl_options;
+                    j++;
+                }
+                argv[j] = xstrdup(argv_[i]);
+            }
+            argc = j;
+        }
+    }
+    if (ops_passed || !ovn_nbctl_options) {
+        /* Copy args for parsing as is from argv_ */
+        for (i = 0; i < argc; i++) {
+            argv[i] = xstrdup(argv_[i]);
+        }
+    }
 
     /* ovn-nbctl has three operation modes:
      *
@@ -240,6 +271,7 @@ main(int argc, char *argv[])
     idl = the_idl = NULL;
 
     free(args);
+    free(argv);
     exit(EXIT_SUCCESS);
 }
 

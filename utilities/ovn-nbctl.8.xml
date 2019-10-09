@@ -1178,6 +1178,13 @@
           wait at all.  Use the <code>sync</code> command to override this
           behavior.
         </p>
+
+        <p>
+          If the <env>OVN_NBCTL_OPTIONS</env> environment variable is set,
+          its value is used as the default to set above options. If user
+          passes options via cli, <env>OVN_NBCTL_OPTIONS</env> environment
+          variable will have no effect.
+        </p>
       </dd>
 
     <dt><code>--db</code> <var>database</var></dt>

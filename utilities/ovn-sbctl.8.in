@@ -93,6 +93,12 @@ to approximately \fIsecs\fR seconds.  If the timeout expires,
 would normally happen only if the database cannot be contacted, or if
 the system is overloaded.)
 .
+.IP "\fBOVN_SBCTL_OPTIONS\fR"
+If \fBOVN_SBCTL_OPTIONS\fR environment variable is set,
+its value is used as the default to set above options. If user
+passes options via cli, \fBOVN_SBCTL_OPTIONS\fR environment
+variable will have no effect.
+.
 .so lib/vlog.man
 .so lib/common.man
 .
