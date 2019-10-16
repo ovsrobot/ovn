@@ -124,17 +124,32 @@ static char * OVS_WARN_UNUSED_RESULT main_loop(const char *args,
 static void server_loop(struct ovsdb_idl *idl, int argc, char *argv[]);
 
 int
-main(int argc, char *argv[])
+main(int argc, char *argv_[])
 {
     struct ovsdb_idl *idl;
     struct shash local_options;
 
-    set_program_name(argv[0]);
+    set_program_name(argv_[0]);
     fatal_ignore_sigpipe();
     vlog_set_levels(NULL, VLF_CONSOLE, VLL_WARN);
     vlog_set_levels_from_string_assert("reconnect:warn");
 
     nbctl_cmd_init();
+
+    /* Check if options are set via env var. */
+    char *ctl_options = getenv("OVN_NBCTL_OPTIONS");
+    char **argv;
+    int *argcp;
+    argcp = xmalloc(sizeof(int));
+    *argcp = argc;
+    argv = ovs_cmdl_env_parse_all(argcp, argv_,
+                                  ctl_options);
+    if (!argv) {
+        /* This situation should never occur, but... */
+        ctl_fatal("Unable to read argv");
+    }
+    argc = *argcp;
+    free(argcp);
 
     /* ovn-nbctl has three operation modes:
      *

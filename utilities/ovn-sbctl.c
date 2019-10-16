@@ -93,7 +93,7 @@ static bool do_sbctl(const char *args, struct ctl_command *, size_t n,
                      struct ovsdb_idl *);
 
 int
-main(int argc, char *argv[])
+main(int argc, char *argv_[])
 {
     struct ovsdb_idl *idl;
     struct ctl_command *commands;
@@ -101,12 +101,27 @@ main(int argc, char *argv[])
     unsigned int seqno;
     size_t n_commands;
 
-    set_program_name(argv[0]);
+    set_program_name(argv_[0]);
     fatal_ignore_sigpipe();
     vlog_set_levels(NULL, VLF_CONSOLE, VLL_WARN);
     vlog_set_levels_from_string_assert("reconnect:warn");
 
     sbctl_cmd_init();
+
+    /* Check if options are set via env var. */
+    char *ctl_options = getenv("OVN_SBCTL_OPTIONS");
+    char **argv;
+    int *argcp;
+    argcp = xmalloc(sizeof(int));
+    *argcp = argc;
+    argv = ovs_cmdl_env_parse_all(argcp, argv_,
+                                  ctl_options);
+    if (!argv) {
+        /* This situation should never occur, but... */
+        ctl_fatal("Unable to read argv");
+    }
+    argc = *argcp;
+    free(argcp);
 
     /* Parse command line. */
     char *args = process_escape_args(argv);
