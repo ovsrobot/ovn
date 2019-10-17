@@ -10719,7 +10719,7 @@ ovn-nbctl --wait=hv --timeout=3 sync
 # Check that there is a logical flow in logical switch foo's pipeline
 # to set the outport to rp-foo (which is expected).
 OVS_WAIT_UNTIL([test 1 = `ovn-sbctl dump-flows foo | grep ls_in_l2_lkup | \
-grep rp-foo | grep -v is_chassis_resident | wc -l`])
+grep rp-foo | grep -v is_chassis_resident | grep "eth.dst" | wc -l`])
 
 # Set the option 'reside-on-redirect-chassis' for foo
 ovn-nbctl set logical_router_port foo options:reside-on-redirect-chassis=true
