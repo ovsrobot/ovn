@@ -1889,6 +1889,10 @@
       <column name="ipv6_ra_configs" key="rdnss">
         IPv6 address of RDNSS server announced in RA packets
       </column>
+
+      <column name="ipv6_ra_configs" key="dnssl">
+        DNS Search List announced in RA packets
+      </column>
     </group>
 
     <group title="Options">
