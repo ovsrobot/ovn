@@ -1885,6 +1885,10 @@
         is one-third of <ref column="ipv6_ra_configs" key="max_interval"/>,
         i.e. 200 seconds if that key is unset.
       </column>
+
+      <column name="ipv6_ra_configs" key="rdnss">
+        IPv6 address of RDNSS server announced in RA packets
+      </column>
     </group>
 
     <group title="Options">
