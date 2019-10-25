@@ -173,7 +173,8 @@ OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
-/connection dropped.*/d"])
+/connection dropped.*/d
+/Could not find Chassis.*/d"])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 2 LRs connected via LS, gateway router, easy SNAT])
@@ -283,7 +284,8 @@ OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
-/connection dropped.*/d"])
+/connection dropped.*/d
+/Could not find Chassis.*/d"])
 AT_CLEANUP
 
 AT_SETUP([ovn -- multiple gateway routers, SNAT and DNAT])
@@ -503,7 +505,8 @@ OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
-/connection dropped.*/d"])
+/connection dropped.*/d
+/Could not find Chassis.*/d"])
 AT_CLEANUP
 
 AT_SETUP([ovn -- load-balancing])
@@ -650,7 +653,8 @@ as northd
 OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 as
-OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d"])
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/Could not find Chassis.*/d"])
 AT_CLEANUP
 
 AT_SETUP([ovn -- load-balancing - same subnet.])
@@ -757,7 +761,8 @@ as northd
 OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 as
-OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d"])
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/Could not find Chassis.*/d"])
 AT_CLEANUP
 
 AT_SETUP([ovn -- load balancing in gateway router])
@@ -908,7 +913,8 @@ OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
-/connection dropped.*/d"])
+/connection dropped.*/d
+/Could not find Chassis.*/d"])
 AT_CLEANUP
 
 AT_SETUP([ovn -- multiple gateway routers, load-balancing])
@@ -1077,7 +1083,8 @@ OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
-/connection dropped.*/d"])
+/connection dropped.*/d
+/Could not find Chassis.*/d"])
 AT_CLEANUP
 
 AT_SETUP([ovn -- load balancing in router with gateway router port])
@@ -1218,7 +1225,8 @@ OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
-/connection dropped.*/d"])
+/connection dropped.*/d
+/Could not find Chassis.*/d"])
 AT_CLEANUP
 
 AT_SETUP([ovn -- DNAT and SNAT on distributed router - N/S])
@@ -1367,7 +1375,8 @@ OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
-/connection dropped.*/d"])
+/connection dropped.*/d
+/Could not find Chassis.*/d"])
 AT_CLEANUP
 
 AT_SETUP([ovn -- DNAT and SNAT on distributed router - E/W])
@@ -1544,7 +1553,8 @@ OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
-/connection dropped.*/d"])
+/connection dropped.*/d
+/Could not find Chassis.*/d"])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 2 LSs IGMP])
@@ -1663,5 +1673,6 @@ OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
-/connection dropped.*/d"])
+/connection dropped.*/d
+/Could not find Chassis.*/d"])
 AT_CLEANUP
