@@ -2194,6 +2194,7 @@ struct ipv6_ra_config {
     struct lport_addresses prefixes;
     struct in6_addr rdnss;
     bool has_rdnss;
+    struct ds dnssl;
 };
 
 struct ipv6_ra_state {
@@ -2215,6 +2216,7 @@ ipv6_ra_config_delete(struct ipv6_ra_config *config)
 {
     if (config) {
         destroy_lport_addresses(&config->prefixes);
+        ds_destroy(&config->dnssl);
         free(config);
     }
 }
@@ -2253,6 +2255,7 @@ ipv6_ra_update_config(const struct sbrec_port_binding *pb)
             nd_ra_min_interval_default(config->max_interval));
     config->mtu = smap_get_int(&pb->options, "ipv6_ra_mtu", ND_MTU_DEFAULT);
     config->la_flags = IPV6_ND_RA_OPT_PREFIX_ON_LINK;
+    ds_init(&config->dnssl);
 
     const char *address_mode = smap_get(&pb->options, "ipv6_ra_address_mode");
     if (!address_mode) {
@@ -2297,6 +2300,11 @@ ipv6_ra_update_config(const struct sbrec_port_binding *pb)
         goto fail;
     }
     config->has_rdnss = !!rdnss;
+
+    const char *dnssl = smap_get(&pb->options, "ipv6_ra_dnssl");
+    if (dnssl) {
+        ds_put_buffer(&config->dnssl, dnssl, strlen(dnssl));
+    }
 
     return config;
 
@@ -2354,6 +2362,45 @@ packet_put_ra_rdnss_opt(struct dp_packet *b, uint8_t num,
                                                       prev_l4_size + len * 8));
 }
 
+static void
+packet_put_ra_dnssl_opt(struct dp_packet *b, ovs_be32 lifetime,
+                        char *dnssl_list)
+{
+    char *t0, *r0 = dnssl_list, dnssl[255] = {};
+    size_t prev_l4_size = dp_packet_l4_size(b);
+    size_t size = sizeof(struct ovs_nd_dnssl);
+    struct ip6_hdr *nh = dp_packet_l3(b);
+    int i = 0;
+
+    while ((t0 = strtok_r(r0, ",", &r0))) {
+        char *t1, *r1 = t0;
+
+        size += strlen(t0) + 2;
+        while ((t1 = strtok_r(r1, ".", &r1))) {
+            dnssl[i++] = strlen(t1);
+            memcpy(&dnssl[i], t1, strlen(t1));
+            i += strlen(t1);
+        }
+        dnssl[i++] = 0;
+    }
+    size = ROUND_UP(size, 8);
+    nh->ip6_plen = htons(prev_l4_size + size);
+
+    struct ovs_nd_dnssl *nd_dnssl = dp_packet_put_uninit(b, sizeof *nd_dnssl);
+    nd_dnssl->type = ND_OPT_DNSSL;
+    nd_dnssl->len = size / 8;
+    nd_dnssl->reserved = 0;
+    put_16aligned_be32(&nd_dnssl->lifetime, lifetime);
+
+    dp_packet_put(b, dnssl, size - sizeof *nd_dnssl);
+
+    struct ovs_ra_msg *ra = dp_packet_l4(b);
+    ra->icmph.icmp6_cksum = 0;
+    uint32_t icmp_csum = packet_csum_pseudoheader6(dp_packet_l3(b));
+    ra->icmph.icmp6_cksum = csum_finish(csum_continue(icmp_csum, ra,
+                                                      prev_l4_size + size));
+}
+
 /* Called with in the pinctrl_handler thread context. */
 static long long int
 ipv6_ra_send(struct rconn *swconn, struct ipv6_ra_state *ra)
@@ -2381,6 +2428,10 @@ ipv6_ra_send(struct rconn *swconn, struct ipv6_ra_state *ra)
     if (ra->config->has_rdnss) {
         packet_put_ra_rdnss_opt(&packet, 1, htonl(0xffffffff),
                                 &ra->config->rdnss);
+    }
+    if (ra->config->dnssl.length) {
+        packet_put_ra_dnssl_opt(&packet, htonl(0xffffffff),
+                                ra->config->dnssl.string);
     }
 
     uint64_t ofpacts_stub[4096 / 8];
