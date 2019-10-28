@@ -2,7 +2,7 @@
 
 : ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
 . ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
-: ${OVN_CTL_DEFAULT="/usr/share/openvswitch/scripts/ovn-ctl"}
+: ${OVN_CTL_DEFAULT="/usr/share/ovn/scripts/ovn-ctl"}
 : ${NB_MASTER_PORT_DEFAULT="6641"}
 : ${NB_MASTER_PROTO_DEFAULT="tcp"}
 : ${SB_MASTER_PORT_DEFAULT="6642"}
@@ -10,12 +10,12 @@
 : ${MANAGE_NORTHD_DEFAULT="no"}
 : ${INACTIVE_PROBE_DEFAULT="5000"}
 : ${LISTEN_ON_MASTER_IP_ONLY_DEFAULT="yes"}
-: ${NB_SSL_KEY_DEFAULT="/etc/openvswitch/ovnnb-privkey.pem"}
-: ${NB_SSL_CERT_DEFAULT="/etc/openvswitch/ovnnb-cert.pem"}
-: ${NB_SSL_CACERT_DEFAULT="/etc/openvswitch/cacert.pem"}
-: ${SB_SSL_KEY_DEFAULT="/etc/openvswitch/ovnsb-privkey.pem"}
-: ${SB_SSL_CERT_DEFAULT="/etc/openvswitch/ovnsb-cert.pem"}
-: ${SB_SSL_CACERT_DEFAULT="/etc/openvswitch/cacert.pem"}
+: ${NB_SSL_KEY_DEFAULT="/etc/ovn/ovnnb-privkey.pem"}
+: ${NB_SSL_CERT_DEFAULT="/etc/ovn/ovnnb-cert.pem"}
+: ${NB_SSL_CACERT_DEFAULT="/etc/ovn/cacert.pem"}
+: ${SB_SSL_KEY_DEFAULT="/etc/ovn/ovnsb-privkey.pem"}
+: ${SB_SSL_CERT_DEFAULT="/etc/ovn/ovnsb-cert.pem"}
+: ${SB_SSL_CACERT_DEFAULT="/etc/ovn/cacert.pem"}
 
 CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot"
 CRM_ATTR_REPL_INFO="${HA_SBIN_DIR}/crm_attribute --type crm_config --name OVN_REPL_INFO -s ovn_ovsdb_master_server"
