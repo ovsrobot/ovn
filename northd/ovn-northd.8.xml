@@ -1807,7 +1807,9 @@ icmp6 {
           to change the source IP address of a packet from <var>A</var> to
           <var>B</var>, a priority-90 flow matches <code>ip &amp;&amp;
           ip4.dst == <var>B</var></code> with an action
-          <code>ct_snat; </code>.
+          <code>ct_snat; </code>. If the NAT rule is of type dnat_and_snat
+          and has <code>stateless=true</code> in the options, then the action
+          would be <code>ip4.dst=(<var>B</var>)</code>.
         </p>
 
         <p>
@@ -1827,7 +1829,10 @@ icmp6 {
           <var>B</var>, a priority-100 flow matches <code>ip &amp;&amp;
           ip4.dst == <var>B</var> &amp;&amp; inport == <var>GW</var></code>,
           where <var>GW</var> is the logical router gateway port, with an
-          action <code>ct_snat;</code>.
+          action <code>ct_snat;</code>. If the NAT rule is of type
+          dnat_and_snat and has <code>stateless=true</code> in the
+          options, then the action would be <code>ip4.dst=
+          (<var>B</var>)</code>.
         </p>
 
         <p>
@@ -1947,7 +1952,10 @@ icmp6 {
         Gateway router is configured to force SNAT any DNATed packet,
         the above action will be replaced by
         <code>flags.force_snat_for_dnat = 1; flags.loopback = 1;
-        ct_dnat(<var>B</var>);</code>.
+        ct_dnat(<var>B</var>);</code>. If the NAT rule is of type
+        dnat_and_snat and has <code>stateless=true</code> in the
+        options, then the action would be <code>ip4.dst=
+        (<var>B</var>)</code>.
       </li>
 
       <li>
@@ -1979,7 +1987,10 @@ icmp6 {
           <var>B</var>, a priority-100 flow matches <code>ip &amp;&amp;
           ip4.dst == <var>B</var> &amp;&amp; inport == <var>GW</var></code>,
           where <var>GW</var> is the logical router gateway port, with an
-          action <code>ct_dnat(<var>B</var>);</code>.
+          action <code>ct_dnat(<var>B</var>);</code>. If the NAT rule is of
+          type dnat_and_snat and has <code>stateless=true</code> in the
+          options, then the action would be <code>ip4.dst=
+          (<var>B</var>)</code>.
         </p>
 
         <p>
@@ -2653,7 +2664,10 @@ nd_ns {
           matches <code>ip &amp;&amp; ip4.src == <var>B</var>
           &amp;&amp; outport == <var>GW</var></code>, where <var>GW</var>
           is the logical router gateway port, with an action
-          <code>ct_dnat;</code>.
+          <code>ct_dnat;</code>. If the NAT rule is of type
+          dnat_and_snat and has <code>stateless=true</code> in the
+          options, then the action would be <code>ip4.src=
+          (<var>B</var>)</code>.
         </p>
 
         <p>
@@ -2711,7 +2725,10 @@ nd_ns {
           <code>ip &amp;&amp; ip4.src == <var>A</var></code> with an action
           <code>ct_snat(<var>B</var>);</code>.  The priority of the flow
           is calculated based on the mask of <var>A</var>, with matches
-          having larger masks getting higher priorities.
+          having larger masks getting higher priorities. If the NAT rule is
+          of type dnat_and_snat and has <code>stateless=true</code> in the
+          options, then the action would be <code>ip4.src=
+          (<var>B</var>)</code>.
         </p>
         <p>
           A priority-0 logical flow with match <code>1</code> has actions
@@ -2734,7 +2751,10 @@ nd_ns {
           logical router gateway port, with an action
           <code>ct_snat(<var>B</var>);</code>.  The priority of the flow
           is calculated based on the mask of <var>A</var>, with matches
-          having larger masks getting higher priorities.
+          having larger masks getting higher priorities. If the NAT rule
+          is of type dnat_and_snat and has <code>stateless=true</code>
+          in the options, then the action would be <code>ip4.src=
+          (<var>B</var>)</code>.
         </p>
 
         <p>
