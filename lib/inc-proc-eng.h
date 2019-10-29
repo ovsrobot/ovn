@@ -82,6 +82,20 @@ struct engine_node_input {
     bool (*change_handler)(struct engine_node *node);
 };
 
+enum engine_node_state {
+    EN_STALE,     /* Data in the node is not up to date with the DB. */
+    EN_UPDATED,   /* Data in the node is valid but was updated during the
+                   * last run.
+                   */
+    EN_VALID,     /* Data in the node is valid and didn't change during the
+                   * last run.
+                   */
+    EN_ABORTED,   /* During the last run, processing was aborted for
+                   * this node.
+                   */
+    EN_STATE_MAX,
+};
+
 struct engine_node {
     /* A unique id to distinguish each iteration of the engine_run(). */
     uint64_t run_id;
@@ -102,8 +116,8 @@ struct engine_node {
      * node. */
     void *data;
 
-    /* Whether the data changed in the last engine run. */
-    bool changed;
+    /* State of the node after the last engine run. */
+    enum engine_node_state state;
 
     /* Method to initialize data. It may be NULL. */
     void (*init)(struct engine_node *);
@@ -121,9 +135,9 @@ struct engine_node {
 void engine_init(struct engine_node *);
 
 /* Execute the processing recursively, which should be called in the main
- * loop. Returns true if the execution is compelte, false if it is aborted,
- * which could happen when engine_abort_recompute is set. */
-bool engine_run(struct engine_node *, uint64_t run_id);
+ * loop. Updates the engine node's states accordingly.
+ */
+void engine_run(struct engine_node *, uint64_t run_id);
 
 /* Clean up the data for the engine nodes recursively. It calls each node's
  * cleanup() method if not NULL. It should be called before the program
@@ -132,7 +146,7 @@ void engine_cleanup(struct engine_node *);
 
 /* Check if engine needs to run, i.e. any change to be processed. */
 bool
-engine_need_run(struct engine_node *);
+engine_need_run(struct engine_node *, uint64_t run_id);
 
 /* Get the input node with <name> for <node> */
 struct engine_node * engine_get_input(const char *input_name,
@@ -159,6 +173,22 @@ const struct engine_context * engine_get_context(void);
 
 void engine_set_context(const struct engine_context *);
 
+void engine_set_node_state_at(struct engine_node *node,
+                              enum engine_node_state state,
+                              const char *where);
+/* Return true if the node's data is up to date with the database contents. */
+bool engine_node_data_valid(struct engine_node *node, uint64_t run_id);
+
+/* Return true if during the last engine run the node's data was updated. */
+bool engine_node_data_changed(struct engine_node *node, uint64_t run_id);
+
+/* Returns true if during the last engine run we had to abort processing. */
+bool engine_aborted(struct engine_node *node);
+
+/* Set the state of the node and log changes. */
+#define engine_set_node_state(node, state) \
+    engine_set_node_state_at(node, state, OVS_SOURCE_LOCATOR)
+
 struct ed_ovsdb_index {
     const char *name;
     struct ovsdb_idl_index *index;
@@ -184,6 +214,7 @@ void engine_ovsdb_node_add_index(struct engine_node *, const char *name,
     struct engine_node en_##NAME = { \
         .name = NAME_STR, \
         .data = &ed_##NAME, \
+        .state = EN_STALE, \
         .init = en_##NAME##_init, \
         .run = en_##NAME##_run, \
         .cleanup = en_##NAME##_cleanup, \
@@ -198,10 +229,10 @@ en_##DB_NAME##_##TBL_NAME##_run(struct engine_node *node) \
     const struct DB_NAME##rec_##TBL_NAME##_table *table = \
         EN_OVSDB_GET(node); \
     if (DB_NAME##rec_##TBL_NAME##_table_track_get_first(table)) { \
-        node->changed = true; \
+        engine_set_node_state(node, EN_UPDATED); \
         return; \
     } \
-    node->changed = false; \
+    engine_set_node_state(node, EN_VALID); \
 } \
 static void (*en_##DB_NAME##_##TBL_NAME##_init)(struct engine_node *node) \
             = NULL; \

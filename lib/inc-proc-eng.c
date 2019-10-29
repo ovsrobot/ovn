@@ -34,6 +34,13 @@ static bool engine_force_recompute = false;
 static bool engine_abort_recompute = false;
 static const struct engine_context *engine_context;
 
+static const char *engine_node_state_name[EN_STATE_MAX] = {
+    [EN_STALE]   = "Stale",
+    [EN_UPDATED] = "Updated",
+    [EN_VALID]   = "Valid",
+    [EN_ABORTED] = "Aborted",
+};
+
 void
 engine_set_force_recompute(bool val)
 {
@@ -128,24 +135,72 @@ engine_ovsdb_node_add_index(struct engine_node *node, const char *name,
     ed->n_indexes ++;
 }
 
+void
+engine_set_node_state_at(struct engine_node *node,
+                         enum engine_node_state state,
+                         const char *where)
+{
+    if (node->state == state) {
+        return;
+    }
+
+    VLOG_DBG("%s: node: %s (run-id %lu), old_state %s, new_state %s",
+             where, node->name, node->run_id,
+             engine_node_state_name[node->state],
+             engine_node_state_name[state]);
+
+    node->state = state;
+}
+
 bool
+engine_node_data_valid(struct engine_node *node, uint64_t run_id)
+{
+    return node->run_id == run_id &&
+        (node->state == EN_UPDATED || node->state == EN_VALID);
+}
+
+bool
+engine_node_data_changed(struct engine_node *node, uint64_t run_id)
+{
+    return node->run_id == run_id && node->state == EN_UPDATED;
+}
+
+bool
+engine_aborted(struct engine_node *node)
+{
+    return node->state == EN_ABORTED;
+}
+
+void
 engine_run(struct engine_node *node, uint64_t run_id)
 {
     if (node->run_id == run_id) {
-        return true;
+        /* The node was already updated in this run (could be input for
+         * multiple other nodes). Stop processing.
+         */
+        return;
     }
-    node->run_id = run_id;
 
-    node->changed = false;
+    /* Initialize the node for this run. */
+    node->run_id = run_id;
+    engine_set_node_state(node, EN_STALE);
+
     if (!node->n_inputs) {
+        /* Run the node handler which might change state. */
         node->run(node);
-        VLOG_DBG("node: %s, changed: %d", node->name, node->changed);
-        return true;
+        return;
     }
 
     for (size_t i = 0; i < node->n_inputs; i++) {
-        if (!engine_run(node->inputs[i].node, run_id)) {
-            return false;
+        engine_run(node->inputs[i].node, run_id);
+        if (!engine_node_data_valid(node->inputs[i].node, run_id)) {
+            /* If the input node aborted computation, move to EN_ABORTED to
+             * propagate the result, otherwise stay in EN_STALE.
+             */
+            if (engine_aborted(node->inputs[i].node)) {
+                engine_set_node_state(node, EN_ABORTED);
+            }
+            return;
         }
     }
 
@@ -155,9 +210,14 @@ engine_run(struct engine_node *node, uint64_t run_id)
     if (engine_force_recompute) {
         need_recompute = true;
     } else {
+        /* If one of the inputs updated data then we need to recompute the
+         * current node too.
+         */
         for (size_t i = 0; i < node->n_inputs; i++) {
-            if (node->inputs[i].node->changed) {
+            if (node->inputs[i].node->state == EN_UPDATED) {
                 need_compute = true;
+
+                /* Trigger a recompute if we don't have a change handler. */
                 if (!node->inputs[i].change_handler) {
                     need_recompute = true;
                     break;
@@ -171,46 +231,67 @@ engine_run(struct engine_node *node, uint64_t run_id)
                  engine_force_recompute ? "forced" : "triggered");
         if (engine_abort_recompute) {
             VLOG_DBG("node: %s, recompute aborted", node->name);
-            return false;
+            engine_set_node_state(node, EN_ABORTED);
+            return;
         }
+        /* Run the node handler which might change state. */
         node->run(node);
-    } else if (need_compute) {
+        return;
+    }
+
+    if (need_compute) {
         for (size_t i = 0; i < node->n_inputs; i++) {
-            if (node->inputs[i].node->changed) {
+            /* If the input node data changed call its change handler. */
+            if (node->inputs[i].node->state == EN_UPDATED) {
                 VLOG_DBG("node: %s, handle change for input %s",
                          node->name, node->inputs[i].node->name);
+
+                /* If the input change can't be handled incrementally, run
+                 * the node handler.
+                 */
                 if (!node->inputs[i].change_handler(node)) {
                     VLOG_DBG("node: %s, can't handle change for input %s, "
                              "fall back to recompute",
                              node->name, node->inputs[i].node->name);
                     if (engine_abort_recompute) {
                         VLOG_DBG("node: %s, recompute aborted", node->name);
-                        return false;
+                        engine_set_node_state(node, EN_ABORTED);
+                        return;
                     }
+                    /* Run the node handler which might change state. */
                     node->run(node);
-                    break;
+                    return;
                 }
             }
         }
     }
 
-    VLOG_DBG("node: %s, changed: %d", node->name, node->changed);
-    return true;
+    /* If we reached this point, either the node was updated or its state is
+     * still valid.
+     */
+    if (!engine_node_data_changed(node, run_id)) {
+        engine_set_node_state(node, EN_VALID);
+    }
 }
 
 bool
-engine_need_run(struct engine_node *node)
+engine_need_run(struct engine_node *node, uint64_t run_id)
 {
     size_t i;
 
+    if (node->run_id == run_id) {
+        return false;
+    }
+
     if (!node->n_inputs) {
         node->run(node);
-        VLOG_DBG("input node: %s, changed: %d", node->name, node->changed);
-        return node->changed;
+        VLOG_DBG("input node: %s, state: %s", node->name,
+                 engine_node_state_name[node->state]);
+        return node->state == EN_UPDATED;
     }
 
     for (i = 0; i < node->n_inputs; i++) {
-        if (engine_need_run(node->inputs[i].node)) {
+        if (engine_need_run(node->inputs[i].node, run_id)) {
             return true;
         }
     }
