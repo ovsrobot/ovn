@@ -363,6 +363,19 @@ default_inb_db(void)
     return def;
 }
 
+const char *
+default_isb_db(void)
+{
+    static char *def;
+    if (!def) {
+        def = getenv("OVN_ISB_DB");
+        if (!def) {
+            def = xasprintf("unix:%s/ovnisb_db.sock", ovn_rundir());
+        }
+    }
+    return def;
+}
+
 char *
 get_abs_unix_ctl_path(void)
 {

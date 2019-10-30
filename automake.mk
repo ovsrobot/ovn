@@ -97,6 +97,37 @@ ovn-inb.5: \
 		$(srcdir)/ovn-inb.xml > $@.tmp && \
 	mv $@.tmp $@
 
+# OVN interconnection southbound E-R diagram
+#
+# If "python" or "dot" is not available, then we do not add graphical diagram
+# to the documentation.
+if HAVE_PYTHON
+if HAVE_DOT
+ovn-isb.gv: ${OVSDIR}/ovsdb/ovsdb-dot.in $(srcdir)/ovn-isb.ovsschema
+	$(AM_V_GEN)$(OVSDB_DOT) --no-arrows $(srcdir)/ovn-isb.ovsschema > $@
+ovn-isb.pic: ovn-isb.gv ${OVSDIR}/ovsdb/dot2pic
+	$(AM_V_GEN)(dot -T plain < ovn-isb.gv | $(PYTHON) ${OVSDIR}/ovsdb/dot2pic -f 3) > $@.tmp && \
+	mv $@.tmp $@
+OVN_ISB_PIC = ovn-isb.pic
+OVN_ISB_DOT_DIAGRAM_ARG = --er-diagram=$(OVN_ISB_PIC)
+CLEANFILES += ovn-isb.gv ovn-isb.pic
+endif
+endif
+
+# OVN interconnection southbound schema documentation
+EXTRA_DIST += ovn-isb.xml
+CLEANFILES += ovn-isb.5
+man_MANS += ovn-isb.5
+
+ovn-isb.5: \
+	${OVSDIR}/ovsdb/ovsdb-doc $(srcdir)/ovn-isb.xml $(srcdir)/ovn-isb.ovsschema $(OVN_ISB_PIC)
+	$(AM_V_GEN)$(OVSDB_DOC) \
+		$(OVN_ISB_DOT_DIAGRAM_ARG) \
+		--version=$(VERSION) \
+		$(srcdir)/ovn-isb.ovsschema \
+		$(srcdir)/ovn-isb.xml > $@.tmp && \
+	mv $@.tmp $@
+
 # Version checking for ovn-nb.ovsschema.
 ALL_LOCAL += ovn-nb.ovsschema.stamp
 ovn-nb.ovsschema.stamp: ovn-nb.ovsschema
@@ -114,8 +145,15 @@ ovn-inb.ovsschema.stamp: ovn-inb.ovsschema
 	$(srcdir)/build-aux/cksum-schema-check $? $@
 CLEANFILES += ovn-inb.ovsschema.stamp
 
+# Version checking for ovn-isb.ovsschema.
+ALL_LOCAL += ovn-isb.ovsschema.stamp
+ovn-isb.ovsschema.stamp: ovn-isb.ovsschema
+	$(srcdir)/build-aux/cksum-schema-check $? $@
+CLEANFILES += ovn-isb.ovsschema.stamp
+
 pkgdata_DATA += ovn-nb.ovsschema
 pkgdata_DATA += ovn-sb.ovsschema
 pkgdata_DATA += ovn-inb.ovsschema
+pkgdata_DATA += ovn-isb.ovsschema
 
 CLEANFILES += ovn-sb.ovsschema.stamp
