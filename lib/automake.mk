@@ -29,7 +29,9 @@ nodist_lib_libovn_la_SOURCES = \
 	lib/ovn-nb-idl.c \
 	lib/ovn-nb-idl.h \
 	lib/ovn-sb-idl.c \
-	lib/ovn-sb-idl.h
+	lib/ovn-sb-idl.h \
+	lib/ovn-inb-idl.c \
+	lib/ovn-inb-idl.h
 
 CLEANFILES += $(nodist_lib_libovn_la_SOURCES)
 
@@ -72,5 +74,18 @@ OVN_NB_IDL_FILES = \
 	$(srcdir)/lib/ovn-nb-idl.ann
 lib/ovn-nb-idl.ovsidl: $(OVN_NB_IDL_FILES)
 	$(AM_V_GEN)$(OVSDB_IDLC) annotate $(OVN_NB_IDL_FILES) > $@.tmp && \
+	mv $@.tmp $@
+
+# ovn-inb IDL
+OVSIDL_BUILT += \
+	lib/ovn-inb-idl.c \
+	lib/ovn-inb-idl.h \
+	lib/ovn-inb-idl.ovsidl
+EXTRA_DIST += lib/ovn-inb-idl.ann
+OVN_INB_IDL_FILES = \
+	$(srcdir)/ovn-inb.ovsschema \
+	$(srcdir)/lib/ovn-inb-idl.ann
+lib/ovn-inb-idl.ovsidl: $(OVN_INB_IDL_FILES)
+	$(AM_V_GEN)$(OVSDB_IDLC) annotate $(OVN_INB_IDL_FILES) > $@.tmp && \
 	mv $@.tmp $@
 

@@ -1,0 +1,65 @@
+AT_BANNER([ovn-inbctl])
+
+# OVN_INBCTL_TEST_START
+m4_define([OVN_INBCTL_TEST_START],
+  [dnl Create database (ovn-inb).
+   AT_KEYWORDS([inbctl])
+   AT_CHECK([ovsdb-tool create ovn-inb.db $abs_top_srcdir/ovn-inb.ovsschema])
+
+   dnl Start ovsdb-servers.
+   AT_CHECK([ovsdb-server --detach --no-chdir --pidfile=ovninb_db.pid --unixctl=$OVS_RUNDIR/ovninb_db.ctl --log-file=ovsdb_inb.log --remote=punix:$OVS_RUNDIR/ovninb_db.sock ovn-inb.db ], [0], [], [stderr])
+   on_exit "kill `cat ovninb_db.pid`"
+   AT_CHECK([[sed < stderr '
+/vlog|INFO|opened log file/d
+/ovsdb_server|INFO|ovsdb-server (Open vSwitch)/d']])
+   AT_CAPTURE_FILE([ovsdb-server.log])
+])
+
+# OVN_INBCTL_TEST_STOP
+m4_define([OVN_INBCTL_TEST_STOP],
+  [AT_CHECK([check_logs "$1"])
+   OVS_APP_EXIT_AND_WAIT_BY_TARGET([$OVS_RUNDIR/ovninb_db.ctl], [$OVS_RUNDIR/ovninb_db.pid])])
+
+dnl ---------------------------------------------------------------------
+
+AT_SETUP([ovn-inbctl])
+OVN_INBCTL_TEST_START
+
+AT_CHECK([ovn-inbctl ts-add ts0])
+AT_CHECK([ovn-inbctl ts-list | uuidfilt], [0], [dnl
+<0> (ts0)
+])
+
+AT_CHECK([ovn-inbctl ts-add ts1])
+AT_CHECK([ovn-inbctl ts-list | uuidfilt], [0], [dnl
+<0> (ts0)
+<1> (ts1)
+])
+
+AT_CHECK([ovn-inbctl show | sort], [0], [dnl
+Transit_Switch ts0
+Transit_Switch ts1
+])
+
+AT_CHECK([ovn-inbctl ts-del ts1])
+AT_CHECK([ovn-inbctl ts-list | uuidfilt], [0], [dnl
+<0> (ts0)
+])
+
+AT_CHECK([ovn-inbctl ts-add ts0], [1], [],
+  [ovn-inbctl: ts0: a transit switch with this name already exists
+])
+
+AT_CHECK([ovn-inbctl --may-exist ts-add ts0])
+AT_CHECK([ovn-inbctl ts-list | uuidfilt], [0], [dnl
+<0> (ts0)
+])
+
+AT_CHECK([ovn-inbctl ts-del ts2], [1], [],
+  [ovn-inbctl: ts2: switch name not found
+])
+
+AT_CHECK([ovn-inbctl --if-exists ts-del ts2])
+
+OVN_INBCTL_TEST_STOP
+AT_CLEANUP
