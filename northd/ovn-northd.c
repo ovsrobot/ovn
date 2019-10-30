@@ -9771,7 +9771,8 @@ check_and_add_supported_dhcpv6_opts_to_sb_db(struct northd_context *ctx)
 static const char *rbac_chassis_auth[] =
     {"name"};
 static const char *rbac_chassis_update[] =
-    {"nb_cfg", "external_ids", "encaps", "vtep_logical_switches"};
+    {"nb_cfg", "external_ids", "encaps", "vtep_logical_switches",
+     "is_interconn"};
 
 static const char *rbac_encap_auth[] =
     {"chassis_name"};
@@ -9969,7 +9970,7 @@ update_northbound_cfg(struct northd_context *ctx,
         const struct sbrec_chassis *chassis;
         int64_t hv_cfg = nbg->nb_cfg;
         SBREC_CHASSIS_FOR_EACH (chassis, ctx->ovnsb_idl) {
-            if (chassis->nb_cfg < hv_cfg) {
+            if (!chassis->is_remote && chassis->nb_cfg < hv_cfg) {
                 hv_cfg = chassis->nb_cfg;
             }
         }
@@ -10256,6 +10257,7 @@ main(int argc, char *argv[])
     ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_chassis);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_chassis_col_nb_cfg);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_chassis_col_name);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_chassis_col_is_remote);
 
     ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_ha_chassis);
     add_column_noalert(ovnsb_idl_loop.idl,
