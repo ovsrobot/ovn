@@ -354,6 +354,16 @@
       </column>
     </group>
 
+    <group title="Interconnection">
+      <column name="other_config" key="interconn-ts"
+          type='{"type": "string"}'>
+        The <ref table="Transit_Switch" column="name" db="OVN_IC_Northbound"/>
+        of corresponding transit switch in <ref db="OVN_IC_Northbound"/>
+        database.  This kind of logical switch is created and controlled
+        by <code>ovn-ic</code>.
+      </column>
+    </group>
+
     <group title="Common Columns">
       <column name="external_ids">
         See <em>External IDs</em> at the beginning of this document.
