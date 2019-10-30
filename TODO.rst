@@ -145,3 +145,13 @@ OVN To-do List
   * Support FTP ALGs.
 
   * Support reject action.
+
+* OVN Interconnection
+
+  * Packaging for RHEL, Debian, etc.
+
+  * Gateway HA enhancement. Currently gateway HA relies on each OVN's BFD
+    monitoring detecting gateway failover and updating port-binding in
+    SB DB, which then is synced to IC-SB DB by ovn-ic. This may have longer
+    latency for failover than monitoring between each gateway pairs
+    acrossing OVN.
