@@ -1152,12 +1152,6 @@ ovn_port_allocate_key(struct ovn_datapath *od)
                               1, (1u << 15) - 1, &od->port_key_hint);
 }
 
-static char *
-chassis_redirect_name(const char *port_name)
-{
-    return xasprintf("cr-%s", port_name);
-}
-
 static bool
 ipam_is_duplicate_mac(struct eth_addr *ea, uint64_t mac64, bool warn)
 {
@@ -2035,7 +2029,8 @@ join_logical_ports(struct northd_context *ctx,
                         continue;
                     }
 
-                    char *redirect_name = chassis_redirect_name(nbrp->name);
+                    char *redirect_name =
+                        ovn_chassis_redirect_name(nbrp->name);
                     struct ovn_port *crp = ovn_port_find(ports, redirect_name);
                     if (crp) {
                         crp->derived = true;

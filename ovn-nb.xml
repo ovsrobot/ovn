@@ -514,7 +514,16 @@
                 parent owning the <code>virtual ip</code>.
               </li>
             </ul>
-           </dd>
+          </dd>
+
+          <dt><code>remote</code></dt>
+          <dd>
+            A remote port is to model a port that resides remotely on another
+            OVN, which is on the other side of a transit logical switch for OVN
+            interconnection.  This type of ports are created by
+            <code>ovn-ic</code> instead of by CMS.  Any change to the port will
+            be automatically overwritten by <code>ovn-ic</code>.
+          </dd>
         </dl>
       </column>
     </group>
