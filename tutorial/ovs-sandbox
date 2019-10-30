@@ -58,6 +58,8 @@ gdb_vswitchd_ex=false
 gdb_ovsdb_ex=false
 gdb_ovn_northd=false
 gdb_ovn_northd_ex=false
+gdb_ovn_ic=false
+gdb_ovn_ic_ex=false
 gdb_ovn_controller=false
 gdb_ovn_controller_ex=false
 gdb_ovn_controller_vtep=false
@@ -72,13 +74,20 @@ built=false
 ovn=true
 ovnsb_schema=
 ovnnb_schema=
+ovnisb_schema=
+ovninb_schema=
 ovn_rbac=true
 n_northds=1
+n_ics=1
 n_controllers=1
 nbdb_model=standalone
 nbdb_servers=3
 sbdb_model=backup
 sbdb_servers=3
+inbdb_model=clustered
+inbdb_servers=3
+isbdb_model=clustered
+isbdb_servers=3
 dummy=override
 
 for option; do
@@ -125,6 +134,7 @@ General options:
   -g, --gdb-vswitchd   run ovs-vswitchd under gdb
   -d, --gdb-ovsdb      run ovsdb-server under gdb
   --gdb-ovn-northd     run ovn-northd under gdb
+  --gdb-ovn-ic         run ovn-ic under gdb
   --gdb-ovn-controller run ovn-controller under gdb
   --gdb-ovn-controller-vtep run ovn-controller-vtep under gdb
   --dummy=ARG          pass --enable-dummy=ARG to vswitchd (default: override)
@@ -135,10 +145,15 @@ General options:
 OVN options:
   --no-ovn-rbac        disable role-based access control for OVN
   --n-northds=NUMBER   run NUMBER copies of northd (default: 1)
+  --n-ics=NUMBER       run NUMBER copies of ic (default: 1)
   --nbdb-model=standalone|backup|clustered    northbound database model
   --nbdb-servers=N     number of servers in nbdb cluster (default: 3)
   --sbdb-model=standalone|backup|clustered    southbound database model
   --sbdb-servers=N     number of servers in sbdb cluster (default: 3)
+  --inbdb-model=standalone|backup|clustered   ic-northbound database model
+  --inbdb-servers=N     number of servers in inbdb cluster (default: 3)
+  --isbdb-model=standalone|backup|clustered   ic-southbound database model
+  --isbdb-servers=N     number of servers in isbdb cluster (default: 3)
 
 Other options:
   -h, --help           Print this usage message.
@@ -210,6 +225,9 @@ EOF
         --gdb-ovn-northd)
             gdb_ovn_northd=true
             ;;
+        --gdb-ovn-ic)
+            gdb_ovn_ic=true
+            ;;
         --gdb-ovn-controller)
             gdb_ovn_controller=true
             ;;
@@ -224,6 +242,12 @@ EOF
             ;;
         --n-northd*)
             prev=n_northds
+            ;;
+        --n-ic*=*)
+            n_ics=$optarg
+            ;;
+        --n-ic*)
+            prev=n_ics_
             ;;
         --n-controller*=*)
             n_controllers=$optarg
@@ -259,10 +283,39 @@ EOF
         --sbdb-m*)
             prev=sbdb_model
             ;;
+        --inbdb-s*=*)
+            inbdb_servers=$optarg
+            inbdb_model=clustered
+            ;;
+        --inbdb-s*)
+            prev=inbdb_servers
+            inbdb_model=clustered
+            ;;
+        --inbdb-m*=*)
+            inbdb_model=$optarg
+            ;;
+        --inbdb-m*)
+            prev=inbdb_model
+            ;;
+        --isbdb-s*=*)
+            isbdb_servers=$optarg
+            isbdb_model=clustered
+            ;;
+        --isbdb-s*)
+            prev=isbdb_servers
+            isbdb_model=clustered
+            ;;
+        --isbdb-m*=*)
+            isbdb_model=$optarg
+            ;;
+        --isbdb-m*)
+            prev=isbdb_model
+            ;;
         -R|--gdb-run)
             gdb_vswitchd_ex=true
             gdb_ovsdb_ex=true
             gdb_ovn_northd_ex=true
+            gdb_ovn_ic_ex=true
             gdb_ovn_controller_ex=true
             gdb_ovn_controller_vtep_ex=true
             ;;
@@ -327,6 +380,16 @@ if $built; then
             echo >&2 'source directory not found, please use --srcdir'
             exit 1
         fi
+        ovnisb_schema=$srcdir/ovn-isb.ovsschema
+        if test ! -e "$ovnisb_schema"; then
+            echo >&2 'source directory not found, please use --srcdir'
+            exit 1
+        fi
+        ovninb_schema=$srcdir/ovn-inb.ovsschema
+        if test ! -e "$ovninb_schema"; then
+            echo >&2 'source directory not found, please use --srcdir'
+            exit 1
+        fi
         vtep_schema=$ovssrcdir/vtep/vtep.ovsschema
         if test ! -e "$vtep_schema"; then
             echo >&2 'source directory not found, please use --srcdir'
@@ -340,7 +403,7 @@ if $built; then
         exit 1
     fi
     PATH=$ovsbuilddir/ovsdb:$ovsbuilddir/vswitchd:$ovsbuilddir/utilities:$ovsbuilddir/vtep:$PATH
-    PATH=$builddir/controller:$builddir/controller-vtep:$builddir/northd:$builddir/utilities:$PATH
+    PATH=$builddir/controller:$builddir/controller-vtep:$builddir/northd:$builddir/ic:$builddir/utilities:$PATH
     export PATH
 else
     case $schema in
@@ -489,6 +552,8 @@ The backup database file is sandbox/${db}2.db
 backup_note=
 ovn_start_db nb "$nbdb_model" "$nbdb_servers" "$ovnnb_schema"
 ovn_start_db sb "$sbdb_model" "$sbdb_servers" "$ovnsb_schema"
+ovn_start_db inb "$inbdb_model" "$inbdb_servers" "$ovninb_schema"
+ovn_start_db isb "$isbdb_model" "$isbdb_servers" "$ovnisb_schema"
 
 #Add a small delay to allow ovsdb-server to launch.
 sleep 0.1
@@ -511,6 +576,9 @@ rungdb $gdb_vswitchd $gdb_vswitchd_ex ovs-vswitchd --detach --no-chdir --pidfile
 
 ovn-nbctl init
 ovn-sbctl init
+ovn-inbctl init
+ovn-isbctl init
+ovn-nbctl set NB_Global . name=az-1
 
 ovs-vsctl set open . external-ids:system-id=chassis-1
 ovs-vsctl set open . external-ids:hostname=sandbox
@@ -532,6 +600,14 @@ else
     ovs-vsctl set open . external-ids:ovn-remote=$OVN_SB_DB
     OVN_CTRLR_PKI=""
 fi
+for i in $(seq $n_ics); do
+    if [ $i -eq 1 ]; then inst=""; else inst=$i; fi
+    rungdb $gdb_ovn_ic $gdb_ovn_ic_ex ovn-ic --detach \
+            --no-chdir --pidfile=ovn-ic${inst}.pid -vconsole:off \
+            --log-file=ovn-ic${inst}.log -vsyslog:off \
+            --ovnsb-db="$OVN_SB_DB" --ovnnb-db="$OVN_NB_DB" \
+            --ovnisb-db="$OVN_ISB_DB" --ovninb-db="$OVN_INB_DB"
+done
 for i in $(seq $n_northds); do
     if [ $i -eq 1 ]; then inst=""; else inst=$i; fi
     rungdb $gdb_ovn_northd $gdb_ovn_northd_ex ovn-northd --detach \
