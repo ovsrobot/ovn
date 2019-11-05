@@ -142,6 +142,20 @@ ha_chassis_destroy_ordered(struct ha_chassis_ordered *ordered_ha_ch)
     }
 }
 
+/* Returns the number of ha_chassis whose chassis column is
+ * set. */
+static size_t
+get_active_ha_chassis(const struct sbrec_ha_chassis_group *ha_ch_grp)
+{
+    size_t n_active_ha_chassis = 0;
+    for (size_t i = 0; i < ha_ch_grp->n_ha_chassis; i++) {
+        if (ha_ch_grp->ha_chassis[i]->chassis) {
+            n_active_ha_chassis++;
+        }
+    }
+
+    return n_active_ha_chassis;
+}
 
 /* Returns true if the local_chassis is the master of
  * the HA chassis group, false otherwise. */
@@ -157,6 +171,14 @@ ha_chassis_group_is_active(
 
     if (ha_ch_grp->n_ha_chassis == 1) {
         return (ha_ch_grp->ha_chassis[0]->chassis == local_chassis);
+    }
+
+    if (get_active_ha_chassis(ha_ch_grp) == 1) {
+        /* Only 1 ha_chassis of this chassis group has the 'chasss'
+         * column set, which can only be true for this 'local_chassis'.
+         * So return true - as the local_chassis can be the master of
+         * this HA chassis group. */
+        return true;
     }
 
     if (sset_is_empty(active_tunnels)) {
