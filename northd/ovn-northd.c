@@ -2588,6 +2588,8 @@ ovn_port_update_sbrec(struct northd_context *ctx,
                       struct sset *active_ha_chassis_grps)
 {
     sbrec_port_binding_set_datapath(op->sb, op->od->sb);
+    const char *ipv6_pd_list = NULL;
+
     if (op->nbrp) {
         /* If the router is for l3 gateway, it resides on a chassis
          * and its port type is "l3gateway". */
@@ -2710,6 +2712,12 @@ ovn_port_update_sbrec(struct northd_context *ctx,
                 smap_add(&new, "l3gateway-chassis", chassis_name);
             }
         }
+
+        ipv6_pd_list = smap_get(&op->sb->options, "ipv6_ra_pd_list");
+        if (ipv6_pd_list) {
+            smap_add(&new, "ipv6_ra_pd_list", ipv6_pd_list);
+        }
+
         sbrec_port_binding_set_options(op->sb, &new);
         smap_destroy(&new);
 
@@ -2759,6 +2767,12 @@ ovn_port_update_sbrec(struct northd_context *ctx,
                 smap_add_format(&options,
                                 "qdisc_queue_id", "%d", queue_id);
             }
+
+            ipv6_pd_list = smap_get(&op->sb->options, "ipv6_ra_pd_list");
+            if (ipv6_pd_list) {
+                smap_add(&options, "ipv6_ra_pd_list", ipv6_pd_list);
+            }
+
             sbrec_port_binding_set_options(op->sb, &options);
             smap_destroy(&options);
             if (ovn_is_known_nb_lsp_type(op->nbsp->type)) {
@@ -2808,6 +2822,12 @@ ovn_port_update_sbrec(struct northd_context *ctx,
                 if (chassis) {
                     smap_add(&new, "l3gateway-chassis", chassis);
                 }
+
+                ipv6_pd_list = smap_get(&op->sb->options, "ipv6_ra_pd_list");
+                if (ipv6_pd_list) {
+                    smap_add(&new, "ipv6_ra_pd_list", ipv6_pd_list);
+                }
+
                 sbrec_port_binding_set_options(op->sb, &new);
                 smap_destroy(&new);
             } else {
@@ -7242,7 +7262,38 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         free(snat_ips);
     }
 
-    /* Logical router ingress table 3: IP Input for IPv6. */
+    /* DHCPv6 reply handling */
+    HMAP_FOR_EACH (op, key_node, ports) {
+        if (!op->nbrp) {
+            continue;
+        }
+
+        bool prefix_delegation = smap_get_bool(&op->nbrp->options,
+                                               "prefix_delegation", false);
+        if (!prefix_delegation) {
+            continue;
+        }
+
+        struct lport_addresses lrp_networks;
+        if (!extract_lrp_networks(op->nbrp, &lrp_networks)) {
+            continue;
+        }
+
+        for (size_t i = 0; i < lrp_networks.n_ipv6_addrs; i++) {
+            ds_clear(&actions);
+            ds_clear(&match);
+            ds_put_format(&match, "inport == %s && ip6.dst == %s"
+                          " && udp.src == 547 && udp.dst == 546",
+                          op->json_key, lrp_networks.ipv6_addrs[i].addr_s);
+            ds_put_format(&actions, "reg0 = 0; dhcp6_server_pkt { "
+                          "eth.dst <-> eth.src; ip6.dst <-> ip6.src; "
+                          "outport <-> inport; output; };");
+            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 100,
+                          ds_cstr(&match), ds_cstr(&actions));
+        }
+    }
+
+    /* Logical router ingress table 1: IP Input for IPv6. */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbrp) {
             continue;
@@ -8035,6 +8086,19 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
 
         if (!op->lrp_networks.n_ipv6_addrs) {
             continue;
+        }
+
+        /* enable IPv6 prefix delegation */
+        bool prefix_delegation = smap_get_bool(&op->nbrp->options,
+                                               "prefix_delegation", false);
+        if (prefix_delegation) {
+            struct smap options;
+
+            smap_clone(&options, &op->sb->options);
+            smap_add(&options, "ipv6_prefix_delegation", "true");
+
+            sbrec_port_binding_set_options(op->sb, &options);
+            smap_destroy(&options);
         }
 
         const char *address_mode = smap_get(

@@ -2048,6 +2048,16 @@
           to <code>true</code>.
         </p>
       </column>
+
+      <column name="options" key="prefix_delegation"
+              type='{"type": "boolean"}'>
+        <p>
+          If set to <code>true</code>, enable IPv6 prefix delegation state
+          machine on this logical router port (RFC3633). IPv6 prefix
+          delegation is available just on a gateway router or on a gateway
+          router port.
+        </p>
+      </column>
     </group>
 
     <group title="Attachment">
