@@ -1468,6 +1468,12 @@ bind_vport("xyzzy",;
 bind_vport("xyzzy", inport;
     Syntax error at `;' expecting `)'.
 
+# prefix delegation
+dhcp6_server_pkt{};
+    formats as dhcp6_server_pkt { drop; };
+    encodes as controller(userdata=00.00.00.12.00.00.00.00)
+    has prereqs ip6
+
 # Miscellaneous negative tests.
 ;
     Syntax error at `;'.

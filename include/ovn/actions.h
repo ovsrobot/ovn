@@ -88,7 +88,8 @@ struct ovn_extend_table;
     OVNACT(OVNFIELD_LOAD,     ovnact_load)            \
     OVNACT(CHECK_PKT_LARGER,  ovnact_check_pkt_larger) \
     OVNACT(TRIGGER_EVENT,     ovnact_controller_event) \
-    OVNACT(BIND_VPORT,        ovnact_bind_vport)
+    OVNACT(BIND_VPORT,        ovnact_bind_vport)      \
+    OVNACT(DHCP6_SERVER_PKT,  ovnact_nest)
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -537,6 +538,12 @@ enum action_opcode {
      *    MFF_LOG_INPORT.
      */
     ACTION_OPCODE_BIND_VPORT,
+
+    /* dhcp6_server_pkt { ...actions ...}."
+     *
+     *  The actions, in OpenFlow 1.3 format, follow the action_header.
+     */
+    ACTION_OPCODE_DHCP6_SERVER,
 };
 
 /* Header. */
