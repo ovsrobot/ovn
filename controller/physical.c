@@ -567,6 +567,7 @@ put_replace_chassis_mac_flows(const struct simap *ct_zones,
 
         if (tag) {
             ofpact_put_STRIP_VLAN(ofpacts_p);
+            put_load(1, MFF_LOG_FLAGS, MLF_RCV_FROM_VLAN_BIT, 1, ofpacts_p);
         }
         load_logical_ingress_metadata(localnet_port, &zone_ids, ofpacts_p);
         replace_mac = ofpact_put_SET_ETH_SRC(ofpacts_p);
@@ -1124,6 +1125,7 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                          ofpacts_p);
             }
             ofpact_put_STRIP_VLAN(ofpacts_p);
+            put_load(1, MFF_LOG_FLAGS, MLF_RCV_FROM_VLAN_BIT, 1, ofpacts_p);
         }
 
         /* Remember the size with just strip vlan added so far,

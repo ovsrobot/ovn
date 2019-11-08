@@ -210,6 +210,9 @@ enum ovn_stage {
 #define REGBIT_LOOKUP_NEIGHBOR_RESULT "reg9[4]"
 #define REGBIT_SKIP_LOOKUP_NEIGHBOR "reg9[5]"
 
+#define REGBIT_NOT_VXLAN "flags[1] == 0"
+#define REGBIT_NOT_VLAN "flags[7] == 0"
+
 /* Returns an "enum ovn_stage" built from the arguments. */
 static enum ovn_stage
 ovn_stage_build(enum ovn_datapath_type dp_type, enum ovn_pipeline pipeline,
@@ -1202,6 +1205,34 @@ ovn_port_allocate_key(struct ovn_datapath *od)
                           1, (1u << 15) - 1, &od->port_key_hint);
 }
 
+/* Returns true if the logical switch port 'enabled' column is empty or
+ * set to true.  Otherwise, returns false. */
+static bool
+lsp_is_enabled(const struct nbrec_logical_switch_port *lsp)
+{
+    return !lsp->n_enabled || *lsp->enabled;
+}
+
+/* Returns true only if the logical switch port 'up' column is set to true.
+ * Otherwise, if the column is not set or set to false, returns false. */
+static bool
+lsp_is_up(const struct nbrec_logical_switch_port *lsp)
+{
+    return lsp->n_up && *lsp->up;
+}
+
+static bool
+lsp_is_external(const struct nbrec_logical_switch_port *nbsp)
+{
+    return !strcmp(nbsp->type, "external");
+}
+
+static bool
+lrport_is_enabled(const struct nbrec_logical_router_port *lrport)
+{
+    return !lrport->enabled || *lrport->enabled;
+}
+
 static char *
 chassis_redirect_name(const char *port_name)
 {
@@ -2184,7 +2215,7 @@ ip_address_and_port_from_lb_key(const char *key, char **ip_address,
 
 static void
 get_router_load_balancer_ips(const struct ovn_datapath *od,
-                             struct sset *all_ips, int *addr_family)
+                             struct sset *all_ips_v4, struct sset *all_ips_v6)
 {
     if (!od->nbr) {
         return;
@@ -2199,11 +2230,19 @@ get_router_load_balancer_ips(const struct ovn_datapath *od,
             /* node->key contains IP:port or just IP. */
             char *ip_address = NULL;
             uint16_t port;
+            int addr_family;
 
             ip_address_and_port_from_lb_key(node->key, &ip_address, &port,
-                                            addr_family);
+                                            &addr_family);
             if (!ip_address) {
                 continue;
+            }
+
+            struct sset *all_ips;
+            if (addr_family == AF_INET) {
+                all_ips = all_ips_v4;
+            } else {
+                all_ips = all_ips_v6;
             }
 
             if (!sset_contains(all_ips, ip_address)) {
@@ -2299,17 +2338,22 @@ get_nat_addresses(const struct ovn_port *op, size_t *n)
         }
     }
 
-    /* A set to hold all load-balancer vips. */
-    struct sset all_ips = SSET_INITIALIZER(&all_ips);
-    int addr_family;
-    get_router_load_balancer_ips(op->od, &all_ips, &addr_family);
+    /* Two sets to hold all load-balancer vips. */
+    struct sset all_ips_v4 = SSET_INITIALIZER(&all_ips_v4);
+    struct sset all_ips_v6 = SSET_INITIALIZER(&all_ips_v6);
+    get_router_load_balancer_ips(op->od, &all_ips_v4, &all_ips_v6);
 
     const char *ip_address;
-    SSET_FOR_EACH (ip_address, &all_ips) {
+    SSET_FOR_EACH (ip_address, &all_ips_v4) {
         ds_put_format(&c_addresses, " %s", ip_address);
         central_ip_address = true;
     }
-    sset_destroy(&all_ips);
+    SSET_FOR_EACH (ip_address, &all_ips_v6) {
+        ds_put_format(&c_addresses, " %s", ip_address);
+        central_ip_address = true;
+    }
+    sset_destroy(&all_ips_v4);
+    sset_destroy(&all_ips_v6);
 
     if (central_ip_address) {
         /* Gratuitous ARP for centralized NAT rules on distributed gateway
@@ -3737,28 +3781,6 @@ build_port_security_ip(enum ovn_pipeline pipeline, struct ovn_port *op,
 
 }
 
-/* Returns true if the logical switch port 'enabled' column is empty or
- * set to true.  Otherwise, returns false. */
-static bool
-lsp_is_enabled(const struct nbrec_logical_switch_port *lsp)
-{
-    return !lsp->n_enabled || *lsp->enabled;
-}
-
-/* Returns true only if the logical switch port 'up' column is set to true.
- * Otherwise, if the column is not set or set to false, returns false. */
-static bool
-lsp_is_up(const struct nbrec_logical_switch_port *lsp)
-{
-    return lsp->n_up && *lsp->up;
-}
-
-static bool
-lsp_is_external(const struct nbrec_logical_switch_port *nbsp)
-{
-    return !strcmp(nbsp->type, "external");
-}
-
 static bool
 build_dhcpv4_action(struct ovn_port *op, ovs_be32 offer_ip,
                     struct ds *options_action, struct ds *response_action,
@@ -5161,6 +5183,150 @@ build_lrouter_groups(struct hmap *ports, struct ovs_list *lr_list)
     }
 }
 
+/*
+ * Ingress table 17: Flows that forward ARP/ND requests only to the routers
+ * that own the addresses. Packets are still flooded in the switching domain
+ * as regular broadcast.
+ */
+static void
+build_lswitch_rport_arp_req_flow_for_ip(const char *target_address,
+                                        int addr_family,
+                                        struct ovn_port *patch_op,
+                                        struct ovn_datapath *od,
+                                        uint32_t priority,
+                                        struct hmap *lflows)
+{
+    struct ds match   = DS_EMPTY_INITIALIZER;
+    struct ds actions = DS_EMPTY_INITIALIZER;
+
+    if (addr_family == AF_INET) {
+        ds_put_format(&match, "arp.tpa == %s && arp.op == 1", target_address);
+    } else {
+        ds_put_format(&match, "nd.target == %s && nd_ns", target_address);
+    }
+
+    /* Packets received from VXLAN tunnels have already been through the
+     * router pipeline so we should skip them. Normally this is done by the
+     * multicast_group implementation (VXLAN packets skip table 32 which
+     * delivers to patch ports) but we're bypassing multicast_groups.
+     *
+     * Packets received on VLAN backed networks were also already routed at
+     * source.
+     */
+    ds_put_format(&match, " && " REGBIT_NOT_VXLAN " && " REGBIT_NOT_VLAN);
+
+    /* Send a the packet only to the router pipeline and skip flooding it
+     * in the broadcast domain.
+     */
+    ds_put_format(&actions, "outport = %s; output;", patch_op->json_key);
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, priority,
+                  ds_cstr(&match), ds_cstr(&actions));
+
+    ds_destroy(&match);
+    ds_destroy(&actions);
+}
+
+/*
+ * Ingress table 17: Flows that forward ARP/ND requests only to the routers
+ * that own the addresses.
+ * Priorities:
+ * - 80: self originated GARPs that need to follow regular processing.
+ * - 75: ARP requests to router owned IPs (interface IP/LB/NAT).
+ */
+static void
+build_lswitch_rport_arp_req_flows(struct ovn_port *op,
+                                  struct ovn_datapath *sw_od,
+                                  struct ovn_port *sw_op,
+                                  struct hmap *lflows)
+{
+    if (!op || !op->nbrp) {
+        return;
+    }
+
+    if (!lrport_is_enabled(op->nbrp)) {
+        return;
+    }
+
+    struct ds match = DS_EMPTY_INITIALIZER;
+
+    /* Self originated (G)ARP requests/ND need to be flooded as usual.
+     * Priority: 80.
+     */
+    ds_put_format(&match, "inport == %s && (arp.op == 1 || nd_ns)",
+                  sw_op->json_key);
+    ovn_lflow_add(lflows, sw_od, S_SWITCH_IN_L2_LKUP, 80,
+                  ds_cstr(&match),
+                  "outport = \""MC_FLOOD"\"; output;");
+
+    ds_destroy(&match);
+
+    /* Forward ARP requests for IPs configured on the router only to this
+     * router port.
+     * Priority: 75.
+     */
+    for (int i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+        struct ipv4_netaddr *ip4 = &op->lrp_networks.ipv4_addrs[i];
+
+        build_lswitch_rport_arp_req_flow_for_ip(ip4->addr_s, AF_INET, sw_op,
+                                                sw_od, 75, lflows);
+    }
+    for (int i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
+        struct ipv6_netaddr *ip6 = &op->lrp_networks.ipv6_addrs[i];
+
+        build_lswitch_rport_arp_req_flow_for_ip(ip6->addr_s, AF_INET6, sw_op,
+                                                sw_od, 75, lflows);
+    }
+
+    /* Forward ARP requests to load-balancer VIPs configured on the router
+     * only to this router port.
+     * Priority: 75.
+     */
+    struct sset all_ips_v4 = SSET_INITIALIZER(&all_ips_v4);
+    struct sset all_ips_v6 = SSET_INITIALIZER(&all_ips_v6);
+    const char *ip_address;
+
+    get_router_load_balancer_ips(op->od, &all_ips_v4, &all_ips_v6);
+
+    SSET_FOR_EACH (ip_address, &all_ips_v4) {
+        build_lswitch_rport_arp_req_flow_for_ip(ip_address, AF_INET, sw_op,
+                                                sw_od, 75, lflows);
+    }
+    SSET_FOR_EACH (ip_address, &all_ips_v6) {
+        build_lswitch_rport_arp_req_flow_for_ip(ip_address, AF_INET6, sw_op,
+                                                sw_od, 75, lflows);
+    }
+    sset_destroy(&all_ips_v4);
+    sset_destroy(&all_ips_v6);
+
+    /* Forward ARP requests to NAT addresses configured on the router
+     * only to this router port.
+     * Priority: 75.
+     */
+    for (int i = 0; i < op->od->nbr->n_nat; i++) {
+        const struct nbrec_nat *nat = op->od->nbr->nat[i];
+
+        if (!strcmp(nat->type, "snat")) {
+            continue;
+        }
+
+        ovs_be32 ip;
+        ovs_be32 mask;
+        struct in6_addr ipv6;
+        struct in6_addr mask_v6;
+
+        if (ip_parse_masked(nat->external_ip, &ip, &mask)) {
+            if (!ipv6_parse_masked(nat->external_ip, &ipv6, &mask_v6)) {
+                build_lswitch_rport_arp_req_flow_for_ip(nat->external_ip,
+                                                        AF_INET6, sw_op,
+                                                        sw_od, 75, lflows);
+            }
+        } else {
+            build_lswitch_rport_arp_req_flow_for_ip(nat->external_ip, AF_INET,
+                                                    sw_op, sw_od, 75, lflows);
+        }
+    }
+}
+
 static void
 build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
                     struct hmap *port_groups, struct hmap *lflows,
@@ -5748,6 +5914,14 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
             continue;
         }
 
+        /* For ports connected to logical routers add flows to bypass the
+         * broadcast flooding of ARP/ND requests in table 17. We direct the
+         * requests only to the router port that owns the IP address.
+         */
+        if (!strcmp(op->nbsp->type, "router")) {
+            build_lswitch_rport_arp_req_flows(op->peer, op->od, op, lflows);
+        }
+
         for (size_t i = 0; i < op->nbsp->n_addresses; i++) {
             /* Addresses are owned by the logical port.
              * Ethernet address followed by zero or more IPv4
@@ -5877,12 +6051,6 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
 
     ds_destroy(&match);
     ds_destroy(&actions);
-}
-
-static bool
-lrport_is_enabled(const struct nbrec_logical_router_port *lrport)
-{
-    return !lrport->enabled || *lrport->enabled;
 }
 
 /* Returns a string of the IP address of the router port 'op' that
@@ -6911,61 +7079,66 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         }
 
         /* A set to hold all load-balancer vips that need ARP responses. */
-        struct sset all_ips = SSET_INITIALIZER(&all_ips);
-        int addr_family;
-        get_router_load_balancer_ips(op->od, &all_ips, &addr_family);
+        struct sset all_ips_v4 = SSET_INITIALIZER(&all_ips_v4);
+        struct sset all_ips_v6 = SSET_INITIALIZER(&all_ips_v6);
+        get_router_load_balancer_ips(op->od, &all_ips_v4, &all_ips_v6);
 
         const char *ip_address;
-        SSET_FOR_EACH(ip_address, &all_ips) {
+        SSET_FOR_EACH (ip_address, &all_ips_v4) {
             ds_clear(&match);
-            if (addr_family == AF_INET) {
-                ds_put_format(&match,
-                              "inport == %s && arp.tpa == %s && arp.op == 1",
-                              op->json_key, ip_address);
-            } else {
-                ds_put_format(&match,
-                              "inport == %s && nd_ns && nd.target == %s",
-                              op->json_key, ip_address);
-            }
+            ds_put_format(&match,
+                          "inport == %s && arp.tpa == %s && arp.op == 1",
+                          op->json_key, ip_address);
 
             ds_clear(&actions);
-            if (addr_family == AF_INET) {
-                ds_put_format(&actions,
-                "eth.dst = eth.src; "
-                "eth.src = %s; "
-                "arp.op = 2; /* ARP reply */ "
-                "arp.tha = arp.sha; "
-                "arp.sha = %s; "
-                "arp.tpa = arp.spa; "
-                "arp.spa = %s; "
-                "outport = %s; "
-                "flags.loopback = 1; "
-                "output;",
-                op->lrp_networks.ea_s,
-                op->lrp_networks.ea_s,
-                ip_address,
-                op->json_key);
-            } else {
-                ds_put_format(&actions,
-                "nd_na { "
-                "eth.src = %s; "
-                "ip6.src = %s; "
-                "nd.target = %s; "
-                "nd.tll = %s; "
-                "outport = inport; "
-                "flags.loopback = 1; "
-                "output; "
-                "};",
-                op->lrp_networks.ea_s,
-                ip_address,
-                ip_address,
-                op->lrp_networks.ea_s);
-            }
+            ds_put_format(&actions,
+                          "eth.dst = eth.src; "
+                          "eth.src = %s; "
+                          "arp.op = 2; /* ARP reply */ "
+                          "arp.tha = arp.sha; "
+                          "arp.sha = %s; "
+                          "arp.tpa = arp.spa; "
+                          "arp.spa = %s; "
+                          "outport = %s; "
+                          "flags.loopback = 1; "
+                          "output;",
+                          op->lrp_networks.ea_s,
+                          op->lrp_networks.ea_s,
+                          ip_address,
+                          op->json_key);
+
             ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
                           ds_cstr(&match), ds_cstr(&actions));
         }
 
-        sset_destroy(&all_ips);
+        SSET_FOR_EACH (ip_address, &all_ips_v6) {
+            ds_clear(&match);
+            ds_put_format(&match,
+                          "inport == %s && nd_ns && nd.target == %s",
+                          op->json_key, ip_address);
+
+            ds_clear(&actions);
+            ds_put_format(&actions,
+                          "nd_na { "
+                          "eth.src = %s; "
+                          "ip6.src = %s; "
+                          "nd.target = %s; "
+                          "nd.tll = %s; "
+                          "outport = inport; "
+                          "flags.loopback = 1; "
+                          "output; "
+                          "};",
+                          op->lrp_networks.ea_s,
+                          ip_address,
+                          ip_address,
+                          op->lrp_networks.ea_s);
+
+            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
+                          ds_cstr(&match), ds_cstr(&actions));
+        }
+
+        sset_destroy(&all_ips_v4);
+        sset_destroy(&all_ips_v6);
 
         /* A gateway router can have 2 SNAT IP addresses to force DNATed and
          * LBed traffic respectively to be SNATed.  In addition, there can be

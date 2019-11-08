@@ -57,6 +57,7 @@ enum mff_log_flags_bits {
     MLF_LOCAL_ONLY_BIT = 4,
     MLF_NESTED_CONTAINER_BIT = 5,
     MLF_LOOKUP_MAC_BIT = 6,
+    MLF_RCV_FROM_VLAN_BIT = 7,
 };
 
 /* MFF_LOG_FLAGS_REG flag assignments */
@@ -88,6 +89,9 @@ enum mff_log_flags {
 
     /* Indicate that the lookup in the mac binding table was successful. */
     MLF_LOOKUP_MAC = (1 << MLF_LOOKUP_MAC_BIT),
+
+    /* Indicate that a packet was received on a VLAN backed network. */
+    MLF_RCV_FROM_VLAN = (1 << MLF_RCV_FROM_VLAN_BIT),
 };
 
 /* OVN logical fields
