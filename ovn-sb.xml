@@ -1243,20 +1243,39 @@
         </dd>
 
         <dt><code>ct_commit;</code></dt>
-        <dt><code>ct_commit(ct_mark=<var>value[/mask]</var>);</code></dt>
-        <dt><code>ct_commit(ct_label=<var>value[/mask]</var>);</code></dt>
-        <dt><code>ct_commit(ct_mark=<var>value[/mask]</var>, ct_label=<var>value[/mask]</var>);</code></dt>
+        <dt>
+          <code>
+            ct_commit(ct_mark=(<var>value[/mask]</var> OR <var>regX</var> OR <var>xregX</var> OR <var>xxregX</var>));
+          </code>
+        </dt>
+        <dt>
+          <code>
+            ct_commit(ct_label=(<var>value[/mask]</var> OR <var>regX</var> OR <var>xregX</var> OR <var>xxregX</var>));
+          </code>
+        </dt>
+        <dt>
+          <code>
+            ct_commit(ct_mark=(<var>value[/mask]</var> OR <var>regX</var> OR <var>xregX</var> OR <var>xxregX</var>),
+            ct_label=(<var>value[/mask]</var> OR <var>regX</var> OR <var>xregX</var> OR <var>xxregX</var> ));
+          </code>
+        </dt>
         <dd>
           <p>
             Commit the flow to the connection tracking entry associated with it
-            by a previous call to <code>ct_next</code>.  When
-            <code>ct_mark=<var>value[/mask]</var></code> and/or
-            <code>ct_label=<var>value[/mask]</var></code> are supplied,
-            <code>ct_mark</code> and/or <code>ct_label</code> will be set to the
-            values indicated by <var>value[/mask]</var> on the connection
-            tracking entry. <code>ct_mark</code> is a 32-bit field.
-            <code>ct_label</code> is a 128-bit field. The <var>value[/mask]</var>
-            should be specified in hex string if more than 64bits are to be used.
+            by a previous call to <code>ct_next</code>. When
+            <code>ct_mark=<var>value[/mask]</var> OR <var>regX</var> OR
+            <var>xregX</var> OR <var>xxregX</var> </code> and/or
+            <code>ct_label=<var>value[/mask]</var> OR <var>regX
+            </var> OR <var>xregX</var> OR <var>xxregX</var> </code> are
+            supplied, <code>ct_mark</code> and/or <code>ct_label</code>
+            will be set to the values indicated by <var>value[/mask]</var>
+            or 32 bit/128 bit registers on the connection tracking entry.
+            <code>ct_mark</code> is a 32-bit field and hence will read
+            value only from a 32 bit register (reg0 - reg9).
+            <code>ct_label</code> is a 128-bit field and hence
+            will read value only from a 128 bit register (xxreg0 - xxreg1).
+            The <var>value[/mask]</var> should be specified in hex string if
+            more than 64bits are to be used.
           </p>
 
           <p>

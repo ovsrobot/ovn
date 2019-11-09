@@ -1037,6 +1037,37 @@ ct_commit(ct_label=18446744073709551615);
 ct_commit(ct_label=18446744073709551616);
     Decimal constants must be less than 2**64.
 
+ct_commit(ct_label=xxreg1);
+    formats as ct_commit;
+    encodes as ct(commit,zone=NXM_NX_REG13[0..15],exec(move:NXM_NX_XXREG1[]->NXM_NX_CT_LABEL[]))
+    has prereqs ip
+
+ct_commit(ct_label=xreg1);
+    formats as ct_commit;
+    encodes as ct(commit,zone=NXM_NX_REG13[0..15],exec(move:OXM_OF_PKT_REG1[]->NXM_NX_CT_LABEL[0..63]))
+    has prereqs ip
+
+ct_commit(ct_label=reg1);
+    formats as ct_commit;
+    encodes as ct(commit,zone=NXM_NX_REG13[0..15],exec(move:NXM_NX_REG1[]->NXM_NX_CT_LABEL[0..31]))
+    has prereqs ip
+
+ct_commit(ct_mark=xxreg1);
+    formats as ct_commit(ct_mark=0);
+    encodes as ct(commit,zone=NXM_NX_REG13[0..15],exec(move:NXM_NX_XXREG1[0..31]->NXM_NX_CT_MARK[]))
+    has prereqs ip
+
+ct_commit(ct_mark=xreg1);
+    formats as ct_commit(ct_mark=0);
+    encodes as ct(commit,zone=NXM_NX_REG13[0..15],exec(move:OXM_OF_PKT_REG1[0..31]->NXM_NX_CT_MARK[]))
+    has prereqs ip
+
+ct_commit(ct_mark=reg1);
+    formats as ct_commit(ct_mark=0);
+    encodes as ct(commit,zone=NXM_NX_REG13[0..15],exec(move:NXM_NX_REG1[]->NXM_NX_CT_MARK[]))
+    has prereqs ip
+
+
 # ct_dnat
 ct_dnat;
     encodes as ct(table=19,zone=NXM_NX_REG11[0..15],nat)
