@@ -176,7 +176,8 @@ AT_CLEANUP
 dnl Check that the OVN conntrack field definitions are correct.
 AT_SETUP([ovn -- conntrack fields])
 AT_CHECK([ovstest test-ovn dump-symtab | grep ^ct | sort], [0],
-[[ct.dnat = ct_state[7]
+[[ct.blocked = ct_mark[0]
+ct.dnat = ct_state[7]
 ct.est = ct_state[1]
 ct.inv = ct_state[4]
 ct.new = ct_state[0]
@@ -372,7 +373,7 @@ eth.src == {$set3, badmac, 00:00:00:00:00:01} => Syntax error at `badmac' expect
 
 ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))) => Parentheses nested too deeply.
 
-ct_label > $set4 => Only == and != operators may be used to compare a field against an empty value set.
+ct_mark > $set4 => Only == and != operators may be used to compare a field against an empty value set.
 ]])
 sed 's/ =>.*//' test-cases.txt > input.txt
 sed 's/.* => //' test-cases.txt > expout
@@ -719,10 +720,10 @@ ip,nw_src=10.0.0.2: conjunction(1, 1/2)
 ip,nw_src=10.0.0.3: conjunction(1, 1/2)
 ])
 
-lflow="ip && (!ct.est || (ct.est && ct_label.blocked == 1))"
+lflow="ip && (!ct.est || (ct.est && ct.blocked == 1))"
 AT_CHECK([expr_to_flow "$lflow"], [0], [dnl
-ct_state=+est+trk,ct_label=0x1/0x1,ip
-ct_state=+est+trk,ct_label=0x1/0x1,ipv6
+ct_state=+est+trk,ct_mark=0x1/0x1,ip
+ct_state=+est+trk,ct_mark=0x1/0x1,ipv6
 ct_state=-est+trk,ip
 ct_state=-est+trk,ipv6
 ])

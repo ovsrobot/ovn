@@ -339,14 +339,14 @@
       </li>
       <li>
         <code>allow-related</code> ACLs translate into logical
-        flows with the <code>ct_commit(ct_label=0/1); next;</code> actions
+        flows with the <code>ct_commit(ct_mark=0/1); next;</code> actions
         for new connections and <code>reg0[1] = 1; next;</code> for existing
         connections.
       </li>
       <li>
         Other ACLs translate to <code>drop;</code> for new or untracked
-        connections and <code>ct_commit(ct_label=1/1);</code> for known
-        connections.  Setting <code>ct_label</code> marks a connection
+        connections and <code>ct_commit(ct_mark=1/1);</code> for known
+        connections.  Setting <code>ct_mark</code> marks a connection
         as one that was previously allowed, but should no longer be
         allowed due to a policy change.
       </li>
@@ -372,12 +372,12 @@
         A priority-65535 flow that allows any traffic in the reply
         direction for a connection that has been committed to the
         connection tracker (i.e., established flows), as long as
-        the committed flow does not have <code>ct_label.blocked</code> set.
+        the committed flow does not have <code>ct.blocked</code> set.
         We only handle traffic in the reply direction here because
         we want all packets going in the request direction to still
         go through the flows that implement the currently defined
         policy based on ACLs.  If a connection is no longer allowed by
-        policy, <code>ct_label.blocked</code> will get set and packets in the
+        policy, <code>ct.blocked</code> will get set and packets in the
         reply direction will no longer be allowed, either.
       </li>
 
@@ -385,7 +385,7 @@
         A priority-65535 flow that allows any traffic that is considered
         related to a committed flow in the connection tracker (e.g., an
         ICMP Port Unreachable from a non-listening UDP port), as long
-        as the committed flow does not have <code>ct_label.blocked</code> set.
+        as the committed flow does not have <code>ct.blocked</code> set.
       </li>
 
       <li>
@@ -395,7 +395,7 @@
 
       <li>
         A priority-65535 flow that drops all traffic in the reply direction
-        with <code>ct_label.blocked</code> set meaning that the connection
+        with <code>ct.blocked</code> set meaning that the connection
         should no longer be allowed due to a policy change.  Packets
         in the request direction are skipped here to let a newly created
         ACL re-allow this connection.

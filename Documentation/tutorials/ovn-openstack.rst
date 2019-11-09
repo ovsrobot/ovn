@@ -60,7 +60,7 @@ packaging for developers, in a way that allows you to follow along
 with the tutorial in full.
 
 Unless you have a spare computer laying about, it's easiest to install
-DevStacck in a virtual machine.  This tutorial was built using a VM
+DevStack in a virtual machine.  This tutorial was built using a VM
 implemented by KVM and managed by virt-manager.  I recommend
 configuring the VM configured for the x86-64 architecture, 6 GB RAM, 2
 VCPUs, and a 20 GB virtual disk.
@@ -1228,7 +1228,7 @@ as the output port::
 
   ct_next(ct_state=est|trk /* default (use --ct to customize) */)
   ---------------------------------------------------------------
-   6. ls_in_acl (ovn-northd.c:2925): !ct.new && ct.est && !ct.rpl && ct_label.blocked == 0 && (inport == "ap" && ip4), priority 2002, uuid a12b39f0
+   6. ls_in_acl (ovn-northd.c:2925): !ct.new && ct.est && !ct.rpl && ct.blocked == 0 && (inport == "ap" && ip4), priority 2002, uuid a12b39f0
       next;
   13. ls_in_l2_lkup (ovn-northd.c:3529): eth.dst == fa:16:3e:f6:e2:8f, priority 50, uuid c43ead31
       outport = "17d870";
@@ -1297,7 +1297,7 @@ Finally the logical switch for ``n2`` runs through the same logic as
 
   ct_next(ct_state=est|trk /* default (use --ct to customize) */)
   ---------------------------------------------------------------
-   4. ls_out_acl (ovn-northd.c:2925): !ct.new && ct.est && !ct.rpl && ct_label.blocked == 0 && (outport == "cp" && ip4 && ip4.src == $as_ip4_0fc1b6cf_f925_49e6_8f00_6dd13beca9dc), priority 2002, uuid a746fa0d
+   4. ls_out_acl (ovn-northd.c:2925): !ct.new && ct.est && !ct.rpl && ct.blocked == 0 && (outport == "cp" && ip4 && ip4.src == $as_ip4_0fc1b6cf_f925_49e6_8f00_6dd13beca9dc), priority 2002, uuid a746fa0d
       next;
    7. ls_out_port_sec_ip (ovn-northd.c:2364): outport == "cp" && eth.dst == fa:16:3e:89:f2:36 && ip4.dst == {255.255.255.255, 224.0.0.0/4, 10.1.2.7}, priority 90, uuid 4d9862b5
       next;
@@ -1537,7 +1537,7 @@ firewall and is output to ``d``::
 
   ct_next(ct_state=est|trk /* default (use --ct to customize) */)
   ---------------------------------------------------------------
-   4. ls_out_acl (ovn-northd.c:2925): !ct.new && ct.est && !ct.rpl && ct_label.blocked == 0 && (outport == "dp" && ip4 && ip4.src == 0.0.0.0/0 && icmp4), priority 2002, uuid b860fc9f
+   4. ls_out_acl (ovn-northd.c:2925): !ct.new && ct.est && !ct.rpl && ct.blocked == 0 && (outport == "dp" && ip4 && ip4.src == 0.0.0.0/0 && icmp4), priority 2002, uuid b860fc9f
       next;
    7. ls_out_port_sec_ip (ovn-northd.c:2364): outport == "dp" && eth.dst == fa:16:3e:c1:f5:a2 && ip4.dst == {255.255.255.255, 224.0.0.0/4, 10.0.0.6}, priority 90, uuid 15655a98
       next;
@@ -1649,7 +1649,7 @@ closely to those for IPv4 which we already discussed back under
 
   ct_next(ct_state=est|trk /* default (use --ct to customize) */)
   ---------------------------------------------------------------
-   6. ls_in_acl (ovn-northd.c:2925): !ct.new && ct.est && !ct.rpl && ct_label.blocked == 0 && (inport == "ap" && ip6), priority 2002, uuid 7fdd607e
+   6. ls_in_acl (ovn-northd.c:2925): !ct.new && ct.est && !ct.rpl && ct.blocked == 0 && (inport == "ap" && ip6), priority 2002, uuid 7fdd607e
       next;
   13. ls_in_l2_lkup (ovn-northd.c:3529): eth.dst == fa:16:3e:ef:2f:8b, priority 50, uuid e1d87fc5
       outport = "ad952e";
@@ -1707,7 +1707,7 @@ closely to those for IPv4 which we already discussed back under
 
   ct_next(ct_state=est|trk /* default (use --ct to customize) */)
   ---------------------------------------------------------------
-   4. ls_out_acl (ovn-northd.c:2925): !ct.new && ct.est && !ct.rpl && ct_label.blocked == 0 && (outport == "cp" && ip6 && ip6.src == $as_ip6_0fc1b6cf_f925_49e6_8f00_6dd13beca9dc), priority 2002, uuid 12fc96f9
+   4. ls_out_acl (ovn-northd.c:2925): !ct.new && ct.est && !ct.rpl && ct.blocked == 0 && (outport == "cp" && ip6 && ip6.src == $as_ip6_0fc1b6cf_f925_49e6_8f00_6dd13beca9dc), priority 2002, uuid 12fc96f9
       next;
    7. ls_out_port_sec_ip (ovn-northd.c:2390): outport == "cp" && eth.dst == fa:16:3e:89:f2:36 && ip6.dst == {fe80::f816:3eff:fe89:f236, ff00::/8, fc22::7}, priority 90, uuid c622596a
       next;
@@ -1913,7 +1913,7 @@ action replaces a DHCPDISCOVER or DHCPREQUEST packet by a
 reply.  Table 12 flips the packet's source and destination and sends
 it back the way it came in::
 
-   6. ls_in_acl (ovn-northd.c:2925): !ct.new && ct.est && !ct.rpl && ct_label.blocked == 0 && (inport == "ap" && ip4 && ip4.dst == {255.255.255.255, 10.1.1.0/24} && udp && udp.src == 68 && udp.dst == 67), priority 2002, uuid 9c90245d
+   6. ls_in_acl (ovn-northd.c:2925): !ct.new && ct.est && !ct.rpl && ct.blocked == 0 && (inport == "ap" && ip4 && ip4.dst == {255.255.255.255, 10.1.1.0/24} && udp && udp.src == 68 && udp.dst == 67), priority 2002, uuid 9c90245d
       next;
   11. ls_in_dhcp_options (ovn-northd.c:3409): inport == "ap" && eth.src == fa:16:3e:a9:4c:c7 && ip4.src == 0.0.0.0 && ip4.dst == 255.255.255.255 && udp.src == 68 && udp.dst == 67, priority 100, uuid 8d63f29c
       reg0[3] = put_dhcp_opts(offerip = 10.1.1.5, lease_time = 43200, mtu = 1442, netmask = 255.255.255.0, router = 10.1.1.1, server_id = 10.1.1.1);

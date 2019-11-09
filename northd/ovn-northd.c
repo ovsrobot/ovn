@@ -4542,13 +4542,13 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
              * It's also possible that a known connection was marked for
              * deletion after a policy was deleted, but the policy was
              * re-added while that connection is still known.  We catch
-             * that case here and un-set ct_label.blocked (which will be done
+             * that case here and un-set ct.blocked (which will be done
              * by ct_commit in the "stateful" stage) to indicate that the
              * connection should be allowed to resume.
              */
             ds_put_format(&match, "((ct.new && !ct.est)"
                                   " || (!ct.new && ct.est && !ct.rpl "
-                                       "&& ct_label.blocked == 1)) "
+                                       "&& ct.blocked == 1)) "
                                   "&& (%s)", acl->match);
             ds_put_cstr(&actions, REGBIT_CONNTRACK_COMMIT" = 1; ");
             build_acl_log(&actions, acl);
@@ -4569,7 +4569,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             ds_clear(&actions);
             ds_put_format(&match,
                           "!ct.new && ct.est && !ct.rpl"
-                          " && ct_label.blocked == 0 && (%s)",
+                          " && ct.blocked == 0 && (%s)",
                           acl->match);
 
             build_acl_log(&actions, acl);
@@ -4595,7 +4595,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             /* If the packet is not part of an established connection, then
              * we can simply reject/drop it. */
             ds_put_cstr(&match,
-                        "(!ct.est || (ct.est && ct_label.blocked == 1))");
+                        "(!ct.est || (ct.est && ct.blocked == 1))");
             if (!strcmp(acl->action, "reject")) {
                 build_reject_acl_rules(od, lflows, stage, acl, &match,
                                        &actions);
@@ -4607,11 +4607,11 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
                               acl->priority + OVN_ACL_PRI_OFFSET,
                               ds_cstr(&match), ds_cstr(&actions));
             }
-            /* For an existing connection without ct_label set, we've
+            /* For an existing connection without ct_mark set, we've
              * encountered a policy change. ACLs previously allowed
              * this connection and we committed the connection tracking
              * entry.  Current policy says that we should drop this
-             * connection.  First, we set bit 0 of ct_label to indicate
+             * connection.  First, we set bit 0 of ct_mark to indicate
              * that this connection is set for deletion.  By not
              * specifying "next;", we implicitly drop the packet after
              * updating conntrack state.  We would normally defer
@@ -4620,8 +4620,8 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
              */
             ds_clear(&match);
             ds_clear(&actions);
-            ds_put_cstr(&match, "ct.est && ct_label.blocked == 0");
-            ds_put_cstr(&actions, "ct_commit(ct_label=1/1); ");
+            ds_put_cstr(&match, "ct.est && ct.blocked == 0");
+            ds_put_cstr(&actions, "ct_commit(ct_mark=1/1); ");
             if (!strcmp(acl->action, "reject")) {
                 build_reject_acl_rules(od, lflows, stage, acl, &match,
                                        &actions);
@@ -4744,56 +4744,56 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          * subsequent packets will hit the flow at priority 0 that just
          * uses "next;"
          *
-         * We also check for established connections that have ct_label.blocked
+         * We also check for established connections that have ct.blocked
          * set on them.  That's a connection that was disallowed, but is
          * now allowed by policy again since it hit this default-allow flow.
-         * We need to set ct_label.blocked=0 to let the connection continue,
+         * We need to set ct.blocked=0 to let the connection continue,
          * which will be done by ct_commit() in the "stateful" stage.
          * Subsequent packets will hit the flow at priority 0 that just
          * uses "next;". */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, 1,
-                      "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
+                      "ip && (!ct.est || (ct.est && ct.blocked == 1))",
                        REGBIT_CONNTRACK_COMMIT" = 1; next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, 1,
-                      "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
+                      "ip && (!ct.est || (ct.est && ct.blocked == 1))",
                        REGBIT_CONNTRACK_COMMIT" = 1; next;");
 
         /* Ingress and Egress ACL Table (Priority 65535).
          *
          * Always drop traffic that's in an invalid state.  Also drop
          * reply direction packets for connections that have been marked
-         * for deletion (bit 0 of ct_label is set).
+         * for deletion (bit 0 of ct_mark is set).
          *
          * This is enforced at a higher priority than ACLs can be defined. */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
+                      "ct.inv || (ct.est && ct.rpl && ct.blocked == 1)",
                       "drop;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
+                      "ct.inv || (ct.est && ct.rpl && ct.blocked == 1)",
                       "drop;");
 
         /* Ingress and Egress ACL Table (Priority 65535).
          *
          * Allow reply traffic that is part of an established
          * conntrack entry that has not been marked for deletion
-         * (bit 0 of ct_label).  We only match traffic in the
+         * (bit 0 of ct_mark).  We only match traffic in the
          * reply direction because we want traffic in the request
          * direction to hit the currently defined policy from ACLs.
          *
          * This is enforced at a higher priority than ACLs can be defined. */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
                       "ct.est && !ct.rel && !ct.new && !ct.inv "
-                      "&& ct.rpl && ct_label.blocked == 0",
+                      "&& ct.rpl && ct.blocked == 0",
                       "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
                       "ct.est && !ct.rel && !ct.new && !ct.inv "
-                      "&& ct.rpl && ct_label.blocked == 0",
+                      "&& ct.rpl && ct.blocked == 0",
                       "next;");
 
         /* Ingress and Egress ACL Table (Priority 65535).
          *
          * Allow traffic that is related to an existing conntrack entry that
-         * has not been marked for deletion (bit 0 of ct_label).
+         * has not been marked for deletion (bit 0 of ct_mark).
          *
          * This is enforced at a higher priority than ACLs can be defined.
          *
@@ -4803,11 +4803,11 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          * that's generated from a non-listening UDP port.  */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
                       "!ct.est && ct.rel && !ct.new && !ct.inv "
-                      "&& ct_label.blocked == 0",
+                      "&& ct.blocked == 0",
                       "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
                       "!ct.est && ct.rel && !ct.new && !ct.inv "
-                      "&& ct_label.blocked == 0",
+                      "&& ct.blocked == 0",
                       "next;");
 
         /* Ingress and Egress ACL Table (Priority 65535).
@@ -4989,13 +4989,15 @@ build_stateful(struct ovn_datapath *od, struct hmap *lflows)
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 0, "1", "next;");
 
     /* If REGBIT_CONNTRACK_COMMIT is set as 1, then the packets should be
-     * committed to conntrack. We always set ct_label.blocked to 0 here as
+     * committed to conntrack. We always set ct.blocked to 0 here as
      * any packet that makes it this far is part of a connection we
      * want to allow to continue. */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 100,
-                  REGBIT_CONNTRACK_COMMIT" == 1", "ct_commit(ct_label=0/1); next;");
+                  REGBIT_CONNTRACK_COMMIT" == 1",
+                  "ct_commit(ct_mark=0/1); next;");
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 100,
-                  REGBIT_CONNTRACK_COMMIT" == 1", "ct_commit(ct_label=0/1); next;");
+                  REGBIT_CONNTRACK_COMMIT" == 1",
+                  "ct_commit(ct_mark=0/1); next;");
 
     /* If REGBIT_CONNTRACK_NAT is set as 1, then packets should just be sent
      * through nat (without committing).
