@@ -12393,6 +12393,63 @@ AT_CHECK([cat 2.packets], [0], [])
 
 AT_CLEANUP
 
+AT_SETUP([ovn -- ACL label])
+AT_KEYWORDS([ovn])
+ovn_start
+
+net_add n1
+
+sim_add hv
+as hv
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+for i in lp1 lp2; do
+    ovs-vsctl -- add-port br-int $i -- \
+        set interface $i external-ids:iface-id=$i \
+        options:tx_pcap=hv/$i-tx.pcap \
+        options:rxq_pcap=hv/$i-rx.pcap
+done
+
+lp1_mac="f0:00:00:00:00:01"
+lp1_ip="192.168.1.2"
+
+lp2_mac="f0:00:00:00:00:02"
+lp2_ip="192.168.1.3"
+
+ovn-nbctl ls-add lsw0
+ovn-nbctl --wait=sb lsp-add lsw0 lp1
+ovn-nbctl --wait=sb lsp-add lsw0 lp2
+ovn-nbctl lsp-set-addresses lp1 $lp1_mac
+ovn-nbctl lsp-set-addresses lp2 $lp2_mac
+ovn-nbctl --wait=sb sync
+
+ovn-nbctl --label=0x1234 acl-add lsw0 to-lport 1000 'tcp.dst==82' allow-related
+
+ovn-sbctl dump-flows
+
+# Check logical flow
+AT_CHECK([ovn-sbctl dump-flows | grep ls_out_acl | grep "xxreg1 = 0x1234;" | wc -l], [0], [dnl
+1
+])
+
+AT_CHECK([ovn-sbctl dump-flows | grep ls_out_stateful | grep "ct_label=xxreg1" | wc -l], [0], [dnl
+1
+])
+
+# Send packet.
+packet="inport==\"lp1\" && eth.src==$lp1_mac && eth.dst==$lp2_mac &&
+        ip4 && ip.ttl==64 && ip4.src==$lp1_ip && ip4.dst==$lp2_ip &&
+        tcp && tcp.flags==2 && tcp.src==4362 && tcp.dst==82"
+as hv ovs-appctl -t ovn-controller inject-pkt "$packet"
+
+# Check connection tracker state
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep labels=0x1234 | wc -l], [0], [dnl
+1
+])
+
+OVN_CLEANUP([hv])
+AT_CLEANUP
+
 AT_SETUP([ovn -- TTL exceeded])
 AT_KEYWORDS([ttl-exceeded])
 AT_SKIP_IF([test $HAVE_PYTHON = no])

@@ -2088,6 +2088,11 @@ nbctl_acl_list(struct ctl_context *ctx)
             ds_chomp(&ctx->output, ',');
             ds_put_cstr(&ctx->output, ")");
         }
+
+        if (acl->label) {
+           ds_put_format(&ctx->output, " label=%s", acl->label);
+        }
+
         ds_put_cstr(&ctx->output, "\n");
     }
 
@@ -2207,6 +2212,23 @@ nbctl_acl_add(struct ctl_context *ctx)
     }
     if (meter) {
         nbrec_acl_set_meter(acl, meter);
+    }
+
+    /* Label */
+    const char *label = shash_find_data(&ctx->options, "--label");
+    if (label) {
+       /* Validate that label is in the hex format (for example: 0x1234) */
+       if (strncmp(label, "0x", 2)) {
+          ctl_error(ctx, "Label: %s, should start with \"0x\"", label);
+          return;
+       }
+
+       if (label[strspn(label + 2, "0123456789abcdefABCDEF") + 2]) {
+          ctl_error(ctx, "Label: %s, should be in hex format", label);
+          return;
+       }
+
+       nbrec_acl_set_label(acl, label);
     }
 
     /* Check if same acl already exists for the ls/portgroup */
@@ -5640,7 +5662,7 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     /* acl commands. */
     { "acl-add", 5, 6, "{SWITCH | PORTGROUP} DIRECTION PRIORITY MATCH ACTION",
       NULL, nbctl_acl_add, NULL,
-      "--log,--may-exist,--type=,--name=,--severity=,--meter=", RW },
+      "--log,--may-exist,--type=,--name=,--severity=,--meter=,--label=", RW },
     { "acl-del", 1, 4, "{SWITCH | PORTGROUP} [DIRECTION [PRIORITY MATCH]]",
       NULL, nbctl_acl_del, NULL, "--type=", RW },
     { "acl-list", 1, 1, "{SWITCH | PORTGROUP}",

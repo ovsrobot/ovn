@@ -190,12 +190,13 @@ enum ovn_stage {
 #define OVN_ACL_PRI_OFFSET 1000
 
 /* Register definitions specific to switches. */
-#define REGBIT_CONNTRACK_DEFRAG  "reg0[0]"
-#define REGBIT_CONNTRACK_COMMIT  "reg0[1]"
-#define REGBIT_CONNTRACK_NAT     "reg0[2]"
-#define REGBIT_DHCP_OPTS_RESULT  "reg0[3]"
-#define REGBIT_DNS_LOOKUP_RESULT "reg0[4]"
-#define REGBIT_ND_RA_OPTS_RESULT "reg0[5]"
+#define REGBIT_CONNTRACK_DEFRAG     "reg0[0]"
+#define REGBIT_CONNTRACK_COMMIT     "reg0[1]"
+#define REGBIT_CONNTRACK_NAT        "reg0[2]"
+#define REGBIT_CONNTRACK_SET_LABEL  "reg0[3]"
+#define REGBIT_DHCP_OPTS_RESULT     "reg0[4]"
+#define REGBIT_DNS_LOOKUP_RESULT    "reg0[5]"
+#define REGBIT_ND_RA_OPTS_RESULT    "reg0[6]"
 
 /* Register definitions for switches and routers. */
 #define REGBIT_NAT_REDIRECT     "reg9[0]"
@@ -4550,7 +4551,14 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
                                   " || (!ct.new && ct.est && !ct.rpl "
                                        "&& ct.blocked == 1)) "
                                   "&& (%s)", acl->match);
-            ds_put_cstr(&actions, REGBIT_CONNTRACK_COMMIT" = 1; ");
+            if (acl->label) {
+               ds_put_format(&actions, REGBIT_CONNTRACK_COMMIT" = 1; "
+                             ""REGBIT_CONNTRACK_SET_LABEL" = 1; "
+                             "xxreg1 = %s; ", acl->label);
+            } else {
+               ds_put_cstr(&actions, REGBIT_CONNTRACK_COMMIT" = 1; ");
+            }
+
             build_acl_log(&actions, acl);
             ds_put_cstr(&actions, "next;");
             ovn_lflow_add_with_hint(lflows, od, stage,
@@ -4987,6 +4995,21 @@ build_stateful(struct ovn_datapath *od, struct hmap *lflows)
      * allowed by default. */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 0, "1", "next;");
+
+    /* If REGBIT_CONNTRACK_COMMIT is set as 1 and
+     * REGBIT_CONNTRACK_SET_LABEL is set to 1, then the packets should be
+     * committed to conntrack.
+     * We always set ct_mark.blocked to 0 here as
+     * any packet that makes it this far is part of a connection we
+     * want to allow to continue. */
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 150,
+                  REGBIT_CONNTRACK_COMMIT" == 1 && "
+                  ""REGBIT_CONNTRACK_SET_LABEL" == 1",
+                  "ct_commit(ct_mark=0/1, ct_label=xxreg1); next;");
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 150,
+                  REGBIT_CONNTRACK_COMMIT" == 1 && "
+                  ""REGBIT_CONNTRACK_SET_LABEL" == 1",
+                  "ct_commit(ct_mark=0/1, ct_label=xxreg1); next;");
 
     /* If REGBIT_CONNTRACK_COMMIT is set as 1, then the packets should be
      * committed to conntrack. We always set ct.blocked to 0 here as

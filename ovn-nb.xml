@@ -1438,6 +1438,18 @@
             default, log messages are not rate-limited.
         </p>
       </column>
+
+      <column name="label">
+        <p>
+            Associates an identifier with the ACL.
+            Same value will be written to corresponding connection
+            tracker entry. Value should be in hex, for example: 0x1234.
+            This value can help in debugging from connection tracker side,
+            for example, through this "label" we can backtrack to the ACL rule
+            which is causing a "leaked" connection.
+        </p>
+      </column>
+
     </group>
 
     <group title="Common Columns">
