@@ -1490,7 +1490,6 @@ AT_BANNER([OVN end-to-end tests])
 # 3 hypervisors, one logical switch, 3 logical ports per hypervisor
 AT_SETUP([ovn -- 3 HVs, 1 LS, 3 lports/HV])
 AT_KEYWORDS([ovnarp])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Create hypervisors hv[123].
@@ -1785,7 +1784,6 @@ AT_CLEANUP
 # logical ports bound to chassis encap-ip.
 AT_SETUP([ovn -- 2 HVs, 1 LS, 2 lports/HV])
 AT_KEYWORDS([ovnarp])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Create hypervisors hv[12].
@@ -1962,7 +1960,6 @@ OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- trace 1 LS, 3 LSPs])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Create a logical switch and some logical ports.
@@ -2185,7 +2182,6 @@ AT_CLEANUP
 # 2 locally attached networks (one flat, one vlan tagged over same device)
 # 2 ports per HV on each network
 AT_SETUP([ovn -- 2 HVs, 4 lports/HV, localnet ports])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # In this test cases we create 3 switches, all connected to same
@@ -2379,7 +2375,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- vtep: 3 HVs, 1 VIFs/HV, 1 GW, 1 LS])
 AT_KEYWORDS([vtep])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Configure the Northbound database
@@ -2581,7 +2576,6 @@ AT_CLEANUP
 
 # Similar test to "hardware GW"
 AT_SETUP([ovn -- 3 HVs, 1 VIFs/HV, 1 software GW, 1 LS])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Configure the Northbound database
@@ -2730,7 +2724,6 @@ AT_CLEANUP
 
 # 3 hypervisors, 3 logical switches with 3 logical ports each, 1 logical router
 AT_SETUP([ovn -- 3 HVs, 3 LS, 3 lports/LS, 1 LR])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -3139,7 +3132,6 @@ OVN_CLEANUP([hv1], [hv2], [hv3])
 AT_CLEANUP
 
 AT_SETUP([ovn -- IP relocation using GARP request])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -3342,7 +3334,6 @@ AT_CLEANUP
 
 # 3 hypervisors, one logical switch, 3 logical ports per hypervisor
 AT_SETUP([ovn -- portsecurity : 3 HVs, 1 LS, 3 lports/HV])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Create hypervisors hv[123].
@@ -3719,7 +3710,6 @@ OVN_CLEANUP([hv1],[hv2],[hv3])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 2 HVs, 2 LS, 1 lport/LS, 2 peer LRs])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -3866,7 +3856,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- 1 HV, 1 LS, 2 lport/LS, 1 LR])
 AT_KEYWORDS([router-admin-state])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -3978,7 +3967,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- 1 HV, 2 LSs, 1 lport/LS, 1 LR])
 AT_KEYWORDS([router-admin-state])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -4093,7 +4081,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 2 HVs, 3 LS, 1 lport/LS, 2 peer LRs, static routes])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -4246,7 +4233,6 @@ OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- send gratuitous arp on localnet])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 ovn-nbctl ls-add lsw0
 net_add n1
@@ -4300,7 +4286,6 @@ OVN_CLEANUP([hv])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 2 HVs, 3 LRs connected via LS, static routes])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -4477,7 +4462,6 @@ OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- dhcpv4 : 1 HV, 2 LS, 2 LSPs/LS])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 ovn-nbctl ls-add ls1
@@ -4910,7 +4894,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- dhcpv6 : 1 HV, 2 LS, 5 LSPs])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 ovn-nbctl ls-add ls1
@@ -5182,7 +5165,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 2 HVs, 2 LRs connected via LS, gateway router])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -5359,7 +5341,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- icmp_reply: 1 HVs, 2 LSs, 1 lport/LS, 1 LR])
 AT_KEYWORDS([router-icmp-reply])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -5505,7 +5486,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- policy-based routing: 1 HVs, 2 LSs, 1 lport/LS, 1 LR])
 AT_KEYWORDS([policy-based-routing])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -5691,7 +5671,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- policy-based routing IPv6: 1 HVs, 3 LSs, 1 lport/LS, 1 LR])
 AT_KEYWORDS([policy-based-routing])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -5968,7 +5947,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- nd_na ])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 #TODO: since patch port for IPv6 logical router port is not ready not,
@@ -6067,7 +6045,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- ipam])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Add a port to a switch that does not have a subnet set, then set the
@@ -6479,7 +6456,6 @@ OVS_APP_EXIT_AND_WAIT([ovn-northd])
 AT_CLEANUP
 
 AT_SETUP([ovn -- ipam connectivity])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 ovn-nbctl lr-add R1
@@ -6609,7 +6585,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- ovs-vswitchd restart])
 AT_KEYWORDS([vswitchd])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 ovn-nbctl ls-add ls1
@@ -6703,7 +6678,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- send arp for nexthop])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Topology: Two LSs - ls1 and ls2 are connected via router r0
@@ -6813,7 +6787,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- send gratuitous arp for nat ips in localnet])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 # Create logical switch
 ovn-nbctl ls-add ls0
@@ -6865,7 +6838,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- send gratuitous arp with nat-addresses router in localnet])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 # Create logical switch
 ovn-nbctl ls-add ls0
@@ -6963,7 +6935,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- conntrack zone allocation])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -7517,7 +7488,6 @@ OVN_CLEANUP([hv])
 AT_CLEANUP
 
 AT_SETUP([ovn -- read-only sb db:ptcp access])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 
 : > .$1.db.~lock~
 ovsdb-tool create ovn-sb.db "$abs_top_srcdir"/ovn-sb.ovsschema
@@ -7553,7 +7523,6 @@ OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CLEANUP
 
 AT_SETUP([ovn -- read-only sb db:pssl access])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 AT_SKIP_IF([test "$HAVE_OPENSSL" = no])
 PKIDIR="$(cd $abs_top_builddir/tests && pwd)"
 AT_SKIP_IF([expr "$PKIDIR" : ".*[ 	'\"
@@ -7610,7 +7579,6 @@ OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CLEANUP
 
 AT_SETUP([ovn -- nb connection/ssl commands])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 AT_SKIP_IF([test "$HAVE_OPENSSL" = no])
 PKIDIR="$(cd $abs_top_builddir/tests && pwd)"
 AT_SKIP_IF([expr "$PKIDIR" : ".*[ 	'\"
@@ -7662,7 +7630,6 @@ OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CLEANUP
 
 AT_SETUP([ovn -- sb connection/ssl commands])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 AT_SKIP_IF([test "$HAVE_OPENSSL" = no])
 PKIDIR="$(cd $abs_top_builddir/tests && pwd)"
 AT_SKIP_IF([expr "$PKIDIR" : ".*[ 	'\"
@@ -7919,7 +7886,6 @@ OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 3 HVs, 3 LRs connected via LS, source IP based routes])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -8120,7 +8086,6 @@ OVN_CLEANUP([hv1],[hv2],[hv3])
 AT_CLEANUP
 
 AT_SETUP([ovn -- dns lookup : 1 HV, 2 LS, 2 LSPs/LS])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 ovn-nbctl ls-add ls1
@@ -8534,7 +8499,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 4 HV, 1 LS, 1 LR, packet test with HA distributed router gateway port])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 net_add n1
@@ -8761,7 +8725,6 @@ OVN_CLEANUP([hv1],[gw1],[ext1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 4 HV, 3 LS, 2 LR, packet test with HA distributed router gateway port])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 net_add n1
@@ -8980,7 +8943,6 @@ OVN_CLEANUP([hv1],[gw1],[gw2],[ext1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 1 LR with distributed router gateway port])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -9308,7 +9270,6 @@ OVN_CLEANUP([hv1],[hv2],[hv3])
 AT_CLEANUP
 
 AT_SETUP([ovn -- send gratuitous arp for NAT rules on distributed router])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 # Create logical switches
 ovn-nbctl ls-add ls0
@@ -9450,7 +9411,6 @@ AT_CLEANUP
 # gateway port should use vlans(i.e input network vlan tag) across hypervisors
 # instead of tunneling.
 AT_SETUP([ovn -- vlan traffic for external network with distributed router gateway port])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -9769,7 +9729,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- IPv6 ND Router Solicitation responder])
 AT_KEYWORDS([ovn-nd_ra])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # In this test case we create 1 lswitch with 3 VIF ports attached,
@@ -10017,7 +9976,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- /32 router IP address])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -10115,7 +10073,6 @@ OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 2 HVs, 1 lport/HV, localport ports])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 ovn-nbctl ls-add ls1
@@ -10237,7 +10194,6 @@ OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 1 LR with HA distributed router gateway port])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 net_add n1
@@ -10792,7 +10748,6 @@ OVN_CLEANUP([gw1],[gw2],[hv1],[hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- send gratuitous ARP for NAT rules on HA distributed router])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 ovn-nbctl ls-add ls0
 ovn-nbctl ls-add ls1
@@ -10963,7 +10918,6 @@ OVN_CLEANUP([hv1],[hv2],[hv3])
 AT_CLEANUP
 
 AT_SETUP([ovn -- ensure one gw controller restart in HA doesn't bounce the master])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 net_add n1
@@ -11060,7 +11014,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- IPv6 Neighbor Solicitation for unknown MAC])
 AT_KEYWORDS([ovn-nd_ns for unknown mac])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 ovn-nbctl ls-add sw0_ip6
@@ -11523,7 +11476,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- ACL reject rule test])
 AT_KEYWORDS([acl-reject])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # test_ip_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_DST IP_CHKSUM EXP_IP_CHKSUM EXP_ICMP_CHKSUM
@@ -11665,7 +11617,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- Port Groups])
 AT_KEYWORDS([ovnpg])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -11891,7 +11842,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- ACLs on Port Groups])
 AT_KEYWORDS([ovnpg_acl])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -12377,7 +12327,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- TTL exceeded])
 AT_KEYWORDS([ttl-exceeded])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # test_ip_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_DST IPV4_ROUTER IP_CHKSUM EXP_IP_CHKSUM EXP_ICMP_CHKSUM
@@ -12474,7 +12423,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- router port unreachable])
 AT_KEYWORDS([router-port-unreachable])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # test_ip_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_ROUTER L4_PROTCOL IP_CHKSUM EXP_IP_CHKSUM EXP_ICMP_CHKSUM EXP_ICMP_CODE
@@ -12623,7 +12571,6 @@ OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- ovn-controller exit])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 # Logical network:
 # One Logical Router: ro, with two logical switches sw1 and sw2.
@@ -12714,7 +12661,6 @@ OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- external logical port])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 net_add n1
@@ -13450,7 +13396,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- Address Set Incremental Processing])
 AT_KEYWORDS([ovn_as_inc])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 net_add n1
@@ -13524,7 +13469,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- ovn-controller restart])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -13677,7 +13621,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- router - check packet length - icmp defrag])
 AT_KEYWORDS([check packet length])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 ovn-nbctl ls-add sw0
@@ -13852,7 +13795,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- IP packet buffering])
 AT_KEYWORDS([ip-buffering])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -13997,7 +13939,6 @@ OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- neighbor update on same HV])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -14507,7 +14448,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- virtual ports])
 AT_KEYWORDS([virtual ports])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 send_garp() {
@@ -14932,7 +14872,6 @@ OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- IGMP snoop/querier/relay])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 # Logical network:
@@ -16112,7 +16051,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- ARP lookup before learning])
 AT_KEYWORDS([virtual ports])
-AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
 send_garp() {
