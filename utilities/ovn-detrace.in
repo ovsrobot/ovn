@@ -188,22 +188,26 @@ def main():
     cookie = None
     while True:
         line = sys.stdin.readline()
-        if cookie:
-            # print lflow info when the current flow block ends
-            if regex_table_id.match(line) or line.strip() == '':
-                lflow = get_lflow_from_cookie(ovsdb_ovnsb, cookie)
-                print_lflow(lflow, "  * ")
-                print_lflow_nb_hint(lflow, "    * ", ovsdb_ovnnb)
-                cookie = None
 
-        print line.strip()
-        if line == "":
+        if line == '':
             break
 
+        line = line.strip()
+
+        if cookie:
+            # print lflow info when the current flow block ends
+            if regex_table_id.match(line):
+                lflow = get_lflow_from_cookie(ovsdb_ovnsb, cookie)
+                if lflow:
+                    print_lflow(lflow, "  * ")
+                    print_lflow_nb_hint(lflow, "    * ", ovsdb_ovnnb)
+                    cookie = None
+
+        print line
+
         m = regex_cookie.match(line)
-        if not m:
-            continue
-        cookie = m.group(1)
+        if m:
+            cookie = m.group(1)
 
 
 if __name__ == "__main__":
