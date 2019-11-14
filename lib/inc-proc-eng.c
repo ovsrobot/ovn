@@ -34,6 +34,13 @@ static bool engine_force_recompute = false;
 static bool engine_abort_recompute = false;
 static const struct engine_context *engine_context;
 
+static const char *engine_node_state_name[EN_STATE_MAX] = {
+    [EN_STALE]   = "Stale",
+    [EN_UPDATED] = "Updated",
+    [EN_VALID]   = "Valid",
+    [EN_ABORTED] = "Aborted",
+};
+
 void
 engine_set_force_recompute(bool val)
 {
@@ -58,26 +65,62 @@ engine_set_context(const struct engine_context *ctx)
     engine_context = ctx;
 }
 
-void
-engine_init(struct engine_node *node)
+/* Builds the topologically sorted 'sorted_nodes' array starting from
+ * 'node'.
+ */
+static struct engine_node **
+engine_topo_sort(struct engine_node *node, struct engine_node **sorted_nodes,
+                 size_t *n_count, size_t *n_size)
 {
-    for (size_t i = 0; i < node->n_inputs; i++) {
-        engine_init(node->inputs[i].node);
+    /* It's not so efficient to walk the array of already sorted nodes but
+     * we know that sorting is done only once at startup so it's ok for now.
+     */
+    for (size_t i = 0; i < *n_count; i++) {
+        if (sorted_nodes[i] == node) {
+            return sorted_nodes;
+        }
     }
-    if (node->init) {
-        node->init(node);
+
+    for (size_t i = 0; i < node->n_inputs; i++) {
+        sorted_nodes = engine_topo_sort(node->inputs[i].node, sorted_nodes,
+                                        n_count, n_size);
+    }
+    if (*n_count == *n_size) {
+        sorted_nodes = x2nrealloc(sorted_nodes, n_size, sizeof *sorted_nodes);
+    }
+    sorted_nodes[(*n_count)] = node;
+    (*n_count)++;
+    return sorted_nodes;
+}
+
+struct engine_node **
+engine_get_nodes(struct engine_node *root_node, size_t *n_count)
+{
+    size_t n_size = 0;
+
+    *n_count = 0;
+    return engine_topo_sort(root_node, NULL, n_count, &n_size);
+}
+
+void
+engine_init(struct engine_node **nodes, size_t n_count)
+{
+    for (size_t i = 0; i < n_count; i++) {
+        if (nodes[i]->init) {
+            nodes[i]->init(nodes[i]);
+        }
     }
 }
 
 void
-engine_cleanup(struct engine_node *node)
+engine_cleanup(struct engine_node **nodes, size_t n_count)
 {
-    for (size_t i = 0; i < node->n_inputs; i++) {
-        engine_cleanup(node->inputs[i].node);
+    for (size_t i = 0; i < n_count; i++) {
+        if (nodes[i]->cleanup) {
+            nodes[i]->cleanup(nodes[i]);
+        }
     }
-    if (node->cleanup) {
-        node->cleanup(node);
-    }
+    free(nodes);
 }
 
 struct engine_node *
@@ -128,16 +171,66 @@ engine_ovsdb_node_add_index(struct engine_node *node, const char *name,
     ed->n_indexes ++;
 }
 
-bool
-engine_has_run(struct engine_node *node, uint64_t run_id)
+void
+engine_set_node_state_at(struct engine_node *node,
+                         enum engine_node_state state,
+                         const char *where)
 {
-    return node->run_id == run_id;
+    if (node->state == state) {
+        return;
+    }
+
+    VLOG_DBG("%s: node: %s, old_state %s, new_state %s",
+             where, node->name,
+             engine_node_state_name[node->state],
+             engine_node_state_name[state]);
+
+    node->state = state;
+}
+
+static bool
+engine_node_valid(struct engine_node *node)
+{
+    return (node->state == EN_UPDATED || node->state == EN_VALID);
+}
+
+bool
+engine_node_changed(struct engine_node *node)
+{
+    return node->state == EN_UPDATED;
+}
+
+bool
+engine_has_run(struct engine_node *root_node)
+{
+    return root_node->state != EN_STALE;
+}
+
+bool
+engine_aborted(struct engine_node *node)
+{
+    return node->state == EN_ABORTED;
+}
+
+void
+engine_init_run(struct engine_node **nodes, size_t n_count,
+                struct engine_node *root_node)
+{
+    /* No need to reinitialize if last run didn't happen. */
+    if (!engine_has_run(root_node)) {
+        return;
+    }
+
+    VLOG_DBG("Initializing new run");
+    for (size_t i = 0; i < n_count; i++) {
+        engine_set_node_state(nodes[i], EN_STALE);
+    }
 }
 
 /* Do a full recompute (or at least try). If we're not allowed then
  * mark the node as "aborted".
  */
-static bool
+static void
 engine_recompute(struct engine_node *node, bool forced, bool allowed)
 {
     VLOG_DBG("node: %s, recompute (%s)", node->name,
@@ -145,12 +238,12 @@ engine_recompute(struct engine_node *node, bool forced, bool allowed)
 
     if (!allowed) {
         VLOG_DBG("node: %s, recompute aborted", node->name);
-        return false;
+        engine_set_node_state(node, EN_ABORTED);
+        return;
     }
 
+    /* Run the node handler which might change state. */
     node->run(node);
-    VLOG_DBG("node: %s, changed: %d", node->name, node->changed);
-    return true;
 }
 
 /* Return true if the node could be computed without triggerring a full
@@ -161,7 +254,7 @@ engine_compute(struct engine_node *node, bool recompute_allowed)
 {
     for (size_t i = 0; i < node->n_inputs; i++) {
         /* If the input node data changed call its change handler. */
-        if (node->inputs[i].node->changed) {
+        if (node->inputs[i].node->state == EN_UPDATED) {
             VLOG_DBG("node: %s, handle change for input %s",
                      node->name, node->inputs[i].node->name);
 
@@ -172,57 +265,61 @@ engine_compute(struct engine_node *node, bool recompute_allowed)
                 VLOG_DBG("node: %s, can't handle change for input %s, "
                          "fall back to recompute",
                          node->name, node->inputs[i].node->name);
-                if (!engine_recompute(node, false, recompute_allowed)) {
+                engine_recompute(node, false, recompute_allowed);
+                if (engine_aborted(node)) {
                     return false;
                 }
             }
         }
     }
-
     return true;
 }
 
-bool engine_run(struct engine_node *node, uint64_t run_id)
+static void
+engine_run_node(struct engine_node *node)
 {
-    if (node->run_id == run_id) {
-        /* The node was already updated in this run (could be input for
-         * multiple other nodes). Stop processing.
-         */
-        return true;
-    }
-
-    /* Initialize the node for this run. */
-    node->run_id = run_id;
-    node->changed = false;
-
     if (!node->n_inputs) {
+        /* Run the node handler which might change state. */
         node->run(node);
-        VLOG_DBG("node: %s, changed: %d", node->name, node->changed);
-        return true;
+        return;
     }
 
+    bool input_stale = false;
     for (size_t i = 0; i < node->n_inputs; i++) {
-        if (!engine_run(node->inputs[i].node, run_id)) {
-            return false;
+        if (!engine_node_valid(node->inputs[i].node)) {
+            /* If the input node aborted computation, move to EN_ABORTED.
+             * This will be propagated to following nodes.
+             */
+            if (engine_aborted(node->inputs[i].node)) {
+                engine_set_node_state(node, EN_ABORTED);
+            }
+
+            input_stale = true;
         }
     }
 
-    bool need_compute = false;
+    /* If at least one input is stale, don't change state. */
+    if (input_stale) {
+        return;
+    }
 
     if (engine_force_recompute) {
-        return engine_recompute(node, true, !engine_abort_recompute);
+        engine_recompute(node, true, !engine_abort_recompute);
+        return;
     }
 
     /* If any of the inputs updated data but there is no change_handler, then
      * recompute the current node too.
      */
+    bool need_compute = false;
     for (size_t i = 0; i < node->n_inputs; i++) {
-        if (node->inputs[i].node->changed) {
+        if (node->inputs[i].node->state == EN_UPDATED) {
             need_compute = true;
 
             /* Trigger a recompute if we don't have a change handler. */
             if (!node->inputs[i].change_handler) {
-                return engine_recompute(node, false, !engine_abort_recompute);
+                engine_recompute(node, false, !engine_abort_recompute);
+                return;
             }
         }
     }
@@ -231,33 +328,42 @@ bool engine_run(struct engine_node *node, uint64_t run_id)
         /* If we couldn't compute the node we either aborted or triggered
          * a full recompute. In any case, stop processing.
          */
-        return engine_compute(node, !engine_abort_recompute);
-    }
-
-    VLOG_DBG("node: %s, changed: %d", node->name, node->changed);
-    return true;
-}
-
-bool
-engine_need_run(struct engine_node *node, uint64_t run_id)
-{
-    size_t i;
-
-    if (node->run_id == run_id) {
-        return false;
-    }
-
-    if (!node->n_inputs) {
-        node->run(node);
-        VLOG_DBG("input node: %s, changed: %d", node->name, node->changed);
-        return node->changed;
-    }
-
-    for (i = 0; i < node->n_inputs; i++) {
-        if (engine_need_run(node->inputs[i].node, run_id)) {
-            return true;
+        if (!engine_compute(node, !engine_abort_recompute)) {
+            return;
         }
     }
 
+    /* If we reached this point, either the node was updated or its state is
+     * still valid.
+     */
+    if (!engine_node_changed(node)) {
+        engine_set_node_state(node, EN_VALID);
+    }
+}
+
+void
+engine_run(struct engine_node **nodes, size_t n_count)
+{
+    for (size_t i = 0; i < n_count; i++) {
+        engine_run_node(nodes[i]);
+    }
+}
+
+bool
+engine_need_run(struct engine_node **nodes, size_t n_count)
+{
+    for (size_t i = 0; i < n_count; i++) {
+        /* Check only leaf nodes. */
+        if (nodes[i]->n_inputs) {
+            continue;
+        }
+
+        nodes[i]->run(nodes[i]);
+        VLOG_DBG("input node: %s, state: %s", nodes[i]->name,
+                 engine_node_state_name[nodes[i]->state]);
+        if (nodes[i]->state == EN_UPDATED) {
+            return true;
+        }
+    }
     return false;
 }
