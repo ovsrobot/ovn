@@ -149,7 +149,7 @@ engine_add_input(struct engine_node *node, struct engine_node *input,
 struct ovsdb_idl_index *
 engine_ovsdb_node_get_index(struct engine_node *node, const char *name)
 {
-    struct ed_type_ovsdb_table *ed = (struct ed_type_ovsdb_table *)node->data;
+    struct ed_type_ovsdb_table *ed = node->internal_data;
     for (size_t i = 0; i < ed->n_indexes; i++) {
         if (!strcmp(ed->indexes[i].name, name)) {
             return ed->indexes[i].index;
@@ -163,7 +163,7 @@ void
 engine_ovsdb_node_add_index(struct engine_node *node, const char *name,
                             struct ovsdb_idl_index *index)
 {
-    struct ed_type_ovsdb_table *ed = (struct ed_type_ovsdb_table *)node->data;
+    struct ed_type_ovsdb_table *ed = node->internal_data;
     ovs_assert(ed->n_indexes < ENGINE_MAX_OVSDB_INDEX);
 
     ed->indexes[ed->n_indexes].name = name;
@@ -191,6 +191,9 @@ engine_set_node_state_at(struct engine_node *node,
 static bool
 engine_node_valid(struct engine_node *node)
 {
+    if (node->is_valid) {
+        return node->is_valid(node);
+    }
     return (node->state == EN_UPDATED || node->state == EN_VALID);
 }
 
@@ -212,6 +215,15 @@ engine_aborted(struct engine_node *node)
     return node->state == EN_ABORTED;
 }
 
+static void *
+engine_get_data(struct engine_node *node)
+{
+    if (engine_node_valid(node)) {
+        return node->internal_data;
+    }
+    return NULL;
+}
+
 void
 engine_init_run(struct engine_node **nodes, size_t n_count,
                 struct engine_node *root_node)
@@ -224,6 +236,11 @@ engine_init_run(struct engine_node **nodes, size_t n_count,
     VLOG_DBG("Initializing new run");
     for (size_t i = 0; i < n_count; i++) {
         engine_set_node_state(nodes[i], EN_STALE);
+
+        /* Make sure we reset the data pointer for outside users.
+         * For nodes that always store valid data the value will be non-NULL.
+         */
+        nodes[i]->data = engine_get_data(nodes[i]);
     }
 }
 
@@ -346,6 +363,10 @@ engine_run(struct engine_node **nodes, size_t n_count)
 {
     for (size_t i = 0; i < n_count; i++) {
         engine_run_node(nodes[i]);
+        /* Make sure we reset the data pointer for outside users as the
+         * node's state might have changed.
+         */
+        nodes[i]->data = engine_get_data(nodes[i]);
     }
 }
 
