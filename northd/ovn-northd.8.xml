@@ -87,6 +87,12 @@
       <dd>
         Returns "true" if ovn-northd is currently paused, "false" otherwise.
       </dd>
+
+      <dt><code>is-active</code></dt>
+      <dd>
+        When ovn-northd is connected to clustered OVN DB servers, this returns
+        "true" if ovn-northd is currently active, "false" otherwise.
+      </dd>
       </dl>
     </p>
 
@@ -128,6 +134,19 @@
       becomes master, you can use the runtime management command
       <code>resume</code> to resume the <code>ovn-northd</code> to process the
       DB changes.
+    </p>
+
+    <h2> Active-Standby with clustered OVN DB servers</h2>
+    <p>
+      When <code>ovn-northd</code> is connected to clustered OVN DB servers a
+      OVSDB locking feature will be used to ensure only one
+      <code>ovn-northd</code> process is active at a time.
+    </p>
+
+    <p>
+      The <code>ovn-northd</code> daemon will write an entry in its log when
+      it becomes active.  You may query the active status at any time with
+      the <code>is-active</code> management command.
     </p>
 
     <h1>Logical Flow Table Structure</h1>
