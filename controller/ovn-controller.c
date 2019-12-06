@@ -2100,6 +2100,14 @@ main(int argc, char *argv[])
                         } else {
                             engine_run(true);
                         }
+                    } else {
+                        /* Even if there's no SB DB transaction available,
+                         * try to run the engine so that we can handle any
+                         * incremental changes that don't require a recompute.
+                         * If a recompute is required, the engine will abort,
+                         * triggerring a full run in the next iteration.
+                         */
+                        engine_run(false);
                     }
                     stopwatch_stop(CONTROLLER_LOOP_STOPWATCH_NAME,
                                    time_msec());
@@ -2167,6 +2175,11 @@ main(int argc, char *argv[])
                 VLOG_DBG("engine was aborted, force recompute next time: "
                          "br_int %p, chassis %p", br_int, chassis);
                 engine_set_force_recompute(true);
+                poll_immediate_wake();
+            } else if (!ovnsb_idl_txn) {
+                VLOG_DBG("engine ran, no SB DB transaction available, "
+                         "trigger an immediate loop run: "
+                         "br_int %p, chassis %p", br_int, chassis);
                 poll_immediate_wake();
             } else {
                 engine_set_force_recompute(false);
