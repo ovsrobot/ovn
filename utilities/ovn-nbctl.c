@@ -604,8 +604,9 @@ ACL commands:\n\
 QoS commands:\n\
   qos-add SWITCH DIRECTION PRIORITY MATCH [rate=RATE [burst=BURST]] [dscp=DSCP]\n\
                             add an QoS rule to SWITCH\n\
-  qos-del SWITCH [DIRECTION [PRIORITY MATCH]]\n\
+  ls-qos-del SWITCH [DIRECTION [PRIORITY MATCH]]\n\
                             remove QoS rules from SWITCH\n\
+  qos-del QOS               remove QoS rules by name or UUID\n\
   qos-list SWITCH           print QoS rules for SWITCH\n\
 \n\
 Meter commands:\n\
@@ -2496,7 +2497,7 @@ nbctl_qos_add(struct ctl_context *ctx)
 }
 
 static void
-nbctl_qos_del(struct ctl_context *ctx)
+nbctl_ls_qos_del(struct ctl_context *ctx)
 {
     const struct nbrec_logical_switch *ls;
     char *error = ls_by_name_or_uuid(ctx, ctx->argv[1], true, &ls);
@@ -2568,6 +2569,96 @@ nbctl_qos_del(struct ctl_context *ctx)
             return;
         }
     }
+}
+
+/* Remove qos*/
+static void
+remove_qos(const struct nbrec_logical_switch *ls, size_t idx)
+{
+
+    /* First remove 'qos' from the array of qos_rules.  This is what will
+     * actually cause the qos to be deleted when the transaction is
+     * sent to the database server (due to garbage collection). */
+    struct nbrec_qos **new_qos_rules
+        = xmemdup(ls->qos_rules, sizeof *new_qos_rules * ls->n_qos_rules);
+    new_qos_rules[idx] = new_qos_rules[ls->n_qos_rules - 1];
+    nbrec_logical_switch_verify_qos_rules(ls);
+    nbrec_logical_switch_set_qos_rules(ls, new_qos_rules, \
+                                      ls->n_qos_rules - 1);
+    free(new_qos_rules);
+
+    /* Delete 'qos' from the IDL.This won't have a real effect on the
+     * database server (the IDL will suppress it in fact) but it means that it
+     * won't show up when we iterate with NBREC_LOGICAL_QOS_FOR_EACH later. */
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+qos_by_name_or_uuid(struct ctl_context *ctx, const char *id, bool must_exist,
+                   const struct nbrec_qos **qos_p)
+{
+    const struct nbrec_qos *qos = NULL;
+    *qos_p = NULL;
+
+    struct uuid qos_uuid;
+    bool is_uuid = uuid_from_string(&qos_uuid, id);
+    if (is_uuid) {
+        qos = nbrec_qos_get_for_uuid(ctx->idl, &qos_uuid);
+    }
+
+    if (!qos) {
+        const struct nbrec_qos *iter;
+
+        NBREC_QOS_FOR_EACH(iter, ctx->idl) {
+            if (strcmp(iter->name, id)) {
+                continue;
+            }
+            if (qos) {
+                return xasprintf("Multiple qos named '%s'.  "
+                                 "Use a UUID.", id);
+            }
+            qos = iter;
+        }
+    }
+
+    if (!qos && must_exist) {
+        return xasprintf("%s: qos %s not found",
+                         id, is_uuid ? "UUID" : "name");
+    }
+
+    *qos_p = qos;
+    return NULL;
+}
+
+static void
+nbctl_qos_del(struct ctl_context *ctx)
+{
+    bool must_exist = !shash_find(&ctx->options, "--if-exists");
+    const char *id = ctx->argv[1];
+    const struct nbrec_qos *qos = NULL;
+
+    char *error = qos_by_name_or_uuid(ctx, id, must_exist, &qos);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+    if (!qos) {
+        return;
+    }
+
+        /* Find the switch that contains 'qos_rules', then delete it. */
+    const struct nbrec_logical_switch *ls;
+    NBREC_LOGICAL_SWITCH_FOR_EACH (ls, ctx->idl) {
+        for (size_t i = 0; i < ls->n_qos_rules; i++) {
+            if (ls->qos_rules[i] == qos) {
+                remove_qos(ls, i);
+                return;
+            }
+        }
+    }
+
+    /* Can't happen because of the database schema. */
+    ctl_error(ctx, "qos %s is not part of any logical switch",
+              ctx->argv[1]);
 }
 
 static int
@@ -5658,8 +5749,9 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "qos-add", 5, 7,
       "SWITCH DIRECTION PRIORITY MATCH [rate=RATE [burst=BURST]] [dscp=DSCP]",
       NULL, nbctl_qos_add, NULL, "--may-exist", RW },
-    { "qos-del", 1, 4, "SWITCH [DIRECTION [PRIORITY MATCH]]", NULL,
-      nbctl_qos_del, NULL, "", RW },
+    { "qos-del", 1, 1, "QOS", NULL, nbctl_qos_del, NULL, "--if-exists", RW },
+    { "ls-qos-del", 1, 4, "SWITCH [DIRECTION [PRIORITY MATCH]]", NULL,
+      nbctl_ls_qos_del, NULL, "", RW },
     { "qos-list", 1, 1, "SWITCH", NULL, nbctl_qos_list, NULL, "", RO },
 
     /* meter commands. */
