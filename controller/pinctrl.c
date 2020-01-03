@@ -2468,7 +2468,6 @@ packet_put_ra_route_info_opt(struct dp_packet *b, ovs_be32 lifetime,
                              char *route_list)
 {
     size_t prev_l4_size = dp_packet_l4_size(b);
-    struct ip6_hdr *nh = dp_packet_l3(b);
     char *t0, *r0 = NULL;
     size_t size = 0;
 
@@ -2523,6 +2522,7 @@ packet_put_ra_route_info_opt(struct dp_packet *b, ovs_be32 lifetime,
         }
     }
 
+    struct ip6_hdr *nh = dp_packet_l3(b);
     nh->ip6_plen = htons(prev_l4_size + size);
     struct ovs_ra_msg *ra = dp_packet_l4(b);
     ra->icmph.icmp6_cksum = 0;
@@ -2574,8 +2574,12 @@ ipv6_ra_send(struct rconn *swconn, struct ipv6_ra_state *ra)
         ds_destroy(&dnssl);
     }
     if (ra->config->route_info.length) {
+        struct ds route_info;
+
+        ds_clone(&route_info, &ra->config->route_info);
         packet_put_ra_route_info_opt(&packet, htonl(0xffffffff),
-                                     ra->config->route_info.string);
+                                     ds_cstr(&route_info));
+        ds_destroy(&route_info);
     }
 
     uint64_t ofpacts_stub[4096 / 8];
