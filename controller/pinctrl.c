@@ -2417,7 +2417,6 @@ packet_put_ra_dnssl_opt(struct dp_packet *b, ovs_be32 lifetime,
 {
     size_t prev_l4_size = dp_packet_l4_size(b);
     size_t size = sizeof(struct ovs_nd_dnssl);
-    struct ip6_hdr *nh = dp_packet_l3(b);
     char *t0, *r0 = NULL, dnssl[255] = {};
     int i = 0;
 
@@ -2445,6 +2444,8 @@ packet_put_ra_dnssl_opt(struct dp_packet *b, ovs_be32 lifetime,
         dnssl[i++] = 0;
     }
     size = ROUND_UP(size, 8);
+
+    struct ip6_hdr *nh = dp_packet_l3(b);
     nh->ip6_plen = htons(prev_l4_size + size);
 
     struct ovs_nd_dnssl *nd_dnssl = dp_packet_put_uninit(b, sizeof *nd_dnssl);
@@ -2566,8 +2567,11 @@ ipv6_ra_send(struct rconn *swconn, struct ipv6_ra_state *ra)
                                 &ra->config->rdnss);
     }
     if (ra->config->dnssl.length) {
-        packet_put_ra_dnssl_opt(&packet, htonl(0xffffffff),
-                                ra->config->dnssl.string);
+        struct ds dnssl;
+
+        ds_clone(&dnssl, &ra->config->dnssl);
+        packet_put_ra_dnssl_opt(&packet, htonl(0xffffffff), ds_cstr(&dnssl));
+        ds_destroy(&dnssl);
     }
     if (ra->config->route_info.length) {
         packet_put_ra_route_info_opt(&packet, htonl(0xffffffff),
