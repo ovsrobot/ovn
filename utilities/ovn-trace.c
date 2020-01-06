@@ -2224,6 +2224,9 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
 
         case OVNACT_HANDLE_SVC_CHECK:
             break;
+
+        case OVNACT_FWD_GROUP:
+            break;
         }
     }
     ds_destroy(&s);
