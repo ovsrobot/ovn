@@ -218,17 +218,18 @@ action_parse_field(struct action_context *ctx,
 }
 
 static bool
-action_parse_port(struct action_context *ctx, uint16_t *port)
+action_parse_uint16(struct action_context *ctx, uint16_t *_value,
+                    const char *msg)
 {
     if (lexer_is_int(ctx->lexer)) {
         int value = ntohll(ctx->lexer->token.value.integer);
         if (value <= UINT16_MAX) {
-            *port = value;
+            *_value = value;
             lexer_get(ctx->lexer);
             return true;
         }
     }
-    lexer_syntax_error(ctx->lexer, "expecting port number");
+    lexer_syntax_error(ctx->lexer, "expecting %s", msg);
     return false;
 }
 
@@ -927,7 +928,7 @@ parse_ct_lb_action(struct action_context *ctx)
                 }
                 dst.port = 0;
                 if (lexer_match(ctx->lexer, LEX_T_COLON)
-                    && !action_parse_port(ctx, &dst.port)) {
+                    && !action_parse_uint16(ctx, &dst.port, "port number")) {
                     free(dsts);
                     return;
                 }
@@ -957,7 +958,8 @@ parse_ct_lb_action(struct action_context *ctx)
                         lexer_syntax_error(ctx->lexer, "IPv6 address needs "
                                 "square brackets if port is included");
                         return;
-                    } else if (!action_parse_port(ctx, &dst.port)) {
+                    } else if (!action_parse_uint16(ctx, &dst.port,
+                                                    "port number")) {
                         free(dsts);
                         return;
                     }
@@ -1096,6 +1098,134 @@ static void
 ovnact_ct_lb_free(struct ovnact_ct_lb *ct_lb)
 {
     free(ct_lb->dsts);
+}
+
+static void
+parse_select_action(struct action_context *ctx)
+{
+    if (ctx->pp->cur_ltable >= ctx->pp->n_tables) {
+        lexer_error(ctx->lexer,
+                    "\"select\" action not allowed in last table.");
+        return;
+    }
+
+    struct ovnact_select_dst *dsts = NULL;
+    size_t allocated_dsts = 0;
+    size_t n_dsts = 0;
+
+    if (!lexer_match(ctx->lexer, LEX_T_LPAREN)) {
+        lexer_syntax_error(ctx->lexer, "expecting '('");
+        return;
+    }
+
+    /* parse the result field */
+    struct expr_field res_field;
+    if (!expr_field_parse(ctx->lexer, ctx->pp->symtab, &res_field,
+                          &ctx->prereqs)) {
+        return;
+    }
+    if (!lexer_match(ctx->lexer, LEX_T_COMMA)) {
+        lexer_syntax_error(ctx->lexer, "expecting ','");
+        return;
+    }
+
+    while (!lexer_match(ctx->lexer, LEX_T_RPAREN)) {
+        struct ovnact_select_dst dst;
+        if (!action_parse_uint16(ctx, &dst.id, "id")) {
+            free(dsts);
+            return;
+        }
+
+        dst.weight = 0;
+        if (lexer_match(ctx->lexer, LEX_T_EQUALS)) {
+            if (!action_parse_uint16(ctx, &dst.weight, "weight")) {
+                free(dsts);
+                return;
+            }
+            if (dst.weight == 0) {
+                lexer_syntax_error(ctx->lexer, "weight can't be 0");
+            }
+        }
+        lexer_match(ctx->lexer, LEX_T_COMMA);
+
+        /* Append to dsts. */
+        if (n_dsts >= allocated_dsts) {
+            dsts = x2nrealloc(dsts, &allocated_dsts, sizeof *dsts);
+        }
+        dsts[n_dsts++] = dst;
+    }
+    if (n_dsts <= 1) {
+        lexer_syntax_error(ctx->lexer, "expecting at least 2 group members");
+        return;
+    }
+
+    struct ovnact_select *sn = ovnact_put_SELECT(ctx->ovnacts);
+    sn->ltable = ctx->pp->cur_ltable + 1;
+    sn->dsts = dsts;
+    sn->n_dsts = n_dsts;
+    sn->res_field = res_field;
+}
+
+static void
+format_SELECT(const struct ovnact_select *sn, struct ds *s)
+{
+    ds_put_cstr(s, "select");
+    ds_put_char(s, '(');
+    expr_field_format(&sn->res_field, s);
+    ds_put_cstr(s, ", ");
+    for (size_t i = 0; i < sn->n_dsts; i++) {
+        if (i) {
+            ds_put_cstr(s, ", ");
+        }
+
+        const struct ovnact_select_dst *dst = &sn->dsts[i];
+        ds_put_format(s, "%"PRIu16, dst->id);
+        ds_put_format(s, "=%"PRIu16, dst->weight ? dst->weight : 100);
+    }
+    ds_put_char(s, ')');
+    ds_put_char(s, ';');
+}
+
+static void
+encode_SELECT(const struct ovnact_select *sn,
+             const struct ovnact_encode_params *ep,
+             struct ofpbuf *ofpacts)
+{
+    ovs_assert(sn->n_dsts >= 1);
+    uint8_t resubmit_table = sn->ltable + first_ptable(ep, ep->pipeline);
+    uint32_t table_id = 0;
+    struct ofpact_group *og;
+
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    ds_put_format(&ds, "type=select,selection_method=dp_hash");
+
+    struct mf_subfield sf = expr_resolve_field(&sn->res_field);
+
+    for (size_t bucket_id = 0; bucket_id < sn->n_dsts; bucket_id++) {
+        const struct ovnact_select_dst *dst = &sn->dsts[bucket_id];
+        ds_put_format(&ds, ",bucket=bucket_id=%"PRIuSIZE",weight:%"PRIu16
+                      ",actions=", bucket_id, dst->weight ? dst->weight : 100);
+        ds_put_format(&ds, "load:%u->%s[%u..%u],", dst->id, sf.field->name,
+                      sf.ofs, sf.ofs + sf.n_bits - 1);
+        ds_put_format(&ds, "resubmit(,%d)", resubmit_table);
+    }
+
+    table_id = ovn_extend_table_assign_id(ep->group_table, ds_cstr(&ds),
+                                          ep->lflow_uuid);
+    ds_destroy(&ds);
+    if (table_id == EXT_TABLE_ID_INVALID) {
+        return;
+    }
+
+    /* Create an action to set the group. */
+    og = ofpact_put_GROUP(ofpacts);
+    og->group_id = table_id;
+}
+
+static void
+ovnact_select_free(struct ovnact_select *select)
+{
+    free(select->dsts);
 }
 
 static void
@@ -2931,6 +3061,8 @@ parse_action(struct action_context *ctx)
         parse_CT_SNAT(ctx);
     } else if (lexer_match_id(ctx->lexer, "ct_lb")) {
         parse_ct_lb_action(ctx);
+    } else if (lexer_match_id(ctx->lexer, "select")) {
+        parse_select_action(ctx);
     } else if (lexer_match_id(ctx->lexer, "ct_clear")) {
         ovnact_put_CT_CLEAR(ctx->ovnacts);
     } else if (lexer_match_id(ctx->lexer, "clone")) {
