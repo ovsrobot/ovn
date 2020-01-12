@@ -828,6 +828,7 @@ ovn_flow_to_string(const struct ovn_flow *f)
 {
     struct ds s = DS_EMPTY_INITIALIZER;
     ds_put_format(&s, "sb_uuid="UUID_FMT", ", UUID_ARGS(&f->sb_uuid));
+    ds_put_format(&s, "cookie=%"PRIx64", ", f->cookie);
     ds_put_format(&s, "table_id=%"PRIu8", ", f->table_id);
     ds_put_format(&s, "priority=%"PRIu16", ", f->priority);
     minimatch_format(&f->match, NULL, NULL, &s, OFP_DEFAULT_PRIORITY);
@@ -1176,7 +1177,8 @@ ofctrl_put(struct ovn_desired_flow_table *flow_table,
                 i->sb_uuid = d->sb_uuid;
             }
             if (!ofpacts_equal(i->ofpacts, i->ofpacts_len,
-                               d->ofpacts, d->ofpacts_len)) {
+                               d->ofpacts, d->ofpacts_len) ||
+                i->cookie != d->cookie) {
                 /* Update actions in installed flow. */
                 struct ofputil_flow_mod fm = {
                     .match = i->match,
@@ -1184,8 +1186,14 @@ ofctrl_put(struct ovn_desired_flow_table *flow_table,
                     .table_id = i->table_id,
                     .ofpacts = d->ofpacts,
                     .ofpacts_len = d->ofpacts_len,
-                    .command = OFPFC_MODIFY_STRICT,
+                    .command = OFPFC_ADD,
                 };
+                /* Update cookie if it is changed. */
+                if (i->cookie != d->cookie) {
+                    fm.modify_cookie = true;
+                    fm.new_cookie = htonll(d->cookie);
+                    i->cookie = d->cookie;
+                }
                 add_flow_mod(&fm, &msgs);
                 ovn_flow_log(i, "updating installed");
 
