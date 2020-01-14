@@ -1481,6 +1481,12 @@ handle_svc_check();
 handle_svc_check(reg0);
     Cannot use numeric field reg0 where string field is required.
 
+# prefix delegation
+handle_dhcpv6_reply{};
+    formats as handle_dhcpv6_reply { drop; };
+    encodes as controller(userdata=00.00.00.13.00.00.00.00)
+    has prereqs ip6
+
 # Miscellaneous negative tests.
 ;
     Syntax error at `;'.

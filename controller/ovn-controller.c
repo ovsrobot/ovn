@@ -2145,6 +2145,7 @@ main(int argc, char *argv[])
                     runtime_data = engine_get_data(&en_runtime_data);
                     if (runtime_data) {
                         pinctrl_run(ovnsb_idl_txn,
+                                    ovnsb_idl_loop.idl,
                                     sbrec_datapath_binding_by_key,
                                     sbrec_port_binding_by_datapath,
                                     sbrec_port_binding_by_key,

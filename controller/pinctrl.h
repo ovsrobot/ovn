@@ -26,6 +26,7 @@ struct hmap;
 struct lport_index;
 struct ovsdb_idl_index;
 struct ovsdb_idl_txn;
+struct ovsdb_idl;
 struct ovsrec_bridge;
 struct sbrec_chassis;
 struct sbrec_dns_table;
@@ -34,6 +35,7 @@ struct sbrec_service_monitor_table;
 
 void pinctrl_init(void);
 void pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
+                 struct ovsdb_idl *ovnsb_idl,
                  struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                  struct ovsdb_idl_index *sbrec_port_binding_by_datapath,
                  struct ovsdb_idl_index *sbrec_port_binding_by_key,
