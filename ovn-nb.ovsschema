@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
     "version": "5.18.0",
-    "cksum": "2806349485 24196",
+    "cksum": "4171338172 24362",
     "tables": {
         "NB_Global": {
             "columns": {
@@ -324,6 +324,9 @@
                 "ipv6_ra_configs": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}},
+                "ipv6_prefix": {"type": {"key": "string",
+                                      "min": 0,
+                                      "max": "unlimited"}},
                 "external_ids": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}}},

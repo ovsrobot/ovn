@@ -1896,6 +1896,11 @@
       port has all ingress and egress traffic dropped.
     </column>
 
+    <column name="ipv6_prefix">
+       This column contains IPv6 prefix obtained by prefix delegation
+       router according to RFC 3633
+    </column>
+
     <group title="ipv6_ra_configs">
       <p>
         This column defines the IPv6 ND RA address mode and ND MTU Option to be
@@ -2140,6 +2145,23 @@
           This option applies when the port is part of a logical router which
           has <ref table="Logical_Router" column="options"/>:mcast_relay set
           to <code>true</code>.
+        </p>
+      </column>
+
+      <column name="options" key="prefix_delegation"
+              type='{"type": "boolean"}'>
+        <p>
+          If set to <code>true</code>, enable IPv6 prefix delegation state
+          machine on this logical router port (RFC3633). IPv6 prefix
+          delegation is available just on a gateway router or on a gateway
+          router port.
+        </p>
+      </column>
+
+      <column name="options" key="prefix" type='{"type": "boolean"}'>
+        <p>
+          If set to <code>true</code>, this interface will receive an IPv6
+          prefix according to RFC3663
         </p>
       </column>
     </group>
