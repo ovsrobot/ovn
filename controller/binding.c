@@ -146,7 +146,7 @@ add_local_datapath__(struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
     const struct sbrec_port_binding *pb;
     SBREC_PORT_BINDING_FOR_EACH_EQUAL (pb, target,
                                        sbrec_port_binding_by_datapath) {
-        if (!strcmp(pb->type, "patch")) {
+        if (!strcmp(pb->type, "patch") || !strcmp(pb->type, "l3gateway")) {
             const char *peer_name = smap_get(&pb->options, "peer");
             if (peer_name) {
                 const struct sbrec_port_binding *peer;
@@ -172,13 +172,6 @@ add_local_datapath__(struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                 }
             }
         }
-
-        ld->n_ports++;
-        if (ld->n_ports > ld->n_allocated_ports) {
-            ld->ports = x2nrealloc(ld->ports, &ld->n_allocated_ports,
-                                   sizeof *ld->ports);
-        }
-        ld->ports[ld->n_ports - 1] = pb;
     }
     sbrec_port_binding_index_destroy_row(target);
 }
