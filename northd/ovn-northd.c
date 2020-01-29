@@ -145,13 +145,15 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, IN,  QOS_METER,      8, "ls_in_qos_meter")     \
     PIPELINE_STAGE(SWITCH, IN,  LB,             9, "ls_in_lb")            \
     PIPELINE_STAGE(SWITCH, IN,  STATEFUL,      10, "ls_in_stateful")      \
-    PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    11, "ls_in_arp_rsp")       \
-    PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  12, "ls_in_dhcp_options")  \
-    PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 13, "ls_in_dhcp_response") \
-    PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,    14, "ls_in_dns_lookup")    \
-    PIPELINE_STAGE(SWITCH, IN,  DNS_RESPONSE,  15, "ls_in_dns_response")  \
-    PIPELINE_STAGE(SWITCH, IN,  EXTERNAL_PORT, 16, "ls_in_external_port") \
-    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       17, "ls_in_l2_lkup")       \
+    PIPELINE_STAGE(SWITCH, IN,  PRE_HAIRPIN,   11, "ls_in_pre_hairpin")   \
+    PIPELINE_STAGE(SWITCH, IN,  HAIRPIN,       12, "ls_in_hairpin")       \
+    PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    13, "ls_in_arp_rsp")       \
+    PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  14, "ls_in_dhcp_options")  \
+    PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 15, "ls_in_dhcp_response") \
+    PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,    16, "ls_in_dns_lookup")    \
+    PIPELINE_STAGE(SWITCH, IN,  DNS_RESPONSE,  17, "ls_in_dns_response")  \
+    PIPELINE_STAGE(SWITCH, IN,  EXTERNAL_PORT, 18, "ls_in_external_port") \
+    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       19, "ls_in_l2_lkup")       \
                                                                           \
     /* Logical switch egress stages. */                                   \
     PIPELINE_STAGE(SWITCH, OUT, PRE_LB,       0, "ls_out_pre_lb")         \
@@ -210,6 +212,7 @@ enum ovn_stage {
 #define REGBIT_DHCP_OPTS_RESULT  "reg0[3]"
 #define REGBIT_DNS_LOOKUP_RESULT "reg0[4]"
 #define REGBIT_ND_RA_OPTS_RESULT "reg0[5]"
+#define REGBIT_HAIRPIN           "reg0[6]"
 
 /* Register definitions for switches and routers. */
 #define REGBIT_NAT_REDIRECT     "reg9[0]"
@@ -5340,6 +5343,133 @@ build_lb(struct ovn_datapath *od, struct hmap *lflows)
 }
 
 static void
+build_lb_hairpin_rules(struct ovn_datapath *od, struct hmap *lflows,
+                       struct lb_vip *lb_vip, const char *ip_match,
+                       const char *proto)
+{
+    /* Ingress Pre-Hairpin table.
+     * - Priority 200: SNAT load balanced traffic that needs to be hairpinned.
+     * - Priority 100: unSNAT replies to hairpinned load balanced traffic.
+     */
+    for (size_t i = 0; i < lb_vip->n_backends; i++) {
+        struct lb_vip_backend *backend = &lb_vip->backends[i];
+        struct ds action = DS_EMPTY_INITIALIZER;
+        struct ds match = DS_EMPTY_INITIALIZER;
+        struct ds proto_match = DS_EMPTY_INITIALIZER;
+
+        /* Packets that after load balancing have equal source and
+         * destination IPs should be hairpinned. SNAT them so that the reply
+         * traffic is directed also through OVN.
+         */
+        if (lb_vip->vip_port) {
+            ds_put_format(&proto_match, " && %s && %s.dst == %"PRIu16,
+                          proto, proto, backend->port);
+        }
+        ds_put_format(&match, "%s.src == %s && %s.dst == %s%s",
+                      ip_match, backend->ip, ip_match, backend->ip,
+                      ds_cstr(&proto_match));
+        ds_put_format(&action, REGBIT_HAIRPIN " = 1; ct_snat(%s);",
+                      lb_vip->vip);
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_HAIRPIN, 2, ds_cstr(&match),
+                      ds_cstr(&action));
+
+        /* If the packets are replies for hairpinned traffic, UNSNAT them. */
+        ds_clear(&proto_match);
+        ds_clear(&match);
+        if (lb_vip->vip_port) {
+            ds_put_format(&proto_match, " && %s && %s.src == %"PRIu16,
+                          proto, proto, backend->port);
+        }
+        ds_put_format(&match, "%s.src == %s && %s.dst == %s%s",
+                      ip_match, backend->ip, ip_match, lb_vip->vip,
+                      ds_cstr(&proto_match));
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_HAIRPIN, 1, ds_cstr(&match),
+                      REGBIT_HAIRPIN " = 1; ct_snat;");
+
+        ds_destroy(&action);
+        ds_destroy(&match);
+        ds_destroy(&proto_match);
+    }
+}
+
+static void
+build_lb_rules(struct ovn_datapath *od, struct hmap *lflows, struct ovn_lb *lb)
+{
+    for (size_t i = 0; i < lb->n_vips; i++) {
+        struct lb_vip *lb_vip = &lb->vips[i];
+
+        const char *ip_match = NULL;
+        if (lb_vip->addr_family == AF_INET) {
+            ip_match = "ip4";
+        } else {
+            ip_match = "ip6";
+        }
+
+        const char *proto = NULL;
+        if (lb_vip->vip_port) {
+            if (lb->nlb->protocol && !strcmp(lb->nlb->protocol, "udp")) {
+                proto = "udp";
+            } else {
+                proto = "tcp";
+            }
+        }
+
+        /* New connections in Ingress table. */
+        struct ds action = DS_EMPTY_INITIALIZER;
+        if (lb_vip->health_check) {
+            ds_put_cstr(&action, "ct_lb(");
+
+            size_t n_active_backends = 0;
+            for (size_t j = 0; j < lb_vip->n_backends; j++) {
+                struct lb_vip_backend *backend = &lb_vip->backends[j];
+                bool is_up = true;
+                if (backend->health_check && backend->sbrec_monitor &&
+                    backend->sbrec_monitor->status &&
+                    strcmp(backend->sbrec_monitor->status, "online")) {
+                    is_up = false;
+                }
+
+                if (is_up) {
+                    n_active_backends++;
+                    ds_put_format(&action, "%s:%"PRIu16",",
+                    backend->ip, backend->port);
+                }
+            }
+
+            if (!n_active_backends) {
+                ds_clear(&action);
+                ds_put_cstr(&action, "drop;");
+            } else {
+                ds_chomp(&action, ',');
+                ds_put_cstr(&action, ");");
+            }
+        } else {
+            ds_put_format(&action, "ct_lb(%s);", lb_vip->backend_ips);
+        }
+
+        struct ds match = DS_EMPTY_INITIALIZER;
+        ds_put_format(&match, "ct.new && %s.dst == %s", ip_match, lb_vip->vip);
+        if (lb_vip->vip_port) {
+            ds_put_format(&match, " && %s.dst == %d", proto, lb_vip->vip_port);
+            ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 120,
+                          ds_cstr(&match), ds_cstr(&action));
+        } else {
+            ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 110,
+                          ds_cstr(&match), ds_cstr(&action));
+        }
+
+        ds_destroy(&match);
+        ds_destroy(&action);
+
+        /* Also install flows that allow hairpinning of traffic (i.e., if
+         * a load balancer VIP is DNAT-ed to a backend that happens to be
+         * the source of the traffic).
+         */
+        build_lb_hairpin_rules(od, lflows, lb_vip, ip_match, proto);
+    }
+}
+
+static void
 build_stateful(struct ovn_datapath *od, struct hmap *lflows, struct hmap *lbs)
 {
     /* Ingress and Egress stateful Table (Priority 0): Packets are
@@ -5376,68 +5506,28 @@ build_stateful(struct ovn_datapath *od, struct hmap *lflows, struct hmap *lbs)
     for (int i = 0; i < od->nbs->n_load_balancer; i++) {
         struct ovn_lb *lb =
             ovn_lb_find(lbs, &od->nbs->load_balancer[i]->header_.uuid);
+
         ovs_assert(lb);
-
-        for (size_t j = 0; j < lb->n_vips; j++) {
-            struct lb_vip *lb_vip = &lb->vips[j];
-            /* New connections in Ingress table. */
-            struct ds action = DS_EMPTY_INITIALIZER;
-            if (lb_vip->health_check) {
-                ds_put_cstr(&action, "ct_lb(");
-
-                size_t n_active_backends = 0;
-                for (size_t k = 0; k < lb_vip->n_backends; k++) {
-                    struct lb_vip_backend *backend = &lb_vip->backends[k];
-                    bool is_up = true;
-                    if (backend->health_check && backend->sbrec_monitor &&
-                        backend->sbrec_monitor->status &&
-                        strcmp(backend->sbrec_monitor->status, "online")) {
-                        is_up = false;
-                    }
-
-                    if (is_up) {
-                        n_active_backends++;
-                        ds_put_format(&action, "%s:%"PRIu16",",
-                        backend->ip, backend->port);
-                    }
-                }
-
-                if (!n_active_backends) {
-                    ds_clear(&action);
-                    ds_put_cstr(&action, "drop;");
-                } else {
-                    ds_chomp(&action, ',');
-                    ds_put_cstr(&action, ");");
-                }
-            } else {
-                ds_put_format(&action, "ct_lb(%s);", lb_vip->backend_ips);
-            }
-
-            struct ds match = DS_EMPTY_INITIALIZER;
-            if (lb_vip->addr_family == AF_INET) {
-                ds_put_format(&match, "ct.new && ip4.dst == %s", lb_vip->vip);
-            } else {
-                ds_put_format(&match, "ct.new && ip6.dst == %s", lb_vip->vip);
-            }
-            if (lb_vip->vip_port) {
-                if (lb->nlb->protocol && !strcmp(lb->nlb->protocol, "udp")) {
-                    ds_put_format(&match, " && udp.dst == %d",
-                                  lb_vip->vip_port);
-                } else {
-                    ds_put_format(&match, " && tcp.dst == %d",
-                                  lb_vip->vip_port);
-                }
-                ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL,
-                              120, ds_cstr(&match), ds_cstr(&action));
-            } else {
-                ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL,
-                              110, ds_cstr(&match), ds_cstr(&action));
-            }
-
-            ds_destroy(&match);
-            ds_destroy(&action);
-        }
+        build_lb_rules(od, lflows, lb);
     }
+
+    /* Ingress Pre-Hairpin table (Priority 0). Packets that don't need
+     * hairpinning should continue processing.
+     */
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_HAIRPIN, 0, "1", "next;");
+
+    /* Ingress Hairpin table.
+     * - Priority 0: Packets that don't need hairpinning should continue
+     *   processing.
+     * - Priority 1: Packets that were SNAT-ed for hairpinning should be
+     *   looped back (i.e., swap ETH addresses and send back on inport).
+     */
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_HAIRPIN, 1, REGBIT_HAIRPIN " == 1",
+                  "eth.dst <-> eth.src;"
+                  "outport = inport;"
+                  "flags.loopback = 1;"
+                  "output;");
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_HAIRPIN, 0, "1", "next;");
 }
 
 static void
@@ -5601,7 +5691,7 @@ build_lrouter_groups(struct hmap *ports, struct ovs_list *lr_list)
 }
 
 /*
- * Ingress table 17: Flows that flood self originated ARP/ND packets in the
+ * Ingress table 19: Flows that flood self originated ARP/ND packets in the
  * switching domain.
  */
 static void
@@ -5644,7 +5734,7 @@ build_lswitch_rport_arp_req_self_orig_flow(struct ovn_port *op,
 }
 
 /*
- * Ingress table 17: Flows that forward ARP/ND requests only to the routers
+ * Ingress table 19: Flows that forward ARP/ND requests only to the routers
  * that own the addresses. Other ARP/ND packets are still flooded in the
  * switching domain as regular broadcast.
  */
@@ -5693,7 +5783,7 @@ build_lswitch_rport_arp_req_flow_for_ip(struct sset *ips,
 }
 
 /*
- * Ingress table 17: Flows that forward ARP/ND requests only to the routers
+ * Ingress table 19: Flows that forward ARP/ND requests only to the routers
  * that own the addresses.
  * Priorities:
  * - 80: self originated GARPs that need to follow regular processing.
@@ -5828,7 +5918,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
 
     build_lswitch_input_port_sec(ports, datapaths, lflows);
 
-    /* Ingress table 11: ARP/ND responder, skip requests coming from localnet
+    /* Ingress table 13: ARP/ND responder, skip requests coming from localnet
      * and vtep ports. (priority 100); see ovn-northd.8.xml for the
      * rationale. */
     struct ovn_port *op;
@@ -5846,7 +5936,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    /* Ingress table 11: ARP/ND responder, reply for known IPs.
+    /* Ingress table 13: ARP/ND responder, reply for known IPs.
      * (priority 50). */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbsp) {
@@ -5996,7 +6086,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    /* Ingress table 11: ARP/ND responder, by default goto next.
+    /* Ingress table 13: ARP/ND responder, by default goto next.
      * (priority 0)*/
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbs) {
@@ -6006,7 +6096,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ARP_ND_RSP, 0, "1", "next;");
     }
 
-    /* Ingress table 11: ARP/ND responder for service monitor source ip.
+    /* Ingress table 13: ARP/ND responder for service monitor source ip.
      * (priority 110)*/
     struct ovn_lb *lb;
     HMAP_FOR_EACH (lb, hmap_node, lbs) {
@@ -6046,8 +6136,8 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
     }
 
 
-    /* Logical switch ingress table 12 and 13: DHCP options and response
-         * priority 100 flows. */
+    /* Logical switch ingress table 14 and 15: DHCP options and response
+     * priority 100 flows. */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbsp) {
            continue;
@@ -6185,7 +6275,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    /* Logical switch ingress table 14 and 15: DNS lookup and response
+    /* Logical switch ingress table 17 and 18: DNS lookup and response
      * priority 100 flows.
      */
     HMAP_FOR_EACH (od, key_node, datapaths) {
@@ -6217,11 +6307,11 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         ds_destroy(&action);
     }
 
-    /* Ingress table 12 and 13: DHCP options and response, by default goto
+    /* Ingress table 14 and 15: DHCP options and response, by default goto
      * next. (priority 0).
-     * Ingress table 14 and 15: DNS lookup and response, by default goto next.
+     * Ingress table 16 and 17: DNS lookup and response, by default goto next.
      * (priority 0).
-     * Ingress table 16 - External port handling, by default goto next.
+     * Ingress table 18 - External port handling, by default goto next.
      * (priority 0). */
 
     HMAP_FOR_EACH (od, key_node, datapaths) {
@@ -6242,7 +6332,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
            continue;
         }
 
-        /* Table 16: External port. Drop ARP request for router ips from
+        /* Table 18: External port. Drop ARP request for router ips from
          * external ports  on chassis not binding those ports.
          * This makes the router pipeline to be run only on the chassis
          * binding the external ports. */
@@ -6288,7 +6378,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
     }
 
     char *svc_check_match = xasprintf("eth.dst == %s", svc_monitor_mac);
-    /* Ingress table 17: Destination lookup, broadcast and multicast handling
+    /* Ingress table 19: Destination lookup, broadcast and multicast handling
      * (priority 70 - 100). */
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbs) {
@@ -6370,7 +6460,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
     }
     free(svc_check_match);
 
-    /* Ingress table 17: Add IP multicast flows learnt from IGMP/MLD
+    /* Ingress table 19: Add IP multicast flows learnt from IGMP/MLD
      * (priority 90). */
     struct ovn_igmp_group *igmp_group;
 
@@ -6423,14 +6513,14 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
                       ds_cstr(&match), ds_cstr(&actions));
     }
 
-    /* Ingress table 17: Destination lookup, unicast handling (priority 50), */
+    /* Ingress table 19: Destination lookup, unicast handling (priority 50), */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbsp || lsp_is_external(op->nbsp)) {
             continue;
         }
 
         /* For ports connected to logical routers add flows to bypass the
-         * broadcast flooding of ARP/ND requests in table 17. We direct the
+         * broadcast flooding of ARP/ND requests in table 19. We direct the
          * requests only to the router port that owns the IP address.
          */
         if (!strcmp(op->nbsp->type, "router")) {
@@ -6550,7 +6640,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    /* Ingress table 17: Destination lookup for unknown MACs (priority 0). */
+    /* Ingress table 19: Destination lookup for unknown MACs (priority 0). */
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbs) {
             continue;
