@@ -1441,7 +1441,6 @@ en_flow_output_run(struct engine_node *node, void *data)
     struct ovn_extend_table *group_table = &fo->group_table;
     struct ovn_extend_table *meter_table = &fo->meter_table;
     uint32_t *conj_id_ofs = &fo->conj_id_ofs;
-    struct lflow_resource_ref *lfrr = &fo->lflow_resource_ref;
 
     static bool first_run = true;
     if (first_run) {
@@ -1450,7 +1449,6 @@ en_flow_output_run(struct engine_node *node, void *data)
         ovn_desired_flow_table_clear(flow_table);
         ovn_extend_table_clear(group_table, false /* desired */);
         ovn_extend_table_clear(meter_table, false /* desired */);
-        lflow_resource_clear(lfrr);
     }
 
     *conj_id_ofs = 1;

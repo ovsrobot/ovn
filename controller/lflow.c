@@ -924,6 +924,9 @@ lflow_run(struct lflow_ctx_in *l_ctx_in, struct lflow_ctx_out *l_ctx_out)
     SBREC_LOGICAL_FLOW_TABLE_FOR_EACH_TRACKED (lflow,
                                                l_ctx_in->logical_flow_table) {
         if (sbrec_logical_flow_is_deleted(lflow)) {
+            /* Delete entries from lflow resource reference. */
+            lflow_resource_destroy_lflow(l_ctx_out->lfrr,
+                                         &lflow->header_.uuid);
             struct lflow_expr *le =
                 lflow_expr_get(l_ctx_out->lflow_expr_cache, lflow);
             if (le) {
