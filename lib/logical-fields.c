@@ -254,12 +254,8 @@ ovn_init_symtab(struct shash *symtab)
     expr_symtab_add_field(symtab, "sctp.src", MFF_SCTP_SRC, "sctp", false);
     expr_symtab_add_field(symtab, "sctp.dst", MFF_SCTP_DST, "sctp", false);
 
-    shash_init(&ovnfield_by_name);
-    for (int i = 0; i < OVN_FIELD_N_IDS; i++) {
-        const struct ovn_field *of = &ovn_fields[i];
-        ovs_assert(of->id == i); /* Fields must be in the enum order. */
-        shash_add_once(&ovnfield_by_name, of->name, of);
-    }
+    ovn_init_ovnfields();
+
     expr_symtab_add_ovn_field(symtab, "icmp4.frag_mtu", OVN_ICMP4_FRAG_MTU);
 }
 
@@ -294,4 +290,21 @@ void
 ovn_destroy_ovnfields(void)
 {
     shash_destroy(&ovnfield_by_name);
+}
+
+void
+ovn_init_ovnfields(void)
+{
+    static struct ovsthread_once field_by_name_once =
+        OVSTHREAD_ONCE_INITIALIZER;
+
+    if (ovsthread_once_start(&field_by_name_once)) {
+       shash_init(&ovnfield_by_name);
+       for (int i = 0; i < OVN_FIELD_N_IDS; i++) {
+           const struct ovn_field *of = &ovn_fields[i];
+           ovs_assert(of->id == i); /* Fields must be in the enum order. */
+           shash_add_once(&ovnfield_by_name, of->name, of);
+       }
+       ovsthread_once_done(&field_by_name_once);
+    }
 }
