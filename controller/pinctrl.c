@@ -966,6 +966,8 @@ pinctrl_handle_tcp_reset(struct rconn *swconn, const struct flow *ip_flow,
     dp_packet_uninit(&packet);
 }
 
+#define DHCP_FLAGS_BROADCAST(flags) (((flags) & (1UL << 7)) != 0)
+
 /* Called with in the pinctrl_handler thread context. */
 static void
 pinctrl_handle_put_dhcp_opts(
@@ -1190,7 +1192,16 @@ pinctrl_handle_put_dhcp_opts(
 
     udp->udp_len = htons(new_l4_size);
 
+    /* Send a broadcast IP frame when BROADCAST flag is set */
     struct ip_header *out_ip = dp_packet_l3(&pkt_out);
+    uint32_t ip_dst;
+    if DHCP_FLAGS_BROADCAST(dhcp_data->flags) {
+        ip_dst = htonl(0xffffffff);
+    } else {
+        ip_dst = *offer_ip;
+    }
+    put_16aligned_be32(&out_ip->ip_dst, ip_dst);
+
     out_ip->ip_tot_len = htons(pkt_out.l4_ofs - pkt_out.l3_ofs + new_l4_size);
     udp->udp_csum = 0;
     /* Checksum needs to be initialized to zero. */
