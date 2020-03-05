@@ -827,7 +827,7 @@ lflow_handle_changed_neighbors(
     }
 }
 
-
+
 /* Translates logical flows in the Logical_Flow table in the OVN_SB database
  * into OpenFlow flows.  See ovn-architecture(7) for more information. */
 void
@@ -846,5 +846,4 @@ lflow_destroy(void)
 {
     expr_symtab_destroy(&symtab);
     shash_destroy(&symtab);
-    ovn_destroy_ovnfields();
 }
