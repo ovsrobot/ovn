@@ -8847,6 +8847,11 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                         &match, "outport == %s && %s == %s",
                         od->l3dgw_port->json_key,
                         is_v6 ? "xxreg0" : "reg0", nat->external_ip);
+                    if (distributed) {
+                        ds_put_format(&match,
+                                      " && is_chassis_resident(\"%s\")",
+                                      nat->logical_port);
+                    }
                     ds_clear(&actions);
                     ds_put_format(
                         &actions, "eth.dst = %s; next;",
