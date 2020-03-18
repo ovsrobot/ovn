@@ -26,6 +26,7 @@ struct hmap;
 struct lport_index;
 struct ovsdb_idl_index;
 struct ovsdb_idl_txn;
+struct ovsdb_idl;
 struct ovsrec_bridge;
 struct sbrec_chassis;
 struct sbrec_dns_table;
