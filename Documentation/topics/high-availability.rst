@@ -52,11 +52,11 @@ OVN Gateway High Availability Plan
 
 The OVN gateway is responsible for shuffling traffic between the tunneled
 overlay network (governed by ovn-northd), and the legacy physical network.  In
-a naive implementation, the gateway is a single x86 server, or hardware VTEP.
-For most deployments, a single system has enough forwarding capacity to service
-the entire virtualized network, however, it introduces a single point of
-failure.  If this system dies, the entire OVN deployment becomes unavailable.
-To mitigate this risk, an HA solution is critical -- by spreading
+a naive implementation, the gateway is a single x86 server or a hardware ToR
+switch.  For most deployments, a single system has enough forwarding capacity
+to service the entire virtualized network, however, it introduces a single
+point of failure.  If this system dies, the entire OVN deployment becomes
+unavailable.  To mitigate this risk, an HA solution is critical -- by spreading
 responsibility across multiple systems, no single server failure can take down
 the network.
 

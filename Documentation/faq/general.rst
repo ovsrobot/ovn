@@ -108,10 +108,12 @@ Q: Why does OVN use STT and Geneve instead of VLANs or VXLAN (or GRE)?
     may need to allocate more bits to the datapath or egress port
     identifiers.
 
-    As a side note, OVN does support VXLAN for use with ASIC-based top of rack
-    switches, using ``ovn-controller-vtep(8)`` and the OVSDB VTEP schema
-    described in ``vtep(5)``, but this limits the features available from OVN
-    to the subset available from the VTEP schema.
+    As a side note, OVN does support VXLAN for use with "ramp
+    gateways" that allow ASIC-based top of rack switches to act as
+    on-ramp from a physical network into an OVN logical network.  Ramp
+    switches use ``ovn-controller-vtep(8)`` and the OVSDB VTEP schema
+    described in ``vtep(5)``.  This limits the features available from
+    OVN to the subset available from the VTEP schema.
 
 Q: How can I contribute to the OVN Community?
 
