@@ -11198,6 +11198,11 @@ static const char *rbac_chassis_auth[] =
 static const char *rbac_chassis_update[] =
     {"nb_cfg", "external_ids", "encaps", "vtep_logical_switches"};
 
+static const char *rbac_chassis_private_auth[] =
+    {"chassis_name"};
+static const char *rbac_chassis_private_update[] =
+    {"nb_cfg"};
+
 static const char *rbac_encap_auth[] =
     {"chassis_name"};
 static const char *rbac_encap_update[] =
@@ -11234,6 +11239,14 @@ static struct rbac_perm_cfg {
         .insdel = true,
         .update = rbac_chassis_update,
         .n_update = ARRAY_SIZE(rbac_chassis_update),
+        .row = NULL
+    },{
+        .table = "Chassis_Private",
+        .auth = rbac_chassis_private_auth,
+        .n_auth = ARRAY_SIZE(rbac_chassis_private_auth),
+        .insdel = true,
+        .update = rbac_chassis_private_update,
+        .n_update = ARRAY_SIZE(rbac_chassis_private_update),
         .row = NULL
     },{
         .table = "Encap",
@@ -11404,11 +11417,10 @@ update_northbound_cfg(struct northd_context *ctx,
     /* Update northbound hv_cfg if appropriate. */
     if (nbg) {
         /* Find minimum nb_cfg among all chassis. */
-        const struct sbrec_chassis *chassis;
+        const struct sbrec_chassis_private *chassis;
         int64_t hv_cfg = nbg->nb_cfg;
-        SBREC_CHASSIS_FOR_EACH (chassis, ctx->ovnsb_idl) {
-            if (!smap_get_bool(&chassis->external_ids, "is-remote", false) &&
-                chassis->nb_cfg < hv_cfg) {
+        SBREC_CHASSIS_PRIVATE_FOR_EACH (chassis, ctx->ovnsb_idl) {
+            if (chassis->nb_cfg < hv_cfg) {
                 hv_cfg = chassis->nb_cfg;
             }
         }
@@ -11694,9 +11706,11 @@ main(int argc, char *argv[])
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_meter_band_col_burst_size);
 
     ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_chassis);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_chassis_col_nb_cfg);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_chassis_col_name);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_chassis_col_external_ids);
+
+    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_chassis_private);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                         &sbrec_chassis_private_col_nb_cfg);
 
     ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_ha_chassis);
     add_column_noalert(ovnsb_idl_loop.idl,

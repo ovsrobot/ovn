@@ -25,6 +25,9 @@
 OVN To-do List
 ==============
 
+* Add OVSDB conditional monitoring to a set of columns. Once implemented
+  we could get rid of the Chassis and Chassis_Private table separation.
+
 * Get incremental updates in ovn-controller and ovn-northd in some
   sensible way.
 
