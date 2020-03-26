@@ -2139,6 +2139,20 @@ icmp6 {
         </p>
 
         <p>
+          For each IPv4 address <var>A</var> defined as load balancer
+          VIP (associated with the logical router) with the protocol
+          <var>P</var> (and the protocol port <var>T</var> if defined) is also
+          present as an <code>external_ip</code> in the NAT table,
+          a priority-120 logical flow is added with the match
+          <code>ip4 &amp;&amp; ip4.dst == <var>A</var> &amp;&amp; </code> with
+          the actions <code>next;</code> to advance the packet to the next
+          table. If the load balancer also has protocol port <code>B</code> is
+          defined, then the match also has
+          <code><var>P</var>.dst == <var>B</var></code>.
+          The same flows are added for IPv6 load balancers too.
+        </p>
+
+        <p>
           A priority-0 logical flow with match <code>1</code> has actions
           <code>next;</code>.
         </p>
