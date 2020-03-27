@@ -702,7 +702,8 @@ Policy commands:\n\
 \n\
 NAT commands:\n\
   [--stateless]\n\
-  lr-nat-add ROUTER TYPE EXTERNAL_IP LOGICAL_IP [LOGICAL_PORT EXTERNAL_MAC]\n\
+  [--portrange]\n\
+  lr-nat-add ROUTER TYPE EXTERNAL_IP LOGICAL_IP [PORT_RANGE][LOGICAL_PORT EXTERNAL_MAC]\n\
                             add a NAT to ROUTER\n\
   lr-nat-del ROUTER [TYPE [IP]]\n\
                             remove NATs from ROUTER\n\
@@ -3969,6 +3970,7 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
     const char *external_ip = ctx->argv[3];
     const char *logical_ip = ctx->argv[4];
     char *new_logical_ip = NULL;
+    bool is_portrange = shash_find(&ctx->options, "--portrange") != NULL;
 
     char *error = lr_by_name_or_uuid(ctx, ctx->argv[1], true, &lr);
     if (error) {
@@ -4032,14 +4034,23 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
         }
     }
 
-    const char *logical_port;
-    const char *external_mac;
+    const char *logical_port = NULL;
+    const char *external_mac = NULL;
+    const char *port_range = NULL;
+
+    if (is_portrange) {
+        port_range = ctx->argv[5];
+    }
+
     if (ctx->argc == 6) {
-        ctl_error(ctx, "lr-nat-add with logical_port "
-                  "must also specify external_mac.");
-        free(new_logical_ip);
-        return;
-    } else if (ctx->argc == 7) {
+
+        if (!is_portrange) {
+            ctl_error(ctx, "lr-nat-add with logical_port "
+                      "must also specify external_mac.");
+            free(new_logical_ip);
+            return;
+        }
+    } else if (ctx->argc >= 7) {
         if (strcmp(nat_type, "dnat_and_snat")) {
             ctl_error(ctx, "logical_port and external_mac are only valid when "
                       "type is \"dnat_and_snat\".");
@@ -4047,7 +4058,14 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
             return;
         }
 
-        logical_port = ctx->argv[5];
+        if (ctx->argc == 7 && is_portrange) {
+            ctl_error(ctx, "lr-nat-add with logical_port "
+                      "must also specify external_mac.");
+            free(new_logical_ip);
+            return;
+        }
+
+        logical_port = ctx->argv[is_portrange ? 6: 5];
         const struct nbrec_logical_switch_port *lsp;
         error = lsp_by_name_or_uuid(ctx, logical_port, true, &lsp);
         if (error) {
@@ -4056,7 +4074,7 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
             return;
         }
 
-        external_mac = ctx->argv[6];
+        external_mac = ctx->argv[is_portrange? 7: 6];
         struct eth_addr ea;
         if (!eth_addr_from_string(external_mac, &ea)) {
             ctl_error(ctx, "invalid mac address %s.", external_mac);
@@ -4064,6 +4082,7 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
             return;
         }
     } else {
+        port_range = NULL;
         logical_port = NULL;
         external_mac = NULL;
     }
@@ -4133,6 +4152,10 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
     if (logical_port && external_mac) {
         nbrec_nat_set_logical_port(nat, logical_port);
         nbrec_nat_set_external_mac(nat, external_mac);
+    }
+
+    if (port_range) {
+        nbrec_nat_set_external_port_range(nat, port_range);
     }
 
     smap_add(&nat_options, "stateless", stateless ? "true":"false");
@@ -6131,9 +6154,10 @@ static const struct ctl_command_syntax nbctl_commands[] = {
        "", RO },
 
     /* NAT commands. */
-    { "lr-nat-add", 4, 6,
-      "ROUTER TYPE EXTERNAL_IP LOGICAL_IP [LOGICAL_PORT EXTERNAL_MAC]", NULL,
-      nbctl_lr_nat_add, NULL, "--may-exist,--stateless", RW },
+    { "lr-nat-add", 4, 7,
+      "ROUTER TYPE EXTERNAL_IP LOGICAL_IP [PORT_RANGE]"
+      "[LOGICAL_PORT EXTERNAL_MAC]", NULL,
+      nbctl_lr_nat_add, NULL, "--may-exist,--stateless,--portrange", RW },
     { "lr-nat-del", 1, 3, "ROUTER [TYPE [IP]]", NULL,
         nbctl_lr_nat_del, NULL, "--if-exists", RW },
     { "lr-nat-list", 1, 1, "ROUTER", NULL, nbctl_lr_nat_list, NULL, "", RO },
