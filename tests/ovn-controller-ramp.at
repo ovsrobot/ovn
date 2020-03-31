@@ -1,6 +1,6 @@
-AT_BANNER([ovn_controller_vtep])
+AT_BANNER([ovn_controller_ramp])
 
-# OVN_CONTROLLER_VTEP_START
+# OVN_CONTROLLER_RAMP_START
 #
 # Starts the test with a setup with vtep device.  Each test case must first
 # call this macro.
@@ -11,7 +11,7 @@ AT_BANNER([ovn_controller_vtep])
 # Configures ovn-nb with a logical switch 'br-test'.
 #
 #
-m4_define([OVN_CONTROLLER_VTEP_START],
+m4_define([OVN_CONTROLLER_RAMP_START],
   [
    AT_KEYWORDS([ovn])
    # this will cause skip when 'make check' using Windows setup.
@@ -69,24 +69,24 @@ m4_define([OVN_CONTROLLER_VTEP_START],
 /vlog|INFO|opened log file/d']])
    AT_CAPTURE_FILE([ovn-northd.log])
 
-   dnl Start ovn-controllger-vtep.
-   AT_CHECK([ovn-controller-vtep --detach --no-chdir --pidfile --log-file --vtep-db=unix:$OVS_RUNDIR/db.sock --ovnsb-db=unix:$OVS_RUNDIR/ovnsb_db.sock], [0], [], [stderr])
-   AT_CAPTURE_FILE([ovn-controller-vtep.log])
-   on_exit "kill `cat ovn-controller-vtep.pid`"
+   dnl Start ovn-controller-ramp.
+   AT_CHECK([ovn-controller-ramp --detach --no-chdir --pidfile --log-file --vtep-db=unix:$OVS_RUNDIR/db.sock --ovnsb-db=unix:$OVS_RUNDIR/ovnsb_db.sock], [0], [], [stderr])
+   AT_CAPTURE_FILE([ovn-controller-ramp.log])
+   on_exit "kill `cat ovn-controller-ramp.pid`"
    AT_CHECK([[sed < stderr '
 /vlog|INFO|opened log file/d
 /reconnect|INFO|/d']])
 ])
 
-# OVN_CONTROLLER_VTEP_STOP
+# OVN_CONTROLLER_RAMP_STOP
 #
 # So many exits... Yeah, we started a lot daemons~
 #
-m4_define([OVN_CONTROLLER_VTEP_STOP],
+m4_define([OVN_CONTROLLER_RAMP_STOP],
   [AT_CHECK([check_logs "$1"])
    OVS_APP_EXIT_AND_WAIT([ovs-vtep])
    OVS_APP_EXIT_AND_WAIT([ovn-northd])
-   OVS_APP_EXIT_AND_WAIT([ovn-controller-vtep])
+   OVS_APP_EXIT_AND_WAIT([ovn-controller-ramp])
    OVS_APP_EXIT_AND_WAIT([ovsdb-server])
    OVS_APP_EXIT_AND_WAIT([ovs-vswitchd])])
 
@@ -106,8 +106,8 @@ AT_CHECK([ovn-nbctl lsp-set-options $2 vtep-physical-switch=$3 vtep-logical-swit
 ##############################################
 
 # tests chassis related updates.
-AT_SETUP([ovn-controller-vtep - chassis])
-OVN_CONTROLLER_VTEP_START
+AT_SETUP([ovn-controller-ramp - chassis])
+OVN_CONTROLLER_RAMP_START
 
 # verifies the initial ovn-sb db configuration.
 OVS_WAIT_UNTIL([test -n "`ovn-sbctl show | grep Chassis`"])
@@ -121,8 +121,8 @@ Chassis br-vtep
 # deletes the chassis via ovn-sbctl and check that it is readded back
 # with the log.
 AT_CHECK([ovn-sbctl chassis-del br-vtep])
-OVS_WAIT_UNTIL([test -n "`grep WARN ovn-controller-vtep.log`"])
-AT_CHECK([sed -n 's/^.*\(|WARN|.*\)$/\1/p' ovn-controller-vtep.log], [0], [dnl
+OVS_WAIT_UNTIL([test -n "`grep WARN ovn-controller-ramp.log`"])
+AT_CHECK([sed -n 's/^.*\(|WARN|.*\)$/\1/p' ovn-controller-ramp.log], [0], [dnl
 |WARN|Chassis for VTEP physical switch (br-vtep) disappears, maybe deleted by ovn-sbctl, adding it back
 ])
 
@@ -169,13 +169,13 @@ AT_CHECK([ovn-sbctl --columns=vtep_logical_switches list Chassis | cut -d ':' -f
 [[]]
 ])
 
-OVN_CONTROLLER_VTEP_STOP([/Chassis for VTEP physical switch (br-vtep) disappears/d])
+OVN_CONTROLLER_RAMP_STOP([/Chassis for VTEP physical switch (br-vtep) disappears/d])
 AT_CLEANUP
 
 
 # Tests binding updates.
-AT_SETUP([ovn-controller-vtep - binding 1])
-OVN_CONTROLLER_VTEP_START
+AT_SETUP([ovn-controller-ramp - binding 1])
+OVN_CONTROLLER_RAMP_START
 
 # adds logical switch 'lswitch0' and vlan_bindings.
 AT_CHECK([vtep-ctl add-ls lswitch0 -- bind-ls br-vtep p0 100 lswitch0 -- bind-ls br-vtep p1 300 lswitch0])
@@ -215,7 +215,7 @@ ${chassis_uuid}
 ${chassis_uuid}
 ])
 # confirms the warning log.
-AT_CHECK([sed -n 's/^.*\(|WARN|.*\)$/\1/p' ovn-controller-vtep.log | sed 's/([[-_0-9a-z]][[-_0-9a-z]]*)/()/g' | uniq], [0], [dnl
+AT_CHECK([sed -n 's/^.*\(|WARN|.*\)$/\1/p' ovn-controller-ramp.log | sed 's/([[-_0-9a-z]][[-_0-9a-z]]*)/()/g' | uniq], [0], [dnl
 |WARN|logical switch (), on vtep gateway chassis () has already been associated with logical port (), ignore logical port ()
 ])
 
@@ -233,14 +233,14 @@ AT_CHECK_UNQUOTED([ovn-sbctl --columns=chassis list Port_Binding | cut -d ':' -f
 [[]]
 ])
 
-OVN_CONTROLLER_VTEP_STOP([/has already been associated with logical port/d])
+OVN_CONTROLLER_RAMP_STOP([/has already been associated with logical port/d])
 AT_CLEANUP
 
 
 # Tests corner case: Binding the vtep logical switch from two different
 # datapath.
-AT_SETUP([ovn-controller-vtep - binding 2])
-OVN_CONTROLLER_VTEP_START
+AT_SETUP([ovn-controller-ramp - binding 2])
+OVN_CONTROLLER_RAMP_START
 
 # adds logical switch 'lswitch0' and vlan_bindings.
 AT_CHECK([vtep-ctl add-ls lswitch0 -- bind-ls br-vtep p0 100 lswitch0])
@@ -256,9 +256,9 @@ AT_CHECK([vtep-ctl add-ps br-vtep-void -- add-port br-vtep-void p0-void -- bind-
 # are bound to the same logical switch, but they are on different datapath).
 OVN_NB_ADD_VTEP_PORT([br-void], [br-vtep-void_lswitch0], [br-vtep-void], [lswitch0])
 ovn-sbctl --timeout=10 wait-until Port_Binding br-vtep_lswitch0
-OVS_WAIT_UNTIL([test -n "`grep WARN ovn-controller-vtep.log`"])
+OVS_WAIT_UNTIL([test -n "`grep WARN ovn-controller-ramp.log`"])
 # confirms the warning log.
-AT_CHECK([sed -n 's/^.*\(|WARN|.*\)$/\1/p' ovn-controller-vtep.log | sed 's/([[-_0-9a-z]][[-_0-9a-z]]*)/()/g;s/(with tunnel key [[0-9]][[0-9]]*)/()/g' | uniq], [0], [dnl
+AT_CHECK([sed -n 's/^.*\(|WARN|.*\)$/\1/p' ovn-controller-ramp.log | sed 's/([[-_0-9a-z]][[-_0-9a-z]]*)/()/g;s/(with tunnel key [[0-9]][[0-9]]*)/()/g' | uniq], [0], [dnl
 |WARN|logical switch (), on vtep gateway chassis () has already been associated with logical datapath (), ignore logical port () which belongs to logical datapath ()
 ])
 
@@ -273,13 +273,13 @@ AT_CHECK_UNQUOTED([ovn-sbctl --columns=chassis list Port_Binding br-vtep_lswitch
 ${chassis_uuid}
 ])
 
-OVN_CONTROLLER_VTEP_STOP([/has already been associated with logical datapath/d])
+OVN_CONTROLLER_RAMP_STOP([/has already been associated with logical datapath/d])
 AT_CLEANUP
 
 
 # Tests vtep module vtep logical switch tunnel key update.
-AT_SETUP([ovn-controller-vtep - vtep-lswitch])
-OVN_CONTROLLER_VTEP_START
+AT_SETUP([ovn-controller-ramp - vtep-lswitch])
+OVN_CONTROLLER_RAMP_START
 
 # creates the logical switch in vtep and adds the corresponding logical
 # port to 'br-test'.
@@ -325,13 +325,13 @@ AT_CHECK([vtep-ctl --columns=tunnel_key list Logical_Switch | cut -d ':' -f2 | t
 0
 ])
 
-OVN_CONTROLLER_VTEP_STOP
+OVN_CONTROLLER_RAMP_STOP
 AT_CLEANUP
 
 
 # Tests vtep module 'Ucast_Macs_Remote's.
-AT_SETUP([ovn-controller-vtep - vtep-macs 1])
-OVN_CONTROLLER_VTEP_START
+AT_SETUP([ovn-controller-ramp - vtep-macs 1])
+OVN_CONTROLLER_RAMP_START
 
 # creates a simple logical network with the vtep device and a fake hv chassis
 # 'ch0'.
@@ -397,13 +397,13 @@ OVS_WAIT_UNTIL([test -z "`vtep-ctl --columns=MAC list Ucast_Macs_Remote | grep 0
 AT_CHECK([vtep-ctl --columns=MAC list Ucast_Macs_Remote | cut -d ':' -f2- | tr -d ' ' | sort], [0], [dnl
 ])
 
-OVN_CONTROLLER_VTEP_STOP
+OVN_CONTROLLER_RAMP_STOP
 AT_CLEANUP
 
 
 # Tests vtep module 'Ucast_Macs_Remote's (corner cases).
-AT_SETUP([ovn-controller-vtep - vtep-macs 2])
-OVN_CONTROLLER_VTEP_START
+AT_SETUP([ovn-controller-ramp - vtep-macs 2])
+OVN_CONTROLLER_RAMP_START
 
 # creates a simple logical network with the vtep device and a fake hv chassis
 # 'ch0'.
@@ -432,8 +432,8 @@ AT_CHECK([vtep-ctl --columns=MAC list Ucast_Macs_Remote | cut -d ':' -f2- | tr -
 "f0:ab:cd:ef:01:02"
 ])
 # confirms the warning log.
-OVS_WAIT_UNTIL([test -n "`grep WARN ovn-controller-vtep.log`"])
-AT_CHECK([sed -n 's/^.*\(|WARN|.*\)$/\1/p' ovn-controller-vtep.log | sed 's/([[-_:0-9a-z]][[-_:0-9a-z]]*)/()/g' | uniq], [0], [dnl
+OVS_WAIT_UNTIL([test -n "`grep WARN ovn-controller-ramp.log`"])
+AT_CHECK([sed -n 's/^.*\(|WARN|.*\)$/\1/p' ovn-controller-ramp.log | sed 's/([[-_:0-9a-z]][[-_:0-9a-z]]*)/()/g' | uniq], [0], [dnl
 |WARN|MAC address () has already been known to be on logical port () in the same logical datapath, so just ignore this logical port ()
 ])
 
@@ -465,5 +465,5 @@ AT_CHECK([vtep-ctl --columns=MAC list Ucast_Macs_Remote | cut -d ':' -f2- | tr -
 "f0:ab:cd:ef:01:02"
 ])
 
-OVN_CONTROLLER_VTEP_STOP([/has already been known to be on logical port/d])
+OVN_CONTROLLER_RAMP_STOP([/has already been known to be on logical port/d])
 AT_CLEANUP

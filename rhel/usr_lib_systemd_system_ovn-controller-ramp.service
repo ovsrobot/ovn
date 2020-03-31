@@ -1,33 +1,33 @@
-# See ovn-controller-vtep(8) for details about ovn-controller-vtep.
+# See ovn-controller-ramp(8) for details about ovn-controller-ramp.
 #
 # You may override the following variables to customize ovn-controller-vtep
 # behavior:
 #
 #   OVN_DB - Set this variable to the location of the ovsdb server that is
 #            serving the OVN_Southbound database.  See the manpage for
-#            ovn-controller-vtep for more details on the format for the db
+#            ovn-controller-ramp for more details on the format for the db
 #            location.
 #
 #   VTEP_DB - Set this variable to the location of the ovsdb server that is
 #             serving the hardware_vtep database.  See the manpage for
-#             ovn-controller-vtep for more details on the format for the db
+#             ovn-controller-ramp for more details on the format for the db
 #             location.
 #
 # To override these variables, you may create a configuration file
-# in the /etc/systemd/system/ovn-controller-vtep.d/ directory.  For example,
+# in the /etc/systemd/system/ovn-controller-ramp.d/ directory.  For example,
 # you could place the following contents in
-# /etc/systemd/system/ovn-controller-vtep.d/local.conf:
+# /etc/systemd/system/ovn-controller-ramp.d/local.conf:
 #
 #   [System]
 #   Environment="OVN_DB=unix:/usr/local/var/run/ovn/db.sock" "VTEP_DB=unix:/usr/local/var/run/ovn/vtep.sock"
 #
-# Alternatively, you may specify environment variables in the file /etc/sysconfig/ovn-controller-vtep:
+# Alternatively, you may specify environment variables in the file /etc/sysconfig/ovn-controller-ramp:
 #
 #   OVN_DB="unix:/usr/local/var/run/ovn/db.sock"
 #   VTEP_DB="unix:/usr/local/var/run/ovn/vtep.sock"
 
 [Unit]
-Description=OVN VTEP gateway controller daemon
+Description=OVN RAMP gateway controller daemon
 After=syslog.target
 Requires=openvswitch.service
 After=openvswitch.service
@@ -40,11 +40,11 @@ Environment=OVN_RUNDIR=%t/ovn
 Environment=OVN_DB=unix:%t/ovn/ovnsb_db.sock
 EnvironmentFile=-/etc/sysconfig/ovn
 Environment=VTEP_DB=unix:%t/openvswitch/db.sock
-EnvironmentFile=-/etc/sysconfig/ovn-controller-vtep
-ExecStart=/usr/bin/ovn-controller-vtep -vconsole:emer -vsyslog:err -vfile:info \
-          --log-file=/var/log/ovn/ovn-controller-vtep.log \
+EnvironmentFile=-/etc/sysconfig/ovn-controller-ramp
+ExecStart=/usr/bin/ovn-controller-ramp -vconsole:emer -vsyslog:err -vfile:info \
+          --log-file=/var/log/ovn/ovn-controller-ramp.log \
           --ovn-user=${OVN_USER_ID} \
-          --no-chdir --pidfile=${OVN_RUNDIR}/ovn-controller-vtep.pid \
+          --no-chdir --pidfile=${OVN_RUNDIR}/ovn-controller-ramp.pid \
           --ovnsb-db=${OVN_DB} --vtep-db=${VTEP_DB}
 
 [Install]

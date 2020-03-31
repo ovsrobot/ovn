@@ -503,7 +503,7 @@ include xenserver/automake.mk
 include tutorial/automake.mk
 include selinux/automake.mk
 include controller/automake.mk
-include controller-vtep/automake.mk
+include controller-ramp/automake.mk
 include northd/automake.mk
 include ic/automake.mk
 include build-aux/automake.mk

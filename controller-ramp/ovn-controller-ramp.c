@@ -40,10 +40,10 @@
 
 #include "binding.h"
 #include "gateway.h"
-#include "vtep.h"
-#include "ovn-controller-vtep.h"
+#include "ramp.h"
+#include "ovn-controller-ramp.h"
 
-static unixctl_cb_func ovn_controller_vtep_exit;
+static unixctl_cb_func ovn_controller_ramp_exit;
 
 static void parse_options(int argc, char *argv[]);
 OVS_NO_RETURN static void usage(void);
@@ -71,7 +71,7 @@ main(int argc, char *argv[])
     if (retval) {
         exit(EXIT_FAILURE);
     }
-    unixctl_command_register("exit", "", 0, 0, ovn_controller_vtep_exit,
+    unixctl_command_register("exit", "", 0, 0, ovn_controller_ramp_exit,
                              &exiting);
 
     daemonize_complete();
@@ -89,7 +89,7 @@ main(int argc, char *argv[])
     /* Main loop. */
     exiting = false;
     while (!exiting) {
-        struct controller_vtep_ctx ctx = {
+        struct controller_ramp_ctx ctx = {
             .vtep_idl = vtep_idl_loop.idl,
             .vtep_idl_txn = ovsdb_idl_loop_run(&vtep_idl_loop),
             .ovnsb_idl = ovnsb_idl_loop.idl,
@@ -98,7 +98,7 @@ main(int argc, char *argv[])
 
         gateway_run(&ctx);
         binding_run(&ctx);
-        vtep_run(&ctx);
+        ramp_run(&ctx);
         unixctl_server_run(unixctl);
 
         unixctl_server_wait(unixctl);
@@ -116,7 +116,7 @@ main(int argc, char *argv[])
     /* It's time to exit.  Clean up the databases. */
     bool done = false;
     while (!done) {
-        struct controller_vtep_ctx ctx = {
+        struct controller_ramp_ctx ctx = {
             .vtep_idl = vtep_idl_loop.idl,
             .vtep_idl_txn = ovsdb_idl_loop_run(&vtep_idl_loop),
             .ovnsb_idl = ovnsb_idl_loop.idl,
@@ -127,7 +127,7 @@ main(int argc, char *argv[])
          * We're done if all of them return true. */
         done = binding_cleanup(&ctx);
         done = gateway_cleanup(&ctx) && done;
-        done = vtep_cleanup(&ctx) && done;
+        done = ramp_cleanup(&ctx) && done;
         if (done) {
             poll_immediate_wake();
         }
@@ -262,7 +262,7 @@ Options:\n\
 
 
 static void
-ovn_controller_vtep_exit(struct unixctl_conn *conn, int argc OVS_UNUSED,
+ovn_controller_ramp_exit(struct unixctl_conn *conn, int argc OVS_UNUSED,
                        const char *argv[] OVS_UNUSED, void *exiting_)
 {
     bool *exiting = exiting_;

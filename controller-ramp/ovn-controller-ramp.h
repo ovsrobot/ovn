@@ -22,7 +22,7 @@
 struct ovsdb_idl;
 struct ovsdb_idl_txn;
 
-struct controller_vtep_ctx {
+struct controller_ramp_ctx {
     struct ovsdb_idl *ovnsb_idl;
     struct ovsdb_idl_txn *ovnsb_idl_txn;
 

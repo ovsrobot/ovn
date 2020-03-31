@@ -12,12 +12,12 @@ m4_define([OVN_CLEANUP_VSWITCH],[
 #
 # Gracefully terminate OVN daemons in the specified
 # sandbox instance. The sandbox name "vtep" is treated
-# as a special case, and is assumed to have ovn-controller-vtep
+# as a special case, and is assumed to have ovn-controller-ramp
 # and ovs-vtep daemons running instead of ovn-controller.
 m4_define([OVN_CLEANUP_SBOX],[
     as $1
     if test "$1" = "vtep"; then
-        OVS_APP_EXIT_AND_WAIT([ovn-controller-vtep])
+        OVS_APP_EXIT_AND_WAIT([ovn-controller-ramp])
         OVS_APP_EXIT_AND_WAIT([ovs-vtep])
     else
         OVS_APP_EXIT_AND_WAIT([ovn-controller])

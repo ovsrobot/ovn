@@ -18,9 +18,9 @@
 
 #include <stdbool.h>
 
-struct controller_vtep_ctx;
+struct controller_ramp_ctx;
 
-void gateway_run(struct controller_vtep_ctx *);
-bool gateway_cleanup(struct controller_vtep_ctx *);
+void gateway_run(struct controller_ramp_ctx *);
+bool gateway_cleanup(struct controller_ramp_ctx *);
 
 #endif /* ovn/controller-gw/gateway.h */

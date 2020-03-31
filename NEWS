@@ -2,6 +2,7 @@ Post-v20.03.0
 --------------------------
    - "VTEP" gateways and switches have been renamed "ramp" gateways and
      switches, to better distinguish them from everyday use of VXLAN.
+   - "ovn-controller-vtep" has been renamed to "ovn-controller-ramp".
 
 
 OVN v20.03.0 - xx xxx xxxx

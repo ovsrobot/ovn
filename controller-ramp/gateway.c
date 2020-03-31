@@ -23,7 +23,7 @@
 #include "openvswitch/vlog.h"
 #include "lib/ovn-sb-idl.h"
 #include "vtep/vtep-idl.h"
-#include "ovn-controller-vtep.h"
+#include "ovn-controller-ramp.h"
 
 VLOG_DEFINE_THIS_MODULE(gateway);
 
@@ -72,7 +72,7 @@ create_chassis_rec(struct ovsdb_idl_txn *txn, const char *name,
  *
  * */
 static void
-revalidate_gateway(struct controller_vtep_ctx *ctx)
+revalidate_gateway(struct controller_ramp_ctx *ctx)
 {
     const struct vteprec_physical_switch *pswitch;
 
@@ -147,7 +147,7 @@ revalidate_gateway(struct controller_vtep_ctx *ctx)
 /* Updates the 'vtep_logical_switches' column in the Chassis table based
  * on vtep database configuration. */
 static void
-update_vtep_logical_switches(struct controller_vtep_ctx *ctx)
+update_vtep_logical_switches(struct controller_ramp_ctx *ctx)
 {
     const struct vteprec_physical_switch *pswitch;
 
@@ -185,7 +185,7 @@ update_vtep_logical_switches(struct controller_vtep_ctx *ctx)
 
 
 void
-gateway_run(struct controller_vtep_ctx *ctx)
+gateway_run(struct controller_ramp_ctx *ctx)
 {
     if (!ctx->ovnsb_idl_txn) {
         return;
@@ -199,7 +199,7 @@ gateway_run(struct controller_vtep_ctx *ctx)
  * Returns true when done (i.e. there is no change made to 'ctx->ovnsb_idl'),
  * otherwise returns false. */
 bool
-gateway_cleanup(struct controller_vtep_ctx *ctx)
+gateway_cleanup(struct controller_ramp_ctx *ctx)
 {
     static bool simap_destroyed = false;
     const struct vteprec_physical_switch *pswitch;

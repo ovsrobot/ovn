@@ -19,9 +19,9 @@
 
 #include <stdbool.h>
 
-struct controller_vtep_ctx;
+struct controller_ramp_ctx;
 
-void vtep_run(struct controller_vtep_ctx *);
-bool vtep_cleanup(struct controller_vtep_ctx *);
+void ramp_run(struct controller_ramp_ctx *);
+bool ramp_cleanup(struct controller_ramp_ctx *);
 
 #endif /* ovn/controller-vtep/vtep.h */

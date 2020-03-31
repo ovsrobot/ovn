@@ -1,22 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manpage program="ovn-controller-vtep" section="8" title="ovn-controller-vtep">
+<manpage program="ovn-controller-ramp" section="8" title="ovn-controller-ramp">
     <h1>Name</h1>
-    <p>ovn-controller-vtep -- Open Virtual Network local controller for
+    <p>ovn-controller-ramp -- Open Virtual Network local controller for
        vtep enabled physical switches.
     </p>
 
     <h1>Synopsis</h1>
-    <p><code>ovn-controller-vtep</code> [<var>options</var>]
-    [<var>--vtep-db=vtep-database</var>] [<var>--ovnsb-db=ovnsb-database</var>]
+    <p><code>ovn-controller-ramp</code> [<var>options</var>]
+    [<var>--ramp-db=ramp-database</var>] [<var>--ovnsb-db=ovnsb-database</var>]
     </p>
 
     <h1>Description</h1>
     <p>
-      <code>ovn-controller-vtep</code> is the local controller daemon in
+      <code>ovn-controller-ramp</code> is the local controller daemon in
       OVN, the Open Virtual Network, for VTEP enabled physical switches.
       It connects up to the OVN Southbound database (see
       <code>ovn-sb</code>(5)) over the OVSDB protocol, and down to the VTEP
-      database (see <code>vtep</code>(5)) over the OVSDB protocol.
+      database (see <code>ramp</code>(5)) over the OVSDB protocol.
     </p>
 
     <h2>PKI Options</h2>
@@ -30,7 +30,7 @@
 
     <h1>Configuration</h1>
     <p>
-      <code>ovn-controller-vtep</code> retrieves its configuration
+      <code>ovn-controller-ramp</code> retrieves its configuration
       information from both the ovnsb and the vtep database.  If the
       database locations are not given from command line, the default
       is the <code>db.sock</code> in local OVSDB's 'run' directory.

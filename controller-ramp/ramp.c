@@ -15,7 +15,7 @@
 
 #include <config.h>
 
-#include "vtep.h"
+#include "ramp.h"
 
 #include "lib/hash.h"
 #include "openvswitch/hmap.h"
@@ -23,7 +23,7 @@
 #include "lib/smap.h"
 #include "lib/sset.h"
 #include "lib/util.h"
-#include "ovn-controller-vtep.h"
+#include "ovn-controller-ramp.h"
 #include "openvswitch/vlog.h"
 #include "lib/ovn-sb-idl.h"
 #include "vtep/vtep-idl.h"
@@ -475,7 +475,7 @@ vtep_mcast_macs_cleanup(struct ovsdb_idl *vtep_idl)
 
 /* Updates vtep logical switch tunnel keys. */
 void
-vtep_run(struct controller_vtep_ctx *ctx)
+ramp_run(struct controller_ramp_ctx *ctx)
 {
     if (!ctx->vtep_idl_txn) {
         return;
@@ -578,10 +578,10 @@ vtep_run(struct controller_vtep_ctx *ctx)
     shash_destroy(&non_vtep_pbs);
 }
 
-/* Cleans up all related entries in vtep.  Returns true when done (i.e. there
+/* Cleans up all related entries in ramp.  Returns true when done (i.e. there
  * is no change made to 'ctx->vtep_idl'), otherwise returns false. */
 bool
-vtep_cleanup(struct controller_vtep_ctx *ctx)
+ramp_cleanup(struct controller_ramp_ctx *ctx)
 {
     if (!ctx->vtep_idl_txn) {
         return false;

@@ -2438,8 +2438,8 @@ OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
 
-AT_SETUP([ovn -- vtep: 3 HVs, 1 VIFs/HV, 1 GW, 1 LS])
-AT_KEYWORDS([vtep])
+AT_SETUP([ovn -- ramp: 3 HVs, 1 VIFs/HV, 1 GW, 1 LS])
+AT_KEYWORDS([ramp])
 ovn_start
 
 # Configure the Northbound database
@@ -2506,7 +2506,7 @@ vtep-ctl set Physical_Switch br-vtep tunnel_ips=192.168.0.3
 vtep-ctl add-ls lsw0
 
 start_daemon ovs-vtep br-vtep
-start_daemon ovn-controller-vtep --vtep-db=unix:"$ovs_base"/vtep/db.sock --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
+start_daemon ovn-controller-ramp --vtep-db=unix:"$ovs_base"/vtep/db.sock --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
 
 OVS_WAIT_UNTIL([vtep-ctl bind-ls br-vtep br-vtep_n2 0 lsw0])
 

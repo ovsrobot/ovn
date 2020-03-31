@@ -19,9 +19,9 @@
 
 #include <stdbool.h>
 
-struct controller_vtep_ctx;
+struct controller_ramp_ctx;
 
-void binding_run(struct controller_vtep_ctx *);
-bool binding_cleanup(struct controller_vtep_ctx *);
+void binding_run(struct controller_ramp_ctx *);
+bool binding_cleanup(struct controller_ramp_ctx *);
 
 #endif /* ovn/controller-gw/binding.h */

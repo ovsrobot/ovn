@@ -95,15 +95,15 @@ Provides: openvswitch-ovn-host = %{?epoch:%{epoch}:}%{version}-%{release}
 %description host
 OVN controller running on each host.
 
-%package vtep
+%package ramp
 Summary: Open Virtual Network support
 License: ASL 2.0
 Requires: ovn
-Obsoletes: openvswitch-ovn-vtep
-Provides: openvswitch-ovn-vtep = %{?epoch:%{epoch}:}%{version}-%{release}
+Obsoletes: openvswitch-ovn-vtep ovn-vtep
+Provides: openvswitch-ovn-vtep = %{?epoch:%{epoch}:}%{version}-%{release} ovn-vtep
 
-%description vtep
-OVN vtep controller
+%description ramp
+OVN ramp controller
 
 %package docker
 Summary: Open Virtual Network support
@@ -161,7 +161,7 @@ install -p -D -m 0644 \
         rhel/usr_share_ovn_scripts_systemd_sysconfig.template \
         $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/ovn
 
-for service in ovn-controller ovn-controller-vtep ovn-northd; do
+for service in ovn-controller ovn-controller-ramp ovn-northd; do
         install -p -D -m 0644 \
                         rhel/usr_lib_systemd_system_${service}.service \
                         $RPM_BUILD_ROOT%{_unitdir}/${service}.service
@@ -247,20 +247,6 @@ if [ $1 -eq 1 ] ; then
     fi
 fi
 
-%pre vtep
-if [ $1 -eq 1 ] ; then
-    # Package install.
-    /bin/systemctl status ovn-controller-vtep.service >/dev/null
-    ovn_status=$?
-    rpm -ql openvswitch-ovn-vtep > /dev/null
-    if [[ "$?" = "0" && "$ovn_status" = "0" ]]; then
-        # ovn-controller-vtep service is running which means old
-        # openvswitch-ovn-vtep is installed and it will be cleaned up. So
-        # start ovn-controller-vtep service when posttrans host is called.
-        touch %{_localstatedir}/lib/rpm-state/ovn-controller-vtep
-    fi
-fi
-
 %preun central
 %if 0%{?systemd_preun:1}
     %systemd_preun ovn-northd.service
@@ -280,17 +266,6 @@ fi
         # Package removal, not upgrade
         /bin/systemctl --no-reload disable ovn-controller.service >/dev/null 2>&1 || :
         /bin/systemctl stop ovn-controller.service >/dev/null 2>&1 || :
-    fi
-%endif
-
-%preun vtep
-%if 0%{?systemd_preun:1}
-    %systemd_preun ovn-controller-vtep.service
-%else
-    if [ $1 -eq 0 ] ; then
-        # Package removal, not upgrade
-        /bin/systemctl --no-reload disable ovn-controller-vtep.service >/dev/null 2>&1 || :
-        /bin/systemctl stop ovn-controller-vtep.service >/dev/null 2>&1 || :
     fi
 %endif
 
@@ -322,16 +297,6 @@ fi
     fi
 %endif
 
-%post vtep
-%if 0%{?systemd_post:1}
-    %systemd_post ovn-controller-vtep.service
-%else
-    # Package install, not upgrade
-    if [ $1 -eq 1 ]; then
-        /bin/systemctl daemon-reload >dev/null || :
-    fi
-%endif
-
 %postun
 
 %postun central
@@ -356,17 +321,6 @@ fi
     fi
 %endif
 
-%postun vtep
-%if 0%{?systemd_postun_with_restart:1}
-    %systemd_postun_with_restart ovn-controller-vtep.service
-%else
-    /bin/systemctl daemon-reload >/dev/null 2>&1 || :
-    if [ "$1" -ge "1" ] ; then
-        # Package upgrade, not uninstall
-        /bin/systemctl try-restart ovn-controller-vtep.service >/dev/null 2>&1 || :
-    fi
-%endif
-
 %posttrans central
 if [ $1 -eq 1 ]; then
     # Package install, not upgrade
@@ -383,15 +337,6 @@ if [ $1 -eq 1 ]; then
     if [ -e %{_localstatedir}/lib/rpm-state/ovn-controller ]; then
         rm %{_localstatedir}/lib/rpm-state/ovn-controller
         /bin/systemctl start ovn-controller.service >/dev/null 2>&1 || :
-    fi
-fi
-
-%posttrans vtep
-if [ $1 -eq 1 ]; then
-    # Package install, not upgrade
-    if [ -e %{_localstatedir}/lib/rpm-state/ovn-controller-vtep ]; then
-        rm %{_localstatedir}/lib/rpm-state/ovn-controller-vtep
-        /bin/systemctl start ovn-controller-vtep.service >/dev/null 2>&1 || :
     fi
 fi
 
@@ -448,10 +393,10 @@ fi
 %{_unitdir}/ovn-controller.service
 %{_prefix}/lib/firewalld/services/ovn-host-firewall-service.xml
 
-%files vtep
-%{_bindir}/ovn-controller-vtep
-%{_mandir}/man8/ovn-controller-vtep.8*
-%{_unitdir}/ovn-controller-vtep.service
+%files ramp
+%{_bindir}/ovn-controller-ramp
+%{_mandir}/man8/ovn-controller-ramp.8*
+%{_unitdir}/ovn-controller-ramp.service
 
 %changelog
 * Thu Dec 20 2018 Numan Siddique <nusiddiq@redhat.com>
