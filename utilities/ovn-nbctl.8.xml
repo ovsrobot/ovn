@@ -429,7 +429,7 @@
 
           <dt><code>vtep</code></dt>
           <dd>
-            A port to a logical switch on a VTEP gateway.
+            A port to a logical switch on a ramp gateway.
           </dd>
         </dl>
 

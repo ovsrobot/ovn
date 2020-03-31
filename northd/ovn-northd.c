@@ -225,7 +225,7 @@ enum ovn_stage {
 #define REG_ECMP_GROUP_ID       "reg8[0..15]"
 #define REG_ECMP_MEMBER_ID      "reg8[16..31]"
 
-#define FLAGBIT_NOT_VXLAN "flags[1] == 0"
+#define FLAGBIT_HAS_EGRESS_PORT "flags[1] == 0"
 
 /* Returns an "enum ovn_stage" built from the arguments. */
 static enum ovn_stage
@@ -5894,12 +5894,13 @@ build_lswitch_rport_arp_req_flow_for_ip(struct sset *ips,
     struct ds match   = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
 
-    /* Packets received from VXLAN tunnels have already been through the
-     * router pipeline so we should skip them. Normally this is done by the
-     * multicast_group implementation (VXLAN packets skip table 32 which
-     * delivers to patch ports) but we're bypassing multicast_groups.
+    /* Packets that have an egress port have already been through the router
+     * pipeline so we should skip them. Normally this is done by the
+     * multicast_group implementation (packets lacking an egress port skip
+     * table 32 which delivers to patch ports) but we're bypassing
+     * multicast_groups.
      */
-    ds_put_cstr(&match, FLAGBIT_NOT_VXLAN " && ");
+    ds_put_cstr(&match, FLAGBIT_HAS_EGRESS_PORT" && ");
 
     if (addr_family == AF_INET) {
         ds_put_cstr(&match, "arp.op == 1 && arp.tpa == { ");

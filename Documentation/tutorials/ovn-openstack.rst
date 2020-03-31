@@ -1959,4 +1959,4 @@ explore some of these directions:
 
 * Other kinds of gateways.  In addition to floating IPs with NAT, OVN
   supports directly attaching VMs to a physical network and connecting
-  logical switches to VTEP hardware.
+  logical switches to hardware top-of-rack switches.

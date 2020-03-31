@@ -51,7 +51,7 @@ void ovn_init_symtab(struct shash *symtab);
 /* MFF_LOG_FLAGS_REG bit assignments */
 enum mff_log_flags_bits {
     MLF_ALLOW_LOOPBACK_BIT = 0,
-    MLF_RCV_FROM_VXLAN_BIT = 1,
+    MLF_NO_EGRESS_PORT_BIT = 1,
     MLF_FORCE_SNAT_FOR_DNAT_BIT = 2,
     MLF_FORCE_SNAT_FOR_LB_BIT = 3,
     MLF_LOCAL_ONLY_BIT = 4,
@@ -64,11 +64,9 @@ enum mff_log_flags {
     /* Allow outputting back to inport. */
     MLF_ALLOW_LOOPBACK = (1 << MLF_ALLOW_LOOPBACK_BIT),
 
-    /* Indicate that a packet was received from a VXLAN tunnel to
-     * compensate for the lack of egress port information available in
-     * VXLAN encapsulation.  Egress port information is available for
-     * Geneve and STT tunnel types. */
-    MLF_RCV_FROM_VXLAN = (1 << MLF_RCV_FROM_VXLAN_BIT),
+    /* Indicate that a packet was received without egress port information,
+     * which is not available, e.g., in packets received from ramp switches. */
+    MLF_NO_EGRESS_PORT = (1 << MLF_NO_EGRESS_PORT_BIT),
 
     /* Indicate that a packet needs a force SNAT in the gateway router when
      * DNAT has taken place. */

@@ -354,7 +354,7 @@
       </p>
 
       <column name="vtep_logical_switches">
-        Stores all VTEP logical switch names connected by this gateway
+        Stores all ramp logical switch names connected by this gateway
         chassis.  The <ref table="Port_Binding"/> table entry with
         <ref column="options" table="Port_Binding"/>:<code>vtep-physical-switch</code>
         equal <ref table="Chassis"/> <ref column="name" table="Chassis"/>, and
@@ -417,7 +417,7 @@
 
       <p>
         Not all devices see such a benefit. The most notable exception is
-        hardware VTEPs. These devices are designed to not buffer entire
+        ramp switches. These devices are designed to not buffer entire
         packets in their switching engines and are therefore unable to
         efficiently compute or validate full packet checksums. In addition
         certain versions of the Linux kernel are not able to fully take
@@ -428,7 +428,7 @@
       </p>
 
       <p>
-        <code>csum</code> defaults to <code>false</code> for hardware VTEPs and
+        <code>csum</code> defaults to <code>false</code> for ramp switches and
         <code>true</code> for all other cases.
       </p>
 
@@ -2494,7 +2494,7 @@ tcp.flags = RST;
 
           <dt>vtep</dt>
           <dd>
-            The physical location of the hardware_vtep gateway.  To successfully
+            The physical location of the ramp gateway.  To successfully
             identify a chassis, this column must be a <ref table="Chassis"/> record.
             This is populated by <code>ovn-controller-vtep</code>.
           </dd>
@@ -2631,7 +2631,7 @@ tcp.flags = RST;
 
           <dt><code>vtep</code></dt>
           <dd>
-            A port to a logical switch on a VTEP gateway chassis.  In order to
+            A port to a logical switch on a ramp gateway chassis.  In order to
             get this port correctly recognized by the OVN controller, the <ref
             column="options"
             table="Port_Binding"/>:<code>vtep-physical-switch</code> and <ref
@@ -2802,18 +2802,19 @@ tcp.flags = RST;
       </column>
     </group>
 
-    <group title="VTEP Options">
+    <group title="Ramp Switch Options">
       <p>
         These options apply to logical ports with <ref column="type"/> of
-        <code>vtep</code>.
+        <code>vtep</code>, that is, ports that attach a ramp gateway to an OVN
+        logical switch.
       </p>
 
       <column name="options" key="vtep-physical-switch">
-        Required. The name of the VTEP gateway.
+        Required. The name of the ramp gateway.
       </column>
 
       <column name="options" key="vtep-logical-switch">
-        Required.  A logical switch name connected by the VTEP gateway.  Must
+        Required.  A logical switch name connected by the ramp gateway.  Must
         be set when <ref column="type"/> is <code>vtep</code>.
       </column>
     </group>

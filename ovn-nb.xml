@@ -549,7 +549,7 @@
 
           <dt><code>vtep</code></dt>
           <dd>
-            A port to a logical switch on a VTEP gateway.
+            A port to a logical switch on a ramp gateway.
           </dd>
 
           <dt><code>external</code></dt>
@@ -746,17 +746,19 @@
 
       </group>
 
-      <group title="Options for vtep ports">
+      <group title="Options for ramp ports">
         <p>
-          These options apply when <ref column="type"/> is <code>vtep</code>.
+          These options apply when <ref column="type"/> is <code>vtep</code>,
+          that is, when the port is used to attach a ramp gateway to an OVN
+          logical switch.
         </p>
 
         <column name="options" key="vtep-physical-switch">
-          Required.  The name of the VTEP gateway.
+          Required.  The name of the ramp gateway.
         </column>
 
         <column name="options" key="vtep-logical-switch">
-          Required.  A logical switch name connected by the VTEP gateway.
+          Required.  A logical switch name connected by the ramp gateway.
         </column>
       </group>
 

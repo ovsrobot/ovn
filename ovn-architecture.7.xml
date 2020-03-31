@@ -77,8 +77,8 @@
         logical network into a physical network by bidirectionally forwarding
         packets between tunnels and a physical Ethernet port.  This allows
         non-virtualized machines to participate in logical networks.  A gateway
-        may be a physical host, a virtual machine, or an ASIC-based hardware
-        switch that supports the <code>vtep</code>(5) schema.
+        may be a physical host, a virtual machine, or a hardware switch (see
+        <code>Ramp Gateways</code>, below).
       </p>
 
       <p>
@@ -529,20 +529,27 @@
     ones.  OVN support multiple kinds of gateways.
   </p>
 
-  <h3>VTEP Gateways</h3>
+  <h3>Ramp Gateways</h3>
 
   <p>
-    A ``VTEP gateway'' connects an OVN logical network to a physical (or
-    virtual) switch that implements the OVSDB VTEP schema that accompanies Open
-    vSwitch.  (The ``VTEP gateway'' term is a misnomer, since a VTEP is just a
-    VXLAN Tunnel Endpoint, but it is a well established name.)  See <code>Life
-    Cycle of a VTEP gateway</code>, below, for more information.
+    A ``ramp gateway'' acts like an on-ramp to an OVN logical network from a
+    physical (or virtual) switch, called a ``ramp switch'', that implements the
+    OVSDB VTEP schema that accompanies Open vSwitch.  See <code>Life Cycle of a
+    ramp gateway</code>, below, for more information.
   </p>
 
   <p>
-    The main intended use case for VTEP gateways is to attach physical servers
-    to an OVN logical network using a physical top-of-rack switch that supports
-    the OVSDB VTEP schema.
+    The main intended use case for ramp gateways is to attach physical servers
+    to an OVN logical network using a physical top-of-rack switch instead of a
+    server.  Reasons to do this include convenience (the switch is already
+    there and supports this feature) or density (the switch has 40 ports and
+    it's difficult to add that many to a server).
+  </p>
+
+  <p>
+    Previous versions of OVN referred to ramp gateways and ramp switches as
+    ``VTEP gateways'' and ``VTEP switches,'' respectively, but these terms are
+    misnomers, since a VTEP is just a VXLAN Tunnel Endpoint.
   </p>
 
   <h3>L2 Gateways</h3>
@@ -568,7 +575,7 @@
     the transport between hypervisors.  With an L2 gateway, packets are still
     transported between hypervisors over tunnels and the <code>l2gateway</code>
     port is only used for the packets that are on the physical network.  The
-    application for L2 gateways is similar to that for VTEP gateways, e.g. to
+    application for L2 gateways is similar to that for ramp gateways, e.g. to
     add non-virtualized machines to a logical network, but L2 gateways do not
     require special support from top-of-rack hardware switches.
   </p>
@@ -1134,7 +1141,7 @@
       <p>
         Geneve and STT tunnels pass this field as part of the tunnel key.
         Although VXLAN tunnels do not explicitly carry a logical input port,
-        OVN only uses VXLAN to communicate with gateways that from OVN's
+        OVN only uses VXLAN to communicate with ramp gateways, which from OVN's
         perspective consist of only a single logical port, so that OVN can set
         the logical input port field to this one on ingress to the OVN logical
         pipeline.
@@ -1160,7 +1167,7 @@
         an OVN hypervisor, the packet is resubmitted to table 8 to
         determine the output port(s);  when the packet reaches table 32,
         these packets are resubmitted to table 33 for local delivery by
-        checking a MLF_RCV_FROM_VXLAN flag, which is set when the packet
+        checking a MLF_NO_EGRESS_PORT flag, which is set when the packet
         arrives from a VXLAN tunnel.
       </p>
     </dd>
@@ -1399,12 +1406,12 @@
 
       <ul>
         <li>
-          A higher-priority rule to match packets received from VXLAN tunnels,
-          based on flag MLF_RCV_FROM_VXLAN, and resubmit these packets to table
-          33 for local delivery.  Packets received from VXLAN tunnels reach
-          here because of a lack of logical output port field in the tunnel key
-          and thus these packets needed to be submitted to table 8 to
-          determine the output port.
+          A higher-priority rule to match packets that were received without
+          egress port metadata, based on flag MLF_NO_EGRESS_PORT.  The actions
+          resubmit these packets to table 33 for local delivery.  This catches
+          packets received from VXLAN tunnels because of a lack of logical
+          output port field in the tunnel key and thus these packets needed to
+          be submitted to table 8 to determine the output port.
         </li>
         <li>
           A higher-priority rule to match packets received from ports of type
@@ -2062,12 +2069,15 @@
   </ol>
 
 
-  <h2>Life Cycle of a VTEP gateway</h2>
+  <h2>Life Cycle of a ramp gateway</h2>
 
   <p>
-    A gateway is a chassis that forwards traffic between the OVN-managed
-    part of a logical network and a physical VLAN,  extending a
-    tunnel-based logical network into a physical network.
+    A gateway is a chassis that forwards traffic between the OVN-managed part
+    of a logical network and a physical VLAN, extending a tunnel-based logical
+    network into a physical network.  A ``ramp gateway'' acts like an on-ramp
+    to an OVN logical network from a physical (or virtual) switch, called a
+    ``ramp switch'', that implements the OVSDB VTEP schema that accompanies
+    Open vSwitch.  See <code>Ramp Gateways</code>, above, for more information.
   </p>
 
   <p>
@@ -2079,19 +2089,19 @@
 
   <ol>
     <li>
-      A VTEP gateway's life cycle begins with the administrator registering
-      the VTEP gateway as a <code>Physical_Switch</code> table entry in the
+      A ramp gateway's life cycle begins with the administrator registering
+      the ramp gateway as a <code>Physical_Switch</code> table entry in the
       <code>VTEP</code> database.  The <code>ovn-controller-vtep</code>
-      connected to this VTEP database, will recognize the new VTEP gateway
+      connected to this VTEP database, will recognize the new ramp gateway
       and create a new <code>Chassis</code> table entry for it in the
       <code>OVN_Southbound</code> database.
     </li>
 
     <li>
       The administrator can then create a new <code>Logical_Switch</code>
-      table entry, and bind a particular vlan on a VTEP gateway's port to
+      table entry, and bind a particular vlan on a ramp gateway's port to
       any VTEP logical switch.  Once a VTEP logical switch is bound to
-      a VTEP gateway, the <code>ovn-controller-vtep</code> will detect
+      a ramp gateway, the <code>ovn-controller-vtep</code> will detect
       it and add its name to the <var>vtep_logical_switches</var>
       column of the <code>Chassis</code> table in the <code>
       OVN_Southbound</code> database.  Note, the <var>tunnel_key</var>
@@ -2108,7 +2118,7 @@
       of this entry must be set to "vtep".  Next, the <var>
       vtep-logical-switch</var> and <var>vtep-physical-switch</var> keys
       in the <var>options</var> column must also be specified, since
-      multiple VTEP gateways can attach to the same VTEP logical switch.
+      multiple ramp gateways can attach to the same VTEP logical switch.
     </li>
 
     <li>
@@ -2116,14 +2126,14 @@
       database and its configuration will be passed down to the <code>
       OVN_Southbound</code> database as a new <code>Port_Binding</code>
       table entry.  The <code>ovn-controller-vtep</code> will recognize the
-      change and bind the logical port to the corresponding VTEP gateway
+      change and bind the logical port to the corresponding ramp gateway
       chassis.  Configuration of binding the same VTEP logical switch to
       a different OVN logical networks is not allowed and a warning will be
       generated in the log.
     </li>
 
     <li>
-      Beside binding to the VTEP gateway chassis, the <code>
+      Beside binding to the ramp gateway chassis, the <code>
       ovn-controller-vtep</code> will update the <var>tunnel_key</var>
       column of the VTEP logical switch to the corresponding <code>
       Datapath_Binding</code> table entry's <var>tunnel_key</var> for the
@@ -2135,13 +2145,13 @@
       configuration change in the <code>Port_Binding</code> in the
       <code>OVN_Northbound</code> database, and updating the
       <code>Ucast_Macs_Remote</code> table in the <code>VTEP</code> database.
-      This allows the VTEP gateway to understand where to forward the unicast
+      This allows the ramp gateway to understand where to forward the unicast
       traffic coming from the extended external network.
     </li>
 
     <li>
-      Eventually, the VTEP gateway's life cycle ends when the administrator
-      unregisters the VTEP gateway from the <code>VTEP</code> database.
+      Eventually, the ramp gateway's life cycle ends when the administrator
+      unregisters the ramp gateway from the <code>VTEP</code> database.
       The <code>ovn-controller-vtep</code> will recognize the event and
       remove all related configurations (<code>Chassis</code> table entry
       and port bindings) in the <code>OVN_Southbound</code> database.
@@ -2151,7 +2161,7 @@
       When the <code>ovn-controller-vtep</code> is terminated, all related
       configurations in the <code>OVN_Southbound</code> database and
       the <code>VTEP</code> database will be cleaned, including
-      <code>Chassis</code> table entries for all registered VTEP gateways
+      <code>Chassis</code> table entries for all registered ramp gateways
       and their port bindings, and all <code>Ucast_Macs_Remote</code> table
       entries and the <code>Logical_Switch</code> tunnel keys.
     </li>
@@ -2658,7 +2668,7 @@
   </diagram>
 
   <p>
-    For connecting to gateways, in addition to Geneve and STT, OVN supports
+    For connecting to ramp gateways, in addition to Geneve and STT, OVN supports
     VXLAN, because only VXLAN support is common on top-of-rack (ToR) switches.
     Currently, gateways have a feature set that matches the capabilities as
     defined by the VTEP schema, so fewer bits of metadata are necessary.  In

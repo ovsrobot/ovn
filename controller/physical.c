@@ -1668,9 +1668,8 @@ physical_run(struct physical_ctx *p_ctx,
             ofpbuf_clear(&ofpacts);
             put_move(MFF_TUN_ID, 0,  MFF_LOG_DATAPATH, 0, 24, &ofpacts);
             put_load(binding->tunnel_key, MFF_LOG_INPORT, 0, 15, &ofpacts);
-            /* For packets received from a vxlan tunnel, set a flag to that
-             * effect. */
-            put_load(1, MFF_LOG_FLAGS, MLF_RCV_FROM_VXLAN_BIT, 1, &ofpacts);
+            /* Packets received from a VXLAN tunnel lack an egress port. */
+            put_load(1, MFF_LOG_FLAGS, MLF_NO_EGRESS_PORT_BIT, 1, &ofpacts);
             put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, &ofpacts);
 
             ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 100,
@@ -1682,15 +1681,15 @@ physical_run(struct physical_ctx *p_ctx,
     /* Table 32, priority 150.
      * =======================
      *
-     * Handles packets received from a VXLAN tunnel which get resubmitted to
-     * OFTABLE_LOG_INGRESS_PIPELINE due to lack of needed metadata in VXLAN,
-     * explicitly skip sending back out any tunnels and resubmit to table 33
-     * for local delivery.
+     * For packets received without an egress port (e.g. from a VXLAN tunnel),
+     * resubmit them to OFTABLE_LOG_INGRESS_PIPELINE to rediscover the egress
+     * port, but explicitly skip sending back out any tunnels and resubmit to
+     * table 33 for local delivery.
      */
     struct match match;
     match_init_catchall(&match);
     match_set_reg_masked(&match, MFF_LOG_FLAGS - MFF_REG0,
-                         MLF_RCV_FROM_VXLAN, MLF_RCV_FROM_VXLAN);
+                         MLF_NO_EGRESS_PORT, MLF_NO_EGRESS_PORT);
 
     /* Resubmit to table 33. */
     ofpbuf_clear(&ofpacts);
