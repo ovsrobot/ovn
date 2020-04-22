@@ -652,6 +652,10 @@ AT_CHECK([ovn-nbctl --portrange lr-nat-add lr0 dnat_and_snat 40.0.0.6 192.168.1.
 [ovn-nbctl: invalid port range 0-10.
 ])
 
+AT_CHECK([ovn-nbctl --stateless --portrange lr-nat-add lr0 dnat_and_snat 40.0.0.5 192.168.1.8 6], [1], [],
+[ovn-nbctl: --stateless and --portrange may not be used together
+])
+
 AT_CHECK([ovn-nbctl show lr0 | grep -c 'external port(s): "1-3000"'], [0], [dnl
 3
 ])

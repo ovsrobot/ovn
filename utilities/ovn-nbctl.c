@@ -4167,6 +4167,12 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
         ctl_error(ctx, "stateless is not applicable to dnat or snat types");
         return;
     }
+    /* Port range needs conntrack, so it can't be stateless. */
+    if (stateless && is_portrange) {
+        ctl_error(ctx, "--stateless and --portrange may not be used "
+                  "together");
+        return;
+    }
 
     int is_snat = !strcmp("snat", nat_type);
     for (size_t i = 0; i < lr->n_nat; i++) {
