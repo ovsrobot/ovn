@@ -2475,6 +2475,243 @@ OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
 
+AT_SETUP([ovn -- 2 HVs, 2 LS, switching between multiple localnet ports with same tags])
+ovn_start
+
+# In this test case we create two switches with multiple localnet ports. Only a
+# single localnet of the same tag is connected to fabric for each switch. Two
+# hypervisors have VIFs that belong to these switches. The test validates that
+# routing between these switches and hypervisors still works regardless of the
+# number of (unplugged) localnet ports.
+
+# two switches, each connected to lots of networks
+for i in 1 2; do
+    ovn-nbctl ls-add ls-$i
+    for tag in `seq 10 20`; do
+        ln_port_name=ln-$i-$tag
+        ovn-nbctl lsp-add ls-$i $ln_port_name "" $tag
+        ovn-nbctl lsp-set-addresses $ln_port_name unknown
+        ovn-nbctl lsp-set-type $ln_port_name localnet
+        ovn-nbctl lsp-set-options $ln_port_name network_name=phys-$tag
+    done
+done
+
+# multiple networks
+for tag in `seq 10 20`; do
+    net_add n-$tag
+done
+
+# two hypervisors, each connected to the same network
+for i in 1 2; do
+    sim_add hv-$i
+    as hv-$i
+    ovs-vsctl add-br br-phys
+    ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys-$tag:br-phys
+    ovn_attach n-10 br-phys 192.168.0.$i
+done
+
+# two vif ports, one per switch
+for i in 1 2; do
+    as hv-$i
+    ovs-vsctl add-port br-int vif-$i -- \
+        set Interface vif-$i external-ids:iface-id=lp-$i \
+                              options:tx_pcap=hv-$i/vif-$i-tx.pcap \
+                              options:rxq_pcap=hv-$i/vif-$i-rx.pcap \
+                              ofport-request=$i
+
+    lsp_name=lp-$i
+    ovn-nbctl lsp-add ls-$i $lsp_name
+    ovn-nbctl lsp-set-addresses $lsp_name f0:00:00:00:00:0$i
+    ovn-nbctl lsp-set-port-security $lsp_name f0:00:00:00:00:0$i
+
+    OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up $lsp_name` = xup])
+done
+
+ovn-nbctl --wait=sb sync
+ovn-nbctl show
+ovn-sbctl dump-flows
+
+# vif ports
+for i in 1 2; do
+    : > vif-$i.expected
+done
+
+# localnet ports
+for i in 1 2; do
+    for tag in `seq 10 20`; do
+        : > $i-$tag.expected
+    done
+done
+
+test_packet() {
+    local inport=$1 outport=$2 dst=$3 src=$4 eth=$5 eout=$6 lout=$7
+
+    # Expect the packet cloned to all localnet ports
+    : > expout
+    for tag in `seq 10 20`; do
+        echo "output(\"ln-$inport-$tag\");" >> expout
+    done
+
+    # First try tracing the packet.
+    uflow="inport==\"lp-$inport\" && eth.dst==$dst && eth.src==$src && eth.type==0x$eth"
+    AT_CAPTURE_FILE([trace])
+    AT_CHECK([ovn-trace --all ls-$inport "$uflow" | tee trace | sed '1,/Minimal trace/d'], [0], [expout])
+
+    # Then actually send a packet, for an end-to-end test.
+    local packet=$(echo $dst$src | sed 's/://g')${eth}
+    as hv-$1 ovs-appctl netdev-dummy/receive vif-$inport $packet
+
+    # Expect the packet received by the peer VIF port
+    echo $packet >> vif-$outport.expected
+
+    # Expect the packet to transfer through the common fabric network
+    local packet=$(echo $dst$src | sed 's/://g')81000014${eth}
+    echo $packet >> $1-10.expected
+}
+
+test_packet 1 2 f0:00:00:00:00:02 f0:00:00:00:00:01 1001 ln-1-10 ln-1-10
+test_packet 1 2 f0:00:00:00:00:02 f0:00:00:00:00:01 1002 ln-1-10 ln-1-10
+
+test_packet 2 1 f0:00:00:00:00:01 f0:00:00:00:00:02 1003 ln-2-10 ln-2-10
+test_packet 2 1 f0:00:00:00:00:01 f0:00:00:00:00:02 1004 ln-2-10 ln-2-10
+
+# Dump a bunch of info helpful for debugging if there's a failure.
+
+echo "------ OVN dump ------"
+ovn-nbctl show
+ovn-sbctl show
+
+for i in 1 2; do
+    hv=hv-$i
+    echo "------ $hv dump ------"
+    as $hv ovs-vsctl show
+    as $hv ovs-ofctl -O OpenFlow13 dump-flows br-int
+done
+
+# Now check the packets actually received against the ones expected.
+for i in 1 2; do
+    OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv-$i/vif-$i-tx.pcap], [vif-$i.expected])
+    OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv-$i/br-phys_n-10-tx.pcap], [$i-10.expected])
+done
+
+OVN_CLEANUP([hv-1],[hv-2])
+
+AT_CLEANUP
+
+AT_SETUP([ovn -- 2 HVs, 1 LS, no switching between multiple localnet ports with different tags])
+ovn_start
+
+# In this test case we create a single switch connected to two physical
+# networks via two localnet ports. Then we create two hypervisors, with 2
+# ports on each. The test validates no interconnectivity between VIF ports
+# located on chassis plugged to different physical networks.
+
+# create the single switch with two locanet ports
+ovn-nbctl ls-add ls1
+for tag in 10 20; do
+    ln_port_name=ln-$tag
+    ovn-nbctl lsp-add ls1 $ln_port_name "" $tag
+    ovn-nbctl lsp-set-addresses $ln_port_name unknown
+    ovn-nbctl lsp-set-type $ln_port_name localnet
+    ovn-nbctl lsp-set-options $ln_port_name network_name=phys-$tag
+done
+
+# create fabric networks
+for tag in 10 20; do
+    net_add n-$tag
+done
+
+# create four chassis, each connected to one network, each with a single VIF port
+for tag in 10 20; do
+    for i in 1 2; do
+        sim_add hv-$tag-$i
+        as hv-$tag-$i
+        ovs-vsctl add-br br-phys
+        ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys-$tag:br-phys
+        ovn_attach n-$tag br-phys 192.168.$i.$tag
+
+        ovs-vsctl add-port br-int vif-$tag-$i -- \
+            set Interface vif-$tag-$i external-ids:iface-id=lp-$tag-$i \
+                                  options:tx_pcap=hv-$tag-$i/vif-$tag-$i-tx.pcap \
+                                  options:rxq_pcap=hv-$tag-$i/vif-$tag-$i-rx.pcap \
+                                  ofport-request=$tag$i
+
+        lsp_name=lp-$tag-$i
+        ovn-nbctl lsp-add ls1 $lsp_name
+        ovn-nbctl lsp-set-addresses $lsp_name f0:00:00:00:0$i:$tag
+        ovn-nbctl lsp-set-port-security $lsp_name f0:00:00:00:0$i:$tag
+
+        OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up $lsp_name` = xup])
+    done
+done
+ovn-nbctl --wait=sb sync
+ovn-sbctl dump-flows
+
+for tag in 10 20; do
+    for i in 1 2; do
+        : > $tag-$i.expected
+    done
+done
+
+vif_to_hv() {
+    echo hv-$1
+}
+
+test_packet() {
+    local inport=$1 dst=$2 src=$3 eth=$4 eout=$5 lout=$6
+
+    # First try tracing the packet.
+    uflow="inport==\"lp-$inport\" && eth.dst==$dst && eth.src==$src && eth.type==0x$eth"
+    echo "output(\"$lout\");" > expout
+    AT_CAPTURE_FILE([trace])
+    AT_CHECK([ovn-trace --all ls1 "$uflow" | tee trace | sed '1,/Minimal trace/d'], [0], [expout])
+
+    # Then actually send a packet, for an end-to-end test.
+    local packet=$(echo $dst$src | sed 's/://g')${eth}
+    hv=`vif_to_hv $inport`
+    vif=vif-$inport
+    as $hv ovs-appctl netdev-dummy/receive $vif $packet
+    if test $eth = 1002 -o $eth = 2002; then
+        echo $packet >> ${eout#lp-}.expected
+    fi
+}
+
+# different fabric networks -> should fail
+test_packet 10-1 f0:00:00:00:01:20 f0:00:00:00:01:10 1001 lp-20-1 lp-20-1
+test_packet 20-1 f0:00:00:00:01:10 f0:00:00:00:01:20 2001 lp-10-1 lp-10-1
+
+# same fabric networks -> should pass
+test_packet 10-1 f0:00:00:00:02:10 f0:00:00:00:01:10 1002 lp-10-2 lp-10-2
+test_packet 20-1 f0:00:00:00:02:20 f0:00:00:00:01:20 2002 lp-20-2 lp-20-2
+test_packet 10-2 f0:00:00:00:01:10 f0:00:00:00:02:10 1002 lp-10-1 lp-10-1
+test_packet 20-2 f0:00:00:00:01:20 f0:00:00:00:02:20 2002 lp-20-1 lp-20-1
+
+# Dump a bunch of info helpful for debugging if there's a failure.
+echo "------ OVN dump ------"
+ovn-nbctl show
+ovn-sbctl show
+
+for tag in 10 20; do
+    for i in 1 2; do
+        hv=hv-$tag-$i
+        echo "------ $hv dump ------"
+        as $hv ovs-vsctl show
+        as $hv ovs-ofctl -O OpenFlow13 dump-flows br-int
+    done
+done
+
+# Now check the packets actually received against the ones expected.
+for tag in 10 20; do
+    for i in 1 2; do
+        echo "hv = $tag-$i"
+        OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv-$tag-$i/vif-$tag-$i-tx.pcap], [$tag-$i.expected])
+    done
+done
+
+OVN_CLEANUP([hv-10-1],[hv-10-2],[hv-20-1],[hv-20-2])
+
+AT_CLEANUP
+
 AT_SETUP([ovn -- vtep: 3 HVs, 1 VIFs/HV, 1 GW, 1 LS])
 AT_KEYWORDS([vtep])
 ovn_start
