@@ -1068,7 +1068,13 @@ build_datapaths(struct northd_context *ctx, struct hmap *datapaths,
     struct ovn_datapath *od, *next;
     if (!ovs_list_is_empty(&nb_only) || !ovs_list_is_empty(&both)) {
         LIST_FOR_EACH (od, list, &both) {
-            ovn_add_tnlid(&dp_tnlids, od->sb->tunnel_key);
+            if (!ovn_tnlid_in_use(&dp_tnlids, od->sb->tunnel_key)) {
+                ovn_add_tnlid(&dp_tnlids, od->sb->tunnel_key);
+            } else {
+                uint32_t dp_key = ovn_datapath_allocate_key(&dp_tnlids);
+
+                sbrec_datapath_binding_set_tunnel_key(od->sb, dp_key);
+            }
         }
     }
 
@@ -3462,7 +3468,12 @@ build_ports(struct northd_context *ctx,
     /* For logical ports that are in both databases, index the in-use
      * tunnel_keys. */
     LIST_FOR_EACH (op, list, &both) {
-        ovn_add_tnlid(&op->od->port_tnlids, op->sb->tunnel_key);
+        if (!ovn_tnlid_in_use(&op->od->port_tnlids, op->sb->tunnel_key)) {
+            ovn_add_tnlid(&op->od->port_tnlids, op->sb->tunnel_key);
+        } else {
+            sbrec_port_binding_set_tunnel_key(op->sb,
+                                              ovn_port_allocate_key(op->od));
+        }
         if (op->sb->tunnel_key > op->od->port_key_hint) {
             op->od->port_key_hint = op->sb->tunnel_key;
         }
@@ -3722,8 +3733,16 @@ ovn_igmp_group_add(struct northd_context *ctx, struct hmap *igmp_groups,
         igmp_group->address = *address;
         if (mcgroup) {
             igmp_group->mcgroup.key = mcgroup->tunnel_key;
-            ovn_add_tnlid(&datapath->mcast_info.group_tnlids,
-                          mcgroup->tunnel_key);
+            if (!ovn_tnlid_in_use(&datapath->mcast_info.group_tnlids,
+                                  mcgroup->tunnel_key)) {
+                ovn_add_tnlid(&datapath->mcast_info.group_tnlids,
+                              mcgroup->tunnel_key);
+            } else {
+                uint32_t group_key =
+                    ovn_mcast_group_allocate_key(&datapath->mcast_info);
+
+                sbrec_multicast_group_set_tunnel_key(mcgroup, group_key);
+            }
         } else {
             igmp_group->mcgroup.key = 0;
         }
