@@ -638,6 +638,12 @@ ovn_datapath_find(struct hmap *datapaths, const struct uuid *uuid)
     return NULL;
 }
 
+static bool
+ovn_datapath_is_stale(const struct ovn_datapath *od)
+{
+    return !od->nbr && !od->nbs;
+}
+
 static struct ovn_datapath *
 ovn_datapath_from_sbrec(struct hmap *datapaths,
                         const struct sbrec_datapath_binding *sb)
@@ -3075,11 +3081,16 @@ ovn_port_update_sbrec(struct northd_context *ctx,
 /* Remove mac_binding entries that refer to logical_ports which are
  * deleted. */
 static void
-cleanup_mac_bindings(struct northd_context *ctx, struct hmap *ports)
+cleanup_mac_bindings(struct northd_context *ctx, struct hmap *datapaths,
+                     struct hmap *ports)
 {
     const struct sbrec_mac_binding *b, *n;
     SBREC_MAC_BINDING_FOR_EACH_SAFE (b, n, ctx->ovnsb_idl) {
-        if (!ovn_port_find(ports, b->logical_port)) {
+        const struct ovn_datapath *od =
+            ovn_datapath_from_sbrec(datapaths, b->datapath);
+
+        if (!od || ovn_datapath_is_stale(od) ||
+                !ovn_port_find(ports, b->logical_port)) {
             sbrec_mac_binding_delete(b);
         }
     }
@@ -3508,7 +3519,7 @@ build_ports(struct northd_context *ctx,
         ovn_port_destroy(ports, op);
     }
     if (remove_mac_bindings) {
-        cleanup_mac_bindings(ctx, ports);
+        cleanup_mac_bindings(ctx, datapaths, ports);
     }
 
     tag_alloc_destroy(&tag_alloc_table);
@@ -10287,7 +10298,8 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
     SBREC_LOGICAL_FLOW_FOR_EACH_SAFE (sbflow, next_sbflow, ctx->ovnsb_idl) {
         struct ovn_datapath *od
             = ovn_datapath_from_sbrec(datapaths, sbflow->logical_datapath);
-        if (!od) {
+
+        if (!od || ovn_datapath_is_stale(od)) {
             sbrec_logical_flow_delete(sbflow);
             continue;
         }
@@ -10347,7 +10359,8 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
     SBREC_MULTICAST_GROUP_FOR_EACH_SAFE (sbmc, next_sbmc, ctx->ovnsb_idl) {
         struct ovn_datapath *od = ovn_datapath_from_sbrec(datapaths,
                                                           sbmc->datapath);
-        if (!od) {
+
+        if (!od || ovn_datapath_is_stale(od)) {
             sbrec_multicast_group_delete(sbmc);
             continue;
         }
@@ -10829,8 +10842,8 @@ build_ip_mcast(struct northd_context *ctx, struct hmap *datapaths)
     const struct sbrec_ip_multicast *sb, *sb_next;
 
     SBREC_IP_MULTICAST_FOR_EACH_SAFE (sb, sb_next, ctx->ovnsb_idl) {
-        if (!sb->datapath ||
-                !ovn_datapath_from_sbrec(datapaths, sb->datapath)) {
+        od = ovn_datapath_from_sbrec(datapaths, sb->datapath);
+        if (!od || ovn_datapath_is_stale(od)) {
             sbrec_ip_multicast_delete(sb);
         }
     }
@@ -10899,7 +10912,8 @@ build_mcast_groups(struct northd_context *ctx,
         /* If the datapath value is stale, purge the group. */
         struct ovn_datapath *od =
             ovn_datapath_from_sbrec(datapaths, sb_igmp->datapath);
-        if (!od) {
+
+        if (!od || ovn_datapath_is_stale(od)) {
             sbrec_igmp_group_delete(sb_igmp);
             continue;
         }
