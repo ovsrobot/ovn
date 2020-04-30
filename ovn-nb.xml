@@ -1513,6 +1513,13 @@
       </p>
     </column>
 
+    <column name="selection_fields">
+      Set of packet header fields to use for selecting a backend to
+      load balance the VIP. This can be used if CMS desires that the
+      backend selection is consistent and deterministic for a given
+      set of packet header fields.
+    </column>
+
     <group title="Common Columns">
       <column name="external_ids">
         See <em>External IDs</em> at the beginning of this document.

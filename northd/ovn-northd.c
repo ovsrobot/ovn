@@ -3101,7 +3101,7 @@ struct ovn_lb {
     struct hmap_node hmap_node;
 
     const struct nbrec_load_balancer *nlb; /* May be NULL. */
-
+    char *selection_fields;
     struct lb_vip *vips;
     size_t n_vips;
 };
@@ -3213,6 +3213,18 @@ ovn_lb_create(struct northd_context *ctx, struct hmap *lbs,
         lb->vips[n_vips].vip_port = port;
         lb->vips[n_vips].addr_family = addr_family;
         lb->vips[n_vips].backend_ips = xstrdup(node->value);
+
+        char *ps1 = lb->vips[n_vips].backend_ips;
+        char *ps2 = ps1;
+        /* Replace all occurances of ',' with '-'. */
+        while (ps2) {
+            ps2 = strstr(ps1, ",");
+            if (ps2) {
+                *ps2 = '-';
+                ps2++;
+                ps1 = ps2;
+            }
+        }
 
         struct nbrec_load_balancer_health_check *lb_health_check = NULL;
         if (nbrec_lb->protocol && !strcmp(nbrec_lb->protocol, "sctp")) {
@@ -3329,6 +3341,16 @@ ovn_lb_create(struct northd_context *ctx, struct hmap *lbs,
         n_vips++;
     }
 
+    if (lb->nlb->n_selection_fields) {
+        struct ds sel_fields = DS_EMPTY_INITIALIZER;
+        for (size_t i = 0; i < lb->nlb->n_selection_fields; i++) {
+            ds_put_format(&sel_fields, "%s,", lb->nlb->selection_fields[i]);
+        }
+        ds_chomp(&sel_fields, ',');
+        lb->selection_fields = ds_steal_cstr(&sel_fields);
+        ds_destroy(&sel_fields);
+    }
+
     return lb;
 }
 
@@ -3347,13 +3369,15 @@ ovn_lb_destroy(struct ovn_lb *lb)
         free(lb->vips[i].backends);
     }
     free(lb->vips);
+    free(lb->selection_fields);
 }
 
 static void build_lb_vip_ct_lb_actions(struct lb_vip *lb_vip,
-                                       struct ds *action)
+                                       struct ds *action,
+                                       char *selection_fields)
 {
     if (lb_vip->health_check) {
-        ds_put_cstr(action, "ct_lb(");
+        ds_put_cstr(action, "ct_lb(backends=");
 
         size_t n_active_backends = 0;
         for (size_t k = 0; k < lb_vip->n_backends; k++) {
@@ -3365,7 +3389,7 @@ static void build_lb_vip_ct_lb_actions(struct lb_vip *lb_vip,
             }
 
             n_active_backends++;
-            ds_put_format(action, "%s:%"PRIu16",",
+            ds_put_format(action, "%s:%"PRIu16"-",
             backend->ip, backend->port);
         }
 
@@ -3373,11 +3397,17 @@ static void build_lb_vip_ct_lb_actions(struct lb_vip *lb_vip,
             ds_clear(action);
             ds_put_cstr(action, "drop;");
         } else {
-            ds_chomp(action, ',');
+            ds_chomp(action, '-');
             ds_put_cstr(action, ");");
         }
     } else {
-        ds_put_format(action, "ct_lb(%s);", lb_vip->backend_ips);
+        ds_put_format(action, "ct_lb(backends=%s);", lb_vip->backend_ips);
+    }
+
+    if (selection_fields && selection_fields[0]) {
+        ds_chomp(action, ';');
+        ds_chomp(action, ')');
+        ds_put_format(action, ", hash_fields=\"%s\");", selection_fields);
     }
 }
 
@@ -5650,7 +5680,7 @@ build_lb_rules(struct ovn_datapath *od, struct hmap *lflows, struct ovn_lb *lb)
 
         /* New connections in Ingress table. */
         struct ds action = DS_EMPTY_INITIALIZER;
-        build_lb_vip_ct_lb_actions(lb_vip, &action);
+        build_lb_vip_ct_lb_actions(lb_vip, &action, lb->selection_fields);
 
         struct ds match = DS_EMPTY_INITIALIZER;
         ds_put_format(&match, "ct.new && %s.dst == %s", ip_match, lb_vip->vip);
@@ -9301,7 +9331,8 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             for (size_t j = 0; j < lb->n_vips; j++) {
                 struct lb_vip *lb_vip = &lb->vips[j];
                 ds_clear(&actions);
-                build_lb_vip_ct_lb_actions(lb_vip, &actions);
+                build_lb_vip_ct_lb_actions(lb_vip, &actions,
+                                           lb->selection_fields);
 
                 if (!sset_contains(&all_ips, lb_vip->vip)) {
                     sset_add(&all_ips, lb_vip->vip);
