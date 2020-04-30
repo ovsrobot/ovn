@@ -1444,3 +1444,29 @@ logical_port=lsp2)
 AT_CHECK([test ${pb1_key} != ${pb2_key}])
 
 AT_CLEANUP
+
+AT_SETUP([ovn -- check reconcile stale Ha_Chassis_Group])
+ovn_start
+
+ovn-nbctl ls-add ls1
+ovn-nbctl ls-add ls2
+ovn-nbctl lsp-add ls1 lsp1
+ovn-nbctl lsp-add ls2 lsp2
+
+ovn-nbctl lsp-set-type lsp2 external
+
+ovn-nbctl ha-chassis-group-add chg1
+ovn-nbctl ha-chassis-group-add-chassis chg1 chassis-1 30
+
+chg1_uuid=$(ovn-nbctl --bare --columns _uuid list Ha_Chassis_Group .)
+ovn-nbctl set logical_switch_port lsp2 ha_chassis_group=${chg1_uuid}
+AT_CHECK([ovn-nbctl --wait=sb sync], [0])
+
+# Move lsp2 from ls2 to ls1. This should also remove the SB HA_Chassis_Group
+# record.
+ovn-nbctl lsp-del lsp2 -- lsp-add ls1 lsp2
+AT_CHECK([ovn-nbctl --wait=sb sync], [0])
+
+AT_CHECK([test 0 = $(ovn-sbctl list Ha_Chassis_Group | wc -l)])
+
+AT_CLEANUP

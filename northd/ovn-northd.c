@@ -2934,16 +2934,14 @@ ovn_port_update_sbrec(struct northd_context *ctx,
 
             sbrec_port_binding_set_nat_addresses(op->sb, NULL, 0);
 
-            if (!strcmp(op->nbsp->type, "external")) {
-                if (op->nbsp->ha_chassis_group) {
-                    sync_ha_chassis_group_for_sbpb(
-                        ctx, op->nbsp->ha_chassis_group,
-                        sbrec_chassis_by_name, op->sb);
-                    sset_add(active_ha_chassis_grps,
-                             op->nbsp->ha_chassis_group->name);
-                } else {
-                    sbrec_port_binding_set_ha_chassis_group(op->sb, NULL);
-                }
+            if (!strcmp(op->nbsp->type, "external") &&
+                    op->nbsp->ha_chassis_group) {
+                sync_ha_chassis_group_for_sbpb(ctx, op->nbsp->ha_chassis_group,
+                                               sbrec_chassis_by_name, op->sb);
+                sset_add(active_ha_chassis_grps,
+                         op->nbsp->ha_chassis_group->name);
+            } else {
+                sbrec_port_binding_set_ha_chassis_group(op->sb, NULL);
             }
         } else {
             const char *chassis = NULL;
