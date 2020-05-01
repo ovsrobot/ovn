@@ -1254,6 +1254,15 @@
       column is ignored.
     </column>
 
+    <column name="mark">
+      <p>
+        The packet received from the VIF of the logical switch port is
+        marked with the value defined here. CMS can inspect this packet
+        metadata marker and take some decisions if desired. This value
+        is not preserved when the packet goes out of the wire.
+      </p>
+    </column>
+
     <group title="Naming">
       <column name="external_ids" key="neutron:port_name">
         <p>

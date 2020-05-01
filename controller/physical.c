@@ -1131,6 +1131,11 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
 
         load_logical_ingress_metadata(binding, &zone_ids, ofpacts_p);
 
+        /* If Mark is set, set the pkt_mark. */
+        if (binding->n_mark) {
+            put_load(binding->mark[0], MFF_PKT_MARK, 0, 32, ofpacts_p);
+        }
+
         /* Resubmit to first logical ingress pipeline table. */
         put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, ofpacts_p);
         ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG,

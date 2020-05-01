@@ -3057,6 +3057,8 @@ ovn_port_update_sbrec(struct northd_context *ctx,
         }
         sbrec_port_binding_set_external_ids(op->sb, &ids);
         smap_destroy(&ids);
+
+        sbrec_port_binding_set_mark(op->sb, op->nbsp->mark, op->nbsp->n_mark);
     }
     int64_t tnl_key = op_get_requested_tnl_key(op);
     if (tnl_key && tnl_key != op->sb->tunnel_key) {
@@ -11841,6 +11843,7 @@ main(int argc, char *argv[])
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_type);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_options);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_mac);
+    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_mark);
     add_column_noalert(ovnsb_idl_loop.idl,
                        &sbrec_port_binding_col_nat_addresses);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_port_binding_col_chassis);
