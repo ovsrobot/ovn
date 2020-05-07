@@ -34,6 +34,7 @@ struct gen_opts_map {
     size_t code;
 };
 
+#define DOMAIN_NAME_MAX_LEN 255
 #define DHCP_BROADCAST_FLAG 0x8000
 
 #define DHCP_OPTION(NAME, CODE, TYPE) \
@@ -57,7 +58,7 @@ struct gen_opts_map {
 #define DHCP_OPT_NIS_SERVER  DHCP_OPTION("nis_server", 41, "ipv4")
 #define DHCP_OPT_NTP_SERVER  DHCP_OPTION("ntp_server", 42, "ipv4")
 #define DHCP_OPT_SERVER_ID   DHCP_OPTION("server_id", 54, "ipv4")
-#define DHCP_OPT_TFTP_SERVER DHCP_OPTION("tftp_server", 66, "ipv4")
+#define DHCP_OPT_TFTP_SERVER DHCP_OPTION("tftp_server", 66, "host_id")
 
 #define DHCP_OPT_CLASSLESS_STATIC_ROUTE \
     DHCP_OPTION("classless_static_route", 121, "static_routes")
@@ -81,6 +82,8 @@ struct gen_opts_map {
 #define DHCP_OPT_PATH_PREFIX DHCP_OPTION("path_prefix", 210, "str")
 #define DHCP_OPT_TFTP_SERVER_ADDRESS \
     DHCP_OPTION("tftp_server_address", 150, "ipv4")
+#define DHCP_OPT_DOMAIN_SEARCH_LIST \
+    DHCP_OPTION("domain_search_list", 119, "domains")
 
 #define DHCP_OPT_ARP_CACHE_TIMEOUT \
     DHCP_OPTION("arp_cache_timeout", 35, "uint32")

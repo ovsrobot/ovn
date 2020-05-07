@@ -3208,6 +3208,30 @@ tcp.flags = RST;
             Example. "name=host_name", "code=12", "type=str".
           </p>
         </dd>
+
+        <dt><code>value: host_id</code></dt>
+        <dd>
+          <p>
+            This indicates that the value of the DHCP option is a host_id.
+            It can either be a host_name or an IP address.
+          </p>
+
+          <p>
+            Example. "name=tftp_server", "code=66", "type=host_id".
+          </p>
+        </dd>
+
+        <dt><code>value: domains</code></dt>
+        <dd>
+          <p>
+            This indicates that the value of the DHCP option is a domain name
+            or a comma separated list of domain names.
+          </p>
+
+          <p>
+            Example. "name=domain_search_list", "code=119", "type=domains".
+          </p>
+        </dd>
       </dl>
     </column>
   </table>

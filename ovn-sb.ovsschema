@@ -214,7 +214,8 @@
                     "type": {"key": {
                         "type": "string",
                         "enum": ["set", ["bool", "uint8", "uint16", "uint32",
-                                         "ipv4", "static_routes", "str"]]}}}},
+                                         "ipv4", "static_routes", "str",
+                                         "host_id", "domains"]]}}}},
             "isRoot": true},
         "DHCPv6_Options": {
             "columns": {
