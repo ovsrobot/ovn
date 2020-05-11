@@ -2129,6 +2129,7 @@ join_logical_ports(struct northd_context *ctx,
                             = VLOG_RATE_LIMIT_INIT(5, 1);
                         VLOG_WARN_RL(&rl, "duplicate logical router port %s",
                                      nbrp->name);
+                        destroy_lport_addresses(&lrp_networks);
                         continue;
                     }
                     ovn_port_set_nb(op, NULL, nbrp);
@@ -8622,6 +8623,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 100,
                           ds_cstr(&match), ds_cstr(&actions));
         }
+        destroy_lport_addresses(&lrp_networks);
     }
 
     /* Logical router ingress table 1: IP Input for IPv6. */
