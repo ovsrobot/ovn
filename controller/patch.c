@@ -198,9 +198,9 @@ add_bridge_mappings(struct ovsdb_idl_txn *ovs_idl_txn,
             continue;
         }
 
-        const char *patch_port_id;
+        bool is_localnet = false;
         if (!strcmp(binding->type, "localnet")) {
-            patch_port_id = "ovn-localnet-port";
+            is_localnet = true;
         } else if (!strcmp(binding->type, "l2gateway")) {
             if (!binding->chassis
                 || strcmp(chassis->name, binding->chassis->name)) {
@@ -208,7 +208,6 @@ add_bridge_mappings(struct ovsdb_idl_txn *ovs_idl_txn,
                  * so we should not create any patch ports for it. */
                 continue;
             }
-            patch_port_id = "ovn-l2gateway-port";
         } else {
             /* not a localnet or L2 gateway port. */
             continue;
@@ -224,10 +223,23 @@ add_bridge_mappings(struct ovsdb_idl_txn *ovs_idl_txn,
         struct ovsrec_bridge *br_ln = shash_find_data(&bridge_mappings, network);
         if (!br_ln) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-            VLOG_ERR_RL(&rl, "bridge not found for %s port '%s' "
-                    "with network name '%s'",
-                    binding->type, binding->logical_port, network);
+            if (!is_localnet) {
+                VLOG_ERR_RL(&rl, "bridge not found for %s port '%s' "
+                        "with network name '%s'",
+                        binding->type, binding->logical_port, network);
+            } else {
+                VLOG_INFO_RL(&rl, "bridge not found for localnet port '%s' "
+                        "with network name '%s'; skipping",
+                        binding->logical_port, network);
+            }
             continue;
+        }
+
+        const char *patch_port_id;
+        if (is_localnet) {
+            patch_port_id = "ovn-localnet-port";
+        } else {
+            patch_port_id = "ovn-l2gateway-port";
         }
 
         char *name1 = patch_port_name(br_int->name, binding->logical_port);
