@@ -4682,6 +4682,36 @@ build_lswitch_output_port_sec(struct hmap *ports, struct hmap *datapaths,
 }
 
 static void
+build_pre_acl_flows_for_nbsp(struct ovn_datapath *od,
+                             const struct nbrec_logical_switch_port *nbsp,
+                             const char *json_key, struct hmap *lflows)
+{
+    /* Can't use ct() for router ports. Consider the following configuration:
+     * lp1(10.0.0.2) on hostA--ls1--lr0--ls2--lp2(10.0.1.2) on hostB, For a
+     * ping from lp1 to lp2, First, the response will go through ct() with a
+     * zone for lp2 in the ls2 ingress pipeline on hostB.  That ct zone knows
+     * about this connection. Next, it goes through ct() with the zone for the
+     * router port in the egress pipeline of ls2 on hostB.  This zone does not
+     * know about the connection, as the icmp request went through the logical
+     * router on hostA, not hostB. This would only work with distributed
+     * conntrack state across all chassis. */
+    struct ds match_in = DS_EMPTY_INITIALIZER;
+    struct ds match_out = DS_EMPTY_INITIALIZER;
+
+    ds_put_format(&match_in, "ip && inport == %s", json_key);
+    ds_put_format(&match_out, "ip && outport == %s", json_key);
+    ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_PRE_ACL, 110,
+                            ds_cstr(&match_in), "next;",
+                            &nbsp->header_);
+    ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL, 110,
+                            ds_cstr(&match_out), "next;",
+                            &nbsp->header_);
+
+    ds_destroy(&match_in);
+    ds_destroy(&match_out);
+}
+
+static void
 build_pre_acls(struct ovn_datapath *od, struct hmap *lflows)
 {
     bool has_stateful = has_stateful_acl(od);
@@ -4707,50 +4737,11 @@ build_pre_acls(struct ovn_datapath *od, struct hmap *lflows)
     if (has_stateful) {
         for (size_t i = 0; i < od->n_router_ports; i++) {
             struct ovn_port *op = od->router_ports[i];
-            /* Can't use ct() for router ports. Consider the
-             * following configuration: lp1(10.0.0.2) on
-             * hostA--ls1--lr0--ls2--lp2(10.0.1.2) on hostB, For a
-             * ping from lp1 to lp2, First, the response will go
-             * through ct() with a zone for lp2 in the ls2 ingress
-             * pipeline on hostB.  That ct zone knows about this
-             * connection. Next, it goes through ct() with the zone
-             * for the router port in the egress pipeline of ls2 on
-             * hostB.  This zone does not know about the connection,
-             * as the icmp request went through the logical router
-             * on hostA, not hostB. This would only work with
-             * distributed conntrack state across all chassis. */
-            struct ds match_in = DS_EMPTY_INITIALIZER;
-            struct ds match_out = DS_EMPTY_INITIALIZER;
-
-            ds_put_format(&match_in, "ip && inport == %s", op->json_key);
-            ds_put_format(&match_out, "ip && outport == %s", op->json_key);
-            ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_PRE_ACL, 110,
-                                    ds_cstr(&match_in), "next;",
-                                    &op->nbsp->header_);
-            ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL, 110,
-                                    ds_cstr(&match_out), "next;",
-                                    &op->nbsp->header_);
-
-            ds_destroy(&match_in);
-            ds_destroy(&match_out);
+            build_pre_acl_flows_for_nbsp(od, op->nbsp, op->json_key, lflows);
         }
         if (od->localnet_port) {
-            struct ds match_in = DS_EMPTY_INITIALIZER;
-            struct ds match_out = DS_EMPTY_INITIALIZER;
-
-            ds_put_format(&match_in, "ip && inport == %s",
-                          od->localnet_port->json_key);
-            ds_put_format(&match_out, "ip && outport == %s",
-                          od->localnet_port->json_key);
-            ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_PRE_ACL, 110,
-                                    ds_cstr(&match_in), "next;",
-                                    &od->localnet_port->nbsp->header_);
-            ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL, 110,
-                                    ds_cstr(&match_out), "next;",
-                                    &od->localnet_port->nbsp->header_);
-
-            ds_destroy(&match_in);
-            ds_destroy(&match_out);
+            build_pre_acl_flows_for_nbsp(od, od->localnet_port->nbsp,
+                                         od->localnet_port->json_key, lflows);
         }
 
         /* Ingress and Egress Pre-ACL Table (Priority 110).
