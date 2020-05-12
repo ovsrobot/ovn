@@ -2938,6 +2938,14 @@
             resolving hostnames via the Domain Name System.
           </p>
         </column>
+
+        <column name="options" key="file">
+          <p>
+          </p>
+             Boot file name, null terminated string; "generic" name or null
+             in DHCPDISCOVER, fully qualified directory-path name in
+             DHCPOFFER.
+        </column>
       </group>
     </group>
 

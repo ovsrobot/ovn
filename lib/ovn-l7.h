@@ -81,6 +81,10 @@ struct gen_opts_map {
 #define DHCP_OPT_PATH_PREFIX DHCP_OPTION("path_prefix", 210, "str")
 #define DHCP_OPT_TFTP_SERVER_ADDRESS \
     DHCP_OPTION("tftp_server_address", 150, "ipv4")
+/* fixed DHCP header */
+#define DHCP_OPT_FILENAME DHCP_OPTION("file", 300, "str")
+
+#define DHCP_OPT_ETHERBOOT	175
 
 #define DHCP_OPT_ARP_CACHE_TIMEOUT \
     DHCP_OPTION("arp_cache_timeout", 35, "uint32")

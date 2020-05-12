@@ -1762,6 +1762,7 @@ pinctrl_handle_put_dhcp_opts(
     }
     in_dhcp_ptr += sizeof magic_cookie;
 
+    bool ipxe_req = false;
     const uint8_t *in_dhcp_msg_type = NULL;
     ovs_be32 request_ip = in_dhcp_data->ciaddr;
     while (in_dhcp_ptr < end) {
@@ -1793,6 +1794,9 @@ pinctrl_handle_put_dhcp_opts(
             if (in_dhcp_opt->len == 4) {
                 request_ip = get_unaligned_be32(DHCP_OPT_PAYLOAD(in_dhcp_opt));
             }
+            break;
+        case DHCP_OPT_ETHERBOOT:
+            ipxe_req = true;
             break;
         default:
             break;
@@ -1844,9 +1848,40 @@ pinctrl_handle_put_dhcp_opts(
      *| 4 Bytes padding | 1 Byte (option end 0xFF ) | 4 Bytes padding|
      * --------------------------------------------------------------
      */
+    /* compute opt len */
+    unsigned char *boot_filename = NULL, *filename = NULL;
+    unsigned char *ptr = (unsigned char *)userdata->data;
+    uint16_t boot_filename_len = 0, filename_len = 0;
+    unsigned char *buf = xmalloc(userdata->size);
+    uint16_t len = 0, opt_len = 0;
+
+    while (len < userdata->size) {
+        int cur_len = ptr[len + 2];
+        uint16_t code;
+
+        memcpy(&code, &ptr[len], 2);
+        switch (code) {
+        case 300: /* DHCP_OPT_FILENAME */
+          filename = &ptr[len + 3];
+          filename_len = cur_len;
+          break;
+        case 67: /* DHCP_OPT_BOOTFILENAME */
+          boot_filename = &buf[opt_len + 2];
+          boot_filename_len = cur_len;
+          /* fall through */
+        default:
+          /* code < 255 */
+          buf[opt_len] = code;
+          memcpy(buf + 1 + opt_len, &ptr[len + 2], cur_len + 1);
+          opt_len += 2 + cur_len;
+          break;
+        }
+        len += 3 + cur_len;
+    }
+
     uint16_t new_l4_size = UDP_HEADER_LEN + DHCP_HEADER_LEN + 16;
     if (msg_type != DHCP_MSG_NAK) {
-        new_l4_size += userdata->size;
+        new_l4_size += opt_len;
     }
     size_t new_packet_size = pkt_in->l4_ofs + new_l4_size;
 
@@ -1876,7 +1911,7 @@ pinctrl_handle_put_dhcp_opts(
 
     uint16_t out_dhcp_opts_size = 12;
     if (msg_type != DHCP_MSG_NAK) {
-      out_dhcp_opts_size += userdata->size;
+      out_dhcp_opts_size += opt_len;
     }
     uint8_t *out_dhcp_opts = dp_packet_put_zeros(&pkt_out,
                                                  out_dhcp_opts_size);
@@ -1886,9 +1921,14 @@ pinctrl_handle_put_dhcp_opts(
     out_dhcp_opts[2] = msg_type;
     out_dhcp_opts += 3;
 
+    if (filename && boot_filename && !ipxe_req) {
+        memset(boot_filename, 0, boot_filename_len);
+        memcpy(boot_filename, filename, filename_len);
+    }
+
     if (msg_type != DHCP_MSG_NAK) {
-      memcpy(out_dhcp_opts, userdata->data, userdata->size);
-      out_dhcp_opts += userdata->size;
+      memcpy(out_dhcp_opts, buf, opt_len);
+      out_dhcp_opts += opt_len;
     }
 
     /* Padding */
@@ -1926,6 +1966,7 @@ pinctrl_handle_put_dhcp_opts(
                  ETH_ADDR_ARGS(l2->eth_src), IP_ARGS(*offer_ip));
 
     success = 1;
+    free(buf);
 exit:
     if (!ofperr) {
         union mf_subvalue sv;

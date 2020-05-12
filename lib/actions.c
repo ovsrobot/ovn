@@ -2236,23 +2236,23 @@ static void
 encode_put_dhcpv4_option(const struct ovnact_gen_option *o,
                          struct ofpbuf *ofpacts)
 {
-    uint8_t *opt_header = ofpbuf_put_zeros(ofpacts, 2);
-    opt_header[0] = o->option->code;
+    uint8_t *opt_header = ofpbuf_put_zeros(ofpacts, 3);
 
+    memcpy(opt_header, &o->option->code, 2);
     const union expr_constant *c = o->value.values;
     size_t n_values = o->value.n_values;
     if (!strcmp(o->option->type, "bool") ||
         !strcmp(o->option->type, "uint8")) {
-        opt_header[1] = 1;
+        opt_header[2] = 1;
         ofpbuf_put(ofpacts, &c->value.u8_val, 1);
     } else if (!strcmp(o->option->type, "uint16")) {
-        opt_header[1] = 2;
+        opt_header[2] = 2;
         ofpbuf_put(ofpacts, &c->value.be16_int, 2);
     } else if (!strcmp(o->option->type, "uint32")) {
-        opt_header[1] = 4;
+        opt_header[2] = 4;
         ofpbuf_put(ofpacts, &c->value.be32_int, 4);
     } else if (!strcmp(o->option->type, "ipv4")) {
-        opt_header[1] = n_values * sizeof(ovs_be32);
+        opt_header[2] = n_values * sizeof(ovs_be32);
         for (size_t i = 0; i < n_values; i++) {
             ofpbuf_put(ofpacts, &c[i].value.ipv4, sizeof(ovs_be32));
         }
@@ -2261,7 +2261,7 @@ encode_put_dhcpv4_option(const struct ovnact_gen_option *o,
         if (no_of_routes % 2) {
             no_of_routes -= 1;
         }
-        opt_header[1] = 0;
+        opt_header[2] = 0;
 
         /* Calculating the length of this option first because when
          * we call ofpbuf_put, it might reallocate the buffer if the
@@ -2273,7 +2273,7 @@ encode_put_dhcpv4_option(const struct ovnact_gen_option *o,
             if (c[i].masked) {
                 plen = (uint8_t) ip_count_cidr_bits(c[i].mask.ipv4);
             }
-            opt_header[1] += (1 + DIV_ROUND_UP(plen, 8) + sizeof(ovs_be32));
+            opt_header[2] += (1 + DIV_ROUND_UP(plen, 8) + sizeof(ovs_be32));
         }
 
         /* Copied from RFC 3442. Please refer to this RFC for the format of
@@ -2303,8 +2303,8 @@ encode_put_dhcpv4_option(const struct ovnact_gen_option *o,
                        sizeof(ovs_be32));
         }
     } else if (!strcmp(o->option->type, "str")) {
-        opt_header[1] = strlen(c->string);
-        ofpbuf_put(ofpacts, c->string, opt_header[1]);
+        opt_header[2] = strlen(c->string);
+        ofpbuf_put(ofpacts, c->string, opt_header[2]);
     }
 }
 
