@@ -3642,6 +3642,10 @@ nbctl_lr_policy_del(struct ctl_context *ctx)
                     new_policies[n_policies++] = lr->policies[i];
                 }
             }
+            if (n_policies == lr->n_policies) {
+                ctl_error(ctx, "uuid is not found");
+                }
+
     /* If match is not specified, delete all routing policies with the
      * specified priority. */
         } else {
