@@ -19208,3 +19208,12 @@ AT_CHECK([test 2287 = `ovs-ofctl dump-group-stats br-int | grep -o bucket | wc -
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
+
+AT_SETUP([ovn -- Case-insensitive MAC])
+ovn_start
+
+ovn-nbctl lr-add r1
+ovn-nbctl lrp-add r1 rp1 CC:DD:EE:EE:DD:CC AEF0::1/64 BEF0::1/64
+
+AT_CHECK([ovn-nbctl --may-exist lrp-add r1 rp1 cc:dd:ee:ee:dd:cc aef0::1/64 bef0:0000:0000:0000::1/64])
+AT_CLEANUP
