@@ -7337,7 +7337,8 @@ build_route_prefix_s(const struct v46_ip *prefix, unsigned int plen)
 }
 
 static void
-build_route_match(const struct ovn_port *op_inport, const char *network_s,
+build_route_match(const struct ovn_port *op_inport,
+                  const struct ovn_port *op_outport, const char *network_s,
                   int plen, bool is_src_route, bool is_ipv4, struct ds *match,
                   uint16_t *priority)
 {
@@ -7350,6 +7351,13 @@ build_route_match(const struct ovn_port *op_inport, const char *network_s,
     } else {
         dir = "dst";
         *priority = (plen * 2) + 1;
+    }
+    /* traffic for internal IPs of logical switch ports must be sent to
+     * the gw controller through the overlay tunnels
+     */
+    if (!op_outport ||
+        (op_outport->nbrp && !op_outport->nbrp->n_gateway_chassis)) {
+        priority += DROUTE_PRIO;
     }
 
     if (op_inport) {
@@ -7434,8 +7442,8 @@ build_ecmp_route_flow(struct hmap *lflows, struct ovn_datapath *od,
     uint16_t priority;
 
     char *prefix_s = build_route_prefix_s(&eg->prefix, eg->plen);
-    build_route_match(NULL, prefix_s, eg->plen, eg->is_src_route, is_ipv4,
-                      &match, &priority);
+    build_route_match(NULL, NULL, prefix_s, eg->plen, eg->is_src_route,
+                      is_ipv4, &match, &priority);
     free(prefix_s);
 
     struct ds actions = DS_EMPTY_INITIALIZER;
@@ -7548,14 +7556,8 @@ add_route(struct hmap *lflows, const struct ovn_port *op,
             op_inport = op;
         }
     }
-    build_route_match(op_inport, network_s, plen, is_src_route, is_ipv4,
+    build_route_match(op_inport, op, network_s, plen, is_src_route, is_ipv4,
                       &match, &priority);
-    /* traffic for internal IPs of logical switch ports must be sent to
-     * the gw controller through the overlay tunnels
-     */
-    if (op->nbrp && !op->nbrp->n_gateway_chassis) {
-        priority += DROUTE_PRIO;
-    }
 
     struct ds actions = DS_EMPTY_INITIALIZER;
     ds_put_format(&actions, "ip.ttl--; "REG_ECMP_GROUP_ID" = 0; %sreg0 = ",

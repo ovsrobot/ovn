@@ -2601,7 +2601,8 @@ next;
           ids <var>MID1</var>, <var>MID2</var>, ..., a logical flow with match
           in CIDR notation <code>ip4.dst == <var>N</var>/<var>M</var></code>,
           or <code>ip6.dst == <var>N</var>/<var>M</var></code>, whose priority
-          is the integer value of <var>M</var>, has the following actions:
+          is <code>400</code> + the integer value of <var>M</var>, has the
+          following actions:
         </p>
 
         <pre>
