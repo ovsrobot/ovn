@@ -210,7 +210,7 @@ extract_ip_addresses(const char *address, struct lport_addresses *laddrs)
 {
     int ofs;
     if (parse_and_store_addresses(address, laddrs, &ofs, false)) {
-        return (laddrs->n_ipv4_addrs || laddrs->n_ipv6_addrs);
+        return !!(laddrs->n_ipv4_addrs || laddrs->n_ipv6_addrs);
     }
 
     return false;

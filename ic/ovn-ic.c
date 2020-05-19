@@ -525,7 +525,7 @@ get_router_uuid_by_sb_pb(struct ic_context *ctx,
 {
     const struct sbrec_port_binding *router_pb = find_peer_port(ctx, sb_pb);
     if (!router_pb || !router_pb->datapath) {
-        return NULL;
+        return false;
     }
 
     return smap_get_uuid(&router_pb->datapath->external_ids, "logical-router",

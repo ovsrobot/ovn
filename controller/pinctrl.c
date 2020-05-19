@@ -1674,7 +1674,7 @@ pinctrl_handle_tcp_reset(struct rconn *swconn, const struct flow *ip_flow,
 static bool
 is_dhcp_flags_broadcast(ovs_be16 flags)
 {
-    return flags & htons(DHCP_BROADCAST_FLAG);
+    return !!(flags & htons(DHCP_BROADCAST_FLAG));
 }
 
 /* Called with in the pinctrl_handler thread context. */
@@ -4606,7 +4606,7 @@ pinctrl_ip_mcast_handle_igmp(struct ip_mcast_snoop *ip_ms,
         break;
     }
     ovs_rwlock_unlock(&ip_ms->ms->rwlock);
-    return group_change;
+    return !!group_change;
 }
 
 static bool
@@ -4654,7 +4654,7 @@ pinctrl_ip_mcast_handle_mld(struct ip_mcast_snoop *ip_ms,
         break;
     }
     ovs_rwlock_unlock(&ip_ms->ms->rwlock);
-    return group_change;
+    return !!group_change;
 }
 
 static void
