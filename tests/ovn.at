@@ -10141,20 +10141,6 @@ AT_CHECK([as hv3 ovs-vsctl set Open_vSwitch . external-ids:ovn-bridge-mappings=p
 OVS_WAIT_UNTIL([test 1 = `as hv3 ovs-vsctl show | \
 grep "Port patch-br-int-to-ln_port" | wc -l`])
 
-AT_CHECK([test 1 = `ovn-sbctl dump-flows lr0 | grep lr_in_ip_routing | \
-grep "ip4.src == 10.0.0.3 && is_chassis_resident(\"foo1\")" -c`])
-AT_CHECK([test 1 = `ovn-sbctl dump-flows lr0 | grep lr_in_ip_routing | \
-grep "ip4.src == 10.0.0.4 && is_chassis_resident(\"foo2\")" -c`])
-
-key=`ovn-sbctl --bare --columns tunnel_key list datapath_Binding lr0`
-# Check that the OVS flows appear for the dnat_and_snat entries in
-# lr_in_ip_routing table.
-OVS_WAIT_UNTIL([test 1 = `as hv3 ovs-ofctl dump-flows br-int table=17 | \
-grep "priority=400,ip,metadata=0x$key,nw_src=10.0.0.3" -c`])
-
-OVS_WAIT_UNTIL([test 1 = `as hv3 ovs-ofctl dump-flows br-int table=17 | \
-grep "priority=400,ip,metadata=0x$key,nw_src=10.0.0.4" -c`])
-
 # Re-add nat-addresses option
 ovn-nbctl lsp-set-options lrp0-rp router-port=lrp0 nat-addresses="router"
 
@@ -14957,9 +14943,14 @@ ovs-vsctl -- add-port br-int hv2-vif1 -- \
     set interface hv2-vif1 external-ids:iface-id=sw1-p0 \
     options:tx_pcap=hv2/vif1-tx.pcap \
     options:rxq_pcap=hv2/vif1-rx.pcap \
-    ofport-request=1
+    ofport-request=2
+ovs-vsctl -- add-port br-int hv2-vif2 -- \
+    set interface hv2-vif2 external-ids:iface-id=sw0-p1 \
+    options:tx_pcap=hv2/vif2-tx.pcap \
+    options:rxq_pcap=hv2/vif2-rx.pcap \
+    ofport-request=3
 
-ovn-nbctl create Logical_Router name=lr0 options:chassis=hv1
+ovn-nbctl create Logical_Router name=lr0
 ovn-nbctl ls-add sw0
 ovn-nbctl ls-add sw1
 
@@ -14968,13 +14959,16 @@ ovn-nbctl lsp-add sw0 rp-sw0 -- set Logical_Switch_Port rp-sw0 \
     type=router options:router-port=sw0 \
     -- lsp-set-addresses rp-sw0 router
 
-ovn-nbctl lrp-add lr0 sw1 00:00:02:01:02:03 172.16.1.1/24 2002:0:0:0:0:0:0:1/64
+ovn-nbctl lrp-add lr0 sw1 00:00:02:01:02:03 172.16.1.1/24 2002:0:0:0:0:0:0:1/64 \
+    -- set Logical_Router_Port sw1 options:redirect-chassis="hv2"
 ovn-nbctl lsp-add sw1 rp-sw1 -- set Logical_Switch_Port rp-sw1 \
     type=router options:router-port=sw1 \
     -- lsp-set-addresses rp-sw1 router
 
 ovn-nbctl lsp-add sw0 sw0-p0 \
     -- lsp-set-addresses sw0-p0 "f0:00:00:01:02:03 192.168.1.2 2001::2"
+ovn-nbctl lsp-add sw0 sw0-p1 \
+    -- lsp-set-addresses sw0-p1 "f0:00:00:11:02:03 192.168.1.3 2001::3"
 
 ovn-nbctl lsp-add sw1 sw1-p0 \
     -- lsp-set-addresses sw1-p0 unknown
@@ -15017,6 +15011,20 @@ send_icmp6_packet 1 1 $src_mac $router_mac0 $src_ip6 $dst_ip6
 echo $(get_nd $router_mac1 $nd_src_ip6 $nd_ip $dst_ip6) >> expected
 echo "${dst_mac}${router_mac1}86dd${ip6_hdr}8000dcb662f00001" >> expected
 send_na 2 1 $dst_mac $router_mac1 $dst_ip6 $router_ip6
+
+OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
+
+# Create FIP on sw0-p0, add a route on logical router pipeline and
+# ARP request for a unkwon destination is sent using FIP MAC/IP
+ovn-nbctl lr-nat-add lr0 dnat_and_snat 172.16.1.2 192.168.1.3 sw0-p1 f0:00:00:01:02:04
+ovn-nbctl lr-route-add lr0 172.16.2.0/24 172.16.1.11
+
+dst_ip=$(ip_to_hex 172 16 2 10)
+fip_ip=$(ip_to_hex 172 16 1 2)
+src_ip=$(ip_to_hex 192 168 1 3)
+gw_router=$(ip_to_hex 172 16 1 11)
+send_icmp_packet 2 2 f00000110203 $router_mac0 $src_ip $dst_ip 0000 $data
+echo $(get_arp_req f00000010204 $fip_ip $gw_router) >> expected
 
 OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
 
@@ -15645,7 +15653,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 # Since the sw0-vir is not claimed by any chassis, eth.dst should be set to
 # zero if the ip4.dst is the virtual ip in the router pipeline.
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 00:00:00:00:00:00; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 00:00:00:00:00:00; next;)
 ])
 
 ip_to_hex() {
@@ -15696,7 +15704,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 # There should be an arp resolve flow to resolve the virtual_ip with the
 # sw0-p1's MAC.
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:03; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:03; next;)
 ])
 
 # Forcibly clear virtual_parent. ovn-controller should release the binding
@@ -15737,7 +15745,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 # There should be an arp resolve flow to resolve the virtual_ip with the
 # sw0-p2's MAC.
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:05; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:05; next;)
 ])
 
 # send the garp from sw0-p2 (in hv2). hv2 should claim sw0-vir
@@ -15760,7 +15768,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 # There should be an arp resolve flow to resolve the virtual_ip with the
 # sw0-p3's MAC.
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:04; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:04; next;)
 ])
 
 # Now send arp reply from sw0-p1. hv1 should claim sw0-vir
@@ -15781,7 +15789,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 > lflows.txt
 
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:03; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:03; next;)
 ])
 
 # Delete hv1-vif1 port. hv1 should release sw0-vir
@@ -15799,7 +15807,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 > lflows.txt
 
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 00:00:00:00:00:00; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 00:00:00:00:00:00; next;)
 ])
 
 # Now send arp reply from sw0-p2. hv2 should claim sw0-vir
@@ -15820,7 +15828,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 > lflows.txt
 
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:04; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:04; next;)
 ])
 
 # Delete sw0-p2 logical port

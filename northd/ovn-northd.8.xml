@@ -2486,37 +2486,6 @@ output;
 
       <li>
         <p>
-          For distributed logical routers where one of the logical router ports
-          specifies a <code>redirect-chassis</code>, a priority-400 logical
-          flow for each <code>dnat_and_snat</code> NAT rules configured.
-          These flows will allow to properly forward traffic to the external
-          connections if available and avoid sending it through the tunnel.
-          Assuming the following NAT rule has been configured:
-        </p>
-
-        <pre>
-external_ip = <var>A</var>;
-external_mac = <var>B</var>;
-logical_ip = <var>C</var>;
-        </pre>
-
-        <p>
-          the following action will be applied:
-        </p>
-
-        <pre>
-ip.ttl--;
-reg0 = <var>ip.dst</var>;
-reg1 = <var>A</var>;
-eth.src = <var>B</var>;
-outport = <var>router-port</var>;
-next;
-        </pre>
-
-      </li>
-
-      <li>
-        <p>
           IPv4 routing table.  For each route to IPv4 network <var>N</var> with
           netmask <var>M</var>, on router port <var>P</var> with IP address
           <var>A</var> and Ethernet
@@ -2660,7 +2629,41 @@ outport = <var>P</var>;
       </li>
     </ul>
 
-    <h3>Ingress Table 12: ARP/ND Resolution</h3>
+    <h3>Ingress Table 12: IP Source Policy</h3>
+
+    <p>
+      This table contains for distributed logical routers where one of
+      the logical router ports specifies a <code>redirect-chassis</code>,
+      a priority-100 logical flow for each <code>dnat_and_snat</code>
+      NAT rules configured.
+      These flows will allow to properly forward traffic to the external
+      connections if available and avoid sending it through the tunnel.
+      Assuming the following NAT rule has been configured:
+    </p>
+
+    <pre>
+external_ip = <var>A</var>;
+external_mac = <var>B</var>;
+logical_ip = <var>C</var>;
+logical_port = <var>D</var>;
+    </pre>
+
+    <p>
+      for IP traffic matching <code>ip.src == <var>C</var> &amp;&amp;
+      is_chassis_resident(<var>D</var>)</code>
+    </p>
+
+    <p>
+      the following action will be applied:
+    </p>
+
+    <pre>
+reg1 = <var>A</var>;
+eth.src = <var>B</var>;
+next;
+    </pre>
+
+    <h3>Ingress Table 13: ARP/ND Resolution</h3>
 
     <p>
       Any packet that reaches this table is an IP packet whose next-hop
@@ -2819,7 +2822,7 @@ outport = <var>P</var>;
 
     </ul>
 
-    <h3>Ingress Table 13: Check packet length</h3>
+    <h3>Ingress Table 14: Check packet length</h3>
 
     <p>
       For distributed logical routers with distributed gateway port configured
@@ -2849,7 +2852,7 @@ REGBIT_PKT_LARGER = check_pkt_larger(<var>L</var>); next;
       and advances to the next table.
     </p>
 
-    <h3>Ingress Table 14: Handle larger packets</h3>
+    <h3>Ingress Table 15: Handle larger packets</h3>
 
     <p>
       For distributed logical routers with distributed gateway port configured
@@ -2898,7 +2901,7 @@ icmp4 {
       and advances to the next table.
     </p>
 
-    <h3>Ingress Table 15: Gateway Redirect</h3>
+    <h3>Ingress Table 16: Gateway Redirect</h3>
 
     <p>
       For distributed logical routers where one of the logical router
@@ -2934,7 +2937,7 @@ icmp4 {
       </li>
     </ul>
 
-    <h3>Ingress Table 16: ARP Request</h3>
+    <h3>Ingress Table 17: ARP Request</h3>
 
     <p>
       In the common case where the Ethernet destination has been resolved, this

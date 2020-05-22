@@ -175,11 +175,12 @@ enum ovn_stage {
     PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      9, "lr_in_ip_routing")   \
     PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 10, "lr_in_ip_routing_ecmp") \
     PIPELINE_STAGE(ROUTER, IN,  POLICY,          11, "lr_in_policy")       \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     12, "lr_in_arp_resolve")  \
-    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN   ,  13, "lr_in_chk_pkt_len")   \
-    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     14,"lr_in_larger_pkts")   \
-    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     15, "lr_in_gw_redirect")  \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     16, "lr_in_arp_request")  \
+    PIPELINE_STAGE(ROUTER, IN,  IP_SRC_POLICY,   12, "lr_in_ip_src_policy") \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     13, "lr_in_arp_resolve")  \
+    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN   ,  14, "lr_in_chk_pkt_len")   \
+    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     15,"lr_in_larger_pkts")   \
+    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     16, "lr_in_gw_redirect")  \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     17, "lr_in_arp_request")  \
                                                                       \
     /* Logical router egress stages. */                               \
     PIPELINE_STAGE(ROUTER, OUT, UNDNAT,    0, "lr_out_undnat")        \
@@ -7125,8 +7126,6 @@ build_routing_policy_flow(struct hmap *lflows, struct ovn_datapath *od,
     ds_destroy(&actions);
 }
 
-/* default logical flow prioriry for distributed routes */
-#define DROUTE_PRIO 400
 struct parsed_route {
     struct ovs_list list_node;
     struct v46_ip prefix;
@@ -7515,7 +7514,7 @@ build_ecmp_route_flow(struct hmap *lflows, struct ovn_datapath *od,
 }
 
 static void
-add_distributed_routes(struct hmap *lflows, struct ovn_datapath *od)
+add_ip_src_policy_flows(struct hmap *lflows, struct ovn_datapath *od)
 {
     struct ds actions = DS_EMPTY_INITIALIZER;
     struct ds match = DS_EMPTY_INITIALIZER;
@@ -7533,12 +7532,9 @@ add_distributed_routes(struct hmap *lflows, struct ovn_datapath *od)
                       is_ipv4 ? "4" : "6", nat->logical_ip,
                       nat->logical_port);
         char *prefix = is_ipv4 ? "" : "xx";
-        ds_put_format(&actions, "outport = %s; eth.src = %s; "
-                      "%sreg0 = ip%s.dst; %sreg1 = %s; next;",
-                      od->l3dgw_port->json_key, nat->external_mac,
-                      prefix, is_ipv4 ? "4" : "6",
-                      prefix, nat->external_ip);
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, DROUTE_PRIO,
+        ds_put_format(&actions, "eth.src = %s; %sreg1 = %s; next;",
+                      nat->external_mac, prefix, nat->external_ip);
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_SRC_POLICY, 100,
                       ds_cstr(&match), ds_cstr(&actions));
         ds_clear(&match);
         ds_clear(&actions);
@@ -7569,12 +7565,6 @@ add_route(struct hmap *lflows, const struct ovn_port *op,
     }
     build_route_match(op_inport, network_s, plen, is_src_route, is_ipv4,
                       &match, &priority);
-    /* traffic for internal IPs of logical switch ports must be sent to
-     * the gw controller through the overlay tunnels
-     */
-    if (op->nbrp && !op->nbrp->n_gateway_chassis) {
-        priority += DROUTE_PRIO;
-    }
 
     struct ds actions = DS_EMPTY_INITIALIZER;
     ds_put_format(&actions, "ip.ttl--; "REG_ECMP_GROUP_ID" = 0; %sreg0 = ",
@@ -9541,9 +9531,13 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
      * logical router
      */
     HMAP_FOR_EACH (od, key_node, datapaths) {
-        if (od->nbr && od->l3dgw_port) {
-            add_distributed_routes(lflows, od);
+        if (!od->nbr) {
+            continue;
         }
+        if (od->l3dgw_port) {
+            add_ip_src_policy_flows(lflows, od);
+        }
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_SRC_POLICY, 0, "1", "next;");
     }
 
     /* Logical router ingress table IP_ROUTING & IP_ROUTING_ECMP: IP Routing.
