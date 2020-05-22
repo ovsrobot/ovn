@@ -30,6 +30,7 @@ The below guides provide information on contributing to OVN itself.
 .. toctree::
    :maxdepth: 2
 
+   quickstart
    submitting-patches
    backporting-patches
    coding-style
