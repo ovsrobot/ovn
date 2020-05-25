@@ -9181,8 +9181,24 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             /* Ingress Gateway Redirect Table: For NAT on a distributed
              * router, add flows that are specific to a NAT rule.  These
              * flows indicate the presence of an applicable NAT rule that
-             * can be applied in a distributed manner. */
+             * can be applied in a distributed manner.
+             * Moreover add logical flows to avoid ARP distributing when the
+             * chassis has a direct connection to the underlay network through
+             * a localnet port
+             */
             if (distributed) {
+                ds_clear(&match);
+                ds_clear(&actions);
+                ds_put_format(&match,
+                              "ip%s.src == %s && is_chassis_resident(\"%s\")",
+                              is_v6 ? "6" : "4", nat->logical_ip,
+                              nat->logical_port);
+                ds_put_format(&actions, "eth.src = %s; %sreg1 = %s; next;",
+                              nat->external_mac, is_v6 ? "xx" : "",
+                              nat->external_ip);
+                ovn_lflow_add(lflows, od, S_ROUTER_IN_GW_REDIRECT, 150,
+                              ds_cstr(&match), ds_cstr(&actions));
+
                 ds_clear(&match);
                 ds_put_format(&match, "ip%s.src == %s && outport == %s",
                               is_v6 ? "6" : "4",
