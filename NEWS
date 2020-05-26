@@ -1,4 +1,4 @@
-Post-v20.03.0
+OVN v20.06.0
 --------------------------
    - Added support for external_port_range in NAT table.
    - Added IPv6 Prefix Delegation support in OVN.
