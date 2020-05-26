@@ -1,17 +1,6 @@
 Post-v20.03.0
 --------------------------
    - Added support for external_port_range in NAT table.
-
-
-OVN v20.03.0 - 04 Feb 2020
---------------------------
-   - OVN was split out from the OVS repository and is now released
-     independently.
-   - Added IPv6 NAT support for OVN routers.
-   - Added Stateless Floating IP support in OVN.
-   - Added Forwarding Group support in OVN.
-   - Added support for MLD Snooping and MLD Querier.
-   - Added support for ECMP routes in OVN router.
    - Added IPv6 Prefix Delegation support in OVN.
    - OVN now uses OpenFlow 1.5.
    - Added support to choose selection methods - dp_hash or
@@ -25,6 +14,15 @@ OVN v20.03.0 - 04 Feb 2020
      with localnet ports that belong to the same logical switch mapped. Routing
      between the ports to be implemented by fabric.
 
+OVN v20.03.0 - 04 Feb 2020
+--------------------------
+   - OVN was split out from the OVS repository and is now released
+     independently.
+   - Added IPv6 NAT support for OVN routers.
+   - Added Stateless Floating IP support in OVN.
+   - Added Forwarding Group support in OVN.
+   - Added support for MLD Snooping and MLD Querier.
+   - Added support for ECMP routes in OVN router.
    - OVN Interconnection:
      * Support for L3 interconnection of multiple OVN deployments with tunnels
        managed by OVN.  See instructions in
