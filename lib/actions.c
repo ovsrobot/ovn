@@ -1982,7 +1982,8 @@ parse_gen_opt(struct action_context *ctx, struct ovnact_gen_option *o,
         return;
     }
 
-    if (!strcmp(o->option->type, "str")) {
+    if (!strcmp(o->option->type, "str") ||
+        !strcmp(o->option->type, "domains")) {
         if (o->value.type != EXPR_C_STRING) {
             lexer_error(ctx->lexer, "%s option %s requires string value.",
                         opts_type, o->option->name);
@@ -2317,6 +2318,103 @@ encode_put_dhcpv4_option(const struct ovnact_gen_option *o,
            opt_header[1] = sizeof(ovs_be32);
            ofpbuf_put(ofpacts, &c->value.ipv4, sizeof(ovs_be32));
         }
+    } else if (!strcmp(o->option->type, "domains")) {
+        /* Please refer to RFC 1035, section 4.1.4 for the format of encoding
+         * domain names. Below is an example for encoding a search list
+         * consisting of the "abc.com" and "xyz.abc.com".
+         *
+         * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+         * |119|14 | 3 |'a'|'b'|'c'| 3 |'c'|'o'|'m'| 0 |'x'|'y'|'z'|xC0|x00|
+         * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+         *
+         * The encoding of "abc.com" ends with 0 to mark the end of the
+         * domain name as required by RFC 1035.
+         *
+         * The encoding of "xyz" (for "xyz.abc.com") ends with the two-octet
+         * compression pointer C000 (hex), which points to offset 0 where
+         * another validly encoded domain name can be found to complete
+         * the name ("abc.com").
+         */
+        typedef struct namemap_node {
+            struct hmap_node node;
+            uint16_t offset;
+            char *name;
+        } namemap_node;
+        struct hmap namemap;
+        hmap_init(&namemap);
+        namemap_node *ref;
+        /* Encoding adds 2 bytes (one for length and one for delimiter) for
+         * every domain name that is unique. If all the domain names are unique
+         * (which probably never happens in real world), then encoded string
+         * could be longer than the original string. Just to be on the safer
+         * side, allocate the (approx.) worst case length here.
+         */
+        uint8_t *dns_encoded = xzalloc(2 * strlen(c->string));
+        uint8_t encode_offset = 0;
+        char *domain_list = xstrdup(c->string), *dom_ptr = NULL;
+        for (char *domain = strtok_r(domain_list, ",", &dom_ptr);
+             domain != NULL;
+             domain = strtok_r(NULL, ",", &dom_ptr)) {
+            if (strlen(domain) > DOMAIN_NAME_MAX_LEN) {
+                VLOG_WARN("Domain names longer than 255 characters are not"
+                          "supported");
+                goto out;
+            }
+            char *label_ptr = NULL, *label;
+            for (label = strtok_r(domain, ".", &label_ptr);
+                 label != NULL;
+                 label = strtok_r(NULL, ".", &label_ptr)) {
+                ref = NULL;
+                /* Check if we have already encoded this label and
+                 * fill in the reference, if yes. */
+                uint32_t label_hash = hash_string(label, 0);
+                HMAP_FOR_EACH_IN_BUCKET (ref, node, label_hash, &namemap) {
+                    if (!strcmp(label, ref->name)) {
+                        ovs_be16 temp = htons(0xc000) | htons(ref->offset);
+                        memcpy(dns_encoded + encode_offset, &temp,
+                               sizeof(temp));
+                        encode_offset += sizeof(temp);
+                        break;
+                    }
+                }
+                /* Break, since we have already filled the offset for this
+                 * domain. */
+                if (ref != NULL) {
+                    break;
+                } else {
+                    /* The label was not encoded before, encode it now and add
+                     * the offset to the namemap map. */
+                    ref = xzalloc(sizeof *ref);
+                    ref->name = xstrdup(label);
+                    ref->offset = encode_offset;
+                    hmap_insert(&namemap, &ref->node, label_hash);
+
+                    uint8_t len = strlen(label);
+                    memcpy(dns_encoded + encode_offset, &len, sizeof(uint8_t));
+                    encode_offset += sizeof(uint8_t);
+                    memcpy(dns_encoded + encode_offset, label, len);
+                    encode_offset += len;
+                }
+            }
+            /* Add the end marker (0 byte) to determine the end of the
+             * domain. */
+            if (label == NULL) {
+                uint8_t end = 0;
+                memcpy(dns_encoded + encode_offset, &end, sizeof(uint8_t));
+                encode_offset += sizeof(uint8_t);
+            }
+        }
+        opt_header[1] = encode_offset;
+        ofpbuf_put(ofpacts, dns_encoded, encode_offset);
+
+        out:
+            HMAP_FOR_EACH_POP (ref, node, &namemap) {
+                free(ref->name);
+                free(ref);
+            }
+            hmap_destroy(&namemap);
+            free(domain_list);
+            free(dns_encoded);
     }
 }
 
