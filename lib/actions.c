@@ -2535,6 +2535,12 @@ parse_put_nd_ra_opts(struct action_context *ctx, const struct expr_field *dst,
             }
             break;
 
+        case ND_RA_FLAG_PRF:
+            ok = (c->string && (!strcmp(c->string, "MEDIUM") ||
+                                !strcmp(c->string, "HIGH") ||
+                                !strcmp(c->string, "LOW")));
+            break;
+
         case ND_OPT_SOURCE_LINKADDR:
             ok = c->format == LEX_F_ETHERNET;
             slla_present = true;
@@ -2583,15 +2589,27 @@ encode_put_nd_ra_option(const struct ovnact_gen_option *o,
                         struct ofpbuf *ofpacts, ptrdiff_t ra_offset)
 {
     const union expr_constant *c = o->value.values;
+    struct ovs_ra_msg *ra = ofpbuf_at(ofpacts, ra_offset, sizeof *ra);
 
     switch (o->option->code) {
     case ND_RA_FLAG_ADDR_MODE:
     {
-        struct ovs_ra_msg *ra = ofpbuf_at(ofpacts, ra_offset, sizeof *ra);
         if (!strcmp(c->string, "dhcpv6_stateful")) {
-            ra->mo_flags = IPV6_ND_RA_FLAG_MANAGED_ADDR_CONFIG;
+            ra->mo_flags |= IPV6_ND_RA_FLAG_MANAGED_ADDR_CONFIG;
         } else if (!strcmp(c->string, "dhcpv6_stateless")) {
-            ra->mo_flags = IPV6_ND_RA_FLAG_OTHER_ADDR_CONFIG;
+            ra->mo_flags |= IPV6_ND_RA_FLAG_OTHER_ADDR_CONFIG;
+        }
+        break;
+    }
+
+    case ND_RA_FLAG_PRF:
+    {
+        if (!strcmp(c->string, "LOW")) {
+            ra->mo_flags |= IPV6_ND_RA_OPT_PRF_LOW;
+        } else if (!strcmp(c->string, "HIGH")) {
+            ra->mo_flags |= IPV6_ND_RA_OPT_PRF_HIGH;
+        } else {
+            ra->mo_flags |= IPV6_ND_RA_OPT_PRF_NORMAL;
         }
         break;
     }
@@ -2640,6 +2658,12 @@ encode_put_nd_ra_option(const struct ovnact_gen_option *o,
         break;
     }
     }
+
+    /* RFC4191 section 2.2 */
+    if (ntohs(ra->router_lifetime) == 0x0) {
+        ra->mo_flags &= IPV6_ND_RA_OPT_PRF_RESET_MASK;
+    }
+
 }
 
 static void
