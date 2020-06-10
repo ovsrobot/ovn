@@ -497,8 +497,8 @@ update_local_lport_ids(struct sset *local_lport_ids,
                        struct hmap *tracked_datapaths)
 {
     char buf[16];
-    snprintf(buf, sizeof(buf), "%"PRId64"_%"PRId64,
-             pb->datapath->tunnel_key, pb->tunnel_key);
+    get_unique_lport_key(pb->datapath->tunnel_key, pb->tunnel_key,
+                         buf, sizeof(buf));
     bool added = !!sset_add(local_lport_ids, buf);
     if (added && tracked_datapaths) {
         /* Add the 'pb' to the tracked_datapaths. */
@@ -512,8 +512,8 @@ remove_local_lport_ids(const struct sbrec_port_binding *pb,
                        struct hmap *tracked_datapaths)
 {
     char buf[16];
-    snprintf(buf, sizeof(buf), "%"PRId64"_%"PRId64,
-             pb->datapath->tunnel_key, pb->tunnel_key);
+    get_unique_lport_key(pb->datapath->tunnel_key, pb->tunnel_key,
+                         buf, sizeof(buf));
     bool deleted = sset_find_and_delete(local_lport_ids, buf);
     if (deleted && tracked_datapaths) {
         /* Add the 'pb' to the tracked_datapaths. */
