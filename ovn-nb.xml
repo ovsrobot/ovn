@@ -2939,7 +2939,7 @@
         </column>
       </group>
 
-      <group title="Host_id DHCP Options">
+      <group title="DHCP Options of type host_id">
         <p>
           These options accept either an IPv4 address or a string value.
         </p>
@@ -2947,6 +2947,19 @@
         <column name="options" key="tftp_server">
           <p>
             The DHCPv4 option code for this option is 66.
+          </p>
+        </column>
+      </group>
+
+      <group title=" DHCP Options of type domains">
+        <p>
+          These options accept string value which is a comma separated
+          list of domain names. The domain names are encoded based on RFC 1035.
+        </p>
+
+        <column name="options" key="domain_search_list">
+          <p>
+            The DHCPv4 option code for this option is 119.
           </p>
         </column>
       </group>
