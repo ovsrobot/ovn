@@ -2628,6 +2628,21 @@
 
     </column>
 
+    <column name="external_port_hash">
+      <p>
+        Hashing algorithm to hash a packet to specified port range
+      </p>
+
+      <p>
+        Applicable only if port range is also specified.
+      </p>
+
+      <p>
+        Takes one of the 2 values "Random" and "Hash"
+      </p>
+
+    </column>
+
     <column name="logical_ip">
       An IPv4 network (e.g 192.168.1.0/24) or an IPv4 address.
     </column>
