@@ -965,6 +965,23 @@ ip.ttl--;
 ip.ttl
     Syntax error at end of input expecting `--'.
 
+# Packet mark.
+pkt.mark=1;
+    formats as pkt.mark = 1;
+    encodes as set_field:0x1->pkt_mark
+
+pkt.mark = 1000;
+    encodes as set_field:0x3e8->pkt_mark
+
+pkt.mark;
+    Syntax error at `pkt.mark' expecting action.
+
+pkt.mark = foo;
+    Syntax error at `foo' expecting field name.
+
+pkt.mark = "foo";
+    Integer field pkt.mark is not compatible with string constant.
+
 # load balancing.
 ct_lb;
     encodes as ct(table=19,zone=NXM_NX_REG13[0..15],nat)
@@ -19901,6 +19918,190 @@ ovn_attach n1 br-phys 192.168.0.1
 
 # Port_Binding should be released.
 OVS_WAIT_UNTIL([test 0 = $(ovn-sbctl show | grep Port_Binding -c)], [0])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+
+AT_SETUP([ovn -- Logical router policy packet marking])
+ovn_start
+
+net_add n1
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl -- add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=sw0-port1 \
+    options:tx_pcap=hv1/vif1-tx.pcap \
+    options:rxq_pcap=hv1/vif1-rx.pcap \
+    ofport-request=1
+ovs-vsctl -- add-port br-int hv1-vif2 -- \
+    set interface hv1-vif2 external-ids:iface-id=sw0-port2 \
+    options:tx_pcap=hv1/vif2-tx.pcap \
+    options:rxq_pcap=hv1/vif2-rx.pcap \
+    ofport-request=2
+
+as hv1 ovs-vsctl set Open_vSwitch . external-ids:ovn-bridge-mappings=public:br-phys
+
+ovn-nbctl ls-add sw0
+ovn-nbctl lsp-add sw0 sw0-port1
+ovn-nbctl lsp-set-addresses sw0-port1 "50:54:00:00:00:03 10.0.0.3 10.0.0.5"
+ovn-nbctl lsp-set-port-security sw0-port1 "50:54:00:00:00:03 10.0.0.3 10.0.0.5"
+
+ovn-nbctl lsp-add sw0 sw0-port2
+ovn-nbctl lsp-set-addresses sw0-port2 "50:54:00:00:00:04 10.0.0.4"
+
+ovn-nbctl lr-add lr0
+ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24
+ovn-nbctl lsp-add sw0 sw0-lr0
+ovn-nbctl lsp-set-type sw0-lr0 router
+ovn-nbctl lsp-set-addresses sw0-lr0 router
+ovn-nbctl lsp-set-options sw0-lr0 router-port=lr0-sw0
+
+ovn-nbctl ls-add public
+ovn-nbctl lrp-add lr0 lr0-public 00:00:20:20:12:13 172.168.0.100/24
+ovn-nbctl lsp-add public public-lr0
+ovn-nbctl lsp-set-type public-lr0 router
+ovn-nbctl lsp-set-addresses public-lr0 router
+ovn-nbctl lsp-set-options public-lr0 router-port=lr0-public
+
+# localnet port
+ovn-nbctl lsp-add public ln-public
+ovn-nbctl lsp-set-type ln-public localnet
+ovn-nbctl lsp-set-addresses ln-public unknown
+ovn-nbctl lsp-set-options ln-public network_name=public
+
+ovn-nbctl lrp-set-gateway-chassis lr0-public hv1 20
+ovn-nbctl lr-nat-add lr0 snat 172.168.0.100 10.0.0.0/24
+lr0_dp_uuid=$(ovn-sbctl --bare --columns _uuid list datapath_binding lr0)
+ovn-sbctl create mac_binding datapath=$lr0_dp_uuid ip=172.168.0.120 \
+logical_port=lr0-public mac="10\:54\:00\:00\:00\:03"
+ovn-sbctl create mac_binding datapath=$lr0_dp_uuid ip=172.168.0.200 \
+logical_port=lr0-public mac="10\:54\:00\:00\:00\:04"
+
+ovn-nbctl --wait=hv sync
+
+# Add logical router policy and set pkt_mark on it.
+ovn-nbctl lr-policy-add lr0 2000 "ip4.src == 10.0.0.3" allow
+ovn-nbctl lr-policy-add lr0 1000 "ip4.src == 10.0.0.4" allow
+ovn-nbctl lr-policy-add lr0 900 "ip4.src == 10.0.0.5" reroute 172.168.0.200
+
+pol1=$(ovn-nbctl --bare --columns _uuid find logical_router_policy priority=2000)
+pol3=$(ovn-nbctl --bare --columns _uuid find logical_router_policy priority=900)
+
+ovn-nbctl set logical_router_policy $pol1 options:pkt_mark=100
+ovn-nbctl set logical_router_policy $pol3 options:pkt_mark=5
+
+OVS_WAIT_UNTIL([
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=19 | \
+    grep "load:0x64->NXM_NX_PKT_MARK" -c)
+])
+
+OVS_WAIT_UNTIL([
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=19 | \
+    grep "load:0x5->NXM_NX_PKT_MARK" -c)
+])
+
+AT_DATA([flows.txt], [dnl
+table=0, priority=0 actions=NORMAL
+table=0, priority=100, pkt_mark=0x64 actions=drop
+table=0, priority=100, pkt_mark=0x2 actions=drop
+table=0, priority=100, pkt_mark=0x5 actions=drop
+])
+
+AT_CHECK([as hv1 ovs-ofctl --protocols=OpenFlow13 add-flows br-phys flows.txt])
+
+ip_to_hex() {
+     printf "%02x%02x%02x%02x" "$@"
+}
+
+send_ipv4_pkt() {
+    local hv=$1 inport=$2 eth_src=$3 eth_dst=$4
+    local ip_src=$5 ip_dst=$6
+    packet=${eth_dst}${eth_src}08004500001c0000000040110000${ip_src}${ip_dst}0035111100080000
+    as $hv ovs-appctl netdev-dummy/receive ${inport} ${packet}
+}
+
+send_ipv4_pkt hv1 hv1-vif1 505400000003 00000000ff01 \
+    $(ip_to_hex 10 0 0 3) $(ip_to_hex 172 168 0 120)
+
+OVS_WAIT_UNTIL([
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-phys table=0 | \
+    grep "priority=100,pkt_mark=0x64" | \
+    grep "n_packets=1" -c)
+])
+
+AT_CHECK([
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-phys table=0 | \
+    grep priority=0 | \
+    grep "n_packets=0" -c)
+])
+
+# Send the pkt from sw0-port2. Packet should not be marked.
+send_ipv4_pkt hv1 hv1-vif2 505400000004 00000000ff01 \
+    $(ip_to_hex 10 0 0 4) $(ip_to_hex 172 168 0 120)
+
+AT_CHECK([
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-phys table=0 | \
+    grep priority=0 | \
+    grep "n_packets=1" -c)
+])
+
+AT_CHECK([
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-phys table=0 | \
+    grep "priority=100,pkt_mark=0x64" | \
+    grep "n_packets=1" -c)
+])
+
+AT_CHECK([
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-phys table=0 | \
+    grep "priority=100,pkt_mark=0x5" | \
+    grep "n_packets=0" -c)
+])
+
+ovn-nbctl set logical_router_policy $pol1 options:pkt_mark=2
+send_ipv4_pkt hv1 hv1-vif1 505400000003 00000000ff01 \
+    $(ip_to_hex 10 0 0 3) $(ip_to_hex 172 168 0 120)
+
+OVS_WAIT_UNTIL([
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=19 | \
+    grep "load:0x2->NXM_NX_PKT_MARK" -c)
+])
+
+AT_CHECK([
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=19 | \
+    grep "load:0x64->NXM_NX_PKT_MARK" -c)
+])
+
+AT_CHECK([
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-phys table=0 | \
+    grep "priority=100,pkt_mark=0x2" | \
+    grep "n_packets=1" -c)
+])
+
+AT_CHECK([
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-phys table=0 | \
+    grep priority=0 | \
+    grep "n_packets=1" -c)
+])
+
+AT_CHECK([
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-phys table=0 | \
+    grep "priority=100,pkt_mark=0x5" | \
+    grep "n_packets=0" -c)
+])
+
+# Send with src ip 10.0.0.5. The reroute policy should be hit
+# and the packet should be marked with 5.
+send_ipv4_pkt hv1 hv1-vif1 505400000003 00000000ff01 \
+    $(ip_to_hex 10 0 0 5) $(ip_to_hex 172 168 0 120)
+
+ovn-sbctl dump-flows lr0 >  /tmp/lr0.f
+OVS_WAIT_UNTIL([
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-phys table=0 | \
+    grep "priority=100,pkt_mark=0x5" | \
+    grep "n_packets=1" -c)
+])
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
