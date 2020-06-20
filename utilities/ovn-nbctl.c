@@ -3833,7 +3833,8 @@ nbctl_lr_route_add(struct ctl_context *ctx)
             }
 
             if (!may_exist) {
-                ctl_error(ctx, "duplicate prefix: %s (policy: %s)",
+                ctl_error(ctx, "duplicate prefix: %s (policy: %s). Use option"
+                          " --ecmp to allow this for ECMP routing.",
                           prefix, is_src_route ? "src-ip" : "dst-ip");
                 free(next_hop);
                 free(rt_prefix);
