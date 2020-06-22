@@ -3121,6 +3121,7 @@ struct ovn_lb {
 
     const struct nbrec_load_balancer *nlb; /* May be NULL. */
     char *selection_fields;
+    char *proto;
     struct lb_vip *vips;
     size_t n_vips;
 };
@@ -3218,6 +3219,12 @@ ovn_lb_create(struct northd_context *ctx, struct hmap *lbs,
     struct smap_node *node;
     size_t n_vips = 0;
 
+    if (!nbrec_lb->protocol || !nbrec_lb->protocol[0]) {
+        lb->proto = xstrdup("tcp");
+    } else {
+        lb->proto = xstrdup(nbrec_lb->protocol);
+    }
+
     SMAP_FOR_EACH (node, &nbrec_lb->vips) {
         char *vip;
         uint16_t port;
@@ -3234,7 +3241,7 @@ ovn_lb_create(struct northd_context *ctx, struct hmap *lbs,
         lb->vips[n_vips].backend_ips = xstrdup(node->value);
 
         struct nbrec_load_balancer_health_check *lb_health_check = NULL;
-        if (nbrec_lb->protocol && !strcmp(nbrec_lb->protocol, "sctp")) {
+        if (!strcmp(lb->proto, "sctp")) {
             if (nbrec_lb->n_health_check > 0) {
                 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
                 VLOG_WARN_RL(&rl,
@@ -3309,15 +3316,11 @@ ovn_lb_create(struct northd_context *ctx, struct hmap *lbs,
             lb->vips[n_vips].backends[i].svc_mon_src_ip = svc_mon_src_ip;
 
             if (lb_health_check && op && svc_mon_src_ip) {
-                const char *protocol = nbrec_lb->protocol;
-                if (!protocol || !protocol[0]) {
-                    protocol = "tcp";
-                }
                 lb->vips[n_vips].backends[i].health_check = true;
                 struct service_monitor_info *mon_info =
                     create_or_get_service_mon(ctx, monitor_map, backend_ip,
                                               op->nbsp->name, backend_port,
-                                              protocol);
+                                              lb->proto);
 
                 ovs_assert(mon_info);
                 sbrec_service_monitor_set_options(
@@ -3351,7 +3354,14 @@ ovn_lb_create(struct northd_context *ctx, struct hmap *lbs,
     if (lb->nlb->n_selection_fields) {
         struct ds sel_fields = DS_EMPTY_INITIALIZER;
         for (size_t i = 0; i < lb->nlb->n_selection_fields; i++) {
-            ds_put_format(&sel_fields, "%s,", lb->nlb->selection_fields[i]);
+            char *field = lb->nlb->selection_fields[i];
+            if (!strcmp(field, "tp_src")) {
+                ds_put_format(&sel_fields, "%s_src,", lb->proto);
+            } else if (!strcmp(field, "tp_dst")) {
+                ds_put_format(&sel_fields, "%s_dst,", lb->proto);
+            } else {
+                ds_put_format(&sel_fields, "%s,", field);
+            }
         }
         ds_chomp(&sel_fields, ',');
         lb->selection_fields = ds_steal_cstr(&sel_fields);
@@ -3374,6 +3384,7 @@ ovn_lb_destroy(struct ovn_lb *lb)
 
         free(lb->vips[i].backends);
     }
+    free(lb->proto);
     free(lb->vips);
     free(lb->selection_fields);
 }
@@ -4820,7 +4831,7 @@ ls_has_dns_records(const struct nbrec_logical_switch *nbs)
 
 static void
 build_empty_lb_event_flow(struct ovn_datapath *od, struct hmap *lflows,
-                          struct lb_vip *lb_vip,
+                          struct lb_vip *lb_vip, const char *proto,
                           struct nbrec_load_balancer *lb,
                           int pl, struct shash *meter_groups)
 {
@@ -4837,11 +4848,11 @@ build_empty_lb_event_flow(struct ovn_datapath *od, struct hmap *lflows,
 
     ds_put_format(&match, "ip%s.dst == %s && %s",
                   lb_vip->addr_family == AF_INET ? "4": "6",
-                  lb_vip->vip, lb->protocol);
+                  lb_vip->vip, proto);
 
     char *vip = lb_vip->vip;
     if (lb_vip->vip_port) {
-        ds_put_format(&match, " && %s.dst == %u", lb->protocol,
+        ds_put_format(&match, " && %s.dst == %u", proto,
                       lb_vip->vip_port);
         vip = xasprintf("%s:%u", lb_vip->vip, lb_vip->vip_port);
     }
@@ -4851,7 +4862,7 @@ build_empty_lb_event_flow(struct ovn_datapath *od, struct hmap *lflows,
                        "protocol = \"%s\", "
                        "load_balancer = \"" UUID_FMT "\");",
                        event_to_string(OVN_EVENT_EMPTY_LB_BACKENDS),
-                       meter, vip, lb->protocol,
+                       meter, vip, proto,
                        UUID_ARGS(&lb->header_.uuid));
     ovn_lflow_add_with_hint(lflows, od, pl, 130, ds_cstr(&match), action,
                             &lb->header_);
@@ -4906,7 +4917,7 @@ build_pre_lb(struct ovn_datapath *od, struct hmap *lflows,
                 sset_add(&all_ips_v6, lb_vip->vip);
             }
 
-            build_empty_lb_event_flow(od, lflows, lb_vip, nb_lb,
+            build_empty_lb_event_flow(od, lflows, lb_vip, lb->proto, nb_lb,
                                       S_SWITCH_IN_PRE_LB, meter_groups);
 
             /* Ignore L4 port information in the key because fragmented packets
@@ -5577,7 +5588,7 @@ build_lb(struct ovn_datapath *od, struct hmap *lflows)
 static void
 build_lb_hairpin_rules(struct ovn_datapath *od, struct hmap *lflows,
                        struct ovn_lb *lb, struct lb_vip *lb_vip,
-                       const char *ip_match, const char *proto)
+                       const char *ip_match)
 {
     if (lb_vip->n_backends == 0) {
         return;
@@ -5605,7 +5616,7 @@ build_lb_hairpin_rules(struct ovn_datapath *od, struct hmap *lflows,
          */
         if (lb_vip->vip_port) {
             ds_put_format(&proto_match, " && %s.dst == %"PRIu16,
-                          proto, backend->port);
+                          lb->proto, backend->port);
         }
         ds_put_format(&match_initiator, "(%s.src == %s && %s.dst == %s%s)",
                       ip_match, backend->ip, ip_match, backend->ip,
@@ -5614,7 +5625,7 @@ build_lb_hairpin_rules(struct ovn_datapath *od, struct hmap *lflows,
         /* Replies to hairpinned traffic are originated by backend->ip:port. */
         ds_clear(&proto_match);
         if (lb_vip->vip_port) {
-            ds_put_format(&proto_match, " && %s.src == %"PRIu16, proto,
+            ds_put_format(&proto_match, " && %s.src == %"PRIu16, lb->proto,
                           backend->port);
         }
         ds_put_format(&match_reply, "(%s.src == %s%s)", ip_match, backend->ip,
@@ -5665,18 +5676,6 @@ build_lb_rules(struct ovn_datapath *od, struct hmap *lflows, struct ovn_lb *lb)
             ip_match = "ip6";
         }
 
-        const char *proto = NULL;
-        if (lb_vip->vip_port) {
-            proto = "tcp";
-            if (lb->nlb->protocol) {
-                if (!strcmp(lb->nlb->protocol, "udp")) {
-                    proto = "udp";
-                } else if (!strcmp(lb->nlb->protocol, "sctp")) {
-                    proto = "sctp";
-                }
-            }
-        }
-
         /* New connections in Ingress table. */
         struct ds action = DS_EMPTY_INITIALIZER;
         build_lb_vip_ct_lb_actions(lb_vip, &action, lb->selection_fields);
@@ -5684,7 +5683,8 @@ build_lb_rules(struct ovn_datapath *od, struct hmap *lflows, struct ovn_lb *lb)
         struct ds match = DS_EMPTY_INITIALIZER;
         ds_put_format(&match, "ct.new && %s.dst == %s", ip_match, lb_vip->vip);
         if (lb_vip->vip_port) {
-            ds_put_format(&match, " && %s.dst == %d", proto, lb_vip->vip_port);
+            ds_put_format(&match, " && %s.dst == %d", lb->proto,
+                          lb_vip->vip_port);
             ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_STATEFUL, 120,
                                     ds_cstr(&match), ds_cstr(&action),
                                     &lb->nlb->header_);
@@ -5701,7 +5701,7 @@ build_lb_rules(struct ovn_datapath *od, struct hmap *lflows, struct ovn_lb *lb)
          * a load balancer VIP is DNAT-ed to a backend that happens to be
          * the source of the traffic).
          */
-        build_lb_hairpin_rules(od, lflows, lb, lb_vip, ip_match, proto);
+        build_lb_hairpin_rules(od, lflows, lb, lb_vip, ip_match);
     }
 }
 
@@ -7667,7 +7667,7 @@ add_router_lb_flow(struct hmap *lflows, struct ovn_datapath *od,
                    const char *proto, struct nbrec_load_balancer *lb,
                    struct shash *meter_groups, struct sset *nat_entries)
 {
-    build_empty_lb_event_flow(od, lflows, lb_vip, lb, S_ROUTER_IN_DNAT,
+    build_empty_lb_event_flow(od, lflows, lb_vip, proto, lb, S_ROUTER_IN_DNAT,
                               meter_groups);
 
     /* A match and actions for new connections. */
@@ -9358,14 +9358,9 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                 }
 
                 int prio = 110;
-                bool is_udp = nullable_string_is_equal(nb_lb->protocol, "udp");
-                bool is_sctp = nullable_string_is_equal(nb_lb->protocol,
-                                                        "sctp");
-                const char *proto = is_udp ? "udp" : is_sctp ? "sctp" : "tcp";
-
                 if (lb_vip->vip_port) {
-                    ds_put_format(&match, " && %s && %s.dst == %d", proto,
-                                  proto, lb_vip->vip_port);
+                    ds_put_format(&match, " && %s && %s.dst == %d", lb->proto,
+                                  lb->proto, lb_vip->vip_port);
                     prio = 120;
                 }
 
@@ -9374,7 +9369,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                                   od->l3redirect_port->json_key);
                 }
                 add_router_lb_flow(lflows, od, &match, &actions, prio,
-                                   lb_force_snat_ip, lb_vip, proto,
+                                   lb_force_snat_ip, lb_vip, lb->proto,
                                    nb_lb, meter_groups, &nat_entries);
             }
         }
