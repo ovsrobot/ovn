@@ -1,5 +1,7 @@
 Post-v20.06.0
 --------------------------
+   - Added DHCPINFORM and DHCPRELEASE support in native
+     OVN DHCPv4 responder.
 
 OVN v20.06.0
 --------------------------
