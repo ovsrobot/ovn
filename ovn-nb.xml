@@ -2658,6 +2658,30 @@
       </p>
     </column>
 
+    <column name="allowed_external_ip">
+      It represents Address Set of external ips that NAT rule is applicable to.
+
+      <p>
+        This configuration overrides the default NAT behavior of applying a
+        rule solely based on internal IP.
+      </p>
+    </column>
+
+    <column name="disallowed_external_ip">
+      It represents Address Set of external ips that NAT rule is NOT
+      applicable to.
+      <p>
+        This configuration overrides the default NAT behavior of applying a
+        rule solely based on internal IP.
+      </p>
+
+      <p>
+        "allowed_external_ip" and "disallowed_external_ip" are mutually
+        exclusive to each other. If both Address Sets are set for a rule,
+        then the NAT rule is not applied.
+      </p>
+    </column>
+
     <column name="options" key="stateless">
       Indicates if a dnat_and_snat rule should lead to connection
       tracking state or not.
