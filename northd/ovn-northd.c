@@ -8809,6 +8809,21 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             struct in6_addr ipv6, mask_v6, v6_exact = IN6ADDR_EXACT_INIT;
             bool is_v6 = false;
             bool stateless = lrouter_nat_is_stateless(nat);
+            struct nbrec_address_set *allowed_external_ip =
+                                      nat->allowed_external_ip;
+            struct nbrec_address_set *disallowed_external_ip =
+                                      nat->disallowed_external_ip;
+
+            if (allowed_external_ip && disallowed_external_ip) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+                VLOG_INFO_RL(&rl, "Both allowed: %s and disallowed: %s "
+                             "external ips set for NAT, type: %s, "
+                             "logical_ip: %s, external_ip: %s",
+                             allowed_external_ip->name,
+                             disallowed_external_ip->name,
+                             nat->type, nat->logical_ip, nat->external_ip);
+                continue;
+            }
 
             char *error = ip_parse_masked(nat->external_ip, &ip, &mask);
             if (error || mask != OVS_BE32_MAX) {
@@ -8896,6 +8911,15 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     ds_put_format(&match, "ip && ip%s.dst == %s",
                                   is_v6 ? "6" : "4",
                                   nat->external_ip);
+                    if (allowed_external_ip || disallowed_external_ip) {
+                        ds_put_format(&match, " && ip%s.src %s $%s",
+                                      is_v6 ? "6" : "4",
+                                      allowed_external_ip? "==" : "!=",
+                                      allowed_external_ip?
+                                      allowed_external_ip->name :
+                                      disallowed_external_ip->name);
+                    }
+
                     if (!strcmp(nat->type, "dnat_and_snat") && stateless) {
                        ds_put_format(&actions, "ip%s.dst=%s; next;",
                                      is_v6 ? "6" : "4", nat->logical_ip);
@@ -8923,6 +8947,15 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                          * programmed on the "redirect-chassis". */
                         ds_put_format(&match, " && is_chassis_resident(%s)",
                                       od->l3redirect_port->json_key);
+                    }
+
+                    if (allowed_external_ip || disallowed_external_ip) {
+                        ds_put_format(&match, " && ip%s.src %s $%s",
+                                      is_v6 ? "6" : "4",
+                                      allowed_external_ip? "==" : "!=",
+                                      allowed_external_ip?
+                                      allowed_external_ip->name :
+                                      disallowed_external_ip->name);
                     }
 
                     if (!strcmp(nat->type, "dnat_and_snat") && stateless) {
@@ -8953,6 +8986,15 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     ds_put_format(&match, "ip && ip%s.dst == %s",
                                   is_v6 ? "6" : "4",
                                   nat->external_ip);
+                    if (allowed_external_ip || disallowed_external_ip) {
+                        ds_put_format(&match, " && ip%s.src %s $%s",
+                                      is_v6 ? "6" : "4",
+                                      allowed_external_ip? "==" : "!=",
+                                      allowed_external_ip?
+                                      allowed_external_ip->name :
+                                      disallowed_external_ip->name);
+                    }
+
                     ds_clear(&actions);
                     if (dnat_force_snat_ip) {
                         /* Indicate to the future tables that a DNAT has taken
@@ -8996,6 +9038,16 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                         ds_put_format(&match, " && is_chassis_resident(%s)",
                                       od->l3redirect_port->json_key);
                     }
+
+                    if (allowed_external_ip || disallowed_external_ip) {
+                        ds_put_format(&match, " && ip%s.src %s $%s",
+                                      is_v6 ? "6" : "4",
+                                      allowed_external_ip? "==" : "!=",
+                                      allowed_external_ip?
+                                      allowed_external_ip->name :
+                                      disallowed_external_ip->name);
+                    }
+
                     ds_clear(&actions);
 
                     if (!strcmp(nat->type, "dnat_and_snat") && stateless) {
@@ -9076,6 +9128,16 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     ds_put_format(&match, " && is_chassis_resident(%s)",
                                   od->l3redirect_port->json_key);
                 }
+
+                if (allowed_external_ip || disallowed_external_ip) {
+                    ds_put_format(&match, " && ip%s.dst %s $%s",
+                                  is_v6 ? "6" : "4",
+                                  allowed_external_ip? "==" : "!=",
+                                  allowed_external_ip?
+                                  allowed_external_ip->name :
+                                  disallowed_external_ip->name);
+                }
+
                 ds_clear(&actions);
                 if (distributed) {
                     ds_put_format(&actions, "eth.src = "ETH_ADDR_FMT"; ",
@@ -9105,6 +9167,16 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     ds_put_format(&match, "ip && ip%s.src == %s",
                                   is_v6 ? "6" : "4",
                                   nat->logical_ip);
+
+                    if (allowed_external_ip || disallowed_external_ip) {
+                        ds_put_format(&match, " && ip%s.dst %s $%s",
+                                      is_v6 ? "6" : "4",
+                                      allowed_external_ip? "==" : "!=",
+                                      allowed_external_ip?
+                                      allowed_external_ip->name :
+                                      disallowed_external_ip->name);
+                    }
+
                     ds_clear(&actions);
 
                     if (!strcmp(nat->type, "dnat_and_snat") && stateless) {
@@ -9145,6 +9217,16 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                         ds_put_format(&match, " && is_chassis_resident(%s)",
                                       od->l3redirect_port->json_key);
                     }
+
+                    if (allowed_external_ip || disallowed_external_ip) {
+                        ds_put_format(&match, " && ip%s.dst %s $%s",
+                                      is_v6 ? "6" : "4",
+                                      allowed_external_ip? "==" : "!=",
+                                      allowed_external_ip?
+                                      allowed_external_ip->name :
+                                      disallowed_external_ip->name);
+                    }
+
                     ds_clear(&actions);
                     if (distributed) {
                         ds_put_format(&actions, "eth.src = "ETH_ADDR_FMT"; ",
