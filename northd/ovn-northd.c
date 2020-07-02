@@ -223,6 +223,11 @@ enum ovn_stage {
 #define REGBIT_LOOKUP_NEIGHBOR_RESULT "reg9[2]"
 #define REGBIT_SKIP_LOOKUP_NEIGHBOR "reg9[3]"
 
+/* Register to store the eth address associated to a router port for packets
+ * received in S_ROUTER_IN_ADMISSION.
+ */
+#define REG_INPORT_ETH_ADDR "xreg0[0..47]"
+
 /* Register for ECMP bucket selection. */
 #define REG_ECMP_GROUP_ID       "reg8[0..15]"
 #define REG_ECMP_MEMBER_ID      "reg8[16..31]"
@@ -246,33 +251,40 @@ enum ovn_stage {
  * +---------+-------------------------------------+
  *
  * Logical Router pipeline:
- * +-----+--------------------------+---+-------------+
- * | R0  | REGBIT_ND_RA_OPTS_RESULT |   |             |
- * |     |    IPv4-NEXT-HOP         | X |             |
- * +-----+--------------------------+ X |             |
- * | R1  | IPv4-SRC-IP for ARP-REQ  | R |    IPv6     |
- * +-----+--------------------------+ E |  NEXT-HOP   |
- * | R2  |        UNUSED            | G |             |
- * +-----+--------------------------+ 0 |             |
- * | R3  |        UNUSED            |   |             |
- * +-----+--------------------------+---+-------------+
- * | R4  |        UNUSED            |   |             |
- * +-----+--------------------------+ X |             |
- * | R5  |        UNUSED            | X | IPv6-SRC-IP |
- * +-----+--------------------------+ R |   for NS    |
- * | R6  |        UNUSED            | E |             |
- * +-----+--------------------------+ G |             |
- * | R7  |        UNUSED            | 1 |             |
- * +-----+--------------------------+---+-------------+
- * | R8  |     ECMP_GROUP_ID        |
- * |     |     ECMP_MEMBER_ID       |
- * +-----+--------------------------+
- * |     | REGBIT_{                 |
- * |     |   EGRESS_LOOPBACK/       |
- * | R9  |   PKT_LARGER/            |
- * |     |   LOOKUP_NEIGHBOR_RESULT/|
- * |     |   SKIP_LOOKUP_NEIGHBOR}  |
- * +-----+--------------------------+
+ * +-----+--------------------------+---+-----------------+---+-------------+
+ * | R0  | REGBIT_ND_RA_OPTS_RESULT | X |                 |   |             |
+ * |     |    IPv4-NEXT-HOP         | R |                 |   |             |
+ * +-----+--------------------------+ E | INPORT_ETH_ADDR | X |             |
+ * | R1  | IPv4-SRC-IP for ARP-REQ  | G |   (< IP_INPUT)  | X |    IPv6     |
+ * |     |                          | 0 |                 | R |  NEXT-HOP   |
+ * +-----+--------------------------+---+-----------------+ E |(>= IP_INPUT)|
+ * | R2  |        UNUSED            | X |                 | G |             |
+ * |     |                          | R |                 | 0 |             |
+ * +-----+--------------------------+ E |     UNUSED      |   |             |
+ * | R3  |        UNUSED            | G |                 |   |             |
+ * |     |                          | 1 |                 |   |             |
+ * +-----+--------------------------+---+-----------------+---+-------------+
+ * | R4  |        UNUSED            | X |                 |   |             |
+ * |     |                          | R |                 |   |             |
+ * +-----+--------------------------+ E |     UNUSED      | X |             |
+ * | R5  |        UNUSED            | G |                 | X | IPv6-SRC-IP |
+ * |     |                          | 2 |                 | R |   for NS    |
+ * +-----+--------------------------+---+-----------------+ E |(>= IP_INPUT)|
+ * | R6  |        UNUSED            | X |                 | G |             |
+ * |     |                          | R |                 | 1 |             |
+ * +-----+--------------------------+ E |     UNUSED      |   |             |
+ * | R7  |        UNUSED            | G |                 |   |             |
+ * |     |                          | 3 |                 |   |             |
+ * +-----+--------------------------+---+-----------------+---+-------------+
+ * | R8  |     ECMP_GROUP_ID        |   |                 |
+ * |     |     ECMP_MEMBER_ID       | X |                 |
+ * +-----+--------------------------+ R |                 |
+ * |     | REGBIT_{                 | E |                 |
+ * |     |   EGRESS_LOOPBACK/       | G |     UNUSED      |
+ * | R9  |   PKT_LARGER/            | 4 |                 |
+ * |     |   LOOKUP_NEIGHBOR_RESULT/|   |                 |
+ * |     |   SKIP_LOOKUP_NEIGHBOR}  |   |                 |
+ * +-----+--------------------------+---+-----------------+
  *
  */
 
@@ -8007,10 +8019,19 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             continue;
         }
 
+        /* Store the ethernet address of the port receiving the packet.
+         * This will save us from having to match on inport further down in
+         * the pipeline.
+         */
+        ds_clear(&actions);
+        ds_put_format(&actions, REG_INPORT_ETH_ADDR " = %s; next;",
+                      op->lrp_networks.ea_s);
+
         ds_clear(&match);
         ds_put_format(&match, "eth.mcast && inport == %s", op->json_key);
         ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_ADMISSION, 50,
-                                ds_cstr(&match), "next;", &op->nbrp->header_);
+                                ds_cstr(&match), ds_cstr(&actions),
+                                &op->nbrp->header_);
 
         ds_clear(&match);
         ds_put_format(&match, "eth.dst == %s && inport == %s",
@@ -8023,7 +8044,8 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                           op->od->l3redirect_port->json_key);
         }
         ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_ADMISSION, 50,
-                                ds_cstr(&match), "next;", &op->nbrp->header_);
+                                ds_cstr(&match),  ds_cstr(&actions),
+                                &op->nbrp->header_);
     }
 
     /* Logical router ingress table 1: LOOKUP_NEIGHBOR and
@@ -8290,17 +8312,15 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             ds_clear(&actions);
             ds_put_format(&actions,
                 "eth.dst = eth.src; "
-                "eth.src = %s; "
+                "eth.src = " REG_INPORT_ETH_ADDR "; "
                 "arp.op = 2; /* ARP reply */ "
                 "arp.tha = arp.sha; "
-                "arp.sha = %s; "
+                "arp.sha = " REG_INPORT_ETH_ADDR "; "
                 "arp.tpa = arp.spa; "
                 "arp.spa = %s; "
                 "outport = %s; "
                 "flags.loopback = 1; "
                 "output;",
-                op->lrp_networks.ea_s,
-                op->lrp_networks.ea_s,
                 op->lrp_networks.ipv4_addrs[i].addr_s,
                 op->json_key);
             ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
@@ -8327,17 +8347,15 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             ds_clear(&actions);
             ds_put_format(&actions,
                           "eth.dst = eth.src; "
-                          "eth.src = %s; "
+                          "eth.src = " REG_INPORT_ETH_ADDR "; "
                           "arp.op = 2; /* ARP reply */ "
                           "arp.tha = arp.sha; "
-                          "arp.sha = %s; "
+                          "arp.sha = " REG_INPORT_ETH_ADDR "; "
                           "arp.tpa = arp.spa; "
                           "arp.spa = %s; "
                           "outport = %s; "
                           "flags.loopback = 1; "
                           "output;",
-                          op->lrp_networks.ea_s,
-                          op->lrp_networks.ea_s,
                           ip_address,
                           op->json_key);
 
@@ -8358,18 +8376,16 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             ds_clear(&actions);
             ds_put_format(&actions,
                           "nd_na { "
-                          "eth.src = %s; "
+                          "eth.src = " REG_INPORT_ETH_ADDR "; "
                           "ip6.src = %s; "
                           "nd.target = %s; "
-                          "nd.tll = %s; "
+                          "nd.tll = " REG_INPORT_ETH_ADDR "; "
                           "outport = inport; "
                           "flags.loopback = 1; "
                           "output; "
                           "};",
-                          op->lrp_networks.ea_s,
                           ip_address,
-                          ip_address,
-                          op->lrp_networks.ea_s);
+                          ip_address);
 
             ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
                           ds_cstr(&match), ds_cstr(&actions));
@@ -8492,18 +8508,14 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                                   nat->logical_port);
                 } else {
                     if (is_v6) {
-                        ds_put_format(&actions,
-                            "eth.src = %s; "
-                            "nd.tll = %s; ",
-                            op->lrp_networks.ea_s,
-                            op->lrp_networks.ea_s);
+                        ds_put_cstr(&actions,
+                                    "eth.src = " REG_INPORT_ETH_ADDR "; "
+                                    "nd.tll = " REG_INPORT_ETH_ADDR "; ");
 
                     } else {
-                        ds_put_format(&actions,
-                            "eth.src = %s; "
-                            "arp.sha = %s; ",
-                            op->lrp_networks.ea_s,
-                            op->lrp_networks.ea_s);
+                        ds_put_cstr(&actions,
+                                    "eth.src = "REG_INPORT_ETH_ADDR "; "
+                                    "arp.sha = " REG_INPORT_ETH_ADDR "; ");
                     }
                     /* Traffic with eth.src = l3dgw_port->lrp_networks.ea_s
                      * should only be sent from the "redirect-chassis", so that
@@ -8517,17 +8529,13 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                 }
             } else {
                 if (is_v6) {
-                    ds_put_format(&actions,
-                        "eth.src = %s; "
-                        "nd.tll = %s; ",
-                        op->lrp_networks.ea_s,
-                        op->lrp_networks.ea_s);
+                    ds_put_cstr(&actions,
+                                "eth.src = " REG_INPORT_ETH_ADDR "; "
+                                "nd.tll = " REG_INPORT_ETH_ADDR "; ");
                 } else {
                     ds_put_format(&actions,
-                        "eth.src = %s; "
-                        "arp.sha = %s; ",
-                        op->lrp_networks.ea_s,
-                        op->lrp_networks.ea_s);
+                                  "eth.src = " REG_INPORT_ETH_ADDR "; "
+                                  "arp.sha = " REG_INPORT_ETH_ADDR "; ");
                 }
             }
             if (is_v6) {
@@ -8745,18 +8753,16 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             ds_clear(&actions);
             ds_put_format(&actions,
                           "nd_na_router { "
-                          "eth.src = %s; "
+                          "eth.src = " REG_INPORT_ETH_ADDR "; "
                           "ip6.src = %s; "
                           "nd.target = %s; "
-                          "nd.tll = %s; "
+                          "nd.tll = " REG_INPORT_ETH_ADDR "; "
                           "outport = inport; "
                           "flags.loopback = 1; "
                           "output; "
                           "};",
-                          op->lrp_networks.ea_s,
                           op->lrp_networks.ipv6_addrs[i].addr_s,
-                          op->lrp_networks.ipv6_addrs[i].addr_s,
-                          op->lrp_networks.ea_s);
+                          op->lrp_networks.ipv6_addrs[i].addr_s);
             ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
                                     ds_cstr(&match), ds_cstr(&actions),
                                     &op->nbrp->header_);
@@ -9258,6 +9264,14 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
              * on the l3dgw_port instance where nat->logical_port is
              * resident. */
             if (distributed) {
+                /* Store the ethernet address of the port receiving the packet.
+                 * This will save us from having to match on inport further
+                 * down in the pipeline.
+                 */
+                ds_clear(&actions);
+                ds_put_format(&actions, REG_INPORT_ETH_ADDR " = %s; next;",
+                              od->l3dgw_port->lrp_networks.ea_s);
+
                 ds_clear(&match);
                 ds_put_format(&match,
                               "eth.dst == "ETH_ADDR_FMT" && inport == %s"
@@ -9266,7 +9280,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                               od->l3dgw_port->json_key,
                               nat->logical_port);
                 ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_ADMISSION, 50,
-                                        ds_cstr(&match), "next;",
+                                        ds_cstr(&match), ds_cstr(&actions),
                                         &nat->header_);
             }
 
