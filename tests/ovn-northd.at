@@ -1140,6 +1140,133 @@ ovn-nbctl lr-nat-del R1 dnat_and_snat  172.16.1.1
 
 AT_CLEANUP
 
+AT_SETUP([ovn -- check allowed/disallowed external dnat, snat and dnat_and_snat rules])
+ovn_start
+
+ovn-sbctl chassis-add gw1 geneve 127.0.0.1
+
+ovn-nbctl lr-add R1
+ovn-nbctl lrp-add R1 R1-S1 02:ac:10:01:00:01 172.16.1.1/24
+
+ovn-nbctl ls-add S1
+ovn-nbctl lsp-add S1 S1-R1
+ovn-nbctl lsp-set-type S1-R1 router
+ovn-nbctl lsp-set-addresses S1-R1 router
+ovn-nbctl --wait=sb lsp-set-options S1-R1 router-port=R1-S1
+
+ovn-nbctl lrp-set-gateway-chassis R1-S1 gw1
+
+uuid=`ovn-sbctl --columns=_uuid --bare find Port_Binding logical_port=cr-R1-S1`
+echo "CR-LRP UUID is: " $uuid
+
+ovn-nbctl create Address_Set name=allowed_range addresses=\"1.1.1.1\"
+ovn-nbctl create Address_Set name=disallowed_range addresses=\"2.2.2.2\"
+
+# SNAT with ALLOWED_IPs
+ovn-nbctl lr-nat-add R1 snat  172.16.1.1 50.0.0.11
+ovn-nbctl --is-applied lr-nat-update-ext-ip R1 snat 50.0.0.11 allowed_range
+
+OVS_WAIT_UNTIL([test 3 = `ovn-sbctl dump-flows R1 | grep lr_out_snat | wc -l`])
+
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_out_snat | grep "ip4.src == 50.0.0.11" | grep "ip4.dst == $allowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_in_unsnat | grep "ip4.dst == 172.16.1.1" | grep "ip4.src == $allowed_range" | wc -l], [0], [1
+])
+
+# SNAT with DISALLOWED_IPs
+ovn-nbctl lr-nat-del R1 snat  50.0.0.11
+ovn-nbctl lr-nat-add R1 snat  172.16.1.1 50.0.0.11
+ovn-nbctl lr-nat-update-ext-ip R1 snat 50.0.0.11 disallowed_range
+
+OVS_WAIT_UNTIL([test 3 = `ovn-sbctl dump-flows R1 | grep lr_out_snat | \
+wc -l`])
+
+ovn-nbctl show R1
+ovn-sbctl dump-flows R1
+
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_out_snat | grep "ip4.src == 50.0.0.11" | grep "ip4.dst != $disallowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_in_unsnat | grep "ip4.dst == 172.16.1.1" | grep "ip4.src != $disallowed_range" | wc -l], [0], [1
+])
+
+# Stateful FIP with ALLOWED_IPs
+ovn-nbctl lr-nat-del R1 snat  50.0.0.11
+ovn-nbctl lr-nat-add R1 dnat_and_snat  172.16.1.2 50.0.0.11
+ovn-nbctl --is-applied lr-nat-update-ext-ip R1 dnat_and_snat 172.16.1.2 allowed_range
+ovn-nbctl show R1
+ovn-sbctl dump-flows R1
+
+OVS_WAIT_UNTIL([test 3 = `ovn-sbctl dump-flows R1 | grep lr_out_snat | \
+wc -l`])
+
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_out_snat | grep "ip4.src == 50.0.0.11" | grep "ip4.dst == $allowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_in_unsnat | grep "ip4.dst == 172.16.1.2" | grep "ip4.src == $allowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_out_undnat | grep "ip4.src == 50.0.0.11" | grep "ip4.dst == $allowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_in_dnat | grep "ip4.dst == 172.16.1.2" | grep "ip4.src == $allowed_range" | wc -l], [0], [1
+])
+
+# Stateful FIP with DISALLOWED_IPs
+ovn-nbctl lr-nat-del R1 dnat_and_snat  172.16.1.2
+ovn-nbctl lr-nat-add R1 dnat_and_snat  172.16.1.2 50.0.0.11
+ovn-nbctl lr-nat-update-ext-ip R1 dnat_and_snat 172.16.1.2 disallowed_range
+ovn-nbctl show R1
+ovn-sbctl dump-flows R1
+
+OVS_WAIT_UNTIL([test 3 = `ovn-sbctl dump-flows R1 | grep lr_out_snat | \
+wc -l`])
+
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_out_snat | grep "ip4.src == 50.0.0.11" | grep "ip4.dst != $disallowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_in_unsnat | grep "ip4.dst == 172.16.1.2" | grep "ip4.src != $disallowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_out_undnat | grep "ip4.src == 50.0.0.11" | grep "ip4.dst != $disallowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_in_dnat | grep "ip4.dst == 172.16.1.2" | grep "ip4.src != $disallowed_range" | wc -l], [0], [1
+])
+
+# Stateless FIP with DISALLOWED_IPs
+ovn-nbctl lr-nat-del R1 dnat_and_snat  172.16.1.2
+ovn-nbctl --stateless lr-nat-add R1 dnat_and_snat  172.16.1.2 50.0.0.11
+ovn-nbctl --is-applied lr-nat-update-ext-ip R1 dnat_and_snat 172.16.1.2 allowed_range
+ovn-nbctl show R1
+ovn-sbctl dump-flows R1
+
+OVS_WAIT_UNTIL([test 3 = `ovn-sbctl dump-flows R1 | grep lr_out_snat | \
+wc -l`])
+
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_out_snat | grep "ip4.src == 50.0.0.11" | grep "ip4.dst == $allowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_in_unsnat | grep "ip4.dst == 172.16.1.2" | grep "ip4.src == $allowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_out_undnat | grep "ip4.src == 50.0.0.11" | grep "ip4.dst == $allowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_in_dnat | grep "ip4.dst == 172.16.1.2" | grep "ip4.src == $allowed_range" | wc -l], [0], [1
+])
+
+# Stateful FIP with DISALLOWED_IPs
+ovn-nbctl lr-nat-del R1 dnat_and_snat  172.16.1.2
+ovn-nbctl --stateless lr-nat-add R1 dnat_and_snat  172.16.1.2 50.0.0.11
+ovn-nbctl lr-nat-update-ext-ip R1 dnat_and_snat 172.16.1.2 disallowed_range
+ovn-nbctl show R1
+ovn-sbctl dump-flows R1
+
+OVS_WAIT_UNTIL([test 3 = `ovn-sbctl dump-flows R1 | grep lr_out_snat | \
+wc -l`])
+
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_out_snat | grep "ip4.src == 50.0.0.11" | grep "ip4.dst != $disallowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_in_unsnat | grep "ip4.dst == 172.16.1.2" | grep "ip4.src != $disallowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_out_undnat | grep "ip4.src == 50.0.0.11" | grep "ip4.dst != $disallowed_range" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows R1 | grep lr_in_dnat | grep "ip4.dst == 172.16.1.2" | grep "ip4.src != $disallowed_range" | wc -l], [0], [1
+])
+
+AT_CLEANUP
+
 AT_SETUP([ovn -- check Load balancer health check and Service Monitor sync])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
