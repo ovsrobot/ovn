@@ -645,10 +645,11 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
 }
 
 bool
-chassis_get_mac(const struct sbrec_chassis *chassis_rec,
-                const char *bridge_mapping,
-                struct eth_addr *chassis_mac)
+chassis_get_mac_mappings(const struct sbrec_chassis *chassis_rec,
+                         struct smap *chassis_mappings)
 {
+    smap_init(chassis_mappings);
+
     const char *tokens
         = get_chassis_mac_mappings(&chassis_rec->other_config);
     if (!tokens[0]) {
@@ -656,7 +657,6 @@ chassis_get_mac(const struct sbrec_chassis *chassis_rec,
     }
 
     char *save_ptr = NULL;
-    bool ret = false;
     char *tokstr = xstrdup(tokens);
 
     /* Format for a chassis mac configuration is:
@@ -669,24 +669,36 @@ chassis_get_mac(const struct sbrec_chassis *chassis_rec,
         char *chassis_mac_bridge = strtok_r(token, ":", &save_ptr2);
         char *chassis_mac_str = strtok_r(NULL, "", &save_ptr2);
 
-        if (!strcmp(chassis_mac_bridge, bridge_mapping)) {
-            struct eth_addr temp_mac;
-
-            /* Return the first chassis mac. */
-            char *err_str = str_to_mac(chassis_mac_str, &temp_mac);
-            if (err_str) {
-                free(err_str);
-                continue;
-            }
-
-            ret = true;
-            *chassis_mac = temp_mac;
-            break;
-        }
+        smap_replace(chassis_mappings, chassis_mac_bridge, chassis_mac_str);
     }
 
     free(tokstr);
-    return ret;
+    return true;
+}
+
+bool
+chassis_get_mac(const struct sbrec_chassis *chassis_rec,
+                const char *bridge_mapping,
+                struct eth_addr *chassis_mac)
+{
+    struct smap chassis_mappings;
+
+    if (!chassis_get_mac_mappings(chassis_rec, &chassis_mappings)) {
+        return false;
+    }
+
+    const char *chassis_mac_str = smap_get_def(&chassis_mappings,
+                                               bridge_mapping, "");
+    struct eth_addr temp_mac;
+
+    char *err_str = str_to_mac(chassis_mac_str, &temp_mac);
+    if (err_str) {
+        free(err_str);
+        return false;
+    }
+
+    *chassis_mac = temp_mac;
+    return true;
 }
 
 /* Returns true if the database is all cleaned up, false if more work is

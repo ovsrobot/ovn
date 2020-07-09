@@ -62,7 +62,8 @@ load_logical_ingress_metadata(const struct sbrec_port_binding *binding,
 /* UUID to identify OF flows not associated with ovsdb rows. */
 static struct uuid *hc_uuid = NULL;
 
-#define CHASSIS_MAC_TO_ROUTER_MAC_CONJID        100
+#define CHASSIS_MAC_TO_ROUTER_SRC_MAC_CONJID        100
+#define CHASSIS_MAC_TO_ROUTER_DST_MAC_CONJID        101
 
 void
 physical_register_ovs_idl(struct ovsdb_idl *ovs_idl)
@@ -146,6 +147,18 @@ put_move(enum mf_field_id src, int src_ofs,
     move->dst.field = mf_from_id(dst);
     move->dst.ofs = dst_ofs;
     move->dst.n_bits = n_bits;
+}
+
+static void
+put_value(const uint8_t *data, size_t len,
+          enum mf_field_id dst, int ofs, int n_bits,
+          struct ofpbuf *ofpacts)
+{
+    struct ofpact_set_field *sf = ofpact_put_set_field(ofpacts,
+                                                       mf_from_id(dst), NULL,
+                                                       NULL);
+    bitwise_copy(data, len, 0, sf->value, sf->field->n_bytes, ofs, n_bits);
+    bitwise_one(ofpact_set_field_mask(sf), sf->field->n_bytes, ofs, n_bits);
 }
 
 static void
@@ -494,11 +507,10 @@ put_chassis_mac_conj_id_flow(const struct sbrec_chassis_table *chassis_table,
         ofpbuf_clear(ofpacts_p);
         match_init_catchall(&match);
 
-
         match_set_dl_src(&match, chassis_mac);
 
         conj = ofpact_put_CONJUNCTION(ofpacts_p);
-        conj->id = CHASSIS_MAC_TO_ROUTER_MAC_CONJID;
+        conj->id = CHASSIS_MAC_TO_ROUTER_SRC_MAC_CONJID;
         conj->n_clauses = 2;
         conj->clause = 0;
         ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 180,
@@ -507,6 +519,51 @@ put_chassis_mac_conj_id_flow(const struct sbrec_chassis_table *chassis_table,
     }
 
     free_remote_chassis_macs();
+
+    /* We need to replace the packet destined to the chassis mac (eth.dst)
+     * with the router mac. This is required to support external ports.
+     * These ports don't see the router mac at all since we send the
+     * chassis MAC in the ARP reply for any ARP requests to the router IPs.
+     * Without these flows, the packets will not enter the router pipeline
+     * if they need to be routed.
+     * Please see put_replace_chassis_mac_flows() for the 2nd clause of
+     * conj id - CHASSIS_MAC_TO_ROUTER_DST_MAC_CONJID.
+     * */
+    struct smap chassis_mac_mappings = SMAP_INITIALIZER(&chassis_mac_mappings);
+    if (chassis_get_mac_mappings(chassis, &chassis_mac_mappings)) {
+        struct smap_node *node;
+        struct sset macs = SSET_INITIALIZER(&macs);
+        SMAP_FOR_EACH (node, &chassis_mac_mappings) {
+            struct eth_addr chassis_mac;
+
+            char *err_str = str_to_mac(node->value, &chassis_mac);
+            if (err_str) {
+                free(err_str);
+                continue;
+            }
+
+            if (!sset_add(&macs, node->value)) {
+                /* The OF flow for the mac is already added. */
+                continue;
+            }
+
+            ofpbuf_clear(ofpacts_p);
+            match_init_catchall(&match);
+
+            match_set_dl_dst(&match, chassis_mac);
+
+            struct ofpact_conjunction *conj;
+            conj = ofpact_put_CONJUNCTION(ofpacts_p);
+            conj->id = CHASSIS_MAC_TO_ROUTER_DST_MAC_CONJID;
+            conj->n_clauses = 2;
+            conj->clause = 0;
+            ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 180,
+                            0, &match, ofpacts_p, hc_uuid);
+        }
+        sset_destroy(&macs);
+    }
+
+    smap_destroy(&chassis_mac_mappings);
 }
 
 static void
@@ -555,7 +612,7 @@ put_replace_chassis_mac_flows(const struct simap *ct_zones,
 
         /* Match on ingress port, vlan_id and conjunction id */
         match_set_in_port(&match, ofport);
-        match_set_conj_id(&match, CHASSIS_MAC_TO_ROUTER_MAC_CONJID);
+        match_set_conj_id(&match, CHASSIS_MAC_TO_ROUTER_SRC_MAC_CONJID);
 
         if (tag) {
             match_set_dl_vlan(&match, htons(tag), 0);
@@ -578,8 +635,39 @@ put_replace_chassis_mac_flows(const struct simap *ct_zones,
                         rport_binding->header_.uuid.parts[0],
                         &match, ofpacts_p, hc_uuid);
 
+        ofpbuf_clear(ofpacts_p);
+        match_init_catchall(&match);
+
+        /* Add flow, which will match on conjunction id and will
+         * replace destination mac with router port mac */
+
+        /* Match on ingress port, vlan_id and conjunction id */
+        match_set_in_port(&match, ofport);
+        match_set_conj_id(&match, CHASSIS_MAC_TO_ROUTER_DST_MAC_CONJID);
+
+        if (tag) {
+            match_set_dl_vlan(&match, htons(tag), 0);
+        } else {
+            match_set_dl_tci_masked(&match, 0, htons(VLAN_CFI));
+        }
+
+        /* Actions */
+
+        if (tag) {
+            ofpact_put_STRIP_VLAN(ofpacts_p);
+        }
+        load_logical_ingress_metadata(localnet_port, &zone_ids, ofpacts_p);
+        replace_mac = ofpact_put_SET_ETH_DST(ofpacts_p);
+        replace_mac->mac = router_port_mac;
+
+        /* Resubmit to first logical ingress pipeline table. */
+        put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, ofpacts_p);
+        ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 180,
+                        rport_binding->header_.uuid.parts[0],
+                        &match, ofpacts_p, hc_uuid);
+
         /* Provide second search criteria, i.e localnet port's
-         * vlan ID for conjunction flow */
+         * vlan ID for conjunction flows. */
         struct ofpact_conjunction *conj;
         ofpbuf_clear(ofpacts_p);
         match_init_catchall(&match);
@@ -591,12 +679,19 @@ put_replace_chassis_mac_flows(const struct simap *ct_zones,
         }
 
         conj = ofpact_put_CONJUNCTION(ofpacts_p);
-        conj->id = CHASSIS_MAC_TO_ROUTER_MAC_CONJID;
+        conj->id = CHASSIS_MAC_TO_ROUTER_SRC_MAC_CONJID;
         conj->n_clauses = 2;
         conj->clause = 1;
+
+        conj = ofpact_put_CONJUNCTION(ofpacts_p);
+        conj->id = CHASSIS_MAC_TO_ROUTER_DST_MAC_CONJID;
+        conj->n_clauses = 2;
+        conj->clause = 1;
+
         ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 180,
                         rport_binding->header_.uuid.parts[0],
                         &match, ofpacts_p, hc_uuid);
+
     }
 }
 
@@ -665,9 +760,6 @@ put_replace_router_port_mac_flows(struct ovsdb_idl_index
          * a. Flow replaces ingress router port mac with a chassis mac.
          * b. Flow appends the vlan id localnet port is configured with.
          */
-        match_init_catchall(&match);
-        ofpbuf_clear(ofpacts_p);
-
         ovs_assert(rport_binding->n_mac == 1);
         char *err_str = str_to_mac(rport_binding->mac[0], &router_port_mac);
         if (err_str) {
@@ -679,6 +771,9 @@ put_replace_router_port_mac_flows(struct ovsdb_idl_index
         }
 
         /* Replace Router mac flow */
+        match_init_catchall(&match);
+        ofpbuf_clear(ofpacts_p);
+
         match_set_metadata(&match, htonll(dp_key));
         match_set_reg(&match, MFF_LOG_OUTPORT - MFF_REG0, port_key);
         match_set_dl_src(&match, router_port_mac);
@@ -696,6 +791,38 @@ put_replace_router_port_mac_flows(struct ovsdb_idl_index
         ofpact_put_OUTPUT(ofpacts_p)->port = ofport;
 
         ofctrl_add_flow(flow_table, OFTABLE_LOG_TO_PHY, 150,
+                        localnet_port->header_.uuid.parts[0],
+                        &match, ofpacts_p, &localnet_port->header_.uuid);
+
+        /* Replace Router mac in the ARP packets (arp.sha) to the chassis MAC.
+         * This is very important and required for external logical ports and
+         * when these ports send ARP for their router IPs, the chassis mac
+         * should be sent which has claimed these external ports. */
+        match_init_catchall(&match);
+        ofpbuf_clear(ofpacts_p);
+
+        match_set_metadata(&match, htonll(dp_key));
+        match_set_reg(&match, MFF_LOG_OUTPORT - MFF_REG0, port_key);
+        match_set_dl_src(&match, router_port_mac);
+        match_set_dl_type(&match, htons(ETH_TYPE_ARP));
+        match_set_arp_sha(&match, router_port_mac);
+
+        replace_mac = ofpact_put_SET_ETH_SRC(ofpacts_p);
+        replace_mac->mac = chassis_mac;
+
+        if (tag) {
+            struct ofpact_vlan_vid *vlan_vid;
+            vlan_vid = ofpact_put_SET_VLAN_VID(ofpacts_p);
+            vlan_vid->vlan_vid = tag;
+            vlan_vid->push_vlan_if_needed = true;
+        }
+
+        put_value(chassis_mac.ea, sizeof chassis_mac.ea, MFF_ARP_SHA,
+                  0, 48, ofpacts_p);
+
+        ofpact_put_OUTPUT(ofpacts_p)->port = ofport;
+
+        ofctrl_add_flow(flow_table, OFTABLE_LOG_TO_PHY, 160,
                         localnet_port->header_.uuid.parts[0],
                         &match, ofpacts_p, &localnet_port->header_.uuid);
     }

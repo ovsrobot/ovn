@@ -14748,6 +14748,137 @@ AT_CHECK([cat ext1_v6.packets | cut -c -120], [0], [expout])
 cat ext1_v6.expected | cut -c 125- > expout
 AT_CHECK([cat ext1_v6.packets | cut -c 125-], [0], [expout])
 
+# Configure ovn-chassis-mac-mappings on all the hypervisors.
+as hv1
+ovs-vsctl set open . external_ids:ovn-chassis-mac-mappings=phys:1e:02:ad:aa:bb:01
+
+as hv2
+ovs-vsctl set open . external_ids:ovn-chassis-mac-mappings=phys:1e:02:ad:aa:bb:02
+
+as hv3
+ovs-vsctl set open . external_ids:ovn-chassis-mac-mappings=phys:1e:02:ad:aa:bb:03
+
+OVS_WAIT_UNTIL([test 6 = $(as hv1 ovs-ofctl dump-flows br-int table=0 | grep conj -c)])
+OVS_WAIT_UNTIL([test 6 = $(as hv2 ovs-ofctl dump-flows br-int table=0 | grep conj -c)])
+OVS_WAIT_UNTIL([test 6 = $(as hv3 ovs-ofctl dump-flows br-int table=0 | grep conj -c)])
+
+OVS_WAIT_UNTIL([test 1 = $(as hv1 ovs-ofctl dump-flows br-int table=0 | \
+grep conj | grep "dl_dst=1e:02:ad:aa:bb:01" -c)])
+
+OVS_WAIT_UNTIL([test 1 = $(as hv2 ovs-ofctl dump-flows br-int table=0 | \
+grep conj | grep "dl_dst=1e:02:ad:aa:bb:02" -c)])
+
+OVS_WAIT_UNTIL([test 1 = $(as hv3 ovs-ofctl dump-flows br-int table=0 | \
+grep conj | grep "dl_dst=1e:02:ad:aa:bb:03" -c)])
+
+OVS_WAIT_UNTIL([test 1 = $(as hv1 ovs-ofctl dump-flows br-int table=65,arp | \
+grep "load:0x1e02adaabb01->NXM_NX_ARP_SHA" -c)])
+
+OVS_WAIT_UNTIL([test 0 = $(as hv2 ovs-ofctl dump-flows br-int table=65,arp | \
+grep "load:0x1e02adaabb01->NXM_NX_ARP_SHA" -c)])
+
+OVS_WAIT_UNTIL([test 1 = $(as hv2 ovs-ofctl dump-flows br-int table=65,arp | \
+grep "load:0x1e02adaabb02->NXM_NX_ARP_SHA" -c)])
+
+OVS_WAIT_UNTIL([test 1 = $(as hv3 ovs-ofctl dump-flows br-int table=65,arp | \
+grep "load:0x1e02adaabb03->NXM_NX_ARP_SHA" -c)])
+
+as hv1
+reset_pcap_file hv1-ext1 hv1/ext1
+
+send_arp_request() {
+    local inport=$1 eth_src=$2 eth_dst=$3 spa=$4 tpa=$5
+    local reply_src_mac=$6 reply_dst_mac=$7
+    local reply_sha=$8 reply_tha=$9
+
+    local eth_type=0806
+    local eth=${eth_dst}${eth_src}${eth_type}
+
+    local arp=0001080006040001${eth_src}${spa}${eth_dst}${tpa}
+
+    local request=${eth}${arp}
+    as hv1 ovs-appctl netdev-dummy/receive hv${inport}-ext${inport} $request
+
+    local reply=${reply_dst_mac}${reply_src_mac}${eth_type}
+    reply=${reply}0001080006040002${reply_sha}${tpa}${reply_tha}${spa}
+    echo $reply > hv1-ext${inport}.expected
+}
+
+src_mac=f00000000003
+dst_mac=ffffffffffff
+reply_src_mac=1e02adaabb03
+repl_dst_mac=f00000000003
+# Send ARP request to router ip - 10.0.0.1
+send_arp_request 1 ${src_mac} ${dst_mac} $(ip_to_hex 10 0 0 6) $(ip_to_hex 10 0 0 1) \
+${reply_src_mac} ${repl_dst_mac} ${reply_src_mac} ${repl_dst_mac}
+
+OVS_WAIT_UNTIL([test 1 = $(as hv3 ovs-ofctl dump-flows br-int table=65,arp | \
+grep "load:0x1e02adaabb03->NXM_NX_ARP_SHA" | grep "n_packets=1" -c)])
+
+OVN_CHECK_PACKETS([hv1/ext1-tx.pcap], [hv1-ext1.expected])
+
+as hv1
+reset_pcap_file hv1-ext1 hv1/ext1
+
+# Send unicast ARP request destined to the chassis mac of hv3.
+src_mac=f00000000003
+dst_mac=1e02adaabb03
+reply_src_mac=1e02adaabb03
+repl_dst_mac=f00000000003
+send_arp_request 1 ${src_mac} ${dst_mac} $(ip_to_hex 10 0 0 6) $(ip_to_hex 10 0 0 1) \
+${reply_src_mac} ${repl_dst_mac} ${reply_src_mac} ${repl_dst_mac}
+
+OVS_WAIT_UNTIL([test 1 = $(as hv3 ovs-ofctl dump-flows br-int table=65,arp | \
+grep "load:0x1e02adaabb03->NXM_NX_ARP_SHA" | grep "n_packets=2" -c)])
+
+OVN_CHECK_PACKETS([hv1/ext1-tx.pcap], [hv1-ext1.expected])
+
+# Make hv2 active.
+ovn-nbctl ha-chassis-group-add-chassis hagrp1 hv2 60
+
+OVS_WAIT_UNTIL(
+    [chassis=`ovn-sbctl --bare --columns chassis find port_binding \
+logical_port=ls1-lp_ext1`
+    test "$chassis" = "$hv2_uuid"])
+
+reset_pcap_file hv1-ext1 hv1/ext1
+
+src_mac=f00000000003
+dst_mac=ffffffffffff
+reply_src_mac=1e02adaabb02
+repl_dst_mac=f00000000003
+# Send ARP request to router ip - 10.0.0.1. Should be replied by hv2.
+send_arp_request 1 ${src_mac} ${dst_mac} $(ip_to_hex 10 0 0 6) $(ip_to_hex 10 0 0 1) \
+${reply_src_mac} ${repl_dst_mac} ${reply_src_mac} ${repl_dst_mac}
+
+OVS_WAIT_UNTIL([test 1 = $(as hv2 ovs-ofctl dump-flows br-int table=65,arp | \
+grep "load:0x1e02adaabb02->NXM_NX_ARP_SHA" | grep "n_packets=1" -c)])
+
+OVN_CHECK_PACKETS([hv1/ext1-tx.pcap], [hv1-ext1.expected])
+
+as hv1
+reset_pcap_file hv1-ext1 hv1/ext1
+
+# Send unicast ARP request destined to the chassis mac of hv2.
+src_mac=f00000000003
+dst_mac=1e02adaabb02
+reply_src_mac=1e02adaabb02
+repl_dst_mac=f00000000003
+send_arp_request 1 ${src_mac} ${dst_mac} $(ip_to_hex 10 0 0 6) $(ip_to_hex 10 0 0 1) \
+${reply_src_mac} ${repl_dst_mac} ${reply_src_mac} ${repl_dst_mac}
+
+OVS_WAIT_UNTIL([test 1 = $(as hv2 ovs-ofctl dump-flows br-int table=65,arp | \
+grep "load:0x1e02adaabb02->NXM_NX_ARP_SHA" | grep "n_packets=2" -c)])
+
+OVN_CHECK_PACKETS([hv1/ext1-tx.pcap], [hv1-ext1.expected])
+
+ovn-nbctl ha-chassis-group-add-chassis hagrp1 hv3 70
+ovn-nbctl ha-chassis-group-add-chassis hagrp1 hv2 10
+OVS_WAIT_UNTIL(
+    [chassis=`ovn-sbctl --bare --columns chassis find port_binding \
+logical_port=ls1-lp_ext1`
+    test "$chassis" = "$hv3_uuid"])
+
 # disconnect hv3 from the network, hv1 should take over
 as hv3
 port=${sandbox}_br-phys
