@@ -355,6 +355,10 @@ nd_ra_opts_init(struct hmap *nd_ra_opts)
 {
     nd_ra_opt_add(nd_ra_opts, "addr_mode", ND_RA_FLAG_ADDR_MODE, "str");
     nd_ra_opt_add(nd_ra_opts, "router_preference", ND_RA_FLAG_PRF, "str");
+    nd_ra_opt_add(nd_ra_opts, "dnssl", ND_OPT_DNSSL, "str");
+    /* As OVN supports only a single rdnss this option can be ipv6 */
+    nd_ra_opt_add(nd_ra_opts, "rdnss", ND_OPT_RDNSS, "ipv6");
+    nd_ra_opt_add(nd_ra_opts, "route_info", ND_OPT_ROUTE_INFO_TYPE, "str");
     nd_ra_opt_add(nd_ra_opts, "slla", ND_OPT_SOURCE_LINKADDR, "mac");
     nd_ra_opt_add(nd_ra_opts, "prefix", ND_OPT_PREFIX_INFORMATION, "ipv6");
     nd_ra_opt_add(nd_ra_opts, "mtu", ND_OPT_MTU, "uint32");

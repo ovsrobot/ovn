@@ -25,6 +25,7 @@
 #include "ovn-l7.h"
 #include "hash.h"
 #include "lib/packets.h"
+#include "lib/ovn-util.h"
 #include "nx-match.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/hmap.h"
@@ -2671,6 +2672,18 @@ parse_put_nd_ra_opts(struct action_context *ctx, const struct expr_field *dst,
         case ND_OPT_MTU:
             ok = c->format == LEX_F_DECIMAL;
             break;
+
+        case ND_OPT_RDNSS:
+            ok = c->format == LEX_F_IPV6 && !c->masked;
+            break;
+
+        case ND_OPT_DNSSL:
+            /* validation is left to the encoder */
+            break;
+
+        case ND_OPT_ROUTE_INFO_TYPE:
+            /* validation is left to the encoder */
+            break;
         }
 
         if (!ok) {
@@ -2773,6 +2786,138 @@ encode_put_nd_ra_option(const struct ovnact_gen_option *o,
         put_16aligned_be32(&prefix_opt->reserved, 0);
         memcpy(prefix_opt->prefix.be32, &c->value.be128[7].be32,
                sizeof(ovs_be32[4]));
+        break;
+    }
+
+    case ND_OPT_DNSSL:
+    {
+        char *t0, *r0 = NULL, dnssl[255] = {};
+        size_t size = sizeof(struct ovs_nd_dnssl);
+        int i = 0;
+
+        /* Multiple DNS Search List must be 'comma' separated
+         * (e.g. "a.b.c, d.e.f"). Domain names must be encoded
+         * as described in Section 3.1 of RFC1035.
+         * (e.g if dns list is a.b.c,www.ovn.org, it will be encoded as:
+         * 01 61 01 62 01 63 00 03 77 77 77 03 6f 76 63 03 6f 72 67 00
+         */
+        for (t0 = strtok_r(c->string, ",", &r0); t0;
+             t0 = strtok_r(NULL, ",", &r0)) {
+            char *t1, *r1 = NULL;
+
+            if (size > sizeof(dnssl)) {
+                /* too many dns options, truncate */
+                break;
+            } else {
+                /* 1 byte label length at tge start, 1 byte 0 at the end */
+                size += strlen(t0) + 2;
+            }
+
+            for (t1 = strtok_r(t0, ".", &r1); t1;
+                 t1 = strtok_r(NULL, ".", &r1)) {
+                dnssl[i++] = strlen(t1);
+                memcpy(&dnssl[i], t1, strlen(t1));
+                i += strlen(t1);
+            }
+            dnssl[i++] = 0;
+        }
+        size = ROUND_UP(size, 8);
+
+        struct ovs_nd_dnssl *ra_dnssl =
+            ofpbuf_put_uninit(ofpacts, sizeof *ra_dnssl);
+        ra_dnssl->type = ND_OPT_DNSSL;
+        ra_dnssl->len = size / 8;
+        ra_dnssl->reserved = 0;
+        /* Lifetime
+         * SHOULD be bounded as follows:
+         * MaxRtrAdvInterval <= Lifetime <= 2*MaxRtrAdvInterval.
+         */
+        put_16aligned_be32(&ra_dnssl->lifetime, htonl(0xffffffff));
+        ofpbuf_put(ofpacts, dnssl, size - sizeof(struct ovs_nd_dnssl));
+        break;
+    }
+
+    case ND_OPT_RDNSS:
+    {
+        /* OVN supports only a single rdnss */
+        int num = 1;
+        /* with multiple dns support this will need to be filled
+         * by a strtok_r loop too */
+        struct in6_addr dns[255] = {};
+        dns[0] = c->value.ipv6;
+        struct nd_rdnss_opt *ra_rdnss =
+            ofpbuf_put_uninit(ofpacts, sizeof *ra_rdnss);
+        size_t len = 2 * num + 1;
+
+        ra_rdnss->type = ND_OPT_RDNSS;
+        ra_rdnss->len = len;
+        ra_rdnss->reserved = 0;
+        put_16aligned_be32(&ra_rdnss->lifetime, htonl(0xffffffff));
+
+        for (int i = 0; i < num; i++) {
+            ofpbuf_put(ofpacts, &dns[i], sizeof(ovs_be32[4]));
+        }
+        break;
+    }
+
+    case ND_OPT_ROUTE_INFO_TYPE:
+    {
+        char *t0, *r0 = NULL;
+        size_t size = 0;
+
+        for (t0 = strtok_r(c->string, ",", &r0); t0;
+             t0 = strtok_r(NULL, ",", &r0)) {
+            struct ovs_nd_route_info nd_rinfo;
+            char *t1, *r1 = NULL;
+            int index;
+
+            nd_rinfo.type = ND_OPT_ROUTE_INFO_TYPE;
+            nd_rinfo.route_lifetime = htonl(0xffffffff);
+
+            for (t1 = strtok_r(t0, "-", &r1), index = 0; t1;
+                 t1 = strtok_r(NULL, "-", &r1), index++) {
+
+                switch (index) {
+                case 0:
+                    if (!strcmp(t1, "HIGH")) {
+                        nd_rinfo.flags = IPV6_ND_RA_OPT_PRF_HIGH;
+                    } else if (!strcmp(t1, "LOW")) {
+                        nd_rinfo.flags = IPV6_ND_RA_OPT_PRF_LOW;
+                    } else {
+                        nd_rinfo.flags = IPV6_ND_RA_OPT_PRF_NORMAL;
+                    }
+                    break;
+                case 1: {
+                    struct lport_addresses route;
+                    uint8_t plen;
+
+                    if (!extract_ip_addresses(t1, &route)) {
+                        goto out;
+                    }
+                    if (!route.n_ipv6_addrs) {
+                        destroy_lport_addresses(&route);
+                        goto out;
+                    }
+
+                    nd_rinfo.prefix_len = route.ipv6_addrs->plen;
+                    plen = DIV_ROUND_UP(nd_rinfo.prefix_len, 64);
+                    nd_rinfo.len = 1 + plen;
+                    ofpbuf_put(ofpacts, &nd_rinfo,
+                        sizeof(struct ovs_nd_route_info));
+                    ofpbuf_put(ofpacts, &route.ipv6_addrs->network, plen * 8);
+                    size += sizeof(struct ovs_nd_route_info) + plen * 8;
+
+                    destroy_lport_addresses(&route);
+                    index = 0;
+                    break;
+                }
+                default:
+                    goto out;
+                }
+            }
+        }
+
+    out:
         break;
     }
     }
