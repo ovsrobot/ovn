@@ -195,6 +195,8 @@ ct.snat = ct_state[6]
 ct.trk = ct_state[5]
 ct_label = NXM_NX_CT_LABEL
 ct_label.blocked = ct_label[0]
+ct_label.ecmp_reply_eth = ct_label[0..47]
+ct_label.ecmp_reply_port = ct_label[48..63]
 ct_mark = NXM_NX_CT_MARK
 ct_state = NXM_NX_CT_STATE
 ]])
@@ -16056,7 +16058,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 # Since the sw0-vir is not claimed by any chassis, eth.dst should be set to
 # zero if the ip4.dst is the virtual ip in the router pipeline.
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 00:00:00:00:00:00; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 00:00:00:00:00:00; next;)
 ])
 
 ip_to_hex() {
@@ -16107,7 +16109,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 # There should be an arp resolve flow to resolve the virtual_ip with the
 # sw0-p1's MAC.
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:03; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:03; next;)
 ])
 
 # Forcibly clear virtual_parent. ovn-controller should release the binding
@@ -16148,7 +16150,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 # There should be an arp resolve flow to resolve the virtual_ip with the
 # sw0-p2's MAC.
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:05; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:05; next;)
 ])
 
 # send the garp from sw0-p2 (in hv2). hv2 should claim sw0-vir
@@ -16171,7 +16173,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 # There should be an arp resolve flow to resolve the virtual_ip with the
 # sw0-p3's MAC.
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:04; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:04; next;)
 ])
 
 # Now send arp reply from sw0-p1. hv1 should claim sw0-vir
@@ -16192,7 +16194,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 > lflows.txt
 
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:03; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:03; next;)
 ])
 
 # Delete hv1-vif1 port. hv1 should release sw0-vir
@@ -16210,7 +16212,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 > lflows.txt
 
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 00:00:00:00:00:00; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 00:00:00:00:00:00; next;)
 ])
 
 # Now send arp reply from sw0-p2. hv2 should claim sw0-vir
@@ -16231,7 +16233,7 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 > lflows.txt
 
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=12(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:04; next;)
+  table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:04; next;)
 ])
 
 # Delete sw0-p2 logical port
@@ -20339,22 +20341,22 @@ ovn-nbctl set logical_router_policy $pol5 options:pkt_mark=5
 ovn-nbctl --wait=hv sync
 
 OVS_WAIT_UNTIL([
-    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=19 | \
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=20 | \
     grep "load:0x64->NXM_NX_PKT_MARK" -c)
 ])
 
 OVS_WAIT_UNTIL([
-    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=19 | \
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=20 | \
     grep "load:0x3->NXM_NX_PKT_MARK" -c)
 ])
 
 OVS_WAIT_UNTIL([
-    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=19 | \
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=20 | \
     grep "load:0x4->NXM_NX_PKT_MARK" -c)
 ])
 
 OVS_WAIT_UNTIL([
-    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=19 | \
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=20 | \
     grep "load:0x5->NXM_NX_PKT_MARK" -c)
 ])
 
@@ -20445,12 +20447,12 @@ send_ipv4_pkt hv1 hv1-vif1 505400000003 00000000ff01 \
     $(ip_to_hex 10 0 0 3) $(ip_to_hex 172 168 0 120)
 
 OVS_WAIT_UNTIL([
-    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=19 | \
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=20 | \
     grep "load:0x2->NXM_NX_PKT_MARK" -c)
 ])
 
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=19 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=20 | \
     grep "load:0x64->NXM_NX_PKT_MARK" -c)
 ])
 
