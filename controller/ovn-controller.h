@@ -17,6 +17,7 @@
 #ifndef OVN_CONTROLLER_H
 #define OVN_CONTROLLER_H 1
 
+#include "binding.h"
 #include "simap.h"
 #include "lib/ovn-sb-idl.h"
 
@@ -86,5 +87,7 @@ enum chassis_tunnel_type {
 };
 
 uint32_t get_tunnel_type(const char *name);
+
+const char *get_ovs_chassis_id(const struct ovsrec_open_vswitch *cfg);
 
 #endif /* controller/ovn-controller.h */

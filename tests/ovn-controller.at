@@ -50,8 +50,7 @@ patch
 # is mirrored into the Chassis record in the OVN_Southbound db.
 check_bridge_mappings () {
     local_mappings=$1
-    sysid=$(ovs-vsctl get Open_vSwitch . external_ids:system-id)
-    OVS_WAIT_UNTIL([test x"${local_mappings}" = x$(ovn-sbctl get Chassis ${sysid} other_config:ovn-bridge-mappings | sed -e 's/\"//g')])
+    OVS_WAIT_UNTIL([test x"${local_mappings}" = x$(ovn-sbctl get Chassis ${sandbox} other_config:ovn-bridge-mappings | sed -e 's/\"//g')])
 }
 
 # Initially there should be no patch ports.
@@ -133,13 +132,13 @@ ovs-vsctl \
     -- add-br br-eth2
 ovn_attach n1 br-phys 192.168.0.1
 
-sysid=$(ovs-vsctl get Open_vSwitch . external_ids:system-id)
+sysid=${sandbox}
 
 # Make sure that the datapath_type set in the Bridge table
 # is mirrored into the Chassis record in the OVN_Southbound db.
 check_datapath_type () {
     datapath_type=$1
-    chassis_datapath_type=$(ovn-sbctl get Chassis ${sysid} other_config:datapath-type | sed -e 's/"//g') #"
+    chassis_datapath_type=$(ovn-sbctl get Chassis ${sandbox} other_config:datapath-type | sed -e 's/"//g') #"
     test "${datapath_type}" = "${chassis_datapath_type}"
 }
 
@@ -187,7 +186,7 @@ OVS_WAIT_UNTIL([
     test "${expected_iface_types}" = "${chassis_iface_types}"
 ])
 
-# Change the value of external_ids:system-id and make sure it's mirrored
+# Set the value of external_ids:system-id and make sure it's mirrored
 # in the Chassis record in the OVN_Southbound database.
 sysid=${sysid}-foo
 ovs-vsctl set Open_vSwitch . external-ids:system-id="${sysid}"
