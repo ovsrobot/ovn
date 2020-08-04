@@ -2674,6 +2674,41 @@
       </p>
     </column>
 
+    <column name="applied_ext_ips">
+      It represents Address Set of external ips that NAT rule is applicable to.
+      For SNAT type NAT rules, this refers to destination addresses.
+      For DNAT type NAT rules, this refers to source addresses.
+
+      <p>
+        This configuration overrides the default NAT behavior of applying a
+        rule solely based on internal IP. Without this configuration, NAT
+        happens without considering the external IP (i.e dest/source for
+        snat/dnat type rule). With this configuration NAT rule is applied
+        ONLY if external ip is in the input Address Set.
+      </p>
+    </column>
+
+    <column name="exempted_ext_ips">
+      It represents Address Set of external ips that NAT rule is NOT
+      applicable to.
+      For SNAT type NAT rules, this refers to destination addresses.
+      For DNAT type NAT rules, this refers to source addresses.
+
+      <p>
+        This configuration overrides the default NAT behavior of applying a
+        rule solely based on internal IP. Without this configuration, NAT
+        happens without considering the external IP (i.e dest/source for
+        snat/dnat type rule). With this configuration NAT rule is NOT applied
+        if external ip is in the input Address Set.
+      </p>
+
+      <p>
+        "applied_ext_ips" and "exempted_ext_ips" are mutually
+        exclusive to each other. If both Address Sets are set for a rule,
+        then the NAT rule is not applied.
+      </p>
+    </column>
+
     <column name="options" key="stateless">
       Indicates if a dnat_and_snat rule should lead to connection
       tracking state or not.
