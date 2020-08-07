@@ -4295,11 +4295,13 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
                             should_return = true;
                         }
                 } else {
-                    ctl_error(ctx, "a NAT with this type (%s) and %s (%s) "
-                              "already exists",
-                              nat_type,
-                              is_snat ? "logical_ip" : "external_ip",
-                              is_snat ? new_logical_ip : new_external_ip);
+                    if (!may_exist) {
+                        ctl_error(ctx, "a NAT with this type (%s) and %s (%s) "
+                                  "already exists",
+                                  nat_type,
+                                  is_snat ? "logical_ip" : "external_ip",
+                                  is_snat ? new_logical_ip : new_external_ip);
+                    }
                     should_return = true;
                 }
             }
