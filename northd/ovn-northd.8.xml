@@ -322,6 +322,15 @@
     </p>
 
     <p>
+      A priority-105 flow which sets <code>reg0[7] = 1</code> for traffic
+      that matches the condition set in
+      <ref column="other_config:acl-stateful-bypass"/> and advances to next
+      table. <code>reg0[7]</code> acts as a hint for tables
+      <code>Pre-Stateful</code> and <code>ACL</code> to avoid sending this
+      traffic to the connection tracker.
+    </p>
+
+    <p>
       This table also has a priority-110 flow with the match
       <code>eth.dst == <var>E</var></code> for all logical switch
       datapaths to move traffic to the next table. Where <var>E</var>
@@ -1369,6 +1378,15 @@ output;
     <p>
       This is similar to ingress table <code>Pre-ACLs</code> except for
      <code>to-lport</code> traffic.
+    </p>
+
+    <p>
+      A priority-105 flow which sets <code>reg0[7] = 1</code> for traffic
+      that matches the condition set in
+      <ref column="other_config:acl-stateful-bypass"/> and advances to next
+      table. <code>reg0[7]</code> acts as a hint for tables
+      <code>Pre-Stateful</code> and <code>ACL</code> to avoid sending this
+      traffic to the connection tracker.
     </p>
 
     <p>

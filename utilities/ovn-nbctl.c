@@ -2079,6 +2079,16 @@ nbctl_acl_list(struct ctl_context *ctx)
         return;
     }
 
+    if (ls) {
+        const char *stateful_bypass = smap_get(&ls->other_config,
+                                               "acl-stateful-bypass");
+
+        if (stateful_bypass) {
+            ds_put_format(&ctx->output, "Stateful bypass rule match: %s\n",
+                          stateful_bypass);
+        }
+    }
+
     size_t n_acls = pg ? pg->n_acls : ls->n_acls;
     struct nbrec_acl **nb_acls = pg ? pg->acls : ls->acls;
 
