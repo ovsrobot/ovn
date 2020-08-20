@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
-    "version": "5.25.0",
-    "cksum": "1354137211 26116",
+    "version": "5.26.0",
+    "cksum": "1450952466 27225",
     "tables": {
         "NB_Global": {
             "columns": {
@@ -35,6 +35,12 @@
                                            "refType": "strong"},
                                    "min": 0,
                                    "max": "unlimited"}},
+                "stateless_filters": {
+                    "type": {"key": {"type": "uuid",
+                                     "refTable": "Stateless_Filter",
+                                     "refType": "strong"},
+                             "min": 0,
+                             "max": "unlimited"}},
                 "acls": {"type": {"key": {"type": "uuid",
                                           "refTable": "ACL",
                                           "refType": "strong"},
@@ -150,6 +156,12 @@
                                            "refType": "weak"},
                                    "min": 0,
                                    "max": "unlimited"}},
+                "stateless_filters": {
+                    "type": {"key": {"type": "uuid",
+                                     "refTable": "Stateless_Filter",
+                                     "refType": "strong"},
+                             "min": 0,
+                             "max": "unlimited"}},
                 "acls": {"type": {"key": {"type": "uuid",
                                           "refTable": "ACL",
                                           "refType": "strong"},
@@ -197,6 +209,16 @@
                               "value": "string",
                               "min": 0,
                               "max": "unlimited"}},
+                "external_ids": {
+                    "type": {"key": "string", "value": "string",
+                             "min": 0, "max": "unlimited"}}},
+            "isRoot": false},
+        "Stateless_Filter": {
+            "columns": {
+                "priority": {"type": {"key": {"type": "integer",
+                                              "minInteger": 0,
+                                              "maxInteger": 32767}}},
+                "match": {"type": "string"},
                 "external_ids": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}}},

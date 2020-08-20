@@ -271,9 +271,16 @@
       ip addresses.
     </column>
 
-    <column name="acls">
-      Access control rules that apply to packets within the logical switch.
-    </column>
+    <group title="ACL processing">
+      <column name="acls">
+        Access control rules that apply to packets within the logical switch.
+      </column>
+
+      <column name="stateless_filters">
+        Stateless filters to bypass connection tracking that apply to packets
+        within the logical switch.
+      </column>
+    </group>
 
     <column name="qos_rules">
       QoS marking and metering rules that apply to packets within the
@@ -1430,6 +1437,11 @@
       lswitches that the ports of the port group belong to.
     </column>
 
+    <column name="stateless_filters">
+      Stateless filters to bypass connection tracking that apply to the
+      port_group.
+    </column>
+
     <group title="Common Columns">
       <column name="external_ids">
         See <em>External IDs</em> at the beginning of this document.
@@ -1582,6 +1594,45 @@
       </column>
     </group>
 
+    <group title="Common Columns">
+      <column name="external_ids">
+        See <em>External IDs</em> at the beginning of this document.
+      </column>
+    </group>
+  </table>
+
+  <table name="Stateless_Filter" title="Filters to bypass ACL processing">
+    <p>
+      Each row in this table represents a rule to determine if traffic should
+      be processed in a stateless way in the ACL stage, without recirculating
+      through connection tracking, regardless of the type of ACL that is hit.
+
+      In normal operation, whenever an ACL associated to a Logical_Switch
+      has action <code>allow-related</code>, all IP traffic gets sent
+      to conntrack and related traffic is allowed.
+
+      If <ref column="match"/> is set to <code>E</code> all
+      <code>allow</code> and <code>allow-related</code> ACLs that match
+      packets for which <code>E</code> is true are applied
+      in a stateless way, without recirculating through connection tracking.
+
+      This also implies that the CMS should add an explicit <code>allow</code>
+      ACL for return traffic, because return traffic will not go to conntrack
+      either so it has to be explicitly allowed.
+
+      This is useful when some specific types of traffic do not need
+      stateful processing.
+    </p>
+    <column name="priority">
+      The priority of the filter rule.  Rules with numerically higher priority
+      take precedence.
+    </column>
+    <column name="match">
+      The packets that the stateless filter should match, in the same
+      expression language used for the <ref column="match" table="Logical_Flow"
+      db="OVN_Southbound"/> column in the OVN Southbound database's
+      <ref table="Logical_Flow" db="OVN_Southbound"/> table.
+    </column>
     <group title="Common Columns">
       <column name="external_ids">
         See <em>External IDs</em> at the beginning of this document.

@@ -601,6 +601,17 @@ ACL commands:\n\
   acl-list {SWITCH | PORTGROUP}\n\
                             print ACLs for SWITCH\n\
 \n\
+Stateless filter commands:\n\
+  [--type={switch | port-group}] [--may-exist]\n\
+  stateless-filter-add {SWITCH | PORTGROUP} PRIORITY MATCH \n\
+                            add a stateless filter to SWITCH/PORTGROUP\n\
+  [--type={switch | port-group}]\n\
+  stateless-filter-del {SWITCH | PORTGROUP} [PRIORITY MATCH]\n\
+                            remove stateless filters from SWITCH/PORTGROUP\n\
+  [--type={switch | port-group}]\n\
+  stateless-filter-list {SWITCH | PORTGROUP}\n\
+                            print stateless filters for SWITCH\n\
+\n\
 QoS commands:\n\
   qos-add SWITCH DIRECTION PRIORITY MATCH [rate=RATE [burst=BURST]] [dscp=DSCP]\n\
                             add an QoS rule to SWITCH\n\
@@ -725,7 +736,8 @@ LB commands:\n\
   ls-lb-add SWITCH LB       add a load-balancer to SWITCH\n\
   ls-lb-del SWITCH [LB]     remove load-balancers from SWITCH\n\
   ls-lb-list SWITCH         print load-balancers\n\
-\n\
+\n\n",program_name, program_name);
+    printf("\
 DHCP Options commands:\n\
   dhcp-options-create CIDR [EXTERNAL_IDS]\n\
                            create a DHCP options row with CIDR\n\
@@ -743,8 +755,7 @@ Connection commands:\n\
   del-connection             delete the connections\n\
   [--inactivity-probe=MSECS]\n\
   set-connection TARGET...   set the list of connections to TARGET...\n\
-\n\n",program_name, program_name);
-    printf("\
+\n\
 SSL commands:\n\
   get-ssl                     print the SSL configuration\n\
   del-ssl                     delete the SSL configuration\n\
@@ -2021,9 +2032,9 @@ acl_cmp(const void *acl1_, const void *acl2_)
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-acl_cmd_get_pg_or_ls(struct ctl_context *ctx,
-                     const struct nbrec_logical_switch **ls,
-                     const struct nbrec_port_group **pg)
+cmd_get_pg_or_ls(struct ctl_context *ctx,
+                 const struct nbrec_logical_switch **ls,
+                 const struct nbrec_port_group **pg)
 {
     const char *opt_type = shash_find_data(&ctx->options, "--type");
     char *error;
@@ -2073,7 +2084,7 @@ nbctl_acl_list(struct ctl_context *ctx)
     const struct nbrec_acl **acls;
     size_t i;
 
-    char *error = acl_cmd_get_pg_or_ls(ctx, &ls, &pg);
+    char *error = cmd_get_pg_or_ls(ctx, &ls, &pg);
     if (error) {
         ctx->error = error;
         return;
@@ -2173,7 +2184,7 @@ nbctl_acl_add(struct ctl_context *ctx)
     const struct nbrec_port_group *pg = NULL;
     const char *action = ctx->argv[5];
 
-    char *error = acl_cmd_get_pg_or_ls(ctx, &ls, &pg);
+    char *error = cmd_get_pg_or_ls(ctx, &ls, &pg);
     if (error) {
         ctx->error = error;
         return;
@@ -2264,7 +2275,7 @@ nbctl_acl_del(struct ctl_context *ctx)
     const struct nbrec_logical_switch *ls = NULL;
     const struct nbrec_port_group *pg = NULL;
 
-    char *error = acl_cmd_get_pg_or_ls(ctx, &ls, &pg);
+    char *error = cmd_get_pg_or_ls(ctx, &ls, &pg);
     if (error) {
         ctx->error = error;
         return;
@@ -2346,6 +2357,181 @@ nbctl_acl_del(struct ctl_context *ctx)
                                               n_acls - 1);
             }
             free(new_acls);
+            return;
+        }
+    }
+}
+
+static int
+stateless_filter_cmp(const void *filter1_, const void *filter2_)
+{
+    const struct nbrec_stateless_filter *const *filter1p = filter1_;
+    const struct nbrec_stateless_filter *const *filter2p = filter2_;
+    const struct nbrec_stateless_filter *filter1 = *filter1p;
+    const struct nbrec_stateless_filter *filter2 = *filter2p;
+
+    if (filter1->priority != filter2->priority) {
+        return filter1->priority > filter2->priority ? -1 : 1;
+    } else {
+        return strcmp(filter1->match, filter2->match);
+    }
+}
+
+static void
+nbctl_stateless_filter_list(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch *ls = NULL;
+    const struct nbrec_port_group *pg = NULL;
+    const struct nbrec_stateless_filter **filters;
+    size_t i;
+
+    char *error = cmd_get_pg_or_ls(ctx, &ls, &pg);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    size_t n_filters = pg ? pg->n_stateless_filters : ls->n_stateless_filters;
+    struct nbrec_stateless_filter **nb_filters = pg
+                                                 ? pg->stateless_filters
+                                                 : ls->stateless_filters;
+
+    filters = xmalloc(sizeof *filters * n_filters);
+    for (i = 0; i < n_filters; i++) {
+        filters[i] = nb_filters[i];
+    }
+
+    qsort(filters, n_filters, sizeof *filters, stateless_filter_cmp);
+
+    for (i = 0; i < n_filters; i++) {
+        const struct nbrec_stateless_filter *filter = filters[i];
+        ds_put_format(&ctx->output, "%5"PRId64" (%s)\n",
+                      filter->priority, filter->match);
+    }
+
+    free(filters);
+}
+
+static void
+nbctl_stateless_filter_add(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch *ls = NULL;
+    const struct nbrec_port_group *pg = NULL;
+
+    char *error = cmd_get_pg_or_ls(ctx, &ls, &pg);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    int64_t priority;
+    error = parse_priority(ctx->argv[2], &priority);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    /* Create the filter. */
+    struct nbrec_stateless_filter *filter =
+        nbrec_stateless_filter_insert(ctx->txn);
+    nbrec_stateless_filter_set_priority(filter, priority);
+    nbrec_stateless_filter_set_match(filter, ctx->argv[3]);
+
+    /* Check if same filter already exists for the ls/portgroup */
+    size_t n_filters = pg ? pg->n_stateless_filters : ls->n_stateless_filters;
+    struct nbrec_stateless_filter **filters = pg
+                                              ? pg->stateless_filters
+                                              : ls->stateless_filters;
+    for (size_t i = 0; i < n_filters; i++) {
+        if (!stateless_filter_cmp(&filters[i], &filter)) {
+            bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
+            if (!may_exist) {
+                ctl_error(ctx,
+                          "Same filter already existed on ls or pg %s.",
+                          ctx->argv[1]);
+                return;
+            }
+            return;
+        }
+    }
+
+    /* Insert the filter into the logical switch/port group. */
+    struct nbrec_stateless_filter **new_filters =
+        xmalloc(sizeof *new_filters * (n_filters + 1));
+    nullable_memcpy(new_filters, filters, sizeof *new_filters * n_filters);
+    new_filters[n_filters] = filter;
+    if (pg) {
+        nbrec_port_group_verify_stateless_filters(pg);
+        nbrec_port_group_set_stateless_filters(pg, new_filters,
+                                               n_filters + 1);
+    } else {
+        nbrec_logical_switch_verify_stateless_filters(ls);
+        nbrec_logical_switch_set_stateless_filters(ls, new_filters,
+                                                   n_filters + 1);
+    }
+    free(new_filters);
+}
+
+static void
+nbctl_stateless_filter_del(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch *ls = NULL;
+    const struct nbrec_port_group *pg = NULL;
+
+    char *error = cmd_get_pg_or_ls(ctx, &ls, &pg);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    if (ctx->argc == 2) {
+        /* If priority and match are not specified, delete filters. */
+        if (pg) {
+            nbrec_port_group_verify_stateless_filters(pg);
+            nbrec_port_group_set_stateless_filters(pg, NULL, 0);
+        } else {
+            nbrec_logical_switch_verify_stateless_filters(ls);
+            nbrec_logical_switch_set_stateless_filters(ls, NULL, 0);
+        }
+        return;
+    }
+
+    int64_t priority;
+    error = parse_priority(ctx->argv[2], &priority);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    if (ctx->argc == 3) {
+        ctl_error(ctx, "cannot specify priority without match");
+        return;
+    }
+
+    size_t n_filters = pg ? pg->n_stateless_filters : ls->n_stateless_filters;
+    struct nbrec_stateless_filter **filters = pg
+                                              ? pg->stateless_filters
+                                              : ls->stateless_filters;
+
+    /* Remove the matching rule. */
+    for (size_t i = 0; i < n_filters; i++) {
+        struct nbrec_stateless_filter *filter = filters[i];
+
+        if (priority == filter->priority
+            && !strcmp(ctx->argv[3], filter->match)) {
+            struct nbrec_stateless_filter **new_filters
+                = xmemdup(filters, sizeof *new_filters * n_filters);
+            new_filters[i] = filters[n_filters - 1];
+            if (pg) {
+                nbrec_port_group_verify_stateless_filters(pg);
+                nbrec_port_group_set_stateless_filters(pg, new_filters,
+                                                       n_filters - 1);
+            } else {
+                nbrec_logical_switch_verify_stateless_filters(ls);
+                nbrec_logical_switch_set_stateless_filters(ls, new_filters,
+                                                           n_filters - 1);
+            }
+            free(new_filters);
             return;
         }
     }
@@ -6282,6 +6468,15 @@ static const struct ctl_command_syntax nbctl_commands[] = {
       NULL, nbctl_acl_del, NULL, "--type=", RW },
     { "acl-list", 1, 1, "{SWITCH | PORTGROUP}",
       NULL, nbctl_acl_list, NULL, "--type=", RO },
+
+    /* stateless filter commands. */
+    { "stateless-filter-add", 3, 4, "{SWITCH | PORTGROUP} PRIORITY MATCH",
+      NULL, nbctl_stateless_filter_add, NULL,
+      "--may-exist,--type=", RW },
+    { "stateless-filter-del", 1, 4, "{SWITCH | PORTGROUP} [PRIORITY MATCH]",
+      NULL, nbctl_stateless_filter_del, NULL, "--type=", RW },
+    { "stateless-filter-list", 1, 1, "{SWITCH | PORTGROUP}",
+      NULL, nbctl_stateless_filter_list, NULL, "--type=", RO },
 
     /* qos commands. */
     { "qos-add", 5, 7,

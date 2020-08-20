@@ -232,6 +232,17 @@ class StaticRouteHintHandler(CookieHandlerByUUUID):
                     route.ip_prefix, route.nexthop, route.output_port,
                     route.policy))
 
+class StatelessFilterHintHandler(CookieHandlerByUUUID):
+    def __init__(self, ovnnb_db):
+        super(StatelessFilterHintHandler, self).__init__(ovnnb_db,
+                                                         'Stateless_Filter')
+
+    def print_record(self, s_filter):
+        output = 'Stateless_Filter: priority=%s, match=(%s)' % (
+            s_filter.priority,
+            s_filter.match.strip('"'))
+        print_h(output)
+
 class QoSHintHandler(CookieHandlerByUUUID):
     def __init__(self, ovnnb_db):
         super(QoSHintHandler, self).__init__(ovnnb_db, 'QoS')
@@ -254,6 +265,7 @@ class LogicalFlowHandler(CookieHandlerByUUUID):
             LoadBalancerHintHandler(ovnnb_db),
             NATHintHandler(ovnnb_db),
             StaticRouteHintHandler(ovnnb_db),
+            StatelessFilterHintHandler(ovnnb_db),
             QoSHintHandler(ovnnb_db),
         ]
 

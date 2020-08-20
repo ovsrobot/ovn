@@ -322,6 +322,16 @@
     </p>
 
     <p>
+      For each record in table <code>Stateful_Filter</code> in the
+      <code>OVN_Northbound</code> database, a flow with
+      <code>priority + 1000</code> is added and sets <code>reg0[7] = 1</code>
+      for traffic that matches the condition in the <code>match</code>
+      column and advances to next table.  <code>reg0[7]</code> acts as a hint
+      for tables <code>Pre-Stateful</code> and <code>ACL</code> to avoid
+      sending this traffic to the connection tracker.
+    </p>
+
+    <p>
       This table also has a priority-110 flow with the match
       <code>eth.dst == <var>E</var></code> for all logical switch
       datapaths to move traffic to the next table. Where <var>E</var>
@@ -1380,6 +1390,16 @@ output;
     <p>
       This is similar to ingress table <code>Pre-ACLs</code> except for
      <code>to-lport</code> traffic.
+    </p>
+
+    <p>
+      For each record in table <code>Stateful_Filter</code> in the
+      <code>OVN_Northbound</code> database, a flow with
+      <code>priority + 1000</code> is added and sets <code>reg0[7] = 1</code>
+      for traffic that matches the condition in the <code>match</code>
+      column and advances to next table.  <code>reg0[7]</code> acts as a hint
+      for tables <code>Pre-Stateful</code> and <code>ACL</code> to avoid
+      sending this traffic to the connection tracker.
     </p>
 
     <p>
