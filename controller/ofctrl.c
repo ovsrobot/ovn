@@ -55,11 +55,30 @@ VLOG_DEFINE_THIS_MODULE(ofctrl);
 struct ovn_flow {
     struct hmap_node match_hmap_node; /* For match based hashing. */
     struct ovs_list list_node; /* For handling lists of flows. */
-    struct ovs_list references; /* A list of struct sb_flow_ref nodes, which
-                                   references this flow. (There are cases
-                                   that multiple SB entities share the same
-                                   desired OpenFlow flow, e.g. when
-                                   conjunction is used.) */
+
+    /* For a flow in desired table, this field maintains a list of struct
+     * sb_flow_ref nodes, which references this flow. (There are cases that
+     * multiple SB entities share the same desired OpenFlow flow, e.g. when
+     * conjunction is used.)
+     *
+     * For a flow in installed table, this field maintains a list of desired
+     * ovn_flow nodes (linked by ovn_flow.installed_ref_list_node), which
+     * reference this installed flow.  (There are cases that multiple desired
+     * flows reference the same installed flow, e.g. when there are
+     * conflict/duplicated ACLs that generates same match conditions). */
+    struct ovs_list references;
+
+    /* For a flow in desired table, this field represents the corresponding
+     * flow in installed table.
+     *
+     * For a flow in installed table, this field represents the corresponding
+     * flow in desired table. It must be one of the flows in references list.
+     * If there are more than one flows in references list, this is the one
+     * that is actually installed. */
+    struct ovn_flow *peer;
+
+    /* For desired flows only: node in references list. */
+    struct ovs_list installed_ref_list_node;
 
     /* Key. */
     uint8_t table_id;
@@ -661,6 +680,45 @@ ofctrl_recv(const struct ofp_header *oh, enum ofptype type)
     }
 }
 
+static void
+link_installed_to_desired(struct ovn_flow *i, struct ovn_flow *d)
+{
+    if (i->peer == d) {
+        return;
+    }
+
+    if (ovs_list_is_empty(&i->references)) {
+        ovs_assert(!i->peer);
+        i->peer = d;
+    }
+    ovs_list_insert(&i->references, &d->installed_ref_list_node);
+    d->peer = i;
+}
+
+static void
+unlink_installed_to_desired(struct ovn_flow *i, struct ovn_flow *d)
+{
+    ovs_assert(i && i->peer && !ovs_list_is_empty(&i->references));
+    ovs_assert(d && d->peer == i);
+    ovs_list_remove(&d->installed_ref_list_node);
+    d->peer = NULL;
+    if (i->peer == d) {
+        i->peer = ovs_list_is_empty(&i->references) ? NULL :
+            CONTAINER_OF(ovs_list_front(&i->references),
+                         struct ovn_flow,
+                         installed_ref_list_node);
+    }
+}
+
+static void
+unlink_all_refs_for_installed_flow(struct ovn_flow *i)
+{
+    struct ovn_flow *d, *next;
+    LIST_FOR_EACH_SAFE (d, next, installed_ref_list_node, &i->references) {
+        unlink_installed_to_desired(i, d);
+    }
+}
+
 static struct sb_to_flow *
 sb_to_flow_find(struct hmap *uuid_flow_table, const struct uuid *sb_uuid)
 {
@@ -812,6 +870,9 @@ remove_flows_from_sb_to_flow(struct ovn_desired_flow_table *flow_table,
             }
             hmap_remove(&flow_table->match_flow_table,
                         &f->match_hmap_node);
+            if (f->peer) {
+                unlink_installed_to_desired(f->peer, f);
+            }
             ovn_flow_destroy(f);
         }
     }
@@ -887,6 +948,9 @@ flood_remove_flows_for_sb_uuid(struct ovn_desired_flow_table *flow_table,
              * be empty in most cases. */
             hmap_remove(&flow_table->match_flow_table,
                         &f->match_hmap_node);
+            if (f->peer) {
+                unlink_installed_to_desired(f->peer, f);
+            }
             ovn_flow_destroy(f);
         } else {
             ovs_list_insert(&to_be_removed, &f->list_node);
@@ -921,6 +985,9 @@ flood_remove_flows_for_sb_uuid(struct ovn_desired_flow_table *flow_table,
         ovs_list_remove(&f->list_node);
         hmap_remove(&flow_table->match_flow_table,
                     &f->match_hmap_node);
+        if (f->peer) {
+            unlink_installed_to_desired(f->peer, f);
+        }
         ovn_flow_destroy(f);
     }
 
@@ -952,6 +1019,8 @@ ovn_flow_alloc(uint8_t table_id, uint16_t priority, uint64_t cookie,
     struct ovn_flow *f = xmalloc(sizeof *f);
     ovs_list_init(&f->references);
     ovs_list_init(&f->list_node);
+    ovs_list_init(&f->installed_ref_list_node);
+    f->peer = NULL;
     f->table_id = table_id;
     f->priority = priority;
     minimatch_init(&f->match, match);
@@ -977,6 +1046,9 @@ ovn_flow_dup(struct ovn_flow *src)
 {
     struct ovn_flow *dst = xmalloc(sizeof *dst);
     ovs_list_init(&dst->references);
+    ovs_list_init(&dst->list_node);
+    ovs_list_init(&dst->installed_ref_list_node);
+    dst->peer = NULL;
     dst->table_id = src->table_id;
     dst->priority = src->priority;
     minimatch_clone(&dst->match, &src->match);
@@ -1050,6 +1122,7 @@ ovn_flow_destroy(struct ovn_flow *f)
 {
     if (f) {
         ovs_assert(ovs_list_is_empty(&f->references));
+        ovs_assert(!f->peer);
         minimatch_destroy(&f->match);
         free(f->ofpacts);
         free(f);
@@ -1088,6 +1161,7 @@ ovn_installed_flow_table_clear(void)
     struct ovn_flow *f, *next;
     HMAP_FOR_EACH_SAFE (f, next, match_hmap_node, &installed_flows) {
         hmap_remove(&installed_flows, &f->match_hmap_node);
+        unlink_all_refs_for_installed_flow(f);
         ovn_flow_destroy(f);
     }
 }
@@ -1413,6 +1487,7 @@ ofctrl_put(struct ovn_desired_flow_table *flow_table,
      * actions, update them. */
     struct ovn_flow *i, *next;
     HMAP_FOR_EACH_SAFE (i, next, match_hmap_node, &installed_flows) {
+        unlink_all_refs_for_installed_flow(i);
         struct ovn_flow *d = ovn_flow_lookup(&flow_table->match_flow_table,
                                              i, NULL);
         if (!d) {
@@ -1458,6 +1533,7 @@ ofctrl_put(struct ovn_desired_flow_table *flow_table,
                 i->ofpacts = xmemdup(d->ofpacts, d->ofpacts_len);
                 i->ofpacts_len = d->ofpacts_len;
             }
+            link_installed_to_desired(i, d);
 
         }
     }
@@ -1482,10 +1558,11 @@ ofctrl_put(struct ovn_desired_flow_table *flow_table,
             ovn_flow_log(d, "adding installed");
 
             /* Copy 'd' from 'flow_table' to installed_flows. */
-            struct ovn_flow *new_node = ovn_flow_dup(d);
-            hmap_insert(&installed_flows, &new_node->match_hmap_node,
-                        new_node->match_hmap_node.hash);
+            i= ovn_flow_dup(d);
+            hmap_insert(&installed_flows, &i->match_hmap_node,
+                        i->match_hmap_node.hash);
         }
+        link_installed_to_desired(i, d);
     }
 
     /* Iterate through the installed groups from previous runs. If they
