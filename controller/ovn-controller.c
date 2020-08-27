@@ -2400,6 +2400,8 @@ main(int argc, char *argv[])
                 ovsrec_open_vswitch_table_get(ovs_idl_loop.idl);
             const struct sbrec_chassis_table *chassis_table =
                 sbrec_chassis_table_get(ovnsb_idl_loop.idl);
+            const struct sbrec_chassis_private_table *chassis_pvt_table =
+                sbrec_chassis_private_table_get(ovnsb_idl_loop.idl);
             const struct ovsrec_bridge *br_int =
                 process_br_int(ovs_idl_txn, bridge_table, ovs_table);
             const char *chassis_id = get_ovs_chassis_id(ovs_table);
@@ -2408,7 +2410,8 @@ main(int argc, char *argv[])
             if (chassis_id) {
                 chassis = chassis_run(ovnsb_idl_txn, sbrec_chassis_by_name,
                                       sbrec_chassis_private_by_name,
-                                      ovs_table, chassis_table, chassis_id,
+                                      ovs_table, chassis_table,
+                                      chassis_pvt_table, chassis_id,
                                       br_int, &transport_zones,
                                       &chassis_private);
             }
