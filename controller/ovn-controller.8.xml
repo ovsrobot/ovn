@@ -233,6 +233,18 @@
         The boolean flag indicates if the chassis is used as an
         interconnection gateway.
       </dd>
+
+      <dt><code>external_ids:ovn-delay-nb-cfg-report</code></dt>
+      <dd>
+        An integer that represents the time (in seconds) to sleep before
+        <code>ovn-controller</code> updating <code>nb_cfg</code> column
+        of <code>Chassis_Private</code> table after it completes processing
+        the corresponding changes. By default it is 0 (meaning do not sleep).
+        This value can be configured when doing control plane latency testing,
+        to make sure the updates of <code>nb_cfg</code> to the Southbound DB
+        from a large number of hypervisors do not interfere with the original
+        Southbound DB data processing.
+      </dd>
     </dl>
 
     <p>

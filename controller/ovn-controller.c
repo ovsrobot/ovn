@@ -2568,6 +2568,15 @@ main(int argc, char *argv[])
                     sbrec_chassis_private_set_nb_cfg(chassis_private, cur_cfg);
                     sbrec_chassis_private_set_nb_cfg_timestamp(
                         chassis_private, time_wall_msec());
+                    const struct ovsrec_open_vswitch *cfg =
+                        ovsrec_open_vswitch_first(ovs_idl_loop.idl);
+                    if (cfg) {
+                        int delay_cfg_report = smap_get_int(&cfg->external_ids,
+                                               "ovn-delay-nb-cfg-report", 0);
+                        if (delay_cfg_report) {
+                            xsleep(delay_cfg_report);
+                        }
+                    }
                 }
             }
 
