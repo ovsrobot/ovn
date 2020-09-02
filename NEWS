@@ -11,6 +11,10 @@ Post-v20.06.0
      called Chassis_Private now contains the nb_cfg column which is updated
      by incrementing the value in the NB_Global table, CMSes relying on
      this mechanism should update their code to use this new table.
+   - Added support for multiple ovn-controller instances on the same host
+     (virtual chassis). Now bridge, tunnel type, IP, and chassis name can be
+     customized for each controller instance running on the same host. Chassis
+     name can be passed via config file or CLI.
 
 OVN v20.06.0
 --------------------------

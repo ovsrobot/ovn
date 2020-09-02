@@ -240,10 +240,12 @@
 
     <column name="name">
       OVN does not prescribe a particular format for chassis names.
-      ovn-controller populates this column using <ref key="system-id"
-      table="Open_vSwitch" column="external_ids" db="Open_vSwitch"/>
-      in the Open_vSwitch database's <ref table="Open_vSwitch"
-      db="Open_vSwitch"/> table.  ovn-controller-vtep populates this
+      ovn-controller populates this column using the <code>system-id</code>
+      configuration file, or <code>-n</code> CLI argument, or
+      <ref key="system-id" table="Open_vSwitch" column="external_ids"
+      db="Open_vSwitch"/> in the Open_vSwitch database's
+      <ref table="Open_vSwitch" db="Open_vSwitch"/> table.
+      ovn-controller-vtep populates this
       column with <ref table="Physical_Switch" column="name"
       db="hardware_vtep"/> in the hardware_vtep database's
       <ref table="Physical_Switch" db="hardware_vtep"/> table.

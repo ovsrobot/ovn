@@ -271,8 +271,27 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
         return false;
     }
 
-    const char *encap_type = smap_get(&cfg->external_ids, "ovn-encap-type");
-    const char *encap_ips = smap_get(&cfg->external_ids, "ovn-encap-ip");
+    const char *encap_type = NULL;
+    const char *chassis_id = get_ovs_chassis_id(cfg);
+    if (chassis_id != NULL) {
+        char *type_key = xasprintf("ovn-encap-type-%s", chassis_id);
+        encap_type = smap_get(&cfg->external_ids, type_key);
+        free(type_key);
+    }
+    if (!encap_type) {
+        encap_type = smap_get(&cfg->external_ids, "ovn-encap-type");
+    }
+
+    const char *encap_ips = NULL;
+    if (chassis_id != NULL) {
+        char *ip_key = xasprintf("ovn-encap-ip-%s", chassis_id);
+        encap_ips = smap_get(&cfg->external_ids, ip_key);
+        free(ip_key);
+    }
+    if (!encap_ips) {
+        encap_ips = smap_get(&cfg->external_ids, "ovn-encap-ip");
+    }
+
     if (!encap_type || !encap_ips) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_INFO_RL(&rl, "Need to specify an encap type and ip");

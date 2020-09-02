@@ -32,6 +32,7 @@ struct ovsrec_port_table;
 struct ovsrec_qos_table;
 struct ovsrec_bridge_table;
 struct ovsrec_open_vswitch_table;
+struct ovsrec_open_vswitch;
 struct sbrec_chassis;
 struct sbrec_port_binding_table;
 struct sset;
