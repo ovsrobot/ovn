@@ -270,6 +270,59 @@ AT_CHECK([ovn-nbctl --type=port-group acl-add ls0 to-lport 100 ip drop], [0], [i
 
 dnl ---------------------------------------------------------------------
 
+OVN_NBCTL_TEST([ovn_nbctl_stateless_filters], [Stateless_Filters], [
+ovn_nbctl_test_stateless_filters() {
+   AT_CHECK([ovn-nbctl $2 stateless-filter-add $1 300 udp])
+   AT_CHECK([ovn-nbctl $2 stateless-filter-add $1 200 tcp])
+   AT_CHECK([ovn-nbctl $2 stateless-filter-add $1 100 ip])
+   dnl Add duplicated Stateless_Filter
+   AT_CHECK([ovn-nbctl $2 stateless-filter-add $1 100 ip], [1], [], [stderr])
+   AT_CHECK([grep 'already existed' stderr], [0], [ignore])
+   AT_CHECK([ovn-nbctl $2 --may-exist stateless-filter-add $1 100 ip])
+
+   AT_CHECK([ovn-nbctl $2 stateless-filter-list $1], [0], [dnl
+  300 (udp)
+  200 (tcp)
+  100 (ip)
+])
+
+   dnl Delete all Stateless_Filters.
+   AT_CHECK([ovn-nbctl $2 stateless-filter-del $1])
+   AT_CHECK([ovn-nbctl $2 stateless-filter-list $1], [0], [dnl
+])
+
+   AT_CHECK([ovn-nbctl $2 stateless-filter-add $1 300 udp])
+   AT_CHECK([ovn-nbctl $2 stateless-filter-add $1 200 tcp])
+   AT_CHECK([ovn-nbctl $2 stateless-filter-add $1 100 ip])
+
+   dnl Delete a single filter.
+   AT_CHECK([ovn-nbctl $2 stateless-filter-del $1 200 tcp])
+   AT_CHECK([ovn-nbctl $2 stateless-filter-list $1], [0], [dnl
+  300 (udp)
+  100 (ip)
+])
+}
+
+AT_CHECK([ovn-nbctl ls-add ls0])
+ovn_nbctl_test_stateless_filters ls0
+AT_CHECK([ovn-nbctl ls-add ls1])
+ovn_nbctl_test_stateless_filters ls1 --type=switch
+AT_CHECK([ovn-nbctl create port_group name=pg0], [0], [ignore])
+ovn_nbctl_test_stateless_filters pg0 --type=port-group
+
+dnl Test when port group doesn't exist
+AT_CHECK([ovn-nbctl --type=port-group stateless-filter-add pg1 100 ip], [1], [], [dnl
+ovn-nbctl: pg1: port group name not found
+])
+
+dnl Test when same name exists in logical switches and portgroups
+AT_CHECK([ovn-nbctl create port_group name=ls0], [0], [ignore])
+AT_CHECK([ovn-nbctl stateless-filter-add ls0 100 ip], [1], [], [stderr])
+AT_CHECK([grep 'exists in both' stderr], [0], [ignore])
+AT_CHECK([ovn-nbctl --type=port-group stateless-filter-add ls0 100 ip], [0], [ignore])])
+
+dnl ---------------------------------------------------------------------
+
 OVN_NBCTL_TEST([ovn_nbctl_qos], [QoS], [
 AT_CHECK([ovn-nbctl ls-add ls0])
 AT_CHECK([ovn-nbctl qos-add ls0 from-lport 600 tcp dscp=63])

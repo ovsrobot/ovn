@@ -11,6 +11,9 @@ Post-v20.06.0
      called Chassis_Private now contains the nb_cfg column which is updated
      by incrementing the value in the NB_Global table, CMSes relying on
      this mechanism should update their code to use this new table.
+   - Added support for bypassing connection tracking for ACL processing for
+     specific types of traffic through the user supplied Stateless_Filter
+     configuration.
 
 OVN v20.06.0
 --------------------------

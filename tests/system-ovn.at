@@ -5397,3 +5397,116 @@ as
 OVS_TRAFFIC_VSWITCHD_STOP(["/.*error receiving.*/d
 /.*terminating with signal 15.*/d"])
 AT_CLEANUP
+
+AT_SETUP([ovn -- ACL Stateful Bypass + Load balancer])
+AT_SKIP_IF([test $HAVE_NC = no])
+AT_KEYWORDS([lb])
+AT_KEYWORDS([conntrack])
+ovn_start
+
+OVS_TRAFFIC_VSWITCHD_START()
+ADD_BR([br-int])
+
+# Set external-ids in br-int needed for ovn-controller
+ovs-vsctl \
+        -- set Open_vSwitch . external-ids:system-id=hv1 \
+        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+        -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+        -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+        -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+# Start ovn-controller
+start_daemon ovn-controller
+
+# Logical network:
+# One logical switch with a load balancer with one backend.
+# On the LS we add "allow" ACLs for TCP and "allow-related" ACLs for UDP.
+# The "allow-related" ACL normally forces all traffic to go to conntrack.
+# We enable ACL stateful bypass for TCP so TCP traffic should not be
+# sent to conntrack for ACLs (only for LB).
+
+ovn-nbctl ls-add ls
+ovn-nbctl lsp-add ls lsp1
+ovn-nbctl lsp-set-addresses lsp1 00:00:00:00:00:01
+ovn-nbctl lsp-add ls lsp2
+ovn-nbctl lsp-set-addresses lsp2 00:00:00:00:00:02
+
+ovn-nbctl acl-add ls from-lport 3 "tcp" allow
+ovn-nbctl acl-add ls from-lport 2 "udp" allow-related
+ovn-nbctl acl-add ls from-lport 1 "ip" drop
+
+ovn-nbctl lr-add rtr
+ovn-nbctl lrp-add rtr rtr-ls 00:00:00:00:01:00 42.42.42.254/24
+ovn-nbctl lsp-add ls ls-rtr                       \
+    -- lsp-set-type ls-rtr router                 \
+    -- lsp-set-addresses ls-rtr 00:00:00:00:01:00 \
+    -- lsp-set-options ls-rtr router-port=rtr-ls
+
+# Add a load balancer.
+ovn-nbctl lb-add lb-tcp 66.66.66.66:80 42.42.42.2:8080 tcp
+ovn-nbctl lb-add lb-udp 66.66.66.66:80 42.42.42.2:8080 udp
+ovn-nbctl ls-lb-add ls lb-tcp
+ovn-nbctl ls-lb-add ls lb-udp
+
+# Enable Stateful Bypass for TCP.
+ovn-nbctl \
+    --id=@f1 create Stateless_Filter priority=1 match="tcp" -- \
+    set Logical_Switch ls stateless_filters='@f1'
+
+ADD_NAMESPACES(lsp1)
+ADD_VETH(lsp1, lsp1, br-int, "42.42.42.1/24", "00:00:00:00:00:01", \
+         "42.42.42.254")
+
+ADD_NAMESPACES(lsp2)
+ADD_VETH(lsp2, lsp2, br-int, "42.42.42.2/24", "00:00:00:00:00:02", \
+         "42.42.42.254")
+
+ovn-nbctl --wait=hv sync
+
+# Start a UDP server on lsp2.
+NETNS_DAEMONIZE([lsp2], [nc -l --no-shutdown -u 42.42.42.2 8080], [nc2.pid])
+
+# Start a UDP connection.
+NS_CHECK_EXEC([lsp1], [echo "foo" | nc --no-shutdown -u 66.66.66.66 80])
+
+# There should be 2 UDP conntrack entries:
+# - one for the allow-related ACL.
+# - one for the LB dnat.
+OVS_WAIT_UNTIL([test "$(ovs-appctl dpctl/dump-conntrack | grep udp | grep '42.42.42.1' -c)" = "2"])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT_STATE(42.42.42.1) | grep udp | \
+sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
+udp,orig=(src=42.42.42.1,dst=42.42.42.2,sport=<cleared>,dport=<cleared>),reply=(src=42.42.42.2,dst=42.42.42.1,sport=<cleared>,dport=<cleared>),zone=<cleared>
+udp,orig=(src=42.42.42.1,dst=66.66.66.66,sport=<cleared>,dport=<cleared>),reply=(src=42.42.42.2,dst=42.42.42.1,sport=<cleared>,dport=<cleared>),zone=<cleared>,labels=0x2
+])
+
+# Start a TCP server on lsp2.
+NETNS_DAEMONIZE([lsp2], [nc -l --no-shutdown 42.42.42.2 8080], [nc0.pid])
+
+# Start a TCP connection.
+NETNS_DAEMONIZE([lsp1], [nc --no-shutdown 66.66.66.66 80], [nc1.pid])
+
+OVS_WAIT_UNTIL([test "$(ovs-appctl dpctl/dump-conntrack | grep tcp | grep '42.42.42.1' -c)" = "1"])
+
+# There should be only one TCP conntrack entry, for the LB dnat.
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT_STATE(42.42.42.1) | grep tcp | \
+sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
+tcp,orig=(src=42.42.42.1,dst=66.66.66.66,sport=<cleared>,dport=<cleared>),reply=(src=42.42.42.2,dst=42.42.42.1,sport=<cleared>,dport=<cleared>),zone=<cleared>,labels=0x2,protoinfo=(state=ESTABLISHED)
+])
+
+OVS_APP_EXIT_AND_WAIT([ovn-controller])
+
+as ovn-sb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as ovn-nb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as northd
+OVS_APP_EXIT_AND_WAIT([ovn-northd])
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+
+AT_CLEANUP

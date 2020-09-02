@@ -218,6 +218,7 @@ enum ovn_stage {
 #define REGBIT_ACL_HINT_ALLOW     "reg0[8]"
 #define REGBIT_ACL_HINT_DROP      "reg0[9]"
 #define REGBIT_ACL_HINT_BLOCK     "reg0[10]"
+#define REGBIT_SKIP_ACL_CT        "reg0[11]"
 
 /* Register definitions for switches and routers. */
 
@@ -4889,7 +4890,47 @@ skip_port_from_conntrack(struct ovn_datapath *od, struct ovn_port *op,
 }
 
 static void
-build_pre_acls(struct ovn_datapath *od, struct hmap *lflows)
+build_stateless_filter(struct ovn_datapath *od,
+                       const struct nbrec_stateless_filter *filter,
+                       struct hmap *lflows)
+{
+    /* Stateless filters must be applied in both directions so that reply
+     * traffic bypasses conntrack too.
+     */
+    ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_PRE_ACL,
+                            filter->priority + OVN_ACL_PRI_OFFSET,
+                            filter->match,
+                            REGBIT_SKIP_ACL_CT" = 1; next;",
+                            &filter->header_);
+    ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
+                            filter->priority + OVN_ACL_PRI_OFFSET,
+                            filter->match,
+                            REGBIT_SKIP_ACL_CT" = 1; next;",
+                            &filter->header_);
+}
+
+static void
+build_stateless_filters(struct ovn_datapath *od, struct hmap *port_groups,
+                        struct hmap *lflows)
+{
+    for (size_t i = 0; i < od->nbs->n_stateless_filters; i++) {
+        build_stateless_filter(od, od->nbs->stateless_filters[i], lflows);
+    }
+
+    struct ovn_port_group *pg;
+    HMAP_FOR_EACH (pg, key_node, port_groups) {
+        if (ovn_port_group_ls_find(pg, &od->nbs->header_.uuid)) {
+            for (size_t i = 0; i < pg->nb_pg->n_stateless_filters; i++) {
+                build_stateless_filter(od, pg->nb_pg->stateless_filters[i],
+                                       lflows);
+            }
+        }
+    }
+}
+
+static void
+build_pre_acls(struct ovn_datapath *od, struct hmap *port_groups,
+               struct hmap *lflows)
 {
     bool has_stateful = has_stateful_acl(od);
 
@@ -4933,6 +4974,13 @@ build_pre_acls(struct ovn_datapath *od, struct hmap *lflows)
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110,
                       "nd || nd_rs || nd_ra || "
                       "(udp && udp.src == 546 && udp.dst == 547)", "next;");
+
+        /* Ingress and Egress Pre-ACL Table (Stateless_Filter).
+         *
+         * If the logical switch is configured to bypass conntrack for
+         * specific types of traffic, skip conntrack for that traffic.
+         */
+        build_stateless_filters(od, port_groups, lflows);
 
         /* Ingress and Egress Pre-ACL Table (Priority 100).
          *
@@ -5170,6 +5218,15 @@ build_acl_hints(struct ovn_datapath *od, struct hmap *lflows)
     for (size_t i = 0; i < ARRAY_SIZE(stages); i++) {
         enum ovn_stage stage = stages[i];
 
+        /* Traffic that matches a Stateless_Filter may hit both allow or
+         * drop ACLs but should never commit connections to conntrack. Only
+         * set REGBIT_ACL_HINT_ALLOW and REGBIT_ACL_HINT_DROP.
+         */
+        ovn_lflow_add(lflows, od, stage, 8, REGBIT_SKIP_ACL_CT " == 1",
+                      REGBIT_ACL_HINT_ALLOW " = 1; "
+                      REGBIT_ACL_HINT_DROP " = 1; "
+                      "next;");
+
         /* New, not already established connections, may hit either allow
          * or drop ACLs. For allow ACLs, the connection must also be committed
          * to conntrack so we set REGBIT_ACL_HINT_ALLOW_NEW.
@@ -5383,7 +5440,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             struct ds match = DS_EMPTY_INITIALIZER;
             struct ds actions = DS_EMPTY_INITIALIZER;
 
-            /* Commit the connection tracking entry if it's a new
+            /* Otherwise commit the connection tracking entry if it's a new
              * connection that matches this ACL.  After this commit,
              * the reply traffic is allowed by a flow we create at
              * priority 65535, defined earlier.
@@ -5600,11 +5657,15 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          * Subsequent packets will hit the flow at priority 0 that just
          * uses "next;". */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, 1,
-                      "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
-                       REGBIT_CONNTRACK_COMMIT" = 1; next;");
+                      REGBIT_SKIP_ACL_CT " == 0 "
+                      "&& ip "
+                      "&& (!ct.est || (ct.est && ct_label.blocked == 1))",
+                      REGBIT_CONNTRACK_COMMIT" = 1; next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, 1,
-                      "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
-                       REGBIT_CONNTRACK_COMMIT" = 1; next;");
+                      REGBIT_SKIP_ACL_CT " == 0 "
+                      "&& ip "
+                      "&& (!ct.est || (ct.est && ct_label.blocked == 1))",
+                      REGBIT_CONNTRACK_COMMIT" = 1; next;");
 
         /* Ingress and Egress ACL Table (Priority 65535).
          *
@@ -5614,10 +5675,14 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          *
          * This is enforced at a higher priority than ACLs can be defined. */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
+                      REGBIT_SKIP_ACL_CT " == 0 "
+                      "&& (ct.inv "
+                           "|| (ct.est && ct.rpl && ct_label.blocked == 1))",
                       "drop;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
+                      REGBIT_SKIP_ACL_CT " == 0 "
+                      "&& (ct.inv "
+                           "|| (ct.est && ct.rpl && ct_label.blocked == 1))",
                       "drop;");
 
         /* Ingress and Egress ACL Table (Priority 65535).
@@ -5630,11 +5695,13 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          *
          * This is enforced at a higher priority than ACLs can be defined. */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "ct.est && !ct.rel && !ct.new && !ct.inv "
+                      REGBIT_SKIP_ACL_CT "== 0 "
+                      "&& ct.est && !ct.rel && !ct.new && !ct.inv "
                       "&& ct.rpl && ct_label.blocked == 0",
                       "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "ct.est && !ct.rel && !ct.new && !ct.inv "
+                      REGBIT_SKIP_ACL_CT "== 0 "
+                      "&& ct.est && !ct.rel && !ct.new && !ct.inv "
                       "&& ct.rpl && ct_label.blocked == 0",
                       "next;");
 
@@ -5650,11 +5717,13 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          * related traffic such as an ICMP Port Unreachable through
          * that's generated from a non-listening UDP port.  */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "!ct.est && ct.rel && !ct.new && !ct.inv "
+                      REGBIT_SKIP_ACL_CT "== 0 "
+                      "&& !ct.est && ct.rel && !ct.new && !ct.inv "
                       "&& ct_label.blocked == 0",
                       "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "!ct.est && ct.rel && !ct.new && !ct.inv "
+                      REGBIT_SKIP_ACL_CT "== 0 "
+                      "&& !ct.est && ct.rel && !ct.new && !ct.inv "
                       "&& ct_label.blocked == 0",
                       "next;");
 
@@ -6709,7 +6778,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
             continue;
         }
 
-        build_pre_acls(od, lflows);
+        build_pre_acls(od, port_groups, lflows);
         build_pre_lb(od, lflows, meter_groups, lbs);
         build_pre_stateful(od, lflows);
         build_acl_hints(od, lflows);
