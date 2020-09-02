@@ -112,15 +112,15 @@ OVN makes releases at the following three-month cadence.  All dates are
 approximate:
 
 +---------------+---------------------+--------------------------------------+
-| Time (months) | Dates               | Stage                                |
+| Time (months) | Example Dates       | Stage                                |
 +---------------+---------------------+--------------------------------------+
 | T             | Jan 1, Apr 1, ...   | Begin x.y release cycle              |
 +---------------+---------------------+--------------------------------------+
-| T + 1         | Feb 1, May 1, ...   | "Soft freeze" master for x.y release |
+| T + 2         | Mar 1, Jun 1, ...   | "Soft freeze" master for x.y release |
 +---------------+---------------------+--------------------------------------+
-| T + 1.5       | Feb 8, May 8, ...   | Fork branch-x.y from master          |
+| T + 2.5       | Mar 15, Jun 15, ... | Fork branch-x.y from master          |
 +---------------+---------------------+--------------------------------------+
-| T + 1.75      | Feb 22, May 22, ... | Release version x.y.0                |
+| T + 2.75      | Mar 29, Jun 29, ... | Release version x.y.0                |
 +---------------+---------------------+--------------------------------------+
 
 Contact
