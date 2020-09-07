@@ -340,15 +340,12 @@
       it contains a priority-110 flow to move IPv6 Neighbor Discovery traffic
       to the next table. If load balancing rules with virtual IP addresses
       (and ports) are configured in <code>OVN_Northbound</code> database for a
-      logical switch datapath, a priority-100 flow is added for each configured
-      virtual IP address <var>VIP</var>. For IPv4 <var>VIPs</var>, the match is
-      <code>ip &amp;&amp; ip4.dst == <var>VIP</var></code>. For IPv6
-      <var>VIPs</var>, the match is <code>ip &amp;&amp;
-      ip6.dst == <var>VIP</var></code>. The flow sets an action
+      logical switch datapath, a priority-100 flow is added with the match
+      <code>ip</code> to match on IP packets and sets the action
       <code>reg0[0] = 1; next;</code> to act as a hint for table
       <code>Pre-stateful</code> to send IP packets to the connection tracker
-      for packet de-fragmentation before eventually advancing to ingress table
-      <code>LB</code>.
+      for packet de-fragmentation before eventually advancing to ingress
+      table <code>LB</code>.
       If controller_event has been enabled and load balancing rules with
       empty backends have been added in <code>OVN_Northbound</code>, a 130 flow
       is added to trigger ovn-controller events whenever the chassis receives a
@@ -430,7 +427,8 @@
     <p>
       This table also contains a priority 0 flow with action
       <code>next;</code>, so that ACLs allow packets by default.  If the
-      logical datapath has a statetful ACL, the following flows will
+      logical datapath has a statetful ACL or a load balancer with VIP
+      configured, the following flows will
       also be added:
     </p>
 
