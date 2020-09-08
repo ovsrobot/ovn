@@ -10691,6 +10691,54 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
+    /* Drop IP traffic destined to router owned IPs. Part of it is dropped
+     * in stage "lr_in_ip_input" but traffic that could have been unSNATed
+     * but didn't match any existing session might still end up here.
+     */
+    HMAP_FOR_EACH (op, key_node, ports) {
+        if (!op->nbrp) {
+            continue;
+        }
+
+        if (op->lrp_networks.n_ipv4_addrs) {
+            ds_clear(&match);
+            ds_put_cstr(&match, "ip4.dst == {");
+
+            for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+                ds_put_format(&match, "%s, ",
+                              op->lrp_networks.ipv4_addrs[i].addr_s);
+            }
+
+            ds_chomp(&match, ' ');
+            ds_chomp(&match, ',');
+            ds_put_char(&match, '}');
+
+            /* Drop traffic with IP.dest == router-ip. */
+            ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_ARP_RESOLVE, 1,
+                                    ds_cstr(&match), "drop;",
+                                    &op->nbrp->header_);
+        }
+
+        if (op->lrp_networks.n_ipv6_addrs) {
+            ds_clear(&match);
+            ds_put_cstr(&match, "ip6.dst == {");
+
+            for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
+                ds_put_format(&match, "%s, ",
+                              op->lrp_networks.ipv6_addrs[i].addr_s);
+            }
+
+            ds_chomp(&match, ' ');
+            ds_chomp(&match, ',');
+            ds_put_char(&match, '}');
+
+            /* Drop traffic with IP.dest == router-ip. */
+            ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_ARP_RESOLVE, 1,
+                                    ds_cstr(&match), "drop;",
+                                    &op->nbrp->header_);
+        }
+    }
+
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbr) {
             continue;
