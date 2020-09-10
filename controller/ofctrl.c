@@ -916,6 +916,57 @@ link_flow_to_sb(struct ovn_desired_flow_table *flow_table,
     ovs_list_insert(&stf->flows, &sfr->flow_list);
 }
 
+static bool
+flow_action_has_conj(const struct ovn_flow *f)
+{
+    const struct ofpact *a = NULL;
+
+    OFPACT_FOR_EACH (a, f->ofpacts, f->ofpacts_len) {
+        if (a->type == OFPACT_CONJUNCTION) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Returns true if the actions of 'f1' cannot be merged with the actions of
+ * 'f2'. This is the case when one of the flow contains action "conjunction"
+ * and the other doesn't. The function always populates 'f1_has_conj' and
+ * 'f2_has_conj'.
+ */
+static bool
+flow_actions_conflict(const struct ovn_flow *f1, const struct ovn_flow *f2,
+                      bool *f1_has_conj, bool *f2_has_conj)
+{
+    *f1_has_conj = flow_action_has_conj(f1);
+    *f2_has_conj = flow_action_has_conj(f2);
+
+    if ((*f1_has_conj) && !(*f2_has_conj) && f2->ofpacts_len) {
+        return true;
+    }
+
+    if ((*f2_has_conj) && !(*f1_has_conj) && f1->ofpacts_len) {
+        return true;
+    }
+
+    return false;
+}
+
+static void
+flow_log_actions_conflict(const char *msg, const struct ovn_flow *f1,
+                          const struct ovn_flow *f2)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+
+    char *f1_s = ovn_flow_to_string(f1);
+    char *f2_s = ovn_flow_to_string(f2);
+
+    VLOG_WARN_RL(&rl, "Flow actions conflict: %s, flow-1: %s, flow-2: %s",
+                 msg, f1_s, f2_s);
+    free(f1_s);
+    free(f2_s);
+}
+
 /* Flow table interfaces to the rest of ovn-controller. */
 
 /* Adds a flow to 'desired_flows' with the specified 'match' and 'actions' to
@@ -985,14 +1036,46 @@ ofctrl_add_or_append_flow(struct ovn_desired_flow_table *desired_flows,
     struct desired_flow *existing;
     existing = desired_flow_lookup(desired_flows, &f->flow, NULL);
     if (existing) {
-        /* There's already a flow with this particular match. Append the
-         * action to that flow rather than adding a new flow
+        /* There's already a flow with this particular match. Try to append
+         * the action to that flow rather than adding a new flow.
+         *
+         * If exactly one of the existing or new flow includes a conjunction
+         * action then we can't merge the actions. In that case keep the flow
+         * without conjunction action as this is the least restrictive one.
          */
+        bool existing_conj = false;
+        bool new_conj = false;
+
+        if (flow_actions_conflict(&existing->flow, &f->flow, &existing_conj,
+                                  &new_conj)) {
+            flow_log_actions_conflict("Cannot merge conj with non-conj action",
+                                      &existing->flow, &f->flow);
+        }
+
+        /* If the existing flow is less restrictive (i.e., no conjunction
+         * action) then keep it installed. Store however the flow with
+         * conjunction action too as it will be installed when the current
+         * one is removed.
+         */
+        if (!existing_conj && new_conj) {
+            hmap_insert(&desired_flows->match_flow_table, &f->match_hmap_node,
+                        f->flow.hash);
+            link_flow_to_sb(desired_flows, f, sb_uuid);
+            return;
+        }
+
         uint64_t compound_stub[64 / 8];
         struct ofpbuf compound;
         ofpbuf_use_stub(&compound, compound_stub, sizeof(compound_stub));
-        ofpbuf_put(&compound, existing->flow.ofpacts,
-                   existing->flow.ofpacts_len);
+
+        /* Only merge actions if both flows either have action conjunction
+         * or non-conjunction. Otherwise use the actions in the new flow,
+         * the least restrictive.
+         */
+        if (existing_conj == new_conj) {
+            ofpbuf_put(&compound, existing->flow.ofpacts,
+                       existing->flow.ofpacts_len);
+        }
         ofpbuf_put(&compound, f->flow.ofpacts, f->flow.ofpacts_len);
 
         free(existing->flow.ofpacts);
@@ -1687,6 +1770,21 @@ update_installed_flows_by_compare(struct ovn_desired_flow_table *flow_table,
             /* Copy 'd' from 'flow_table' to installed_flows. */
             i = installed_flow_dup(d);
             hmap_insert(&installed_flows, &i->match_hmap_node, i->flow.hash);
+        } else if (i->desired_flow != d) {
+            /* If a matching installed flow was found but its actions are
+             * conflicting with the desired flow actions, we should chose
+             * to install the least restrictive one (i.e., no conjunctive
+             * action).
+             */
+            bool i_conj = false;
+            bool d_conj = false;
+
+            if (flow_actions_conflict(&i->flow, &d->flow, &i_conj, &d_conj) &&
+                    i_conj && !d_conj) {
+                flow_log_actions_conflict("Use new flow", &i->flow, &d->flow);
+                installed_flow_mod(&i->flow, &d->flow, msgs);
+                ovn_flow_log(&i->flow, "updating installed");
+            }
         }
         link_installed_to_desired(i, d);
     }
@@ -1817,7 +1915,23 @@ update_installed_flows_by_track(struct ovn_desired_flow_table *flow_table,
                 installed_flow_mod(&i->flow, &f->flow, msgs);
             } else {
                 /* Adding a new flow that conflicts with an existing installed
-                 * flow, so just add it to the link. */
+                 * flow, so just add it to the link.
+                 *
+                 * However, if the existing installed flow is less restrictive
+                 * (i.e., no conjunctive action), we should chose it over the
+                 * existing installed flow.
+                 */
+                bool i_conj = false;
+                bool f_conj = false;
+
+                if (flow_actions_conflict(&i->flow, &f->flow, &i_conj,
+                                          &f_conj) &&
+                        i_conj && !f_conj) {
+                    flow_log_actions_conflict("Use new flow",
+                                              &i->flow, &f->flow);
+                    ovn_flow_log(&i->flow, "updating installed (tracked)");
+                    installed_flow_mod(&i->flow, &f->flow, msgs);
+                }
                 link_installed_to_desired(i, f);
             }
             /* The track_list_node emptyness is used to check if the node is
