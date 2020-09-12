@@ -1363,8 +1363,8 @@ runtime_data_sb_port_binding_handler(struct engine_node *node, void *data)
 }
 
 static bool
-runtime_data_sb_datapath_binding_handler(struct engine_node *node OVS_UNUSED,
-                                         void *data OVS_UNUSED)
+runtime_data_sb_datapath_binding_handler(struct engine_node *node,
+                                         void *data)
 {
     struct sbrec_datapath_binding_table *dp_table =
         (struct sbrec_datapath_binding_table *)EN_OVSDB_GET(
@@ -1378,6 +1378,18 @@ runtime_data_sb_datapath_binding_handler(struct engine_node *node OVS_UNUSED,
                                    dp->tunnel_key)) {
                 return false;
             }
+        }
+
+        /* Force recompute when the tunnel_key is updated. However,
+           don't update if the external_id column is updated as this
+           can be done when a logical switch or logical router is
+           added which does not recquire a recompute.
+        */
+        if (sbrec_datapath_binding_is_updated(dp,
+                 SBREC_DATAPATH_BINDING_COL_TUNNEL_KEY) &&
+            !sbrec_datapath_binding_is_updated(dp,
+                 SBREC_DATAPATH_BINDING_COL_EXTERNAL_IDS)) {
+            return false;
         }
     }
 
