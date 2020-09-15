@@ -1727,7 +1727,60 @@ AT_CLEANUP
 
 AT_BANNER([OVN end-to-end tests])
 
-# 3 hypervisors, one logical switch, 3 logical ports per hypervisor
+AT_SETUP([ovn -- 3 virtual hosts, same node])
+AT_KEYWORDS([ovn])
+ovn_start
+ovn-nbctl ls-add lsw0
+net_add n1
+sim_add hv
+
+as hv
+for i in 1 2 3; do
+    chassis=host-$i
+    ovs-vsctl add-br br-phys-$i
+    ovn_attach n1 br-phys-$i 192.168.0.$i 24 br-int-$i $chassis
+
+    for j in 1 2 3; do
+        lpname=lp$i$j
+        ovs-vsctl add-port br-int-$i vif$i$j -- set Interface vif$i$j external-ids:iface-id=$lpname options:tx_pcap=hv$i/vif$i$j-tx.pcap options:rxq_pcap=hv$i/vif$i$j-rx.pcap ofport-request=$i$j
+        ovn-nbctl lsp-add lsw0 $lpname
+        OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up $lpname` = xup])
+
+        pb_chassis_id=$(ovn-sbctl --bare --columns chassis list port_binding $lpname)
+        pb_chassis_name=$(ovn-sbctl get chassis $pb_chassis_id name)
+        AT_FAIL_IF([test x$pb_chassis_name != x$chassis])
+    done
+done
+
+for i in 1 2 3; do
+    > expout
+    for vif in 1 2 3; do
+        echo vif$i$vif >> expout
+    done
+    AT_CHECK([ovs-vsctl list-ports br-int-$i | grep vif], [0], [expout])
+done
+
+AT_CLEANUP
+
+AT_SETUP([ovn -- system-id in file])
+AT_KEYWORDS([ovn])
+
+ovn_start
+net_add n1
+sim_add hv
+
+as hv
+
+echo otherid > ${OVS_SYSCONFDIR}/system-id
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+# system-id file overrides chassis name selected via cli
+echo otherid > expout
+AT_CHECK([ovn-sbctl --bare --columns name list chassis], [0], [expout])
+
+AT_CLEANUP
+
 AT_SETUP([ovn -- 3 HVs, 1 LS, 3 lports/HV])
 AT_KEYWORDS([ovnarp])
 ovn_start

@@ -42,7 +42,8 @@ void patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
                const struct sbrec_port_binding_table *,
                const struct ovsrec_bridge *br_int,
                const struct sbrec_chassis *,
-               const struct hmap *local_datapaths);
+               const struct hmap *local_datapaths,
+               int is_multiple_chassis);
 void patch_init(void);
 void patch_destroy(void);
 

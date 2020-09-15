@@ -157,7 +157,9 @@ add_ovs_bridge_mappings(const struct ovsrec_open_vswitch_table *ovs_table,
         const char *mappings_cfg;
         char *cur, *next, *start;
 
-        mappings_cfg = smap_get(&cfg->external_ids, "ovn-bridge-mappings");
+        mappings_cfg = get_chassis_external_id_value(
+            &cfg->external_ids, get_ovs_chassis_id(cfg),
+            "ovn-bridge-mappings", NULL);
         if (!mappings_cfg || !mappings_cfg[0]) {
             return;
         }
@@ -287,7 +289,8 @@ patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
           const struct sbrec_port_binding_table *port_binding_table,
           const struct ovsrec_bridge *br_int,
           const struct sbrec_chassis *chassis,
-          const struct hmap *local_datapaths)
+          const struct hmap *local_datapaths,
+          int is_multiple_chassis)
 {
     if (!ovs_idl_txn) {
         return;
@@ -318,12 +321,14 @@ patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
                         local_datapaths);
 
     /* Now 'existing_ports' only still contains patch ports that exist in the
-     * database but shouldn't.  Delete them from the database. */
-    struct shash_node *port_node, *port_next_node;
-    SHASH_FOR_EACH_SAFE (port_node, port_next_node, &existing_ports) {
-        port = port_node->data;
-        shash_delete(&existing_ports, port_node);
-        remove_port(bridge_table, port);
+     * database but shouldn't.  Delete them from the database if it's safe. */
+    if (!is_multiple_chassis) {
+        struct shash_node *port_node, *port_next_node;
+        SHASH_FOR_EACH_SAFE (port_node, port_next_node, &existing_ports) {
+            port = port_node->data;
+            shash_delete(&existing_ports, port_node);
+            remove_port(bridge_table, port);
+        }
+        shash_destroy(&existing_ports);
     }
-    shash_destroy(&existing_ports);
 }
