@@ -292,6 +292,10 @@ lflow_resource_destroy_lflow(struct lflow_resource_ref *lfrr,
     LIST_FOR_EACH_SAFE (lrln, next, list_node, &lfrn->lflow_ref_head) {
         ovs_list_remove(&lrln->list_node);
         hmap_remove(&lrln->rlfn->lflow_uuids, &lrln->hmap_node);
+        if (hmap_is_empty(&lrln->rlfn->lflow_uuids)) {
+            hmap_remove(&lfrr->ref_lflow_table, &lrln->rlfn->node);
+            ref_lflow_node_destroy(lrln->rlfn);
+        }
         free(lrln);
     }
     free(lfrn);
