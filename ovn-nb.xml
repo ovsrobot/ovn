@@ -180,6 +180,13 @@
         </p>
       </column>
 
+      <column name="options" key="max_tunid">
+        <p>
+          The maximum supported tunnel ID. Depends on types of encapsulation
+          enabled in the cluster.
+        </p>
+      </column>
+
       <group title="Options for configuring interconnection route advertisement">
         <p>
           These options control how routes are advertised between OVN
