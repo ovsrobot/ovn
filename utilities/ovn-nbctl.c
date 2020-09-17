@@ -1088,6 +1088,11 @@ print_lr(const struct nbrec_logical_router *lr, struct ds *s)
         if (nat->external_port_range[0]) {
           ds_put_cstr(s, "        external port(s): ");
           ds_put_format(s, "\"%s\"\n", nat->external_port_range);
+
+          if (nat->external_port_hash[0]) {
+              ds_put_cstr(s, "        external port_hash: ");
+              ds_put_format(s, "\"%s\"\n", nat->external_port_hash);
+          }
         }
         ds_put_cstr(s, "        logical ip: ");
         ds_put_format(s, "\"%s\"\n", nat->logical_ip);
@@ -4129,6 +4134,16 @@ out:
     free(nexthop);
 }
 
+static inline bool
+is_valid_port_hash(const char *port_hash)
+{
+    if (!strcmp(port_hash, "hash") || !strcmp(port_hash, "random")) {
+        return true;
+    }
+
+    return false;
+}
+
 static bool
 is_valid_port_range(const char *port_range)
 {
@@ -4246,6 +4261,7 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
     const char *logical_port = NULL;
     const char *external_mac = NULL;
     const char *port_range = NULL;
+    const char *port_hash = NULL;
 
     if (ctx->argc == 6) {
         if (!is_portrange) {
@@ -4259,18 +4275,45 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
             goto cleanup;
         }
 
-    } else if (ctx->argc >= 7) {
-        if (strcmp(nat_type, "dnat_and_snat")) {
-            ctl_error(ctx, "logical_port and external_mac are only valid when "
-                      "type is \"dnat_and_snat\".");
-            goto cleanup;
+    } else if (ctx->argc == 7) {
+        if (is_portrange) {
+            port_range = ctx->argv[5];
+            if (!is_valid_port_range(port_range)) {
+                ctl_error(ctx, "invalid port range %s.", port_range);
+                goto cleanup;
+            }
+
+            /* No need to validate the hash value, NBDB set will fail,
+             * If value is not valid */
+            port_hash = ctx->argv[6];
+            if (!is_valid_port_hash(port_hash)) {
+                ctl_error(ctx, "invalid port hash %s.", port_hash);
+                goto cleanup;
+            }
+        } else {
+            if (strcmp(nat_type, "dnat_and_snat")) {
+                ctl_error(ctx, "logical_port and external_mac are only valid "
+                          "when type is \"dnat_and_snat\".");
+                goto cleanup;
+            }
+
+            logical_port = ctx->argv[5];
+            const struct nbrec_logical_switch_port *lsp;
+            error = lsp_by_name_or_uuid(ctx, logical_port, true, &lsp);
+            if (error) {
+                ctx->error = error;
+                goto cleanup;
+            }
+
+            external_mac = ctx->argv[6];
+            struct eth_addr ea;
+            if (!eth_addr_from_string(external_mac, &ea)) {
+                ctl_error(ctx, "invalid mac address %s.", external_mac);
+                goto cleanup;
+            }
         }
 
-        if (ctx->argc == 7 && is_portrange) {
-            ctl_error(ctx, "lr-nat-add with logical_port "
-                      "must also specify external_mac.");
-            goto cleanup;
-        }
+    } else if (ctx->argc >= 8) {
 
         logical_port = ctx->argv[5];
         const struct nbrec_logical_switch_port *lsp;
@@ -4286,11 +4329,17 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
             ctl_error(ctx, "invalid mac address %s.", external_mac);
             goto cleanup;
         }
-
-        if (ctx->argc > 7) {
-            port_range = ctx->argv[7];
-            if (!is_valid_port_range(port_range)) {
-                ctl_error(ctx, "invalid port range %s.", port_range);
+        port_range = ctx->argv[7];
+        if (!is_valid_port_range(port_range)) {
+            ctl_error(ctx, "invalid port range %s.", port_range);
+            goto cleanup;
+        }
+        if (ctx->argc > 8) {
+            /* No need to validate the hash value, NBDB set will fail,
+             * If value is not valid */
+            port_hash = ctx->argv[8];
+            if (!is_valid_port_hash(port_hash)) {
+                ctl_error(ctx, "invalid port hash %s.", port_hash);
                 goto cleanup;
             }
         }
@@ -4299,6 +4348,7 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
         port_range = NULL;
         logical_port = NULL;
         external_mac = NULL;
+        port_hash = NULL;
     }
 
     bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
@@ -4387,6 +4437,9 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
 
     if (port_range) {
         nbrec_nat_set_external_port_range(nat, port_range);
+        if (port_hash) {
+            nbrec_nat_set_external_port_hash(nat, port_hash);
+        }
     }
 
     smap_add(&nat_options, "stateless", stateless ? "true":"false");
@@ -4507,13 +4560,15 @@ nbctl_lr_nat_list(struct ctl_context *ctx)
         const struct nbrec_nat *nat = lr->nat[i];
         char *key = xasprintf("%-17.13s%s", nat->type, nat->external_ip);
         if (nat->external_mac && nat->logical_port) {
-            smap_add_format(&lr_nats, key, "%-17.13s%-22.18s%-21.17s%s",
-                            nat->external_port_range,
+            smap_add_format(&lr_nats, key, "%-17.13s%-22.18s%-"
+                            "22.18s%-21.17s%s",nat->external_port_range,
+                            nat->external_port_hash,
                             nat->logical_ip, nat->external_mac,
                             nat->logical_port);
         } else {
-            smap_add_format(&lr_nats, key, "%-17.13s%s",
+            smap_add_format(&lr_nats, key, "%-17.13s%-22.18s%s",
                             nat->external_port_range,
+                            nat->external_port_hash,
                             nat->logical_ip);
         }
         free(key);
@@ -4522,9 +4577,9 @@ nbctl_lr_nat_list(struct ctl_context *ctx)
     const struct smap_node **nodes = smap_sort(&lr_nats);
     if (nodes) {
         ds_put_format(&ctx->output,
-                "%-17.13s%-19.15s%-17.13s%-22.18s%-21.17s%s\n",
-                "TYPE", "EXTERNAL_IP", "EXTERNAL_PORT", "LOGICAL_IP",
-                "EXTERNAL_MAC", "LOGICAL_PORT");
+                "%-17.13s%-19.15s%-17.13s%-22.18s%-22.18s%-21.17s%s\n",
+                "TYPE", "EXTERNAL_IP", "EXTERNAL_PORT", "EXTERNAL_PORT_HASH",
+                "LOGICAL_IP","EXTERNAL_MAC", "LOGICAL_PORT");
         for (size_t i = 0; i < smap_count(&lr_nats); i++) {
             const struct smap_node *node = nodes[i];
             ds_put_format(&ctx->output, "%-36.32s%s\n",
@@ -6538,8 +6593,9 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     /* NAT commands. */
     { "lr-nat-add", 4, 7,
       "ROUTER TYPE EXTERNAL_IP LOGICAL_IP"
-      "[LOGICAL_PORT EXTERNAL_MAC] [EXTERNAL_PORT_RANGE]", NULL,
-      nbctl_lr_nat_add, NULL, "--may-exist,--stateless,--portrange", RW },
+      "[LOGICAL_PORT EXTERNAL_MAC] [EXTERNAL_PORT_RANGE EXTERNAL_PORT_HASH]",
+      NULL, nbctl_lr_nat_add, NULL, "--may-exist,--stateless,--portrange",
+      RW },
     { "lr-nat-del", 1, 3, "ROUTER [TYPE [IP]]", NULL,
         nbctl_lr_nat_del, NULL, "--if-exists", RW },
     { "lr-nat-list", 1, 1, "ROUTER", NULL, nbctl_lr_nat_list, NULL, "", RO },

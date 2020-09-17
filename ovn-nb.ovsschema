@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
-    "version": "5.27.0",
-    "cksum": "3507518247 26773",
+    "version": "5.28.0",
+    "cksum": "2621169942 26831",
     "tables": {
         "NB_Global": {
             "columns": {
@@ -398,6 +398,7 @@
                 "external_mac": {"type": {"key": "string",
                                           "min": 0, "max": 1}},
                 "external_port_range": {"type": "string"},
+                "external_port_hash": {"type": "string"},
                 "logical_ip": {"type": "string"},
                 "logical_port": {"type": {"key": "string",
                                           "min": 0, "max": 1}},
