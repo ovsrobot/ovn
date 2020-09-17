@@ -9626,6 +9626,10 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                         if (nat->external_port_range[0]) {
                             ds_put_format(&actions, ",%s",
                                           nat->external_port_range);
+                            if (nat->external_port_hash[0]) {
+                                ds_put_format(&actions, ",%s",
+                                              nat->external_port_hash);
+                            }
                         }
                         ds_put_format(&actions, ");");
                     }
@@ -9663,6 +9667,10 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                         if (nat->external_port_range[0]) {
                             ds_put_format(&actions, ",%s",
                                           nat->external_port_range);
+                            if (nat->external_port_hash[0]) {
+                                ds_put_format(&actions, ",%s",
+                                              nat->external_port_hash);
+                            }
                         }
                         ds_put_format(&actions, ");");
                     }
@@ -9780,6 +9788,10 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                         if (nat->external_port_range[0]) {
                             ds_put_format(&actions, ",%s",
                                           nat->external_port_range);
+                            if (nat->external_port_hash[0]) {
+                                ds_put_format(&actions, ",%s",
+                                              nat->external_port_hash);
+                            }
                         }
                         ds_put_format(&actions, ");");
                     }
@@ -9829,6 +9841,10 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                         if (nat->external_port_range[0]) {
                             ds_put_format(&actions, ",%s",
                                           nat->external_port_range);
+                            if (nat->external_port_hash[0]) {
+                                ds_put_format(&actions, ",%s",
+                                              nat->external_port_hash);
+                            }
                         }
                         ds_put_format(&actions, ");");
                     }

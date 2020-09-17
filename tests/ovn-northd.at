@@ -2010,3 +2010,34 @@ ovn-nbctl --wait=sb set NB_Global . options:ignore_lsp_down=true
 AT_CHECK([ovn-sbctl lflow-list | grep arp | grep 10\.0\.0\.1], [0], [ignore])
 
 AT_CLEANUP
+
+AT_SETUP([ovn -- Port Range and Hash in NAT entries])
+AT_SKIP_IF([test $HAVE_PYTHON = no])
+ovn_start
+
+ovn-nbctl lr-add lr0
+ovn-nbctl lrp-add lr0 lr0-public 00:00:01:01:02:04 192.168.2.1/24
+ovn-nbctl lrp-add lr0 lr0-join 00:00:01:01:02:04 10.10.0.1/24
+
+ovn-nbctl set logical_router lr0 options:chassis=ch1
+
+ovn-nbctl --portrange lr-nat-add lr0 snat 192.168.2.1 10.0.0.0/24 1-1000 hash
+ovn-nbctl --portrange lr-nat-add lr0 dnat_and_snat 192.168.2.4 10.0.0.4 1100-2000 random
+ovn-nbctl --portrange lr-nat-add lr0 dnat 192.168.2.5 10.0.0.5 2100-3000
+
+ovn-sbctl dump-flows lr0
+
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep lr_out_snat | \
+grep "ct_snat(192.168.2.1,1-1000,hash)" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep lr_in_dnat | \
+grep "ct_dnat(10.0.0.4,1100-2000,random)" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep lr_out_snat | \
+grep "ct_snat(192.168.2.4,1100-2000,random)" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep lr_in_dnat | \
+grep "ct_dnat(10.0.0.5,2100-3000)" | wc -l], [0], [1
+])
+
+AT_CLEANUP

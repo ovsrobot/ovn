@@ -707,6 +707,8 @@ parse_ct_nat(struct action_context *ctx, const char *name,
 
         if (lexer_match(ctx->lexer, LEX_T_COMMA)) {
 
+            cn->port_range.port_hash = NULL;
+
            if (ctx->lexer->token.type != LEX_T_INTEGER ||
                ctx->lexer->token.format != LEX_F_DECIMAL) {
               lexer_syntax_error(ctx->lexer, "expecting Integer for port "
@@ -733,8 +735,40 @@ parse_ct_nat(struct action_context *ctx, const char *name,
                                       "greater than range low");
                }
                lexer_get(ctx->lexer);
+
+               if (lexer_match(ctx->lexer, LEX_T_COMMA)) {
+                   if (ctx->lexer->token.type != LEX_T_ID) {
+                       lexer_syntax_error(ctx->lexer, "expecting string for "
+                                          "port hash");
+                   }
+
+                   if (strcmp(ctx->lexer->token.s, "hash") &&
+                       strcmp(ctx->lexer->token.s, "random")) {
+                       lexer_syntax_error(ctx->lexer, "Invalid value for "
+                                          "port hash");
+                   }
+
+                   cn->port_range.port_hash = xstrdup(ctx->lexer->token.s);
+                   lexer_get(ctx->lexer);
+               }
            } else {
                cn->port_range.port_hi = 0;
+
+               if (lexer_match(ctx->lexer, LEX_T_COMMA)) {
+                   if (ctx->lexer->token.type != LEX_T_ID) {
+                       lexer_syntax_error(ctx->lexer, "expecting string for "
+                                          "port hash");
+                   }
+
+                   if (strcmp(ctx->lexer->token.s, "hash") &&
+                       strcmp(ctx->lexer->token.s, "random")) {
+                       lexer_syntax_error(ctx->lexer, "Invalid value for "
+                                          "port hash");
+                   }
+
+                   cn->port_range.port_hash = xstrdup(ctx->lexer->token.s);
+                   lexer_get(ctx->lexer);
+               }
            }
 
            cn->port_range.exists = true;
@@ -776,6 +810,10 @@ format_ct_nat(const struct ovnact_ct_nat *cn, const char *name, struct ds *s)
 
         if (cn->port_range.port_hi) {
             ds_put_format(s, "-%d", cn->port_range.port_hi);
+        }
+
+        if (cn->port_range.port_hash) {
+            ds_put_format(s, ",%s", cn->port_range.port_hash);
         }
         ds_put_char(s, ')');
     }
@@ -843,8 +881,17 @@ encode_ct_nat(const struct ovnact_ct_nat *cn,
     }
 
     if (cn->port_range.exists) {
-       nat->range.proto.min = cn->port_range.port_lo;
-       nat->range.proto.max = cn->port_range.port_hi;
+        const char *port_hash = cn->port_range.port_hash;
+        nat->range.proto.min = cn->port_range.port_lo;
+        nat->range.proto.max = cn->port_range.port_hi;
+
+        if (port_hash) {
+            if (!strcmp(port_hash, "hash")) {
+                nat->flags |= NX_NAT_F_PROTO_HASH;
+            } else {
+                nat->flags |= NX_NAT_F_PROTO_RANDOM;
+            }
+        }
     }
 
     ofpacts->header = ofpbuf_push_uninit(ofpacts, nat_offset);

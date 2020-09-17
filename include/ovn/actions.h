@@ -235,6 +235,7 @@ struct ovnact_ct_nat {
        bool exists;
        uint16_t port_lo;
        uint16_t port_hi;
+       char *port_hash;
     } port_range;
 
     uint8_t ltable;             /* Logical table ID of next table. */
