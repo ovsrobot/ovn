@@ -1436,7 +1436,7 @@ binding_run(struct binding_ctx_in *b_ctx_in, struct binding_ctx_out *b_ctx_out)
             break;
 
         case LP_LOCALNET: {
-            consider_localnet_lport(pb, b_ctx_in, b_ctx_out, qos_map_ptr);
+            consider_localnet_lport(pb, b_ctx_in, b_ctx_out, &qos_map);
             struct localnet_lport *lnet_lport = xmalloc(sizeof *lnet_lport);
             lnet_lport->pb = pb;
             ovs_list_push_back(&localnet_lports, &lnet_lport->list_node);
@@ -1903,6 +1903,14 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
         if (ovsrec_interface_is_deleted(iface_rec)) {
             continue;
         }
+
+        bool egress_info = smap_get_bool(&iface_rec->external_ids,
+                                         "ovn-egress-iface", false);
+        if (egress_info) {
+            handled = false;
+            break;
+        }
+
 
         const char *iface_id = smap_get(&iface_rec->external_ids, "iface-id");
         int64_t ofport = iface_rec->n_ofport ? *iface_rec->ofport : 0;
