@@ -7523,6 +7523,18 @@ get_outport_for_routing_policy_nexthop(struct ovn_datapath *od,
     return NULL;
 }
 
+static uint32_t
+get_lr_policy_pkt_mark(const struct nbrec_logical_router_policy *rule)
+{
+    const char *str_pkt_mark = smap_get(&rule->options, "pkt_mark");
+    uint32_t pkt_mark = 0;
+    if (str_pkt_mark) {
+        str_to_uint(str_pkt_mark, 10, &pkt_mark);
+    }
+
+    return pkt_mark;
+}
+
 static void
 build_routing_policy_flow(struct hmap *lflows, struct ovn_datapath *od,
                           struct hmap *ports,
@@ -7547,7 +7559,7 @@ build_routing_policy_flow(struct hmap *lflows, struct ovn_datapath *od,
                          rule->priority, rule->nexthop);
             return;
         }
-        uint32_t pkt_mark = smap_get_int(&rule->options, "pkt_mark", 0);
+        uint32_t pkt_mark = get_lr_policy_pkt_mark(rule);
         if (pkt_mark) {
             ds_put_format(&actions, "pkt.mark = %u; ", pkt_mark);
         }
@@ -7568,7 +7580,7 @@ build_routing_policy_flow(struct hmap *lflows, struct ovn_datapath *od,
     } else if (!strcmp(rule->action, "drop")) {
         ds_put_cstr(&actions, "drop;");
     } else if (!strcmp(rule->action, "allow")) {
-        uint32_t pkt_mark = smap_get_int(&rule->options, "pkt_mark", 0);
+        uint32_t pkt_mark = get_lr_policy_pkt_mark(rule);
         if (pkt_mark) {
             ds_put_format(&actions, "pkt.mark = %u; ", pkt_mark);
         }
