@@ -6098,6 +6098,11 @@ build_stateful(struct ovn_datapath *od, struct hmap *lflows, struct hmap *lbs)
 static void
 build_fwd_group_lflows(struct ovn_datapath *od, struct hmap *lflows)
 {
+
+    if (!od->nbs || !od->nbs->n_forwarding_groups) {
+        return;
+    }
+
     struct ds match = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
 
@@ -6771,10 +6776,6 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
 
     /* Build logical flows for the forwarding groups */
     HMAP_FOR_EACH (od, key_node, datapaths) {
-        if (!od->nbs || !od->nbs->n_forwarding_groups) {
-            continue;
-        }
-
         build_fwd_group_lflows(od, lflows);
     }
 
