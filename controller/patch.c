@@ -76,6 +76,7 @@ create_patch_port(struct ovsdb_idl_txn *ovs_idl_txn,
                   const char *key, const char *value,
                   const struct ovsrec_bridge *src, const char *src_name,
                   const struct ovsrec_bridge *dst, const char *dst_name,
+                  const char *chassis_name,
                   struct shash *existing_ports)
 {
     for (size_t i = 0; i < src->n_ports; i++) {
@@ -101,7 +102,8 @@ create_patch_port(struct ovsdb_idl_txn *ovs_idl_txn,
     port = ovsrec_port_insert(ovs_idl_txn);
     ovsrec_port_set_name(port, src_name);
     ovsrec_port_set_interfaces(port, &iface, 1);
-    const struct smap ids = SMAP_CONST1(&ids, key, value);
+    const struct smap ids = SMAP_CONST2(&ids, key, value,
+                                        "owner", chassis_name);
     ovsrec_port_set_external_ids(port, &ids);
 
     struct ovsrec_port **ports;
@@ -157,7 +159,9 @@ add_ovs_bridge_mappings(const struct ovsrec_open_vswitch_table *ovs_table,
         const char *mappings_cfg;
         char *cur, *next, *start;
 
-        mappings_cfg = smap_get(&cfg->external_ids, "ovn-bridge-mappings");
+        mappings_cfg = get_chassis_external_id_value(
+            &cfg->external_ids, get_ovs_chassis_id(cfg),
+            "ovn-bridge-mappings", NULL);
         if (!mappings_cfg || !mappings_cfg[0]) {
             return;
         }
@@ -269,9 +273,11 @@ add_bridge_mappings(struct ovsdb_idl_txn *ovs_idl_txn,
         char *name1 = patch_port_name(br_int->name, binding->logical_port);
         char *name2 = patch_port_name(binding->logical_port, br_int->name);
         create_patch_port(ovs_idl_txn, patch_port_id, binding->logical_port,
-                          br_int, name1, br_ln, name2, existing_ports);
+                          br_int, name1, br_ln, name2, chassis->name,
+                          existing_ports);
         create_patch_port(ovs_idl_txn, patch_port_id, binding->logical_port,
-                          br_ln, name2, br_int, name1, existing_ports);
+                          br_ln, name2, br_int, name1, chassis->name,
+                          existing_ports);
         free(name1);
         free(name2);
     }
@@ -323,6 +329,11 @@ patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
     SHASH_FOR_EACH_SAFE (port_node, port_next_node, &existing_ports) {
         port = port_node->data;
         shash_delete(&existing_ports, port_node);
+
+        const char *owner = smap_get_def(&port->external_ids, "owner", "");
+        if (strcmp(owner, chassis->name)) {
+            continue;
+        }
         remove_port(bridge_table, port);
     }
     shash_destroy(&existing_ports);

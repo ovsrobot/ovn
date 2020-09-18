@@ -641,3 +641,53 @@ str_tolower(const char *orig)
 
     return copy;
 }
+
+const char *
+get_chassis_external_id_value(const struct smap *external_ids,
+                              const char *chassis_id, const char *option_key,
+                              const char *def)
+{
+    const char *option_value = NULL;
+    if (chassis_id != NULL) {
+        char *chassis_option_key = xasprintf("%s-%s", option_key, chassis_id);
+        option_value = smap_get(external_ids, chassis_option_key);
+        free(chassis_option_key);
+    }
+    if (!option_value) {
+        option_value = smap_get_def(external_ids, option_key, def);
+    }
+    return option_value;
+}
+
+int
+get_chassis_external_id_value_int(const struct smap *external_ids,
+                                  const char *chassis_id,
+                                  const char *option_key,
+                                  int def)
+{
+    const char *value = get_chassis_external_id_value(
+        external_ids, chassis_id, option_key, NULL);
+
+    int i_value;
+    if (!value || !str_to_int(value, 10, &i_value)) {
+        return def;
+    }
+
+    return i_value;
+}
+
+bool
+get_chassis_external_id_value_bool(const struct smap *external_ids,
+                                   const char *chassis_id,
+                                   const char *option_key,
+                                   bool def)
+{
+    const char *value = get_chassis_external_id_value(
+        external_ids, chassis_id, option_key, "");
+
+    if (def) {
+        return strcasecmp("false", value) != 0;
+    } else {
+        return !strcasecmp("true", value);
+    }
+}
