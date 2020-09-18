@@ -6811,6 +6811,13 @@ build_lswitch_destination_lookup_brodcast_multicast(
                     struct ovn_datapath *od, struct hmap *lflows,
                     char *svc_check_match, struct ds *actions);
 
+/* Ingress table 19: Add IP multicast flows learnt from IGMP/MLD
+ * (priority 90). */
+static void
+build_lswitch_multicast_igmp_mld(
+                    struct ovn_igmp_group *igmp_group,
+                    struct hmap *lflows,
+                    struct ds *match, struct ds *actions);
 /*
 * Do not remove this comment - it is here as a marker to
 * make diffs readable.
@@ -6834,6 +6841,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
     struct ovn_datapath *od;
     struct ovn_port *op;
     struct ovn_lb *lb;
+    struct ovn_igmp_group *igmp_group;
 
     HMAP_FOR_EACH (od, key_node, datapaths) {
         build_lswitch_flows_pre_acl_and_acl(od, lflows,
@@ -6898,72 +6906,9 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
     }
     free(svc_check_match);
 
-    /* Ingress table 19: Add IP multicast flows learnt from IGMP/MLD
-     * (priority 90). */
-    struct ovn_igmp_group *igmp_group;
-
     HMAP_FOR_EACH (igmp_group, hmap_node, igmp_groups) {
-        if (!igmp_group->datapath) {
-            continue;
-        }
-
-        ds_clear(&match);
-        ds_clear(&actions);
-
-        struct mcast_switch_info *mcast_sw_info =
-            &igmp_group->datapath->mcast_info.sw;
-
-        if (IN6_IS_ADDR_V4MAPPED(&igmp_group->address)) {
-            /* RFC 4541, section 2.1.2, item 2: Skip groups in the 224.0.0.X
-             * range.
-             */
-            ovs_be32 group_address =
-                in6_addr_get_mapped_ipv4(&igmp_group->address);
-            if (ip_is_local_multicast(group_address)) {
-                continue;
-            }
-
-            if (mcast_sw_info->active_v4_flows >= mcast_sw_info->table_size) {
-                continue;
-            }
-            mcast_sw_info->active_v4_flows++;
-            ds_put_format(&match, "eth.mcast && ip4 && ip4.dst == %s ",
-                          igmp_group->mcgroup.name);
-        } else {
-            /* RFC 4291, section 2.7.1: Skip groups that correspond to all
-             * hosts.
-             */
-            if (ipv6_is_all_hosts(&igmp_group->address)) {
-                continue;
-            }
-            if (mcast_sw_info->active_v6_flows >= mcast_sw_info->table_size) {
-                continue;
-            }
-            mcast_sw_info->active_v6_flows++;
-            ds_put_format(&match, "eth.mcast && ip6 && ip6.dst == %s ",
-                          igmp_group->mcgroup.name);
-        }
-
-        /* Also flood traffic to all multicast routers with relay enabled. */
-        if (mcast_sw_info->flood_relay) {
-            ds_put_cstr(&actions,
-                        "clone { "
-                            "outport = \""MC_MROUTER_FLOOD "\"; "
-                            "output; "
-                        "};");
-        }
-        if (mcast_sw_info->flood_static) {
-            ds_put_cstr(&actions,
-                        "clone { "
-                            "outport =\""MC_STATIC"\"; "
-                            "output; "
-                        "};");
-        }
-        ds_put_format(&actions, "outport = \"%s\"; output; ",
-                      igmp_group->mcgroup.name);
-
-        ovn_lflow_add(lflows, igmp_group->datapath, S_SWITCH_IN_L2_LKUP, 90,
-                      ds_cstr(&match), ds_cstr(&actions));
+        build_lswitch_multicast_igmp_mld(
+                igmp_group, lflows, &match, &actions);
     }
 
     /* Ingress table 19: Destination lookup, unicast handling (priority 50), */
@@ -7569,6 +7514,75 @@ build_lswitch_destination_lookup_brodcast_multicast(
 
         ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 70, "eth.mcast",
                       "outport = \""MC_FLOOD"\"; output;");
+    }
+
+}
+
+static void
+build_lswitch_multicast_igmp_mld(
+                    struct ovn_igmp_group *igmp_group,
+                    struct hmap *lflows,
+                    struct ds *match, struct ds *actions)
+{
+    if (igmp_group->datapath) {
+
+        ds_clear(match);
+        ds_clear(actions);
+
+        struct mcast_switch_info *mcast_sw_info =
+            &igmp_group->datapath->mcast_info.sw;
+
+        if (IN6_IS_ADDR_V4MAPPED(&igmp_group->address)) {
+            /* RFC 4541, section 2.1.2, item 2: Skip groups in the 224.0.0.X
+             * range.
+             */
+            ovs_be32 group_address =
+                in6_addr_get_mapped_ipv4(&igmp_group->address);
+            if (ip_is_local_multicast(group_address)) {
+                continue;
+            }
+
+            if (mcast_sw_info->active_v4_flows >= mcast_sw_info->table_size) {
+                continue;
+            }
+            mcast_sw_info->active_v4_flows++;
+            ds_put_format(match, "eth.mcast && ip4 && ip4.dst == %s ",
+                          igmp_group->mcgroup.name);
+        } else {
+            /* RFC 4291, section 2.7.1: Skip groups that correspond to all
+             * hosts.
+             */
+            if (ipv6_is_all_hosts(&igmp_group->address)) {
+                continue;
+            }
+            if (mcast_sw_info->active_v6_flows >= mcast_sw_info->table_size) {
+                continue;
+            }
+            mcast_sw_info->active_v6_flows++;
+            ds_put_format(match, "eth.mcast && ip6 && ip6.dst == %s ",
+                          igmp_group->mcgroup.name);
+        }
+
+        /* Also flood traffic to all multicast routers with relay enabled. */
+        if (mcast_sw_info->flood_relay) {
+            ds_put_cstr(actions,
+                        "clone { "
+                            "outport = \""MC_MROUTER_FLOOD "\"; "
+                            "output; "
+                        "};");
+        }
+        if (mcast_sw_info->flood_static) {
+            ds_put_cstr(actions,
+                        "clone { "
+                            "outport =\""MC_STATIC"\"; "
+                            "output; "
+                        "};");
+        }
+        ds_put_format(actions, "outport = \"%s\"; output; ",
+                      igmp_group->mcgroup.name);
+
+        ovn_lflow_add(lflows, igmp_group->datapath, S_SWITCH_IN_L2_LKUP, 90,
+                      ds_cstr(match), ds_cstr(actions));
     }
 
 }
