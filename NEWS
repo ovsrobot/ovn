@@ -18,6 +18,11 @@ OVN v20.09.0 - xx xxx xxxx
    - Added support for external ip based NAT. Now, besides the logical ip,
      external ips will also decide if a packet will be NATed or not.
    - Added support for VXLAN encapsulation (not just for ramp/VTEP switches).
+   - Added support for multiple ovn-controller instances on the same host
+     (virtual chassis). Now all external-ids:* configuration options can be
+     customized for each controller instance running on the same host. The only
+     option that is not available per chassis is external-ids:system-id, which
+     stands for the chassis name and can be passed via config file or CLI (-n).
 
 OVN v20.06.0
 --------------------------

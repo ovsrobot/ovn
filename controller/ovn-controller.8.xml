@@ -236,6 +236,19 @@
     </dl>
 
     <p>
+      Note that every <code>external_ids:*</code> key listed above has its
+      <code>external_ids:*-chassis_name</code> counterpart keys that allow to
+      configure values specific to chassis running on the same OVSDB. For
+      example, if two chassis named <code>blue</code> and <code>red</code> are
+      available on the same host, then an admin may configure different
+      <code>ovn-cms-options</code> for each of them by setting
+      <code>external_ids:ovn-cms-options-blue</code> and
+      <code>external_ids:ovn-cms-options-red</code> keys in the database. The
+      only key that is not available for per-chassis configuration is
+      <code>external_ids:system-id</code>.
+    </p>
+
+    <p>
       <code>ovn-controller</code> reads the following values from the
       <code>Open_vSwitch</code> database of the local OVS instance:
     </p>
