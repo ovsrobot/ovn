@@ -6779,6 +6779,12 @@ static void
 build_lswitch_dhcp_response(
                     struct ovn_port *op, struct hmap *lflows);
 
+/* Logical switch ingress table 17 and 18: DNS lookup and response
+ * priority 100 flows.
+ */
+static void
+build_lswitch_dns_lookup_response(
+                    struct ovn_datapath *od, struct hmap *lflows);
 /*
 * Do not remove this comment - it is here as a marker to
 * make diffs readable.
@@ -6847,29 +6853,8 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         build_lswitch_dhcp_response(op, lflows);
     }
 
-
-    /* Logical switch ingress table 17 and 18: DNS lookup and response
-     * priority 100 flows.
-     */
     HMAP_FOR_EACH (od, key_node, datapaths) {
-        if (!od->nbs || !ls_has_dns_records(od->nbs)) {
-           continue;
-        }
-
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_LOOKUP, 100,
-                      "udp.dst == 53",
-                      REGBIT_DNS_LOOKUP_RESULT" = dns_lookup(); next;");
-        const char *dns_action = "eth.dst <-> eth.src; ip4.src <-> ip4.dst; "
-                      "udp.dst = udp.src; udp.src = 53; outport = inport; "
-                      "flags.loopback = 1; output;";
-        const char *dns_match = "udp.dst == 53 && "REGBIT_DNS_LOOKUP_RESULT;
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 100,
-                      dns_match, dns_action);
-        dns_action = "eth.dst <-> eth.src; ip6.src <-> ip6.dst; "
-                      "udp.dst = udp.src; udp.src = 53; outport = inport; "
-                      "flags.loopback = 1; output;";
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 100,
-                      dns_match, dns_action);
+        build_lswitch_dns_lookup_response(od, lflows);
     }
 
     /* Ingress table 14 and 15: DHCP options and response, by default goto
@@ -7528,6 +7513,28 @@ build_lswitch_dhcp_response(
     }
 }
 
+static void
+build_lswitch_dns_lookup_response(
+                    struct ovn_datapath *od, struct hmap *lflows)
+{
+    if (!(!od->nbs || !ls_has_dns_records(od->nbs))) {
+
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_LOOKUP, 100,
+                      "udp.dst == 53",
+                      REGBIT_DNS_LOOKUP_RESULT" = dns_lookup(); next;");
+        const char *dns_action = "eth.dst <-> eth.src; ip4.src <-> ip4.dst; "
+                      "udp.dst = udp.src; udp.src = 53; outport = inport; "
+                      "flags.loopback = 1; output;";
+        const char *dns_match = "udp.dst == 53 && "REGBIT_DNS_LOOKUP_RESULT;
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 100,
+                      dns_match, dns_action);
+        dns_action = "eth.dst <-> eth.src; ip6.src <-> ip6.dst; "
+                      "udp.dst = udp.src; udp.src = 53; outport = inport; "
+                      "flags.loopback = 1; output;";
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 100,
+                      dns_match, dns_action);
+    }
+}
 /* Returns a string of the IP address of the router port 'op' that
  * overlaps with 'ip_s".  If one is not found, returns NULL.
  *
