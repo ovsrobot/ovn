@@ -1727,7 +1727,108 @@ AT_CLEANUP
 
 AT_BANNER([OVN end-to-end tests])
 
-# 3 hypervisors, one logical switch, 3 logical ports per hypervisor
+AT_SETUP([ovn -- 3 virtual hosts, same node])
+AT_KEYWORDS([ovn])
+ovn_start
+ovn-nbctl ls-add lsw0
+net_add n1
+sim_add hv
+
+as hv
+for i in 1 2 3; do
+    chassis=host-$i
+    ovs-vsctl add-br br-phys-$i
+    ovn_attach n1 br-phys-$i 192.168.0.$i 24 geneve br-int-$i $chassis
+
+    for j in 1 2 3; do
+        lpname=lp$i$j
+        ovn-nbctl lsp-add lsw0 $lpname
+        ovn-nbctl --wait=hv --timeout=3 lsp-set-options $lpname requested-chassis=$chassis
+        ovs-vsctl add-port br-int-$i vif$i$j -- set Interface vif$i$j external-ids:iface-id=$lpname
+        OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up $lpname` = xup])
+
+        pb_chassis_id=$(ovn-sbctl --bare --columns chassis list port_binding $lpname)
+        pb_chassis_name=$(ovn-sbctl get chassis $pb_chassis_id name)
+        AT_FAIL_IF([test x$pb_chassis_name != x$chassis])
+    done
+done
+
+for i in 1 2 3; do
+    > expout
+    for vif in 1 2 3; do
+        echo vif$i$vif >> expout
+    done
+    AT_CHECK([ovs-vsctl list-ports br-int-$i | grep vif], [0], [expout])
+done
+
+AT_CLEANUP
+
+AT_SETUP([ovn -- system-id in file])
+AT_KEYWORDS([ovn])
+
+ovn_start
+net_add n1
+sim_add hv
+
+as hv
+
+mkdir -p ${OVS_SYSCONFDIR}/ovn
+echo otherid > ${OVS_SYSCONFDIR}/ovn/system-id-override
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+# system-id-override file overrides chassis name selected via cli
+echo otherid > expout
+AT_CHECK([ovn-sbctl --bare --columns name list chassis], [0], [expout])
+
+AT_CLEANUP
+
+AT_SETUP([ovn -- concurrent controllers avoid fighting for each others' resources])
+AT_KEYWORDS([ovn])
+
+ovn_start
+sim_add hv
+
+for i in 1 2; do
+    net_add n-$i
+done
+
+as hv
+for i in 1 2; do
+    AT_CHECK([ovn-nbctl ls-add ls-$i])
+    AT_CHECK([ovn-nbctl lsp-add ls-$i ln_port-$i])
+    AT_CHECK([ovn-nbctl lsp-set-addresses ln_port-$i unknown])
+    AT_CHECK([ovn-nbctl lsp-set-type ln_port-$i localnet])
+    AT_CHECK([ovn-nbctl --wait=hv lsp-set-options ln_port-$i network_name=phys-$i])
+done
+
+for i in 1 2; do
+    as hv
+    ovs-vsctl add-br br-phys-$i
+    ovs-vsctl set open . external-ids:ovn-bridge-mappings-hv-$i=phys-$i:br-phys-$i
+    ovn_attach n-$i br-phys-$i 192.168.0.$i 24 geneve br-int-$i hv-$i
+
+    ovs-vsctl add-port br-int-$i vif-$i -- set Interface vif-$i external-ids:iface-id=lp-$i
+    ovn-nbctl lsp-add ls-$i lp-$i
+    OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up lp-$i` = xup])
+done
+
+# check that both patch ports are present
+AT_CHECK([ovs-vsctl --bare --columns=name find interface type="patch" | awk NF | sort], [0],
+[[patch-br-int-1-to-ln_port-1
+patch-br-int-2-to-ln_port-2
+patch-ln_port-1-to-br-int-1
+patch-ln_port-2-to-br-int-2
+]])
+
+# check that both tunnel endpoints are present
+AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
+[[ovn-hv-1-0
+ovn-hv-2-0
+]])
+
+AT_CLEANUP
+
 AT_SETUP([ovn -- 3 HVs, 1 LS, 3 lports/HV])
 AT_KEYWORDS([ovnarp])
 ovn_start

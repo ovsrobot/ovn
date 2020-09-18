@@ -18,10 +18,14 @@
 #include "ovn-controller.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "bfd.h"
 #include "binding.h"
@@ -84,6 +88,9 @@ static unixctl_cb_func debug_delay_nb_cfg_report;
 #define OFCTRL_DEFAULT_PROBE_INTERVAL_SEC 0
 
 #define CONTROLLER_LOOP_STOPWATCH_NAME "ovn-controller-flow-generation"
+
+static char *controller_chassis = NULL;
+static char *system_id_override = NULL;
 
 static char *parse_options(int argc, char *argv[]);
 OVS_NO_RETURN static void usage(void);
@@ -260,7 +267,9 @@ out:
 static const char *
 br_int_name(const struct ovsrec_open_vswitch *cfg)
 {
-    return smap_get_def(&cfg->external_ids, "ovn-bridge", DEFAULT_BRIDGE_NAME);
+    return get_chassis_external_id_value(
+        &cfg->external_ids, get_ovs_chassis_id(cfg),
+        "ovn-bridge", DEFAULT_BRIDGE_NAME);
 }
 
 static const struct ovsrec_bridge *
@@ -361,8 +370,9 @@ process_br_int(struct ovsdb_idl_txn *ovs_idl_txn,
         const struct ovsrec_open_vswitch *cfg;
         cfg = ovsrec_open_vswitch_table_first(ovs_table);
         ovs_assert(cfg);
-        const char *datapath_type = smap_get(&cfg->external_ids,
-                                             "ovn-bridge-datapath-type");
+        const char *datapath_type = get_chassis_external_id_value(
+            &cfg->external_ids, get_ovs_chassis_id(cfg),
+            "ovn-bridge-datapath-type", NULL);
         /* Check for the datapath_type and set it only if it is defined in
          * cfg. */
         if (datapath_type && strcmp(br_int->datapath_type, datapath_type)) {
@@ -372,17 +382,46 @@ process_br_int(struct ovsdb_idl_txn *ovs_idl_txn,
     return br_int;
 }
 
-static const char *
-get_ovs_chassis_id(const struct ovsrec_open_vswitch_table *ovs_table)
+static char *get_file_system_id_override(void)
 {
-    const struct ovsrec_open_vswitch *cfg
-        = ovsrec_open_vswitch_table_first(ovs_table);
+    char *ret = NULL;
+    char *filename = xasprintf("%s/ovn/system-id-override", ovs_sysconfdir());
+    errno = 0;
+    int fd = open(filename, O_RDONLY);
+    if (fd != -1) {
+        char file_system_id[64];
+        int nread = read(fd, file_system_id, sizeof file_system_id);
+        if (nread) {
+            file_system_id[nread] = '\0';
+            if (file_system_id[nread - 1] == '\n') {
+                file_system_id[nread - 1] = '\0';
+            }
+            ret = xstrdup(file_system_id);
+        }
+        close(fd);
+    }
+
+    free(filename);
+    return ret;
+}
+
+const char *
+get_ovs_chassis_id(const struct ovsrec_open_vswitch *cfg)
+{
+    if (controller_chassis) {
+        return controller_chassis;
+    }
+
+    if (system_id_override) {
+        return system_id_override;
+    }
+
     const char *chassis_id = cfg ? smap_get(&cfg->external_ids, "system-id")
                                  : NULL;
-
     if (!chassis_id) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-        VLOG_WARN_RL(&rl, "'system-id' in Open_vSwitch database is missing.");
+        VLOG_WARN_RL(&rl, "Failed to detect system-id, "
+                          "configuration not found.");
     }
 
     return chassis_id;
@@ -477,10 +516,12 @@ static int
 get_ofctrl_probe_interval(struct ovsdb_idl *ovs_idl)
 {
     const struct ovsrec_open_vswitch *cfg = ovsrec_open_vswitch_first(ovs_idl);
-    return !cfg ? OFCTRL_DEFAULT_PROBE_INTERVAL_SEC :
-                  smap_get_int(&cfg->external_ids,
-                               "ovn-openflow-probe-interval",
-                               OFCTRL_DEFAULT_PROBE_INTERVAL_SEC);
+    if (!cfg) {
+        return OFCTRL_DEFAULT_PROBE_INTERVAL_SEC;
+    }
+    return get_chassis_external_id_value_int(
+        &cfg->external_ids, get_ovs_chassis_id(cfg),
+        "ovn-openflow-probe-interval", OFCTRL_DEFAULT_PROBE_INTERVAL_SEC);
 }
 
 /* Retrieves the pointer to the OVN Southbound database from 'ovs_idl' and
@@ -496,18 +537,21 @@ update_sb_db(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
     }
 
     /* Set remote based on user configuration. */
-    const char *remote = smap_get(&cfg->external_ids, "ovn-remote");
+    const char *chassis_id = get_ovs_chassis_id(cfg);
+    const char *remote = get_chassis_external_id_value(
+        &cfg->external_ids, chassis_id, "ovn-remote", NULL);
     ovsdb_idl_set_remote(ovnsb_idl, remote, true);
 
     /* Set probe interval, based on user configuration and the remote. */
     int default_interval = (remote && !stream_or_pstream_needs_probes(remote)
                             ? 0 : DEFAULT_PROBE_INTERVAL_MSEC);
-    int interval = smap_get_int(&cfg->external_ids,
-                                "ovn-remote-probe-interval", default_interval);
+    int interval = get_chassis_external_id_value_int(
+        &cfg->external_ids, chassis_id, "ovn-remote-probe-interval",
+        default_interval);
     ovsdb_idl_set_probe_interval(ovnsb_idl, interval);
 
-    bool monitor_all = smap_get_bool(&cfg->external_ids, "ovn-monitor-all",
-                                     false);
+    bool monitor_all = get_chassis_external_id_value_bool(
+        &cfg->external_ids, chassis_id, "ovn-monitor-all", false);
     if (monitor_all) {
         /* Always call update_sb_monitors when monitor_all is true.
          * Otherwise, don't call it here, because there would be unnecessary
@@ -1166,7 +1210,9 @@ init_binding_ctx(struct engine_node *node,
     struct ovsrec_bridge_table *bridge_table =
         (struct ovsrec_bridge_table *)EN_OVSDB_GET(
             engine_get_input("OVS_bridge", node));
-    const char *chassis_id = get_ovs_chassis_id(ovs_table);
+    const struct ovsrec_open_vswitch *cfg =
+        ovsrec_open_vswitch_table_first(ovs_table);
+    const char *chassis_id = get_ovs_chassis_id(cfg);
     const struct ovsrec_bridge *br_int = get_br_int(bridge_table, ovs_table);
 
     ovs_assert(br_int && chassis_id);
@@ -2432,6 +2478,10 @@ main(int argc, char *argv[])
     exiting = false;
     restart = false;
     bool sb_monitor_all = false;
+
+    /* Read from system-id-override file once on startup. */
+    system_id_override = get_file_system_id_override();
+
     while (!exiting) {
         /* If we're paused just run the unixctl server and skip most of the
          * processing loop.
@@ -2498,7 +2548,9 @@ main(int argc, char *argv[])
                 sbrec_chassis_private_table_get(ovnsb_idl_loop.idl);
             const struct ovsrec_bridge *br_int =
                 process_br_int(ovs_idl_txn, bridge_table, ovs_table);
-            const char *chassis_id = get_ovs_chassis_id(ovs_table);
+            const struct ovsrec_open_vswitch *cfg =
+                ovsrec_open_vswitch_table_first(ovs_table);
+            const char *chassis_id = get_ovs_chassis_id(cfg);
             const struct sbrec_chassis *chassis = NULL;
             const struct sbrec_chassis_private *chassis_private = NULL;
             if (chassis_id) {
@@ -2779,6 +2831,8 @@ loop_done:
     ovsdb_idl_loop_destroy(&ovs_idl_loop);
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
 
+    free(controller_chassis);
+    free(system_id_override);
     free(ovs_remote);
     service_stop();
 
@@ -2804,6 +2858,7 @@ parse_options(int argc, char *argv[])
         STREAM_SSL_LONG_OPTIONS,
         {"peer-ca-cert", required_argument, NULL, OPT_PEER_CA_CERT},
         {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
+        {"chassis", required_argument, NULL, 'n'},
         {NULL, 0, NULL, 0}
     };
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
@@ -2834,6 +2889,10 @@ parse_options(int argc, char *argv[])
 
         case OPT_BOOTSTRAP_CA_CERT:
             stream_ssl_set_ca_cert_file(optarg, true);
+            break;
+
+        case 'n':
+            controller_chassis = xstrdup(optarg);
             break;
 
         case '?':
