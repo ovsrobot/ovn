@@ -54,6 +54,10 @@ struct binding_ctx_in {
     const struct ovsrec_interface_table *iface_table;
 };
 
+struct local_iface_node {
+    char *iface_id;
+};
+
 struct binding_ctx_out {
     struct hmap *local_datapaths;
     struct shash *local_bindings;
@@ -77,7 +81,7 @@ struct binding_ctx_out {
     struct sset *egress_ifaces;
     /* smap of OVS interface name as key and
      * OVS interface external_ids:iface-id as value. */
-    struct smap *local_iface_ids;
+    struct shash *local_ifaces;
 
     /* hmap of 'struct tracked_binding_datapath' which the
      * callee (binding_handle_ovs_interface_changes and

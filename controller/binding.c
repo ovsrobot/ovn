@@ -1349,8 +1349,16 @@ build_local_bindings(struct binding_ctx_in *b_ctx_in,
                 }
 
                 update_local_lports(iface_id, b_ctx_out);
-                smap_replace(b_ctx_out->local_iface_ids, iface_rec->name,
-                             iface_id);
+
+                struct local_iface_node *iface_node =
+                    xmalloc(sizeof *iface_node);
+                iface_node->iface_id = xstrdup(iface_id);
+                iface_node = shash_replace(b_ctx_out->local_ifaces,
+                                           iface_rec->name, iface_node);
+                if (iface_node) {
+                    free(iface_node->iface_id);
+                    free(iface_node);
+                }
             }
 
             /* Check if this is a tunnel interface. */
@@ -1689,7 +1697,15 @@ consider_iface_claim(const struct ovsrec_interface *iface_rec,
                      struct hmap *qos_map)
 {
     update_local_lports(iface_id, b_ctx_out);
-    smap_replace(b_ctx_out->local_iface_ids, iface_rec->name, iface_id);
+
+    struct local_iface_node *iface_node = xmalloc(sizeof *iface_node);
+    iface_node->iface_id = xstrdup(iface_id);
+    iface_node = shash_replace(b_ctx_out->local_ifaces,
+                               iface_rec->name, iface_node);
+    if (iface_node) {
+        free(iface_node->iface_id);
+        free(iface_node);
+    }
 
     struct local_binding *lbinding =
         local_binding_find(b_ctx_out->local_bindings, iface_id);
@@ -1783,7 +1799,13 @@ consider_iface_release(const struct ovsrec_interface *iface_rec,
     }
 
     remove_local_lports(iface_id, b_ctx_out);
-    smap_remove(b_ctx_out->local_iface_ids, iface_rec->name);
+    struct local_iface_node *iface_node = shash_find_and_delete(
+            b_ctx_out->local_ifaces,
+            iface_rec->name);
+    if (iface_node) {
+        free(iface_node->iface_id);
+        free(iface_node);
+    }
 
     return true;
 }
@@ -1822,11 +1844,11 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
      *   2. external_ids:iface-id is cleared in which case we need to
      *      release the port binding corresponding to the previously set
      *      'old-iface-id' (which is stored in the smap
-     *      'b_ctx_out->local_iface_ids').
+     *      'b_ctx_out->local_ifaces').
      *   3. external_ids:iface-id is updated with a different value
      *      in which case we need to release the port binding corresponding
      *      to the previously set 'old-iface-id' (which is stored in the smap
-     *      'b_ctx_out->local_iface_ids').
+     *      'b_ctx_out->local_ifaces').
      *   4. ofport of the OVS interface is 0.
      *
      */
@@ -1842,8 +1864,10 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
         }
 
         const char *iface_id = smap_get(&iface_rec->external_ids, "iface-id");
-        const char *old_iface_id = smap_get(b_ctx_out->local_iface_ids,
-                                            iface_rec->name);
+
+        struct local_iface_node *iface_node = shash_find_data(
+                b_ctx_out->local_ifaces, iface_rec->name);
+        const char *old_iface_id = iface_node ? iface_node->iface_id : NULL;
         const char *cleared_iface_id = NULL;
         if (!ovsrec_interface_is_deleted(iface_rec)) {
             int64_t ofport = iface_rec->n_ofport ? *iface_rec->ofport : 0;

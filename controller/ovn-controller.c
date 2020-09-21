@@ -35,6 +35,7 @@
 #include "fatal-signal.h"
 #include "ip-mcast.h"
 #include "openvswitch/hmap.h"
+#include "openvswitch/shash.h"
 #include "lflow.h"
 #include "lib/vswitch-idl.h"
 #include "lport.h"
@@ -1033,7 +1034,7 @@ struct ed_type_runtime_data {
 
     /* runtime data engine private data. */
     struct sset egress_ifaces;
-    struct smap local_iface_ids;
+    struct shash local_ifaces;
 
     /* Tracked data. See below for more details and comments. */
     bool tracked;
@@ -1085,7 +1086,7 @@ struct ed_type_runtime_data {
  * | local_bindings   | the @tracked_dp_bindings indirectly and hence it |
  * | local_lport_ids  | is not tracked explicitly.                       |
  *  ---------------------------------------------------------------------
- * | local_iface_ids  | This is used internally within the runtime data  |
+ * | local_ifaces     | This is used internally within the runtime data  |
  * | egress_ifaces    | engine (used only in binding.c) and hence there  |
  * |                  | there is no need to track.                       |
  *  ---------------------------------------------------------------------
@@ -1124,7 +1125,7 @@ en_runtime_data_init(struct engine_node *node OVS_UNUSED,
     sset_init(&data->local_lport_ids);
     sset_init(&data->active_tunnels);
     sset_init(&data->egress_ifaces);
-    smap_init(&data->local_iface_ids);
+    shash_init(&data->local_ifaces);
     local_bindings_init(&data->local_bindings);
 
     /* Init the tracked data. */
@@ -1142,7 +1143,19 @@ en_runtime_data_cleanup(void *data)
     sset_destroy(&rt_data->local_lport_ids);
     sset_destroy(&rt_data->active_tunnels);
     sset_destroy(&rt_data->egress_ifaces);
-    smap_destroy(&rt_data->local_iface_ids);
+
+    struct shash_node *sh_node, *sh_node_next;
+    SHASH_FOR_EACH_SAFE (sh_node, sh_node_next,
+                         &rt_data->local_ifaces) {
+        struct local_iface_node *iface_node = sh_node->data;
+        hmap_remove(&rt_data->local_ifaces.map, &sh_node->node);
+        free(iface_node->iface_id);
+        free(sh_node->data);
+        free(sh_node->name);
+        free(sh_node);
+    }
+    hmap_destroy(&rt_data->local_ifaces.map);
+
     struct local_datapath *cur_node, *next_node;
     HMAP_FOR_EACH_SAFE (cur_node, next_node, hmap_node,
                         &rt_data->local_datapaths) {
@@ -1234,7 +1247,7 @@ init_binding_ctx(struct engine_node *node,
     b_ctx_out->non_vif_ports_changed = false;
     b_ctx_out->egress_ifaces = &rt_data->egress_ifaces;
     b_ctx_out->local_bindings = &rt_data->local_bindings;
-    b_ctx_out->local_iface_ids = &rt_data->local_iface_ids;
+    b_ctx_out->local_ifaces = &rt_data->local_ifaces;
     b_ctx_out->tracked_dp_bindings = NULL;
     b_ctx_out->local_lports_changed = NULL;
 }
@@ -1282,12 +1295,24 @@ en_runtime_data_run(struct engine_node *node, void *data)
         sset_destroy(local_lport_ids);
         sset_destroy(active_tunnels);
         sset_destroy(&rt_data->egress_ifaces);
-        smap_destroy(&rt_data->local_iface_ids);
+
+        struct shash_node *sh_node, *sh_node_next;
+        SHASH_FOR_EACH_SAFE (sh_node, sh_node_next,
+                             &rt_data->local_ifaces) {
+            struct local_iface_node *iface_node = sh_node->data;
+            hmap_remove(&rt_data->local_ifaces.map, &sh_node->node);
+            free(iface_node->iface_id);
+            free(sh_node->data);
+            free(sh_node->name);
+            free(sh_node);
+        }
+        hmap_destroy(&rt_data->local_ifaces.map);
+
         sset_init(local_lports);
         sset_init(local_lport_ids);
         sset_init(active_tunnels);
         sset_init(&rt_data->egress_ifaces);
-        smap_init(&rt_data->local_iface_ids);
+        shash_init(&rt_data->local_ifaces);
         local_bindings_init(&rt_data->local_bindings);
     }
 
