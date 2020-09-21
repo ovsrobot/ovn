@@ -1353,6 +1353,13 @@ build_local_bindings(struct binding_ctx_in *b_ctx_in,
                 struct local_iface_node *iface_node =
                     xmalloc(sizeof *iface_node);
                 iface_node->iface_id = xstrdup(iface_id);
+                struct local_iface_node *old_iface_node = shash_find_data(
+                        b_ctx_out->local_ifaces,
+                        iface_rec->name);
+                if (old_iface_node) {
+                    iface_node->qos_egress_iface =
+                        old_iface_node->qos_egress_iface;
+                }
                 iface_node = shash_replace(b_ctx_out->local_ifaces,
                                            iface_rec->name, iface_node);
                 if (iface_node) {
@@ -1700,6 +1707,12 @@ consider_iface_claim(const struct ovsrec_interface *iface_rec,
 
     struct local_iface_node *iface_node = xmalloc(sizeof *iface_node);
     iface_node->iface_id = xstrdup(iface_id);
+    struct local_iface_node *old_iface_node = shash_find_data(
+            b_ctx_out->local_ifaces,
+            iface_rec->name);
+    if (old_iface_node) {
+        iface_node->qos_egress_iface = old_iface_node->qos_egress_iface;
+    }
     iface_node = shash_replace(b_ctx_out->local_ifaces,
                                iface_rec->name, iface_node);
     if (iface_node) {
@@ -1926,6 +1939,19 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
         /* Loop to handle create and update changes only. */
         if (ovsrec_interface_is_deleted(iface_rec)) {
             continue;
+        }
+
+        struct local_iface_node *node = shash_find_data(
+                b_ctx_out->local_ifaces, iface_rec->name);
+        bool old_qos_egress = node ? node->qos_egress_iface : false;
+        bool qos_egress = smap_get_bool(&iface_rec->external_ids,
+                                        "ovn-egress-iface", false);
+        if (qos_egress != old_qos_egress) {
+            if (node) {
+                node->qos_egress_iface = qos_egress;
+            }
+            handled = false;
+            break;
         }
 
         const char *iface_id = smap_get(&iface_rec->external_ids, "iface-id");

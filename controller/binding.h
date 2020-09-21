@@ -56,6 +56,7 @@ struct binding_ctx_in {
 
 struct local_iface_node {
     char *iface_id;
+    bool qos_egress_iface;
 };
 
 struct binding_ctx_out {
