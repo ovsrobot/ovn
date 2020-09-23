@@ -415,14 +415,15 @@ chassis_tunnels_changed(const struct sset *encap_type_set,
                         const char *encap_csum,
                         const struct sbrec_chassis *chassis_rec)
 {
-    size_t encap_type_count = 0;
+    struct sset chassis_rec_encap_type_set;
 
+    sset_init(&chassis_rec_encap_type_set);
     for (size_t i = 0; i < chassis_rec->n_encaps; i++) {
 
         if (!sset_contains(encap_type_set, chassis_rec->encaps[i]->type)) {
             return true;
         }
-        encap_type_count++;
+        sset_add(&chassis_rec_encap_type_set, chassis_rec->encaps[i]->type);
 
         if (!sset_contains(encap_ip_set, chassis_rec->encaps[i]->ip)) {
             return true;
@@ -441,7 +442,8 @@ chassis_tunnels_changed(const struct sset *encap_type_set,
         return true;
     }
 
-    if (sset_count(encap_type_set) != encap_type_count) {
+    if (sset_count(encap_type_set) !=
+            sset_count(&chassis_rec_encap_type_set)) {
         return true;
     }
 
