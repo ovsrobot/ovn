@@ -1870,6 +1870,11 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
                                              b_ctx_in, b_ctx_out);
         }
 
+        if (smap_get(&iface_rec->external_ids, "ovn-egress-iface") ||
+            sset_contains(b_ctx_out->egress_ifaces, iface_rec->name)) {
+            handled = false;
+        }
+
         if (!handled) {
             break;
         }
