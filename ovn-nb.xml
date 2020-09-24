@@ -1721,6 +1721,49 @@
       </ul>
     </column>
 
+    <group title="Common options">
+      <column name="options">
+        This column provides general key/value settings. The supported
+        options are described individually below.
+      </column>
+
+      <group title="Options for providing protocol hints for reject ACL.">
+        <p>
+          The ACL match specified in the
+          <ref column="match" table="ACL" db="OVN_Northbound"/> column is
+          opaque to <code>OVN</code> and <code>ovn-northd</code> doesn't
+          look into the match fields.
+          These options can be specified by CMS to provide hints to
+          <code>OVN</code> about the L3 and L4 protocol matches for the reject
+          ACL. <code>ovn-northd</code> uses these options if set to use
+          appropriate actions when generating logical flows.
+        </p>
+
+        <p>
+          If these options are not set, then <code>ovn-northd</code> assumes
+          the reject ACL applies to IPv4, IPv6 and TCP packets.
+        </p>
+
+        <column name="options" key="l3-protocol">
+          The possible values are <code>ip</code>, <code>ip4</code> and
+          <code>ip6</code>. If the value is <code>ip</code>, it means the
+          reject ACL action applies to both IPv4 and IPv6 packets. If the
+          value is <code>ip4</code>, it means the reject ACL action applies to
+          IPv4 packets and the value <code>ip6</code> applies to IPv6 packets.
+        </column>
+
+        <column name="options" key="l4-protocol">
+          <p>
+            The possible values are <code>tcp</code> and <code>udp</code>.
+            If the value is <code>tcp</code>, it means the
+            reject ACL action applies to TCP packets. If the
+            value is <code>udp</code>, it means the reject ACL action applies
+            to UDP packets.
+          </p>
+        </column>
+      </group>
+    </group>
+
     <group title="Logging">
       <p>
         These columns control whether and how OVN logs packets that match an

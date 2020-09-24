@@ -5372,73 +5372,135 @@ build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
     struct ds actions = DS_EMPTY_INITIALIZER;
     bool ingress = (stage == S_SWITCH_IN_ACL);
 
-    /* TCP */
-    build_acl_log(&actions, acl);
-    if (extra_match->length > 0) {
-        ds_put_format(&match, "(%s) && ", extra_match->string);
-    }
-    ds_put_format(&match, "ip4 && tcp && (%s)", acl->match);
-    ds_put_format(&actions, "reg0 = 0; "
-                  "eth.dst <-> eth.src; ip4.dst <-> ip4.src; "
-                  "tcp_reset { outport <-> inport; %s };",
-                  ingress ? "next(pipeline=egress,table=5);"
-                          : "next(pipeline=ingress,table=20);");
-    ovn_lflow_add_with_hint(lflows, od, stage,
-                            acl->priority + OVN_ACL_PRI_OFFSET + 10,
-                            ds_cstr(&match), ds_cstr(&actions), stage_hint);
-    ds_clear(&match);
-    ds_clear(&actions);
-    build_acl_log(&actions, acl);
-    if (extra_match->length > 0) {
-        ds_put_format(&match, "(%s) && ", extra_match->string);
-    }
-    ds_put_format(&match, "ip6 && tcp && (%s)", acl->match);
-    ds_put_format(&actions, "reg0 = 0; "
-                  "eth.dst <-> eth.src; ip6.dst <-> ip6.src; "
-                  "tcp_reset { outport <-> inport; %s };",
-                  ingress ? "next(pipeline=egress,table=5);"
-                          : "next(pipeline=ingress,table=20);");
-    ovn_lflow_add_with_hint(lflows, od, stage,
-                            acl->priority + OVN_ACL_PRI_OFFSET + 10,
-                            ds_cstr(&match), ds_cstr(&actions), stage_hint);
+    bool is_ip4 = true;
+    bool is_ip6 = true;
+    bool tcp_reset = true;
+    bool icmp_reset = true;
+    bool is_udp = false;
 
-    /* IP traffic */
-    ds_clear(&match);
-    ds_clear(&actions);
-    build_acl_log(&actions, acl);
-    if (extra_match->length > 0) {
-        ds_put_format(&match, "(%s) && ", extra_match->string);
+    const char *l3_protocol = smap_get(&acl->options, "l3-protocol");
+    if (l3_protocol) {
+        if (!strcasecmp(l3_protocol, "ip")) {
+            is_ip4 = true;
+            is_ip6 = true;
+        } else if (!strcasecmp(l3_protocol, "ip4")) {
+            is_ip4 = true;
+            is_ip6 = false;
+        } else if (!strcasecmp(l3_protocol, "ip6")) {
+            is_ip6 = true;
+            is_ip4 = false;
+        }
     }
-    ds_put_format(&match, "ip4 && (%s)", acl->match);
-    if (extra_actions->length > 0) {
-        ds_put_format(&actions, "%s ", extra_actions->string);
+
+    const char *l4_protocol = smap_get(&acl->options, "l4-protocol");
+    if (l4_protocol) {
+        if (!strcasecmp(l4_protocol, "tcp")) {
+            tcp_reset = true;
+            icmp_reset = false;
+        } else if (!strcasecmp(l4_protocol, "udp")) {
+            tcp_reset = false;
+            is_udp = true;
+        } else {
+            tcp_reset = false;
+        }
     }
-    ds_put_format(&actions, "reg0 = 0; "
-                  "icmp4 { eth.dst <-> eth.src; ip4.dst <-> ip4.src; "
-                  "outport <-> inport; %s };",
-                  ingress ? "next(pipeline=egress,table=5);"
-                          : "next(pipeline=ingress,table=20);");
-    ovn_lflow_add_with_hint(lflows, od, stage,
-                            acl->priority + OVN_ACL_PRI_OFFSET,
-                            ds_cstr(&match), ds_cstr(&actions), stage_hint);
-    ds_clear(&match);
-    ds_clear(&actions);
-    build_acl_log(&actions, acl);
-    if (extra_match->length > 0) {
-        ds_put_format(&match, "(%s) && ", extra_match->string);
+
+    if (is_ip4) {
+        if (tcp_reset) {
+            build_acl_log(&actions, acl);
+            if (extra_match->length > 0) {
+                ds_put_format(&match, "(%s) && ", extra_match->string);
+            }
+            ds_put_format(&match, "ip4 && tcp && (%s)", acl->match);
+            if (extra_actions->length > 0) {
+                ds_put_format(&actions, "%s ", extra_actions->string);
+            }
+            ds_put_format(&actions, "reg0 = 0; "
+                          "eth.dst <-> eth.src; ip4.dst <-> ip4.src; "
+                          "tcp_reset { outport <-> inport; %s };",
+                          ingress ? "next(pipeline=egress,table=5);"
+                                  : "next(pipeline=ingress,table=20);");
+            ovn_lflow_add_with_hint(lflows, od, stage,
+                                    acl->priority + OVN_ACL_PRI_OFFSET + 10,
+                                    ds_cstr(&match), ds_cstr(&actions),
+                                    stage_hint);
+        }
+
+        if (icmp_reset) {
+            ds_clear(&match);
+            ds_clear(&actions);
+            build_acl_log(&actions, acl);
+            if (extra_match->length > 0) {
+                ds_put_format(&match, "(%s) && ", extra_match->string);
+            }
+            ds_put_format(&match, "ip4 && (%s)", acl->match);
+            if (is_udp) {
+                ds_put_cstr(&match, " && udp");
+            }
+            if (extra_actions->length > 0) {
+                ds_put_format(&actions, "%s ", extra_actions->string);
+            }
+            ds_put_format(&actions, "reg0 = 0; "
+                          "icmp4 { eth.dst <-> eth.src; ip4.dst <-> ip4.src; "
+                          "outport <-> inport; %s };",
+                          ingress ? "next(pipeline=egress,table=5);"
+                                  : "next(pipeline=ingress,table=20);");
+            ovn_lflow_add_with_hint(lflows, od, stage,
+                                    acl->priority + OVN_ACL_PRI_OFFSET,
+                                    ds_cstr(&match), ds_cstr(&actions),
+                                    stage_hint);
+        }
     }
-    ds_put_format(&match, "ip6 && (%s)", acl->match);
-    if (extra_actions->length > 0) {
-        ds_put_format(&actions, "%s ", extra_actions->string);
+
+    if (is_ip6) {
+        if (tcp_reset) {
+            ds_clear(&match);
+            ds_clear(&actions);
+            build_acl_log(&actions, acl);
+            if (extra_match->length > 0) {
+                ds_put_format(&match, "(%s) && ", extra_match->string);
+            }
+            ds_put_format(&match, "ip6 && tcp && (%s)", acl->match);
+            if (extra_actions->length > 0) {
+                ds_put_format(&actions, "%s ", extra_actions->string);
+            }
+            ds_put_format(&actions, "reg0 = 0; "
+                          "eth.dst <-> eth.src; ip6.dst <-> ip6.src; "
+                          "tcp_reset { outport <-> inport; %s };",
+                          ingress ? "next(pipeline=egress,table=5);"
+                                  : "next(pipeline=ingress,table=20);");
+            ovn_lflow_add_with_hint(lflows, od, stage,
+                                    acl->priority + OVN_ACL_PRI_OFFSET + 10,
+                                    ds_cstr(&match), ds_cstr(&actions),
+                                    stage_hint);
+        }
+
+        if (icmp_reset) {
+            ds_clear(&match);
+            ds_clear(&actions);
+            build_acl_log(&actions, acl);
+            if (extra_match->length > 0) {
+                ds_put_format(&match, "(%s) && ", extra_match->string);
+            }
+            ds_put_format(&match, "ip6 && (%s)", acl->match);
+            if (is_udp) {
+                ds_put_cstr(&match, " && udp");
+            }
+
+            if (extra_actions->length > 0) {
+                ds_put_format(&actions, "%s ", extra_actions->string);
+            }
+            ds_put_format(&actions, "reg0 = 0; icmp6 { "
+                          "eth.dst <-> eth.src; ip6.dst <-> ip6.src; "
+                          "outport <-> inport; %s };",
+                          ingress ? "next(pipeline=egress,table=5);"
+                                : "next(pipeline=ingress,table=20);");
+            ovn_lflow_add_with_hint(lflows, od, stage,
+                                    acl->priority + OVN_ACL_PRI_OFFSET,
+                                    ds_cstr(&match), ds_cstr(&actions),
+                                    stage_hint);
+        }
     }
-    ds_put_format(&actions, "reg0 = 0; icmp6 { "
-                  "eth.dst <-> eth.src; ip6.dst <-> ip6.src; "
-                  "outport <-> inport; %s };",
-                  ingress ? "next(pipeline=egress,table=5);"
-                          : "next(pipeline=ingress,table=20);");
-    ovn_lflow_add_with_hint(lflows, od, stage,
-                            acl->priority + OVN_ACL_PRI_OFFSET,
-                            ds_cstr(&match), ds_cstr(&actions), stage_hint);
 
     ds_destroy(&match);
     ds_destroy(&actions);

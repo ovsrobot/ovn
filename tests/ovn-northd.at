@@ -2010,3 +2010,288 @@ ovn-nbctl --wait=sb set NB_Global . options:ignore_lsp_down=true
 AT_CHECK([ovn-sbctl lflow-list | grep arp | grep 10\.0\.0\.1], [0], [ignore])
 
 AT_CLEANUP
+
+AT_SETUP([ovn-northd -- ACL reject flows])
+ovn_start
+
+ovn-nbctl ls-add sw0
+ovn-nbctl lsp-add sw0 sw0-p1
+ovn-nbctl lsp-add sw0 sw0-p2
+
+ovn-nbctl pg-add pg0 sw0-p1 sw0-p2
+ovn-nbctl acl-add pg0 to-lport 1002 "inport == @pg0 && ip" reject
+
+ovn-nbctl --wait=sb sync
+
+# If there is a reject ACL wihtout any protocol hints, then ovn-northd should
+# generate lflows with ip4 tcp_reset, icmp4, ip6 tcp_reset and icmp6 actions.
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=(ip4 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip4.dst <-> ip4.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=(ip6 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip6.dst <-> ip6.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=(ip4 && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; icmp4 { eth.dst <-> eth.src; ip4.dst <-> ip4.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=(ip6 && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; icmp6 { eth.dst <-> eth.src; ip6.dst <-> ip6.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+# Set l3-protocol=ip4 for the reject ACL.
+ovn-nbctl --wait=sb set ACL . options:l3-protocol=ip4
+
+# ovn-northd should generate  2 lflows with ip4 tcp_reset and icmp4 actions.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=(ip4 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip4.dst <-> ip4.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=(ip4 && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; icmp4 { eth.dst <-> eth.src; ip4.dst <-> ip4.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+# Set l4-protocol=tcp for the reject ACL.
+ovn-nbctl --wait=sb set ACL . options:l4-protocol=tcp
+
+# ovn-northd should generate 1 lflow with ip4 tcp_reset action.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=(ip4 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip4.dst <-> ip4.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+])
+
+# Set l4-protocol=udp for the reject ACL.
+ovn-nbctl --wait=sb set ACL . options:l4-protocol=udp
+
+# ovn-northd should generate 1 lflow with udp match and icmp4 action.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=(ip4 && (inport == @pg0 && ip) && udp), dnl
+action=(reg0 = 0; icmp4 { eth.dst <-> eth.src; ip4.dst <-> ip4.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+# Remove l4-protocol from the reject ACL.
+ovn-nbctl --wait=sb remove ACL . options l4-protocol
+
+# ovn-northd should generate 2 lflow with tcp_reset and icmp4 action.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=(ip4 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip4.dst <-> ip4.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=(ip4 && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; icmp4 { eth.dst <-> eth.src; ip4.dst <-> ip4.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+# Set l3-protocol to ip.
+ovn-nbctl --wait=sb set ACL . options:l3-protocol=ip
+
+# ovn-northd should generate 4 lflow with ip4 tcp_reset, ip6 tcp_reset, icmp4 and icmp6 actions.
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=(ip4 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip4.dst <-> ip4.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=(ip6 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip6.dst <-> ip6.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=(ip4 && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; icmp4 { eth.dst <-> eth.src; ip4.dst <-> ip4.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=(ip6 && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; icmp6 { eth.dst <-> eth.src; ip6.dst <-> ip6.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+# Set l3-protocol=ip6 for the reject ACL.
+ovn-nbctl --wait=sb set ACL . options:l3-protocol=ip6
+
+# ovn-northd should generate  2 lflows with ip6 tcp_reset and icmp6 actions.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=(ip6 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip6.dst <-> ip6.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=(ip6 && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; icmp6 { eth.dst <-> eth.src; ip6.dst <-> ip6.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+# Set l4-protocol=tcp for the reject ACL.
+ovn-nbctl --wait=sb set ACL . options:l4-protocol=tcp
+
+# ovn-northd should generate 1 lflow with ip6 tcp_reset action.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=(ip6 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip6.dst <-> ip6.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+])
+
+# Set l4-protocol=udp for the reject ACL.
+ovn-nbctl --wait=sb set ACL . options:l4-protocol=udp
+
+# ovn-northd should generate 1 lflow with udp match and icmp6 action.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=(ip6 && (inport == @pg0 && ip) && udp), dnl
+action=(reg0 = 0; icmp6 { eth.dst <-> eth.src; ip6.dst <-> ip6.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+# Set l3-protocol to ip and l4-protocol=tcp for the reject ACL.
+ovn-nbctl --wait=sb set ACL . options:l3-protocol=ip
+ovn-nbctl --wait=sb set ACL . options:l4-protocol=tcp
+
+# ovn-northd should generate 2 lflow with ip4 tcp_reset and ip6 tcp_reset actions.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=(ip4 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip4.dst <-> ip4.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=(ip6 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip6.dst <-> ip6.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+])
+
+# Set l3-protocol to ip and l4-protocol=udp for the reject ACL.
+ovn-nbctl --wait=sb set ACL . options:l3-protocol=ip
+ovn-nbctl --wait=sb set ACL . options:l4-protocol=udp
+
+# ovn-northd should generate 2 lflows (udp match) with icmp4 and icmp6 actions.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=(ip4 && (inport == @pg0 && ip) && udp), dnl
+action=(reg0 = 0; icmp4 { eth.dst <-> eth.src; ip4.dst <-> ip4.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=(ip6 && (inport == @pg0 && ip) && udp), dnl
+action=(reg0 = 0; icmp6 { eth.dst <-> eth.src; ip6.dst <-> ip6.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+# Add an ACL with allow-related
+ovn-nbctl --wait=sb acl-add pg0 to-lport 1000 "ip" allow-related
+
+# ovn-northd should generate 4 lflow with 2 icmp4 and 2 icmp6 actions.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=((reg0[[10]] == 1) && ip4 && (inport == @pg0 && ip) && udp), dnl\
+action=(ct_commit { ct_label.blocked = 1; };  reg0 = 0; icmp4 { eth.dst <-> eth.src; ip4.dst <-> ip4.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=((reg0[[10]] == 1) && ip6 && (inport == @pg0 && ip) && udp), dnl
+action=(ct_commit { ct_label.blocked = 1; };  reg0 = 0; icmp6 { eth.dst <-> eth.src; ip6.dst <-> ip6.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=((reg0[[9]] == 1) && ip4 && (inport == @pg0 && ip) && udp), dnl
+action=(reg0 = 0; icmp4 { eth.dst <-> eth.src; ip4.dst <-> ip4.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=((reg0[[9]] == 1) && ip6 && (inport == @pg0 && ip) && udp), dnl
+action=(reg0 = 0; icmp6 { eth.dst <-> eth.src; ip6.dst <-> ip6.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+# Set l3-protocol to ip and l4-protocol=tcp for the reject ACL.
+rej_acl=$(ovn-nbctl --bare --columns _uuid  find ACL action=reject)
+ovn-nbctl --wait=sb set ACL $rej_acl options:l3-protocol=ip
+ovn-nbctl --wait=sb set ACL $rej_acl options:l4-protocol=tcp
+
+# ovn-northd should generate 4 lflow with 2 ip4 tcp_reset and 2 ip6 tcp_reset actions.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=((reg0[[10]] == 1) && ip4 && tcp && (inport == @pg0 && ip)), dnl
+action=(ct_commit { ct_label.blocked = 1; };  reg0 = 0; eth.dst <-> eth.src; ip4.dst <-> ip4.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=((reg0[[10]] == 1) && ip6 && tcp && (inport == @pg0 && ip)), dnl
+action=(ct_commit { ct_label.blocked = 1; };  reg0 = 0; eth.dst <-> eth.src; ip6.dst <-> ip6.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=((reg0[[9]] == 1) && ip4 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip4.dst <-> ip4.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=((reg0[[9]] == 1) && ip6 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip6.dst <-> ip6.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+])
+
+
+# Clear l3-protocol and set l4-protocol to udp
+ovn-nbctl --wait=sb remove ACL $rej_acl options l3-protocol
+ovn-nbctl --wait=sb set ACL $rej_acl options:l4-protocol=udp
+
+# ovn-northd should generate 4 lflows (with udp match) with 2 icmp4 and 2 icmp6 actions.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=((reg0[[10]] == 1) && ip4 && (inport == @pg0 && ip) && udp), dnl\
+action=(ct_commit { ct_label.blocked = 1; };  reg0 = 0; icmp4 { eth.dst <-> eth.src; ip4.dst <-> ip4.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=((reg0[[10]] == 1) && ip6 && (inport == @pg0 && ip) && udp), dnl
+action=(ct_commit { ct_label.blocked = 1; };  reg0 = 0; icmp6 { eth.dst <-> eth.src; ip6.dst <-> ip6.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=((reg0[[9]] == 1) && ip4 && (inport == @pg0 && ip) && udp), dnl
+action=(reg0 = 0; icmp4 { eth.dst <-> eth.src; ip4.dst <-> ip4.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2002 , dnl
+match=((reg0[[9]] == 1) && ip6 && (inport == @pg0 && ip) && udp), dnl
+action=(reg0 = 0; icmp6 { eth.dst <-> eth.src; ip6.dst <-> ip6.src; outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+# Clear l3-protocol and set l4-protocol to tcp
+ovn-nbctl --wait=sb remove ACL $rej_acl options l3-protocol
+ovn-nbctl --wait=sb set ACL $rej_acl options:l4-protocol=tcp
+
+# ovn-northd should generate 4 lflow with 2 ip4 tcp_reset and 2 ip6 tcp_reset actions.
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2012" | sort], [0], [dnl
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=((reg0[[10]] == 1) && ip4 && tcp && (inport == @pg0 && ip)), dnl
+action=(ct_commit { ct_label.blocked = 1; };  reg0 = 0; eth.dst <-> eth.src; ip4.dst <-> ip4.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=((reg0[[10]] == 1) && ip6 && tcp && (inport == @pg0 && ip)), dnl
+action=(ct_commit { ct_label.blocked = 1; };  reg0 = 0; eth.dst <-> eth.src; ip6.dst <-> ip6.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=((reg0[[9]] == 1) && ip4 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip4.dst <-> ip4.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+  table=5 (ls_out_acl         ), priority=2012 , dnl
+match=((reg0[[9]] == 1) && ip6 && tcp && (inport == @pg0 && ip)), dnl
+action=(reg0 = 0; eth.dst <-> eth.src; ip6.dst <-> ip6.src; tcp_reset { outport <-> inport; next(pipeline=ingress,table=20); };)
+])
+
+AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_acl.*priority=2002" | sort], [0], [dnl
+])
+
+AT_CLEANUP
