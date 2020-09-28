@@ -1,5 +1,6 @@
 Post-v20.09.0
 ---------------------
+   - ACL priority range changed from 0 - 32767 to 0 - 30000.
 
 
 OVN v20.09.0 - xx xxx xxxx

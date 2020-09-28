@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
-    "version": "5.27.0",
-    "cksum": "3507518247 26773",
+    "version": "5.28.0",
+    "cksum": "3562758453 26773",
     "tables": {
         "NB_Global": {
             "columns": {
@@ -211,7 +211,7 @@
                                           "min": 0, "max": 1}},
                 "priority": {"type": {"key": {"type": "integer",
                                               "minInteger": 0,
-                                              "maxInteger": 32767}}},
+                                              "maxInteger": 30000}}},
                 "direction": {"type": {"key": {"type": "string",
                                             "enum": ["set", ["from-lport", "to-lport"]]}}},
                 "match": {"type": "string"},

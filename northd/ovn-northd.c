@@ -5362,6 +5362,14 @@ build_acl_log(struct ds *actions, const struct nbrec_acl *acl)
     ds_put_cstr(actions, "); ");
 }
 
+static uint16_t
+acl_priority_base(uint16_t acl_priority)
+{
+    /* acl_priority range is 0 - 30000, so the resulted priority
+     * is between 1000 and 61000. */
+    return OVN_ACL_PRI_OFFSET + acl_priority * 2;
+}
+
 static void
 build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
                        enum ovn_stage stage, struct nbrec_acl *acl,
@@ -5384,7 +5392,7 @@ build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
                   ingress ? "next(pipeline=egress,table=5);"
                           : "next(pipeline=ingress,table=20);");
     ovn_lflow_add_with_hint(lflows, od, stage,
-                            acl->priority + OVN_ACL_PRI_OFFSET + 10,
+                            acl_priority_base(acl->priority) + 1,
                             ds_cstr(&match), ds_cstr(&actions), stage_hint);
     ds_clear(&match);
     ds_clear(&actions);
@@ -5399,7 +5407,7 @@ build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
                   ingress ? "next(pipeline=egress,table=5);"
                           : "next(pipeline=ingress,table=20);");
     ovn_lflow_add_with_hint(lflows, od, stage,
-                            acl->priority + OVN_ACL_PRI_OFFSET + 10,
+                            acl_priority_base(acl->priority) + 1,
                             ds_cstr(&match), ds_cstr(&actions), stage_hint);
 
     /* IP traffic */
@@ -5419,7 +5427,7 @@ build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
                   ingress ? "next(pipeline=egress,table=5);"
                           : "next(pipeline=ingress,table=20);");
     ovn_lflow_add_with_hint(lflows, od, stage,
-                            acl->priority + OVN_ACL_PRI_OFFSET,
+                            acl_priority_base(acl->priority),
                             ds_cstr(&match), ds_cstr(&actions), stage_hint);
     ds_clear(&match);
     ds_clear(&actions);
@@ -5437,7 +5445,7 @@ build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
                   ingress ? "next(pipeline=egress,table=5);"
                           : "next(pipeline=ingress,table=20);");
     ovn_lflow_add_with_hint(lflows, od, stage,
-                            acl->priority + OVN_ACL_PRI_OFFSET,
+                            acl_priority_base(acl->priority),
                             ds_cstr(&match), ds_cstr(&actions), stage_hint);
 
     ds_destroy(&match);
@@ -5463,7 +5471,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             build_acl_log(&actions, acl);
             ds_put_cstr(&actions, "next;");
             ovn_lflow_add_with_hint(lflows, od, stage,
-                                    acl->priority + OVN_ACL_PRI_OFFSET,
+                                    acl_priority_base(acl->priority),
                                     acl->match, ds_cstr(&actions),
                                     &acl->header_);
             ds_destroy(&actions);
@@ -5489,7 +5497,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             build_acl_log(&actions, acl);
             ds_put_cstr(&actions, "next;");
             ovn_lflow_add_with_hint(lflows, od, stage,
-                                    acl->priority + OVN_ACL_PRI_OFFSET,
+                                    acl_priority_base(acl->priority),
                                     ds_cstr(&match),
                                     ds_cstr(&actions),
                                     &acl->header_);
@@ -5508,7 +5516,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             build_acl_log(&actions, acl);
             ds_put_cstr(&actions, "next;");
             ovn_lflow_add_with_hint(lflows, od, stage,
-                                    acl->priority + OVN_ACL_PRI_OFFSET,
+                                    acl_priority_base(acl->priority),
                                     ds_cstr(&match), ds_cstr(&actions),
                                     &acl->header_);
 
@@ -5536,7 +5544,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
                 build_acl_log(&actions, acl);
                 ds_put_cstr(&actions, "/* drop */");
                 ovn_lflow_add_with_hint(lflows, od, stage,
-                                        acl->priority + OVN_ACL_PRI_OFFSET,
+                                        acl_priority_base(acl->priority),
                                         ds_cstr(&match), ds_cstr(&actions),
                                         &acl->header_);
             }
@@ -5563,7 +5571,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
                 build_acl_log(&actions, acl);
                 ds_put_cstr(&actions, "/* drop */");
                 ovn_lflow_add_with_hint(lflows, od, stage,
-                                        acl->priority + OVN_ACL_PRI_OFFSET,
+                                        acl_priority_base(acl->priority),
                                         ds_cstr(&match), ds_cstr(&actions),
                                         &acl->header_);
             }
@@ -5578,7 +5586,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
                 build_acl_log(&actions, acl);
                 ds_put_cstr(&actions, "/* drop */");
                 ovn_lflow_add_with_hint(lflows, od, stage,
-                                        acl->priority + OVN_ACL_PRI_OFFSET,
+                                        acl_priority_base(acl->priority),
                                         acl->match, ds_cstr(&actions),
                                         &acl->header_);
             }

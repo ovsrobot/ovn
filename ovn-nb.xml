@@ -1646,10 +1646,10 @@
 
     <column name="priority">
       <p>
-        The ACL rule's priority.  Rules with numerically higher priority
-        take precedence over those with lower.  If two ACL rules with
-        the same priority both match, then the one actually applied to a
-        packet is undefined.
+        The ACL rule's priority, an integer between 0 and 30000.  Rules with
+        numerically higher priority take precedence over those with lower.  If
+        two ACL rules with the same priority both match, then the one actually
+        applied to a packet is undefined.
       </p>
 
       <p>
