@@ -1700,24 +1700,6 @@ ipam_get_unused_mac(ovs_be32 ip)
     return mac64;
 }
 
-static uint32_t
-ipam_get_unused_ip(struct ovn_datapath *od)
-{
-    if (!od || !od->ipam_info.allocated_ipv4s) {
-        return 0;
-    }
-
-    size_t new_ip_index = bitmap_scan(od->ipam_info.allocated_ipv4s, 0, 0,
-                                      od->ipam_info.total_ipv4s - 1);
-    if (new_ip_index == od->ipam_info.total_ipv4s - 1) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-        VLOG_WARN_RL( &rl, "Subnet address space has been exhausted.");
-        return 0;
-    }
-
-    return od->ipam_info.start_ipv4 + new_ip_index;
-}
-
 enum dynamic_update_type {
     NONE,    /* No change to the address */
     REMOVE,  /* Address is no longer dynamic */
@@ -1739,6 +1721,32 @@ struct dynamic_address_update {
     enum dynamic_update_type ipv4;
     enum dynamic_update_type ipv6;
 };
+
+static uint32_t
+ipam_get_unused_ip(struct dynamic_address_update *update)
+{
+    struct ovn_datapath *od = update->od;
+
+    if (!od || !od->ipam_info.allocated_ipv4s) {
+        return 0;
+    }
+
+    size_t new_ip_index = bitmap_scan(od->ipam_info.allocated_ipv4s, 0, 0,
+                                      od->ipam_info.total_ipv4s - 1);
+    if (new_ip_index == od->ipam_info.total_ipv4s - 1) {
+        const struct nbrec_logical_switch_port *nbsp = update->op->nbsp;
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL( &rl, "Subnet address space has been exhausted.");
+
+        if (nbsp->dynamic_addresses) {
+            nbrec_logical_switch_port_set_dynamic_addresses(nbsp, NULL);
+        }
+
+        return 0;
+    }
+
+    return od->ipam_info.start_ipv4 + new_ip_index;
+}
 
 static enum dynamic_update_type
 dynamic_mac_changed(const char *lsp_addresses,
@@ -1793,7 +1801,7 @@ dynamic_ip4_changed(const char *lsp_addrs,
     }
 
     uint32_t index = ip4 - ipam->start_ipv4;
-    if (index > ipam->total_ipv4s ||
+    if (index >= ipam->total_ipv4s - 1 ||
         bitmap_is_set(ipam->allocated_ipv4s, index)) {
         /* Previously assigned dynamic IPv4 address can no longer be used.
          * It's either outside the subnet, conflicts with an excluded IP,
@@ -1999,7 +2007,7 @@ update_dynamic_addresses(struct dynamic_address_update *update)
         ip4 = update->static_ip;
         break;
     case DYNAMIC:
-        ip4 = htonl(ipam_get_unused_ip(update->od));
+        ip4 = htonl(ipam_get_unused_ip(update));
         VLOG_INFO("Assigned dynamic IPv4 address '"IP_FMT"' to port '%s'",
                   IP_ARGS(ip4), update->op->nbsp->name);
     }
