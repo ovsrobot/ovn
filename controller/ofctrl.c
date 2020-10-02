@@ -1687,8 +1687,12 @@ update_installed_flows_by_compare(struct ovn_desired_flow_table *flow_table,
             /* Copy 'd' from 'flow_table' to installed_flows. */
             i = installed_flow_dup(d);
             hmap_insert(&installed_flows, &i->match_hmap_node, i->flow.hash);
+            link_installed_to_desired(i, d);
+        } else if (i->desired_flow != d) {
+            /* This is a desired_flow that conflicts with one installed
+             * previously. */
+            link_installed_to_desired(i, d);
         }
-        link_installed_to_desired(i, d);
     }
 }
 
