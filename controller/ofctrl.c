@@ -229,6 +229,8 @@ static struct installed_flow *installed_flow_lookup(
 static void installed_flow_destroy(struct installed_flow *);
 static struct installed_flow *installed_flow_dup(struct desired_flow *);
 static struct desired_flow *installed_flow_get_active(struct installed_flow *);
+static struct desired_flow *installed_flow_select_active(
+    struct installed_flow *);
 
 static uint32_t ovn_flow_match_hash(const struct ovn_flow *);
 static char *ovn_flow_to_string(const struct ovn_flow *);
@@ -796,6 +798,12 @@ ofctrl_recv(const struct ofp_header *oh, enum ofptype type)
 }
 
 static bool
+flow_action_has_drop(const struct ovn_flow *f)
+{
+    return f->ofpacts_len == 0;
+}
+
+static bool
 flow_action_has_conj(const struct ovn_flow *f)
 {
     const struct ofpact *a = NULL;
@@ -822,7 +830,7 @@ link_installed_to_desired(struct installed_flow *i, struct desired_flow *d)
 {
     d->installed_flow = i;
     ovs_list_push_back(&i->desired_refs, &d->installed_ref_list_node);
-    return installed_flow_get_active(i) == d;
+    return installed_flow_select_active(i) == d;
 }
 
 /* Replaces 'old_desired' with 'new_desired' in the list of desired flows
@@ -852,6 +860,7 @@ unlink_installed_to_desired(struct installed_flow *i, struct desired_flow *d)
 
     ovs_assert(d && d->installed_flow == i);
     ovs_list_remove(&d->installed_ref_list_node);
+    installed_flow_select_active(i);
     d->installed_flow = NULL;
     return old_active == d;
 }
@@ -1272,6 +1281,70 @@ installed_flow_get_active(struct installed_flow *f)
                             installed_ref_list_node);
     }
     return NULL;
+}
+
+/* Walks the list of desired flows that refer 'f' and selects the least
+ * restrictive one to be used as active flow, moving it to the front of
+ * the list.
+ *
+ * Returns the new active flow.
+ */
+static struct desired_flow *
+installed_flow_select_active(struct installed_flow *f)
+{
+    struct desired_flow *old_active = installed_flow_get_active(f);
+    struct desired_flow *active = NULL;
+
+    /* If there is at most one desired_flow, no selection needed, return
+     * early.
+     */
+    if (!old_active || ovs_list_is_short(&f->desired_refs)) {
+        return old_active;
+    }
+
+    struct desired_flow *d_allow = NULL;
+    struct desired_flow *d_drop = NULL;
+    struct desired_flow *d_conj = NULL;
+    struct desired_flow *d;
+
+    LIST_FOR_EACH (d, installed_ref_list_node, &f->desired_refs) {
+        if (flow_action_has_drop(&d->flow)) {
+            if (!d_drop) {
+                d_drop = d;
+            }
+        } else if (flow_action_has_conj(&d->flow)) {
+            /* Conjunction flows are always merged together into a single
+             * flow.  There should never be more than one referring the same
+             * installed flow.
+             */
+            ovs_assert(!d_conj);
+            d_conj = d;
+        } else {
+            if (!d_allow) {
+                d_allow = d;
+            }
+        }
+    }
+
+    /* Give precedence to "allow" over "drop" over "conjunction" action. */
+    if (d_allow) {
+        active = d_allow;
+    } else if (d_drop) {
+        active = d_drop;
+    } else {
+        active = d_conj;
+    }
+
+    /* There must be an active flow otherwise we should have returned early. */
+    ovs_assert(active);
+
+    /* Move the newly selected active flow to the front of the list. */
+    if (active != old_active) {
+        ovs_list_remove(&active->installed_ref_list_node);
+        ovs_list_push_front(&f->desired_refs,
+                            &active->installed_ref_list_node);
+    }
+    return active;
 }
 
 static struct desired_flow *
@@ -1789,8 +1862,14 @@ update_installed_flows_by_compare(struct ovn_desired_flow_table *flow_table,
             link_installed_to_desired(i, d);
         } else if (!d->installed_flow) {
             /* This is a desired_flow that conflicts with one installed
-             * previously but not linked yet. */
-            link_installed_to_desired(i, d);
+             * previously but not linked yet.  However, if this flow becomes
+             * active, e.g., it is less restrictive than the previous active
+             * flow then modify the installed flow.
+             */
+            if (link_installed_to_desired(i, d)) {
+                installed_flow_mod(&i->flow, &d->flow, msgs);
+                ovn_flow_log(&i->flow, "updating installed (conflict)");
+            }
         }
     }
 }
@@ -1919,8 +1998,15 @@ update_installed_flows_by_track(struct ovn_desired_flow_table *flow_table,
                 installed_flow_mod(&i->flow, &f->flow, msgs);
             } else {
                 /* Adding a new flow that conflicts with an existing installed
-                 * flow, so just add it to the link. */
-                link_installed_to_desired(i, f);
+                 * flow, so add it to the link.  If this flow becomes active,
+                 * e.g., it is less restrictive than the previous active flow
+                 * then modify the installed flow.
+                 */
+                if (link_installed_to_desired(i, f)) {
+                    installed_flow_mod(&i->flow, &f->flow, msgs);
+                    ovn_flow_log(&i->flow,
+                                 "updating installed (tracked conflict)");
+                }
             }
             /* The track_list_node emptyness is used to check if the node is
              * already added to track list, so initialize it again here. */
