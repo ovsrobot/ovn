@@ -93,6 +93,11 @@ struct gen_opts_map {
 #define DHCP_OPT_DOMAIN_SEARCH_LIST \
     DHCP_OPTION("domain_search_list", 119, "domains")
 
+/* fixed DHCP header */
+#define DHCP_OPT_BOOTFILE_ALT DHCP_OPTION("bootfile_name_alt", 300, "str")
+
+#define DHCP_OPT_ETHERBOOT	175
+
 #define DHCP_OPT_ARP_CACHE_TIMEOUT \
     DHCP_OPTION("arp_cache_timeout", 35, "uint32")
 #define DHCP_OPT_TCP_KEEPALIVE_INTERVAL \
@@ -178,6 +183,12 @@ struct dhcp_opt6_header {
     ovs_be16 opt_code;
     ovs_be16 size;
 };
+
+OVS_PACKED(
+struct dhcp_opt_userdata_hdr {
+    uint16_t code;
+    uint8_t len;
+});
 
 /* These are not defined in ovs/lib/dhcp.h, hence defining here. */
 #define OVN_DHCP_MSG_DECLINE        4
