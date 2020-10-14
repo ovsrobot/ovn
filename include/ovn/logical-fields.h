@@ -116,6 +116,24 @@ enum ovn_field_id {
      */
     OVN_ICMP6_FRAG_MTU,
 
+    /*
+     * Name: "ip.src"
+     * Type: be128
+     * Description: Sets the field MFF_IPV4_SRC if eth.type == 0x800 (IPv4)
+     *              or sets the field MFF_IPV6_SRC if
+     *              eth.type == 0x86dd (IPV6).
+     */
+    OVN_IP_SRC,
+
+    /*
+     * Name: "ip.dst"
+     * Type: be128
+     * Description: Sets the field MFF_IPV4_DST if eth.type == 0x800 (IPv4)
+     *              or sets the field MFF_IPV6_DST if
+     *              eth.type == 0x86dd (IPV6).
+     */
+    OVN_IP_DST,
+
     OVN_FIELD_N_IDS
 };
 

@@ -33,6 +33,14 @@ const struct ovn_field ovn_fields[OVN_FIELD_N_IDS] = {
         OVN_ICMP6_FRAG_MTU,
         "icmp6.frag_mtu",
         4, 32,
+    }, {
+        OVN_IP_SRC,
+        "ip.src",
+        16, 128,
+    }, {
+        OVN_IP_DST,
+        "ip.dst",
+        16, 128,
     },
 };
 
@@ -271,6 +279,8 @@ ovn_init_symtab(struct shash *symtab)
 
     expr_symtab_add_ovn_field(symtab, "icmp4.frag_mtu", OVN_ICMP4_FRAG_MTU);
     expr_symtab_add_ovn_field(symtab, "icmp6.frag_mtu", OVN_ICMP6_FRAG_MTU);
+    expr_symtab_add_ovn_field(symtab, "ip.src", OVN_IP_SRC);
+    expr_symtab_add_ovn_field(symtab, "ip.dst", OVN_IP_DST);
 }
 
 const char *

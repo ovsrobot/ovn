@@ -233,6 +233,11 @@ static void pinctrl_handle_put_icmp_frag_mtu(struct rconn *swconn,
                                              struct ofputil_packet_in *pin,
                                              struct ofpbuf *userdata,
                                              struct ofpbuf *continuation);
+static void pinctrl_handle_swap_src_dst_ip(struct rconn *swconn,
+                                           const struct flow *in_flow,
+                                           struct dp_packet *pkt_in,
+                                           struct ofputil_packet_in *pin,
+                                           struct ofpbuf *continuation);
 static void
 pinctrl_handle_event(struct ofpbuf *userdata)
     OVS_REQUIRES(pinctrl_mutex);
@@ -2833,6 +2838,11 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
         pinctrl_handle_svc_check(swconn, &headers, &packet,
                                  &pin.flow_metadata);
         ovs_mutex_unlock(&pinctrl_mutex);
+        break;
+
+    case ACTION_OPCODE_SWAP_SRC_DST_IP:
+        pinctrl_handle_swap_src_dst_ip(swconn, &headers, &packet, &pin,
+                                       &continuation);
         break;
 
     default:
@@ -6507,4 +6517,43 @@ pinctrl_handle_svc_check(struct rconn *swconn, const struct flow *ip_flow,
         /* Calculate next_send_time. */
         svc_mon->next_send_time = time_msec() + svc_mon->interval;
     }
+}
+
+static void
+pinctrl_handle_swap_src_dst_ip(struct rconn *swconn,
+                               const struct flow *in_flow,
+                               struct dp_packet *pkt_in,
+                               struct ofputil_packet_in *pin,
+                               struct ofpbuf *continuation)
+{
+    enum ofp_version version = rconn_get_version(swconn);
+    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
+    struct dp_packet *pkt_out;
+
+    pkt_out = dp_packet_clone(pkt_in);
+    pkt_out->l2_5_ofs = pkt_in->l2_5_ofs;
+    pkt_out->l2_pad_size = pkt_in->l2_pad_size;
+    pkt_out->l3_ofs = pkt_in->l3_ofs;
+    pkt_out->l4_ofs = pkt_in->l4_ofs;
+
+    if (get_dl_type(in_flow) == htons(ETH_TYPE_IP)) {
+        /* IPv4 packet. Swap nw_src with nw_dst. */
+        packet_set_ipv4(pkt_out, in_flow->nw_dst, in_flow->nw_src,
+                        in_flow->nw_tos, in_flow->nw_ttl);
+    } else {
+        /* IPv6 packet. Swap ip6_src with ip6_dst.
+         * We could also use packet_set_ipv6() here, but that would require
+         * to extract the 'tc' and 'label' from in_nh->ip6_flow which seems
+         * unnecessary. */
+        struct ovs_16aligned_ip6_hdr *out_nh = dp_packet_l3(pkt_out);
+        union ovs_16aligned_in6_addr tmp = out_nh->ip6_src;
+        out_nh->ip6_src = out_nh->ip6_dst;
+        out_nh->ip6_dst = tmp;
+    }
+
+    pin->packet = dp_packet_data(pkt_out);
+    pin->packet_len = dp_packet_size(pkt_out);
+
+    queue_msg(swconn, ofputil_encode_resume(pin, continuation, proto));
+    dp_packet_delete(pkt_out);
 }

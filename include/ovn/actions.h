@@ -97,6 +97,7 @@ struct ovn_extend_table;
     OVNACT(DHCP6_REPLY,       ovnact_null)            \
     OVNACT(ICMP6_ERROR,       ovnact_nest)            \
     OVNACT(REJECT,            ovnact_nest)            \
+    OVNACT(OVNFIELD_EXCHANGE, ovnact_move)            \
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -612,6 +613,9 @@ enum action_opcode {
      * The actions, in OpenFlow 1.3 format, follow the action_header.
      */
     ACTION_OPCODE_REJECT,
+
+    /* ip.src <-> ip.dst */
+    ACTION_OPCODE_SWAP_SRC_DST_IP,
 };
 
 /* Header. */

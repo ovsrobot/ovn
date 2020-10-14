@@ -1605,6 +1605,33 @@ reject { };
     formats as reject { drop; };
     encodes as controller(userdata=00.00.00.16.00.00.00.00)
 
+ip.src <-> ip.dst;
+    encodes as controller(userdata=00.00.00.17.00.00.00.00,pause)
+
+ip.src <-> ip.dst
+    Syntax error at end of input expecting `;'.
+
+ip.src = 10.0.0.10;
+    Can't load a value to ovn field (ip.src).
+
+ip.dst = aef0::4;
+    Can't load a value to ovn field (ip.dst).
+
+ip.src <-> ip4.dst;
+    Can't exchange ovn field with non ovn field (ip.src <-> ip4.dst).
+
+ip6.src <-> ip.dst;
+    Can't exchange ovn field with non ovn field (ip6.src <-> ip.dst).
+
+ip.src <-> icmp4.frag_mtu;
+    Can't exchange ovn field (ip.src) with ovn field (icmp4.frag_mtu).
+
+icmp6.frag_mtu <-> ip.dst;
+    Can't exchange ovn field (icmp6.frag_mtu) with ovn field (ip.dst).
+
+ip.src <-> ip.src;
+    Can't exchange ovn field (ip.src) with ovn field (ip.src).
+
 # trigger_event
 trigger_event(event = "empty_lb_backends", vip = "10.0.0.1:80", protocol = "tcp", load_balancer = "12345678-abcd-9876-fedc-11119f8e7d6c");
     encodes as controller(userdata=00.00.00.0f.00.00.00.00.00.00.00.00.00.01.00.0b.31.30.2e.30.2e.30.2e.31.3a.38.30.00.02.00.03.74.63.70.00.03.00.24.31.32.33.34.35.36.37.38.2d.61.62.63.64.2d.39.38.37.36.2d.66.65.64.63.2d.31.31.31.31.39.66.38.65.37.64.36.63)

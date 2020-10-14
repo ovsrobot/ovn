@@ -371,12 +371,35 @@ ovnact_next_free(struct ovnact_next *a OVS_UNUSED)
 {
 }
 
+static bool
+check_ovnfield_load(struct action_context *ctx, const struct expr_field *field)
+{
+    switch (field->symbol->ovn_field->id) {
+    case OVN_ICMP4_FRAG_MTU:
+    case OVN_ICMP6_FRAG_MTU:
+        return true;
+
+    case OVN_IP_SRC:
+    case OVN_IP_DST:
+        lexer_error(ctx->lexer, "Can't load a value to ovn field (%s).",
+                    field->symbol->name);
+        return false;
+
+    case OVN_FIELD_N_IDS:
+    default:
+        OVS_NOT_REACHED();
+    }
+}
+
 static void
 parse_LOAD(struct action_context *ctx, const struct expr_field *lhs)
 {
     size_t ofs = ctx->ovnacts->size;
     struct ovnact_load *load;
     if (lhs->symbol->ovn_field) {
+        if (!check_ovnfield_load(ctx, lhs)) {
+            return;
+        }
         load = ovnact_put_OVNFIELD_LOAD(ctx->ovnacts);
     } else {
         load = ovnact_put_LOAD(ctx->ovnacts);
@@ -475,11 +498,56 @@ format_EXCHANGE(const struct ovnact_move *move, struct ds *s)
 }
 
 static void
+parse_ovnfield_exchange(struct action_context *ctx,
+                        const struct expr_field *lhs,
+                        const struct expr_field *rhs)
+{
+    if (!lhs->symbol->ovn_field || !rhs->symbol->ovn_field) {
+        lexer_error(ctx->lexer,
+                    "Can't exchange ovn field with non ovn field (%s <-> %s).",
+                    lhs->symbol->name, rhs->symbol->name);
+        return;
+    }
+
+    if (lhs->symbol->ovn_field->id != OVN_IP_SRC &&
+            lhs->symbol->ovn_field->id != OVN_IP_DST) {
+        lexer_error(ctx->lexer,
+                    "Can't exchange ovn field (%s) with ovn field (%s).",
+                    lhs->symbol->name, rhs->symbol->name);
+        return;
+    }
+
+    if (rhs->symbol->ovn_field->id != OVN_IP_SRC &&
+            rhs->symbol->ovn_field->id != OVN_IP_DST) {
+        lexer_error(ctx->lexer,
+                    "Can't exchange ovn field (%s) with ovn field (%s).",
+                    lhs->symbol->name, rhs->symbol->name);
+        return;
+    }
+
+    if (lhs->symbol->ovn_field->id == rhs->symbol->ovn_field->id) {
+        lexer_error(ctx->lexer,
+                    "Can't exchange ovn field (%s) with ovn field (%s).",
+                    lhs->symbol->name, rhs->symbol->name);
+        return;
+    }
+
+    struct ovnact_move *move = ovnact_put_OVNFIELD_EXCHANGE(ctx->ovnacts);
+    move->lhs = *lhs;
+    move->rhs = *rhs;
+}
+
+static void
 parse_assignment_action(struct action_context *ctx, bool exchange,
                         const struct expr_field *lhs)
 {
     struct expr_field rhs;
     if (!expr_field_parse(ctx->lexer, ctx->pp->symtab, &rhs, &ctx->prereqs)) {
+        return;
+    }
+
+    if (exchange && (lhs->symbol->ovn_field || rhs.symbol->ovn_field)) {
+        parse_ovnfield_exchange(ctx, lhs, &rhs);
         return;
     }
 
@@ -3128,6 +3196,8 @@ format_OVNFIELD_LOAD(const struct ovnact_load *load , struct ds *s)
                       ntohs(load->imm.value.be16_int));
         break;
 
+    case OVN_IP_SRC:
+    case OVN_IP_DST:
     case OVN_FIELD_N_IDS:
     default:
         OVS_NOT_REACHED();
@@ -3157,6 +3227,9 @@ encode_OVNFIELD_LOAD(const struct ovnact_load *load,
         encode_finish_controller_op(oc_offset, ofpacts);
         break;
     }
+
+    case OVN_IP_SRC:
+    case OVN_IP_DST:
     case OVN_FIELD_N_IDS:
     default:
         OVS_NOT_REACHED();
@@ -3449,6 +3522,51 @@ static void
 ovnact_fwd_group_free(struct ovnact_fwd_group *fwd_group)
 {
     free(fwd_group->child_ports);
+}
+
+static void
+format_OVNFIELD_EXCHANGE(const struct ovnact_move *move , struct ds *s)
+{
+    const struct ovn_field *lhs = ovn_field_from_name(move->lhs.symbol->name);
+    const struct ovn_field *rhs = ovn_field_from_name(move->rhs.symbol->name);
+    switch (lhs->id) {
+    case OVN_IP_SRC:
+    case OVN_IP_DST:
+        break;
+
+    case OVN_ICMP4_FRAG_MTU:
+    case OVN_ICMP6_FRAG_MTU:
+    case OVN_FIELD_N_IDS:
+    default:
+        OVS_NOT_REACHED();
+    }
+
+    switch (rhs->id) {
+    case OVN_IP_SRC:
+    case OVN_IP_DST:
+        break;
+
+    case OVN_ICMP4_FRAG_MTU:
+    case OVN_ICMP6_FRAG_MTU:
+    case OVN_FIELD_N_IDS:
+    default:
+        OVS_NOT_REACHED();
+    }
+
+    ds_put_format(s, "%s <-> %s;", lhs->name, rhs->name);
+}
+
+static void
+encode_OVNFIELD_EXCHANGE(const struct ovnact_move *move OVS_UNUSED,
+                         const struct ovnact_encode_params *ep OVS_UNUSED,
+                         struct ofpbuf *ofpacts OVS_UNUSED)
+{
+    /* Right now we only support exchanging the IPs in
+     * OVN fields (ip.src <-> ip.dst). */
+    size_t oc_offset =
+        encode_start_controller_op(ACTION_OPCODE_SWAP_SRC_DST_IP,
+                                   true, NX_CTLR_NO_METER, ofpacts);
+    encode_finish_controller_op(oc_offset, ofpacts);
 }
 
 /* Parses an assignment or exchange or put_dhcp_opts action. */

@@ -1258,6 +1258,43 @@
             except that the two values are exchanged instead of copied.  Both
             <var>field1</var> and <var>field2</var> must modifiable.
           </p>
+
+          <p>
+            <code>OVN</code> supports exchange of below OVN logical fields.
+          </p>
+
+          <ul>
+            <li>
+              <code>ip.src</code>
+              <code>ip.dst</code>
+              <p>
+                These fields can be used to refer to IP source and destination
+                fields which are IP version independent. These fields can be
+                used only for exchange of values.
+              </p>
+            </li>
+
+            <li>
+              <p>
+                Below are few examples:
+              </p>
+
+              <p>
+                match = "ip &amp;&amp; tcp"
+                action = "ip.src &lt;-&gt; ip.dst; next;"
+              </p>
+
+              <p>
+                match = "ip4 || ip6"
+                action = reject { ip.src &lt;-&gt; ip.dst; } next;"
+              </p>
+
+              <p>
+                match = "ip &amp;&amp; (tcp || udp)"
+                action = "ip.src &lt;-&gt; ip.dst; next;"
+              </p>
+            </li>
+          </ul>
         </dd>
 
         <dt><code>ip.ttl--;</code></dt>

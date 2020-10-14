@@ -2147,9 +2147,32 @@ execute_ovnfield_load(const struct ovnact_load *load,
                              ntohs(load->imm.value.be16_int));
         break;
     }
+
+    case OVN_IP_SRC:
+    case OVN_IP_DST:
     case OVN_FIELD_N_IDS:
     default:
         OVS_NOT_REACHED();
+    }
+}
+
+static void
+execute_ovnfield_exchange(const struct ovnact_move *move OVS_UNUSED,
+                          struct flow *uflow,
+                          struct ovs_list *super)
+{
+    /* Right now we support exchanging of ip.src with ip.dst. */
+    ovntrace_node_append(super, OVNTRACE_NODE_MODIFY,
+                         "ip.src <-> ip.dst");
+
+    if (get_dl_type(uflow) == htons(ETH_TYPE_IP)) {
+        ovs_be32 tmp = uflow->nw_dst;
+        uflow->nw_dst = uflow->nw_src;
+        uflow->nw_src = tmp;
+    } else {
+        struct in6_addr tmp = uflow->ipv6_dst;
+        uflow->ipv6_dst = uflow->ipv6_src;
+        uflow->ipv6_src = tmp;
     }
 }
 
@@ -2367,6 +2390,11 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
         case OVNACT_REJECT:
             execute_reject(ovnact_get_REJECT(a), dp, uflow, table_id,
                            pipeline, super);
+            break;
+
+        case OVNACT_OVNFIELD_EXCHANGE:
+            execute_ovnfield_exchange(ovnact_get_OVNFIELD_EXCHANGE(a),
+                                      uflow, super);
             break;
 
         case OVNACT_TRIGGER_EVENT:
