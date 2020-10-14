@@ -1670,6 +1670,18 @@ pinctrl_handle_tcp_reset(struct rconn *swconn, const struct flow *ip_flow,
     dp_packet_uninit(&packet);
 }
 
+static void
+pinctrl_handle_reject(struct rconn *swconn, const struct flow *ip_flow,
+                      struct dp_packet *pkt_in,
+                      const struct match *md, struct ofpbuf *userdata)
+{
+    if (ip_flow->nw_proto == IPPROTO_TCP) {
+        pinctrl_handle_tcp_reset(swconn, ip_flow, pkt_in, md, userdata);
+    } else {
+        pinctrl_handle_icmp(swconn, ip_flow, pkt_in, md, userdata, true);
+    }
+}
+
 static bool
 is_dhcp_flags_broadcast(ovs_be16 flags)
 {
@@ -2785,6 +2797,11 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
     case ACTION_OPCODE_TCP_RESET:
         pinctrl_handle_tcp_reset(swconn, &headers, &packet, &pin.flow_metadata,
                                  &userdata);
+        break;
+
+    case ACTION_OPCODE_REJECT:
+        pinctrl_handle_reject(swconn, &headers, &packet, &pin.flow_metadata,
+                              &userdata);
         break;
 
     case ACTION_OPCODE_PUT_ICMP4_FRAG_MTU:

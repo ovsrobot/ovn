@@ -1712,6 +1712,23 @@ execute_tcp_reset(const struct ovnact_nest *on,
 }
 
 static void
+execute_reject(const struct ovnact_nest *on,
+               const struct ovntrace_datapath *dp,
+               const struct flow *uflow, uint8_t table_id,
+               enum ovnact_pipeline pipeline, struct ovs_list *super)
+{
+    if (uflow->nw_proto == IPPROTO_TCP) {
+        execute_tcp_reset(on, dp, uflow, table_id, pipeline, super);
+    } else {
+        if (get_dl_type(uflow) == htons(ETH_TYPE_IP)) {
+            execute_icmp4(on, dp, uflow, table_id, pipeline, super);
+        } else {
+            execute_icmp6(on, dp, uflow, table_id, pipeline, super);
+        }
+    }
+}
+
+static void
 execute_get_mac_bind(const struct ovnact_get_mac_bind *bind,
                      const struct ovntrace_datapath *dp,
                      struct flow *uflow, struct ovs_list *super)
@@ -2345,6 +2362,11 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
 
         case OVNACT_OVNFIELD_LOAD:
             execute_ovnfield_load(ovnact_get_OVNFIELD_LOAD(a), super);
+            break;
+
+        case OVNACT_REJECT:
+            execute_reject(ovnact_get_REJECT(a), dp, uflow, table_id,
+                           pipeline, super);
             break;
 
         case OVNACT_TRIGGER_EVENT:
