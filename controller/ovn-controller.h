@@ -21,6 +21,7 @@
 #include "lib/ovn-sb-idl.h"
 
 struct ovsrec_bridge_table;
+struct ovsrec_open_vswitch;
 
 /* Linux supports a maximum of 64K zones, which seems like a fine default. */
 #define MAX_CT_ZONES 65535
@@ -86,5 +87,8 @@ enum chassis_tunnel_type {
 };
 
 uint32_t get_tunnel_type(const char *name);
+
+const char *get_ovs_chassis_id(const struct ovsrec_open_vswitch *cfg);
+bool is_concurrent_chassis(const struct ovsrec_open_vswitch *cfg);
 
 #endif /* controller/ovn-controller.h */

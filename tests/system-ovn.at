@@ -5443,6 +5443,7 @@ OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/.*error receiving.*/d
+/failed to query port patch-.*/d
 /.*terminating with signal 15.*/d"])
 AT_CLEANUP
 

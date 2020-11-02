@@ -18,6 +18,7 @@
 
 #include "lib/packets.h"
 #include "include/ovn/version.h"
+#include "smap.h"
 
 #define ovn_set_program_name(name) \
     ovs_set_program_name(name, OVN_PACKAGE_VERSION)
@@ -155,6 +156,23 @@ char *normalize_v46_prefix(const struct v46_ip *prefix, unsigned int plen);
 /* Temporary util function until ovs library has smap_get_unit. */
 unsigned int ovn_smap_get_uint(const struct smap *smap, const char *key,
                                unsigned int def);
+
+const char *
+get_chassis_external_id_value(const struct smap *external_ids,
+                              const char *chassis_id, const char *option_key,
+                              const char *def);
+
+int
+get_chassis_external_id_value_int(const struct smap *external_ids,
+                                  const char *chassis_id,
+                                  const char *option_key,
+                                  int def);
+
+bool
+get_chassis_external_id_value_bool(const struct smap *external_ids,
+                                   const char *chassis_id,
+                                   const char *option_key,
+                                   bool def);
 
 /* Returns a lowercase copy of orig.
  * Caller must free the returned string.
