@@ -188,3 +188,38 @@ Instructions to setup travis-ci for your GitHub repository:
 
 4. Pushing a commit to the repository which breaks the build or the
    testsuite will now trigger a email sent to mylist@mydomain.org
+
+Datapath testing
+~~~~~~~~~~~~~~~~
+
+OVN includes a suite of tests specifically for datapath functionality.
+The datapath tests make some assumptions about the environment.  They
+must be run under root privileges on a Linux system with support for
+network namespaces.  Make sure no other Open vSwitch instance is
+running the test suite.  These tests may take several minutes to
+complete, and cannot be run in parallel.
+
+To invoke the datapath testsuite, run::
+
+    $ make check-system-userspace
+
+The tests themselves must run as root.  If you do not run ``make`` as
+root, then you can specify a program to get superuser privileges as
+``SUDO=<program>``, e.g. the following uses ``sudo`` (the ``-E``
+option is needed to pass through environment variables)::
+
+    $ make check-system-userspace SUDO='sudo -E'
+
+The results of the testsuite are in ``tests/system-userspace-testsuite.dir``.
+
+The testsuite creates and destroys tap devices named ``ovs-netdev``
+and ``br0``.  If it is interrupted during a test, then before it can
+be restarted, you may need to destroy these devices with commands like
+the following::
+
+    ip tuntap del dev ovs-netdev mode tap
+    ip tuntap del dev br0 mode tap
+
+All the features documented under `Unit Tests`_ are available for the
+userspace datapath testsuite, except that the datapath testsuite does
+not support running tests in parallel.
