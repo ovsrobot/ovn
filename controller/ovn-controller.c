@@ -726,11 +726,23 @@ restore_ct_zones(const struct ovsrec_bridge_table *bridge_table,
 }
 
 static int64_t
-get_nb_cfg(const struct sbrec_sb_global_table *sb_global_table)
+get_nb_cfg(const struct sbrec_sb_global_table *sb_global_table,
+           struct ovsdb_idl_loop *sb_loop)
 {
+    static int64_t nb_cfg = 0;
+
+    /* Delay getting nb_cfg if there are monitor condition changes
+     * in flight.  It might be that those changes would instruct the
+     * server to send updates that happened before SB_Global.nb_cfg.
+     */
+    if (ovsdb_idl_monitor_condition_pending(sb_loop->idl)) {
+        return nb_cfg;
+    }
+
     const struct sbrec_sb_global *sb
         = sbrec_sb_global_table_first(sb_global_table);
-    return sb ? sb->nb_cfg : 0;
+    nb_cfg = sb ? sb->nb_cfg : 0;
+    return nb_cfg;
 }
 
 static const char *
@@ -2574,7 +2586,8 @@ main(int argc, char *argv[])
                                    &ct_zones_data->pending,
                                    sbrec_meter_table_get(ovnsb_idl_loop.idl),
                                    get_nb_cfg(sbrec_sb_global_table_get(
-                                                   ovnsb_idl_loop.idl)),
+                                                   ovnsb_idl_loop.idl),
+                                              &ovnsb_idl_loop),
                                    engine_node_changed(&en_flow_output));
                     }
                     runtime_data = engine_get_data(&en_runtime_data);
