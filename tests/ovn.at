@@ -22684,3 +22684,94 @@ AT_CHECK([test "$encap_rec_mvtep" == "$encap_rec_mvtep1"], [0], [])
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
+
+AT_SETUP([ovn -- snat default ct zone])
+ovn_start
+
+net_add n1
+sim_add hv1
+ovs-vsctl add-br br-phys
+as hv1
+ovn_attach n1 br-phys 192.168.0.10
+
+ovn-nbctl ls-add sw0
+ovn-nbctl lsp-add sw0 sw0-p1
+ovn-nbctl lsp-set-addresses sw0-p1 "00:00:00:00:00:02 10.0.0.2"
+
+ovn-nbctl lr-add gw_router
+ovn-nbctl set Logical_Router gw_router options:chassis="hv1"
+
+ovn-nbctl lrp-add gw_router gw_router-sw0 00:00:00:00:00:01 10.0.0.1/24
+ovn-nbctl lsp-add sw0 sw0-gw_router
+ovn-nbctl lsp-set-addresses sw0-gw_router router
+ovn-nbctl set Logical_Switch_Port sw0-gw_router type=router \
+                             options:router-port=gw_router-sw0 \
+
+ovn-nbctl lr-nat-add gw_router snat 192.168.0.1 10.0.0.0/24
+
+as hv1 ovs-vsctl -- add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=sw0-p1
+
+ovn-nbctl --wait=hv sync
+
+ro_nb_uuid=$(ovn-nbctl get Logical_Router gw_router _uuid)
+sw_nb_uuid=$(ovn-nbctl get Logical_Switch sw0 _uuid)
+ro_sb_uuid=$(ovn-sbctl --bare --columns=_uuid find Datapath_Binding external-ids:logical-router=${ro_nb_uuid})
+sw_sb_uuid=$(ovn-sbctl --bare --columns=_uuid find Datapath_Binding external-ids:logical-switch=${sw_nb_uuid})
+ro_meta=$(ovn-sbctl get Datapath_Binding ${ro_sb_uuid} tunnel_key)
+ro_meta=$(printf %#x ${ro_meta})
+sw_meta=$(ovn-sbctl get Datapath_Binding ${sw_sb_uuid} tunnel_key)
+sw_meta=$(printf %#x ${sw_meta})
+
+echo "ro_nb_uuid: ${ro_nb_uuid}"
+echo "sw_nb_uuid: ${sw_nb_uuid}"
+echo "ro_sb_uuid: ${ro_sb_uuid}"
+echo "sw_sb_uuid: ${sw_sb_uuid}"
+echo "ro_meta: ${ro_meta}"
+echo "sw_meta: ${sw_meta}"
+
+as hv1
+ovs-vsctl list bridge br-int
+snat_zone=$(printf %#x $(ovs-vsctl get bridge br-int external-ids:ct-zone-${ro_sb_uuid}_snat | tr -d \"))
+
+echo "snat_zone: ${snat_zone}"
+
+as hv1 ovs-ofctl dump-flows br-int > offlows_pre
+AT_CAPTURE_FILE([offlows_pre])
+# We should have a flow in table 33 that transitions from the ingress pipeline
+# to the egress pipeline of gw_router.
+AT_CHECK_UNQUOTED([grep -c "table=33.*metadata=${ro_meta}.*load:${snat_zone}->NXM_NX_REG12[]" offlows_pre], [0], [dnl
+1
+])
+
+# We should have a flow in table 65 that transitions from the egress pipeline
+# of sw0 to the ingress pipeline of gw_router.
+AT_CHECK_UNQUOTED([grep -c "table=65.*metadata=${sw_meta}.*load:${snat_zone}->NXM_NX_REG12[]" offlows_pre], [0], [dnl
+1
+])
+
+ovn-nbctl --wait=hv set Logical_Router gw_router options:snat-ct-zone=666
+
+as hv1
+snat_zone=$(ovs-vsctl get bridge br-int external-ids:ct-zone-${ro_sb_uuid}_snat | tr -d \")
+
+echo "snat_zone: ${snat_zone}"
+
+AT_CHECK([test "${snat_zone}" = "666"], [0], [])
+
+as hv1 ovs-ofctl dump-flows br-int > offlows_post
+AT_CAPTURE_FILE([offlows_post])
+# We should have a flow in table 33 that transitions from the ingress pipeline
+# to the egress pipeline of gw_router.
+AT_CHECK_UNQUOTED([grep -c "table=33.*metadata=${ro_meta}.*load:0x29a->NXM_NX_REG12[]" offlows_post], [0], [dnl
+1
+])
+
+# We should have a flow in table 65 that transitions from the egress pipeline
+# of sw0 to the ingress pipeline of gw_router.
+AT_CHECK_UNQUOTED([grep -c "table=65.*metadata=${sw_meta}.*load:0x29a->NXM_NX_REG12[]" offlows_post], [0], [dnl
+1
+])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
