@@ -532,6 +532,21 @@ update_sb_db(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
 }
 
 static void
+add_pending_ct_zone_entry(struct shash *pending_ct_zones,
+                          enum ct_zone_pending_state state,
+                          int zone, bool add, const char *name)
+{
+    VLOG_DBG("%s ct zone %"PRId32" for '%s'",
+             add ? "assigning" : "removing", zone, name);
+
+    struct ct_zone_pending_entry *pending = xmalloc(sizeof *pending);
+    pending->state = state; /* Skip flushing zone. */
+    pending->zone = zone;
+    pending->add = add;
+    shash_add(pending_ct_zones, name, pending);
+}
+
+static void
 update_ct_zones(const struct sset *lports, const struct hmap *local_datapaths,
                 struct simap *ct_zones, unsigned long *ct_zone_bitmap,
                 struct shash *pending_ct_zones)
@@ -540,6 +555,7 @@ update_ct_zones(const struct sset *lports, const struct hmap *local_datapaths,
     int scan_start = 1;
     const char *user;
     struct sset all_users = SSET_INITIALIZER(&all_users);
+    struct simap req_snat_zones = SIMAP_INITIALIZER(&req_snat_zones);
 
     SSET_FOR_EACH(user, lports) {
         sset_add(&all_users, user);
@@ -554,6 +570,25 @@ update_ct_zones(const struct sset *lports, const struct hmap *local_datapaths,
         char *snat = alloc_nat_zone_key(&ld->datapath->header_.uuid, "snat");
         sset_add(&all_users, dnat);
         sset_add(&all_users, snat);
+
+        int req_snat_zone = datapath_snat_ct_zone(ld->datapath);
+        if (req_snat_zone >= 0) {
+            struct simap_node *node;
+            bool collision = false;
+            SIMAP_FOR_EACH (node, &req_snat_zones) {
+                if (node->data == req_snat_zone) {
+                    VLOG_WARN("Datapaths %.*s and " UUID_FMT " request SNAT "
+                              "CT zone %d\n", UUID_LEN, node->name,
+                              UUID_ARGS(&ld->datapath->header_.uuid),
+                              req_snat_zone);
+                    collision = true;
+                    break;
+                }
+            }
+            if (!collision) {
+                simap_put(&req_snat_zones, snat, req_snat_zone);
+            }
+        }
         free(dnat);
         free(snat);
     }
@@ -564,16 +599,50 @@ update_ct_zones(const struct sset *lports, const struct hmap *local_datapaths,
             VLOG_DBG("removing ct zone %"PRId32" for '%s'",
                      ct_zone->data, ct_zone->name);
 
-            struct ct_zone_pending_entry *pending = xmalloc(sizeof *pending);
-            pending->state = CT_ZONE_DB_QUEUED; /* Skip flushing zone. */
-            pending->zone = ct_zone->data;
-            pending->add = false;
-            shash_add(pending_ct_zones, ct_zone->name, pending);
+            add_pending_ct_zone_entry(pending_ct_zones, CT_ZONE_DB_QUEUED,
+                                      ct_zone->data, false, ct_zone->name);
 
             bitmap_set0(ct_zone_bitmap, ct_zone->data);
             simap_delete(ct_zones, ct_zone);
         }
     }
+
+    /* Prioritize requested CT zones */
+    struct simap_node *snat_req_node;
+    SIMAP_FOR_EACH (snat_req_node, &req_snat_zones) {
+        struct simap_node *node = simap_find(ct_zones, snat_req_node->name);
+        if (node) {
+            if (node->data == snat_req_node->data) {
+                /* Already have this zone reserved */
+                continue;
+            } else {
+                /* Zone has changed for this node. delete old entry */
+                bitmap_set0(ct_zone_bitmap, node->data);
+                simap_delete(ct_zones, node);
+            }
+        } else if (snat_req_node->data > 0 &&
+                   bitmap_is_set(ct_zone_bitmap, snat_req_node->data)) {
+            /* Uh oh. Someone else already has this zone assigned.
+             * We need to find who and remove them from ct_zones so
+             * that they get re-assigned a new zone below
+             */
+            struct simap_node *next;
+            SIMAP_FOR_EACH_SAFE (node, next, ct_zones) {
+                if (node->data == snat_req_node->data) {
+                    simap_delete(ct_zones, node);
+                    break;
+                }
+            }
+        }
+
+        add_pending_ct_zone_entry(pending_ct_zones, CT_ZONE_OF_QUEUED,
+                                  snat_req_node->data, true,
+                                  snat_req_node->name);
+
+        bitmap_set1(ct_zone_bitmap, snat_req_node->data);
+        simap_put(ct_zones, snat_req_node->name, snat_req_node->data);
+    }
+    simap_destroy(&req_snat_zones);
 
     /* xxx This is wasteful to assign a zone to each port--even if no
      * xxx security policy is applied. */
@@ -596,13 +665,8 @@ update_ct_zones(const struct sset *lports, const struct hmap *local_datapaths,
         }
         scan_start = zone + 1;
 
-        VLOG_DBG("assigning ct zone %"PRId32" to '%s'", zone, user);
-
-        struct ct_zone_pending_entry *pending = xmalloc(sizeof *pending);
-        pending->state = CT_ZONE_OF_QUEUED;
-        pending->zone = zone;
-        pending->add = true;
-        shash_add(pending_ct_zones, user, pending);
+        add_pending_ct_zone_entry(pending_ct_zones, CT_ZONE_OF_QUEUED,
+                                  zone, true, user);
 
         bitmap_set1(ct_zone_bitmap, zone);
         simap_put(ct_zones, user, zone);
@@ -2330,6 +2394,7 @@ main(int argc, char *argv[])
 
     engine_add_input(&en_ct_zones, &en_ovs_open_vswitch, NULL);
     engine_add_input(&en_ct_zones, &en_ovs_bridge, NULL);
+    engine_add_input(&en_ct_zones, &en_sb_datapath_binding, NULL);
     engine_add_input(&en_ct_zones, &en_runtime_data, NULL);
 
     engine_add_input(&en_runtime_data, &en_ofctrl_is_connected, NULL);
