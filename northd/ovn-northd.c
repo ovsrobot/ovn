@@ -11315,12 +11315,29 @@ build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
     build_lrouter_flows(datapaths, ports, lflows, meter_groups, lbs);
 }
 
+struct ovn_dp_group {
+    struct hmapx map;
+    struct sbrec_logical_datapath_group *dp_group;
+    struct hmap_node node;
+};
 
-static void
-ovn_sb_set_lflow_logical_datapath_group(
-    struct northd_context *ctx,
-    const struct sbrec_logical_flow *sbflow,
-    const struct hmapx *od)
+static struct ovn_dp_group *
+ovn_dp_group_find(const struct hmap *dp_groups,
+                  const struct hmapx *od, uint32_t hash)
+{
+    struct ovn_dp_group *dpg;
+
+    HMAP_FOR_EACH_WITH_HASH (dpg, node, hash, dp_groups) {
+        if (hmapx_equals(&dpg->map, od)) {
+            return dpg;
+        }
+    }
+    return NULL;
+}
+
+static struct sbrec_logical_datapath_group *
+ovn_sb_insert_logical_datapath_group(struct northd_context *ctx,
+                                     const struct hmapx *od)
 {
     struct sbrec_logical_datapath_group *dp_group;
     const struct sbrec_datapath_binding **sb;
@@ -11335,7 +11352,26 @@ ovn_sb_set_lflow_logical_datapath_group(
     sbrec_logical_datapath_group_set_datapaths(
         dp_group, (struct sbrec_datapath_binding **) sb, n);
     free(sb);
-    sbrec_logical_flow_set_logical_datapath_group(sbflow, dp_group);
+
+    return dp_group;
+}
+
+static void
+ovn_sb_set_lflow_logical_datapath_group(
+    struct northd_context *ctx,
+    struct hmap *dp_groups,
+    const struct sbrec_logical_flow *sbflow,
+    const struct hmapx *od)
+{
+    struct ovn_dp_group *dpg;
+
+    dpg = ovn_dp_group_find(dp_groups, od, hash_int(hmapx_count(od), 0));
+    ovs_assert(dpg != NULL);
+
+    if (!dpg->dp_group) {
+        dpg->dp_group = ovn_sb_insert_logical_datapath_group(ctx, &dpg->map);
+    }
+    sbrec_logical_flow_set_logical_datapath_group(sbflow, dpg->dp_group);
 }
 
 /* Updates the Logical_Flow and Multicast_Group tables in the OVN_SB database,
@@ -11353,7 +11389,24 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
                                     port_groups, &lflows, mcgroups,
                                     igmp_groups, meter_groups, lbs);
 
+    /* Collecting all unique datapath groups. */
+    struct hmap dp_groups = HMAP_INITIALIZER(&dp_groups);
+    struct ovn_lflow *lflow;
+    HMAP_FOR_EACH (lflow, hmap_node, &lflows) {
+        uint32_t hash = hash_int(hmapx_count(&lflow->od), 0);
+        struct ovn_dp_group *dpg;
+
+        dpg = ovn_dp_group_find(&dp_groups, &lflow->od, hash);
+        if (!dpg) {
+            dpg = xzalloc(sizeof *dpg);
+            hmapx_clone(&dpg->map, &lflow->od);
+            hmap_insert(&dp_groups, &dpg->node, hash);
+        }
+    }
+
     /* Push changes to the Logical_Flow table to database. */
+    struct hmapx orphaned_dp_groups = HMAPX_INITIALIZER(&orphaned_dp_groups);
+    struct hmapx kept_dp_groups = HMAPX_INITIALIZER(&kept_dp_groups);
     const struct sbrec_logical_flow *sbflow, *next_sbflow;
     SBREC_LOGICAL_FLOW_FOR_EACH_SAFE (sbflow, next_sbflow, ctx->ovnsb_idl) {
         struct sbrec_logical_datapath_group *dp_group
@@ -11376,7 +11429,7 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
 
         if (!n_valid_datapaths) {
             /* This lflow has no valid logical datapaths. */
-            sbrec_logical_datapath_group_delete(dp_group);
+            hmapx_add(&orphaned_dp_groups, dp_group);
             sbrec_logical_flow_delete(sbflow);
             free(od);
             continue;
@@ -11384,10 +11437,10 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
 
         enum ovn_pipeline pipeline
             = !strcmp(sbflow->pipeline, "ingress") ? P_IN : P_OUT;
-        struct ovn_lflow *lflow = ovn_lflow_find(
+
+        lflow = ovn_lflow_find(
             &lflows, ovn_stage_build(dp_type, pipeline, sbflow->table_id),
             sbflow->priority, sbflow->match, sbflow->actions, sbflow->hash);
-
         if (lflow) {
             /* This is a valid lflow.  Checking if the datapath group needs
              * updates. */
@@ -11406,25 +11459,39 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
 
             if (update_datapath_group) {
                 /* Re-creating datapath group since there are changes. */
-                sbrec_logical_datapath_group_delete(dp_group);
-                ovn_sb_set_lflow_logical_datapath_group(ctx,
+                hmapx_add(&orphaned_dp_groups, dp_group);
+                ovn_sb_set_lflow_logical_datapath_group(ctx, &dp_groups,
                                                         sbflow, &lflow->od);
+            } else {
+                hmapx_add(&kept_dp_groups, dp_group);
             }
             /* This lflow updated.  Not needed anymore. */
             ovn_lflow_destroy(&lflows, lflow);
         } else {
-            sbrec_logical_datapath_group_delete(dp_group);
+            hmapx_add(&orphaned_dp_groups, dp_group);
             sbrec_logical_flow_delete(sbflow);
         }
         free(od);
     }
-    struct ovn_lflow *lflow, *next_lflow;
+
+    /* Remove all orphaned datapath groups, i.e. all groups without lflows. */
+    const struct hmapx_node *node;
+    HMAPX_FOR_EACH (node, &orphaned_dp_groups) {
+        if (!hmapx_contains(&kept_dp_groups, node->data)) {
+            sbrec_logical_datapath_group_delete(node->data);
+        }
+    }
+    hmapx_destroy(&orphaned_dp_groups);
+    hmapx_destroy(&kept_dp_groups);
+
+    struct ovn_lflow *next_lflow;
     HMAP_FOR_EACH_SAFE (lflow, next_lflow, hmap_node, &lflows) {
         const char *pipeline = ovn_stage_get_pipeline_name(lflow->stage);
         uint8_t table = ovn_stage_get_table(lflow->stage);
 
         sbflow = sbrec_logical_flow_insert(ctx->ovnsb_txn);
-        ovn_sb_set_lflow_logical_datapath_group(ctx, sbflow, &lflow->od);
+        ovn_sb_set_lflow_logical_datapath_group(ctx, &dp_groups,
+                                                sbflow, &lflow->od);
         sbrec_logical_flow_set_pipeline(sbflow, pipeline);
         sbrec_logical_flow_set_table_id(sbflow, table);
         sbrec_logical_flow_set_priority(sbflow, lflow->priority);
@@ -11455,6 +11522,13 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
         ovn_lflow_destroy(&lflows, lflow);
     }
     hmap_destroy(&lflows);
+
+    struct ovn_dp_group *dpg;
+    HMAP_FOR_EACH_POP (dpg, node, &dp_groups) {
+        hmapx_destroy(&dpg->map);
+        free(dpg);
+    }
+    hmap_destroy(&dp_groups);
 
     /* Push changes to the Multicast_Group table to database. */
     const struct sbrec_multicast_group *sbmc, *next_sbmc;
