@@ -520,13 +520,17 @@ pre_get_info(struct ctl_context *ctx)
     ovsdb_idl_add_column(ctx->idl, &sbrec_port_binding_col_chassis);
     ovsdb_idl_add_column(ctx->idl, &sbrec_port_binding_col_datapath);
 
-    ovsdb_idl_add_column(ctx->idl, &sbrec_logical_flow_col_logical_datapath);
+    ovsdb_idl_add_column(ctx->idl,
+                         &sbrec_logical_flow_col_logical_datapath_group);
     ovsdb_idl_add_column(ctx->idl, &sbrec_logical_flow_col_pipeline);
     ovsdb_idl_add_column(ctx->idl, &sbrec_logical_flow_col_actions);
     ovsdb_idl_add_column(ctx->idl, &sbrec_logical_flow_col_priority);
     ovsdb_idl_add_column(ctx->idl, &sbrec_logical_flow_col_table_id);
     ovsdb_idl_add_column(ctx->idl, &sbrec_logical_flow_col_match);
     ovsdb_idl_add_column(ctx->idl, &sbrec_logical_flow_col_external_ids);
+
+    ovsdb_idl_add_column(ctx->idl,
+                         &sbrec_logical_datapath_group_col_datapaths);
 
     ovsdb_idl_add_column(ctx->idl, &sbrec_datapath_binding_col_external_ids);
 
@@ -713,16 +717,10 @@ lflow_cmp(const void *a_, const void *b_)
     const struct sbrec_logical_flow *a = *ap;
     const struct sbrec_logical_flow *b = *bp;
 
-    const struct sbrec_datapath_binding *adb = a->logical_datapath;
-    const struct sbrec_datapath_binding *bdb = b->logical_datapath;
-    const char *a_name = smap_get_def(&adb->external_ids, "name", "");
-    const char *b_name = smap_get_def(&bdb->external_ids, "name", "");
-    int cmp = strcmp(a_name, b_name);
-    if (cmp) {
-        return cmp;
-    }
+    const struct sbrec_logical_datapath_group *adb = a->logical_datapath_group;
+    const struct sbrec_logical_datapath_group *bdb = b->logical_datapath_group;
 
-    cmp = uuid_compare_3way(&adb->header_.uuid, &bdb->header_.uuid);
+    int cmp = uuid_compare_3way(&adb->header_.uuid, &bdb->header_.uuid);
     if (cmp) {
         return cmp;
     }
@@ -1009,6 +1007,21 @@ cmd_lflow_list_chassis(struct ctl_context *ctx, struct vconn *vconn,
     }
 }
 
+static bool
+datapath_group_contains_datapath(const struct sbrec_logical_datapath_group *g,
+                                 const struct sbrec_datapath_binding *dp)
+{
+    if (!g || !dp) {
+        return false;
+    }
+    for (size_t i = 0; i < g->n_datapaths; i++) {
+        if (g->datapaths[i] == dp) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void
 cmd_lflow_list(struct ctl_context *ctx)
 {
@@ -1045,7 +1058,9 @@ cmd_lflow_list(struct ctl_context *ctx)
     size_t n_capacity = 0;
     const struct sbrec_logical_flow *lflow;
     SBREC_LOGICAL_FLOW_FOR_EACH (lflow, ctx->idl) {
-        if (datapath && lflow->logical_datapath != datapath) {
+        if (datapath
+            && !datapath_group_contains_datapath(lflow->logical_datapath_group,
+                                                 datapath)) {
             continue;
         }
 
@@ -1089,13 +1104,21 @@ cmd_lflow_list(struct ctl_context *ctx)
         /* Print a header line for this datapath or pipeline, if we haven't
          * already done so. */
         if (!prev
-            || prev->logical_datapath != lflow->logical_datapath
+            || prev->logical_datapath_group != lflow->logical_datapath_group
             || strcmp(prev->pipeline, lflow->pipeline)) {
-            printf("Datapath: ");
-            print_datapath_name(lflow->logical_datapath);
-            printf(" ("UUID_FMT")  Pipeline: %s\n",
-                   UUID_ARGS(&lflow->logical_datapath->header_.uuid),
-                   lflow->pipeline);
+            const struct sbrec_logical_datapath_group *g;
+
+            printf("Datapaths: ");
+            g = lflow->logical_datapath_group;
+            for (size_t j = 0; j < g->n_datapaths; j++) {
+                if (j) {
+                    printf("           ");
+                }
+                print_datapath_name(g->datapaths[j]);
+                printf(" ("UUID_FMT")  Pipeline: %s\n",
+                       UUID_ARGS(&g->datapaths[j]->header_.uuid),
+                       lflow->pipeline);
+            }
         }
 
         /* Print the flow. */
