@@ -1,7 +1,7 @@
 {
     "name": "OVN_Southbound",
-    "version": "2.10.0",
-    "cksum": "2548342632 22615",
+    "version": "20.12.0",
+    "cksum": "2311403201 23260",
     "tables": {
         "SB_Global": {
             "columns": {
@@ -90,8 +90,14 @@
             "isRoot": true},
         "Logical_Flow": {
             "columns": {
-                "logical_datapath": {"type": {"key": {"type": "uuid",
-                                                      "refTable": "Datapath_Binding"}}},
+                "logical_datapath":
+                    {"type": {"key": {"type": "uuid",
+                                      "refTable": "Datapath_Binding"},
+                              "min": 0, "max": 1}},
+                "logical_datapath_group":
+                    {"type": {"key": {"type": "uuid",
+                                      "refTable": "Logical_Datapath_Group"},
+                              "min": 0, "max": 1}},
                 "pipeline": {"type": {"key": {"type": "string",
                                       "enum": ["set", ["ingress",
                                                        "egress"]]}}},
@@ -107,6 +113,14 @@
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}}},
             "isRoot": true},
+        "Logical_Datapath_Group": {
+            "columns": {
+                "datapaths":
+                    {"type": {"key": {"type": "uuid",
+                                      "refTable": "Datapath_Binding",
+                                      "refType": "weak"},
+                              "min": 0, "max": "unlimited"}}},
+            "isRoot": false},
         "Multicast_Group": {
             "columns": {
                 "datapath": {"type": {"key": {"type": "uuid",
