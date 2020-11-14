@@ -153,7 +153,7 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
      * a VIF on a particular logical switch, we immediately know to monitor all
      * the connected logical routers and logical switches. */
     struct ovsdb_idl_condition pb = OVSDB_IDL_CONDITION_INIT(&pb);
-    struct ovsdb_idl_condition lf = OVSDB_IDL_CONDITION_INIT(&lf);
+    struct ovsdb_idl_condition ldpg = OVSDB_IDL_CONDITION_INIT(&ldpg);
     struct ovsdb_idl_condition mb = OVSDB_IDL_CONDITION_INIT(&mb);
     struct ovsdb_idl_condition mg = OVSDB_IDL_CONDITION_INIT(&mg);
     struct ovsdb_idl_condition dns = OVSDB_IDL_CONDITION_INIT(&dns);
@@ -164,7 +164,7 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
 
     if (monitor_all) {
         ovsdb_idl_condition_add_clause_true(&pb);
-        ovsdb_idl_condition_add_clause_true(&lf);
+        ovsdb_idl_condition_add_clause_true(&ldpg);
         ovsdb_idl_condition_add_clause_true(&mb);
         ovsdb_idl_condition_add_clause_true(&mg);
         ovsdb_idl_condition_add_clause_true(&dns);
@@ -226,8 +226,8 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
             struct uuid *uuid = CONST_CAST(struct uuid *,
                                            &ld->datapath->header_.uuid);
             sbrec_port_binding_add_clause_datapath(&pb, OVSDB_F_EQ, uuid);
-            sbrec_logical_flow_add_clause_logical_datapath(&lf, OVSDB_F_EQ,
-                                                           uuid);
+            sbrec_logical_datapath_group_add_clause_datapaths(
+                &ldpg, OVSDB_F_INCLUDES, &uuid, 1);
             sbrec_mac_binding_add_clause_datapath(&mb, OVSDB_F_EQ, uuid);
             sbrec_multicast_group_add_clause_datapath(&mg, OVSDB_F_EQ, uuid);
             sbrec_dns_add_clause_datapaths(&dns, OVSDB_F_INCLUDES, &uuid, 1);
@@ -238,7 +238,7 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
 
 out:
     sbrec_port_binding_set_condition(ovnsb_idl, &pb);
-    sbrec_logical_flow_set_condition(ovnsb_idl, &lf);
+    sbrec_logical_datapath_group_set_condition(ovnsb_idl, &ldpg);
     sbrec_mac_binding_set_condition(ovnsb_idl, &mb);
     sbrec_multicast_group_set_condition(ovnsb_idl, &mg);
     sbrec_dns_set_condition(ovnsb_idl, &dns);
@@ -247,7 +247,6 @@ out:
     sbrec_igmp_group_set_condition(ovnsb_idl, &igmp);
     sbrec_chassis_private_set_condition(ovnsb_idl, &chprv);
     ovsdb_idl_condition_destroy(&pb);
-    ovsdb_idl_condition_destroy(&lf);
     ovsdb_idl_condition_destroy(&mb);
     ovsdb_idl_condition_destroy(&mg);
     ovsdb_idl_condition_destroy(&dns);
@@ -1652,11 +1651,6 @@ static void init_lflow_ctx(struct engine_node *node,
                 engine_get_input("SB_port_binding", node),
                 "name");
 
-    struct ovsdb_idl_index *sbrec_logical_flow_by_dp =
-        engine_ovsdb_node_get_index(
-                engine_get_input("SB_logical_flow", node),
-                "logical_datapath");
-
     struct ovsdb_idl_index *sbrec_mc_group_by_name_dp =
         engine_ovsdb_node_get_index(
                 engine_get_input("SB_multicast_group", node),
@@ -1704,8 +1698,6 @@ static void init_lflow_ctx(struct engine_node *node,
 
     l_ctx_in->sbrec_multicast_group_by_name_datapath =
         sbrec_mc_group_by_name_dp;
-    l_ctx_in->sbrec_logical_flow_by_logical_datapath =
-        sbrec_logical_flow_by_dp;
     l_ctx_in->sbrec_port_binding_by_name = sbrec_port_binding_by_name;
     l_ctx_in->dhcp_options_table  = dhcp_table;
     l_ctx_in->dhcpv6_options_table = dhcpv6_table;
@@ -2188,9 +2180,6 @@ main(int argc, char *argv[])
         = chassis_private_index_create(ovnsb_idl_loop.idl);
     struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath
         = mcast_group_index_create(ovnsb_idl_loop.idl);
-    struct ovsdb_idl_index *sbrec_logical_flow_by_logical_datapath
-        = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
-                                  &sbrec_logical_flow_col_logical_datapath);
     struct ovsdb_idl_index *sbrec_port_binding_by_name
         = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
                                   &sbrec_port_binding_col_logical_port);
@@ -2362,8 +2351,6 @@ main(int argc, char *argv[])
     engine_ovsdb_node_add_index(&en_sb_chassis, "name", sbrec_chassis_by_name);
     engine_ovsdb_node_add_index(&en_sb_multicast_group, "name_datapath",
                                 sbrec_multicast_group_by_name_datapath);
-    engine_ovsdb_node_add_index(&en_sb_logical_flow, "logical_datapath",
-                                sbrec_logical_flow_by_logical_datapath);
     engine_ovsdb_node_add_index(&en_sb_port_binding, "name",
                                 sbrec_port_binding_by_name);
     engine_ovsdb_node_add_index(&en_sb_port_binding, "key",

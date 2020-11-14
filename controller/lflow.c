@@ -666,6 +666,7 @@ update_conj_id_ofs(uint32_t *conj_id_ofs, uint32_t n_conjs)
 
 static void
 add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
+                          const struct sbrec_datapath_binding *dp,
                           struct hmap *matches, size_t conj_id_ofs,
                           uint8_t ptable, uint8_t output_ptable,
                           struct ofpbuf *ovnacts,
@@ -676,7 +677,7 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
         .sbrec_multicast_group_by_name_datapath
             = l_ctx_in->sbrec_multicast_group_by_name_datapath,
         .sbrec_port_binding_by_name = l_ctx_in->sbrec_port_binding_by_name,
-        .dp = lflow->logical_datapath
+        .dp = dp,
     };
 
     /* Encode OVN logical actions into OpenFlow. */
@@ -686,7 +687,7 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
         .lookup_port = lookup_port_cb,
         .tunnel_ofport = tunnel_ofport_cb,
         .aux = &aux,
-        .is_switch = datapath_is_switch(lflow->logical_datapath),
+        .is_switch = datapath_is_switch(dp),
         .group_table = l_ctx_out->group_table,
         .meter_table = l_ctx_out->meter_table,
         .lflow_uuid = lflow->header_.uuid,
@@ -702,17 +703,16 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
 
     struct expr_match *m;
     HMAP_FOR_EACH (m, hmap_node, matches) {
-        match_set_metadata(&m->match,
-                           htonll(lflow->logical_datapath->tunnel_key));
+        match_set_metadata(&m->match, htonll(dp->tunnel_key));
         if (m->match.wc.masks.conj_id) {
             m->match.flow.conj_id += conj_id_ofs;
         }
-        if (datapath_is_switch(lflow->logical_datapath)) {
+        if (datapath_is_switch(dp)) {
             unsigned int reg_index
                 = (ingress ? MFF_LOG_INPORT : MFF_LOG_OUTPORT) - MFF_REG0;
             int64_t port_id = m->match.flow.regs[reg_index];
             if (port_id) {
-                int64_t dp_id = lflow->logical_datapath->tunnel_key;
+                int64_t dp_id = dp->tunnel_key;
                 char buf[16];
                 get_unique_lport_key(dp_id, port_id, buf, sizeof(buf));
                 lflow_resource_add(l_ctx_out->lfrr, REF_TYPE_PORTBINDING, buf,
@@ -761,6 +761,7 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
  */
 static struct expr *
 convert_match_to_expr(const struct sbrec_logical_flow *lflow,
+                      const struct sbrec_datapath_binding *dp,
                       struct expr *prereqs,
                       const struct shash *addr_sets,
                       const struct shash *port_groups,
@@ -773,8 +774,7 @@ convert_match_to_expr(const struct sbrec_logical_flow *lflow,
 
     struct expr *e = expr_parse_string(lflow->match, &symtab, addr_sets,
                                        port_groups, &addr_sets_ref,
-                                       &port_groups_ref,
-                                       lflow->logical_datapath->tunnel_key,
+                                       &port_groups_ref, dp->tunnel_key,
                                        &error);
     const char *addr_set_name;
     SSET_FOR_EACH (addr_set_name, &addr_sets_ref) {
@@ -812,23 +812,18 @@ convert_match_to_expr(const struct sbrec_logical_flow *lflow,
 }
 
 static bool
-consider_logical_flow(const struct sbrec_logical_flow *lflow,
-                      struct hmap *dhcp_opts, struct hmap *dhcpv6_opts,
-                      struct hmap *nd_ra_opts,
-                      struct controller_event_options *controller_event_opts,
-                      struct lflow_ctx_in *l_ctx_in,
-                      struct lflow_ctx_out *l_ctx_out)
+consider_logical_flow__(const struct sbrec_logical_flow *lflow,
+                        const struct sbrec_datapath_binding *dp,
+                        struct hmap *dhcp_opts, struct hmap *dhcpv6_opts,
+                        struct hmap *nd_ra_opts,
+                        struct controller_event_options *controller_event_opts,
+                        struct lflow_ctx_in *l_ctx_in,
+                        struct lflow_ctx_out *l_ctx_out)
 {
     /* Determine translation of logical table IDs to physical table IDs. */
     bool ingress = !strcmp(lflow->pipeline, "ingress");
 
-    const struct sbrec_datapath_binding *ldp = lflow->logical_datapath;
-    if (!ldp) {
-        VLOG_DBG("lflow "UUID_FMT" has no datapath binding, skip",
-                 UUID_ARGS(&lflow->header_.uuid));
-        return true;
-    }
-    if (!get_local_datapath(l_ctx_in->local_datapaths, ldp->tunnel_key)) {
+    if (!get_local_datapath(l_ctx_in->local_datapaths, dp->tunnel_key)) {
         VLOG_DBG("lflow "UUID_FMT" is not for local datapath, skip",
                  UUID_ARGS(&lflow->header_.uuid));
         return true;
@@ -877,7 +872,7 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
         .sbrec_multicast_group_by_name_datapath
             = l_ctx_in->sbrec_multicast_group_by_name_datapath,
         .sbrec_port_binding_by_name = l_ctx_in->sbrec_port_binding_by_name,
-        .dp = lflow->logical_datapath
+        .dp = dp,
     };
     struct condition_aux cond_aux = {
         .sbrec_port_binding_by_name = l_ctx_in->sbrec_port_binding_by_name,
@@ -890,7 +885,7 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
     struct expr *expr = NULL;
     if (!l_ctx_out->lflow_cache_map) {
         /* Caching is disabled. */
-        expr = convert_match_to_expr(lflow, prereqs, l_ctx_in->addr_sets,
+        expr = convert_match_to_expr(lflow, dp, prereqs, l_ctx_in->addr_sets,
                                      l_ctx_in->port_groups, l_ctx_out->lfrr,
                                      NULL);
         if (!expr) {
@@ -916,7 +911,7 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
             return true;
         }
 
-        add_matches_to_flow_table(lflow, &matches, *l_ctx_out->conj_id_ofs,
+        add_matches_to_flow_table(lflow, dp, &matches, *l_ctx_out->conj_id_ofs,
                                   ptable, output_ptable, &ovnacts, ingress,
                                   l_ctx_in, l_ctx_out);
 
@@ -933,7 +928,7 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
     if (lc && lc->type == LCACHE_T_MATCHES) {
         /* 'matches' is cached. No need to do expr parsing.
          * Add matches to flow table and return. */
-        add_matches_to_flow_table(lflow, lc->expr_matches, lc->conj_id_ofs,
+        add_matches_to_flow_table(lflow, dp, lc->expr_matches, lc->conj_id_ofs,
                                   ptable, output_ptable, &ovnacts, ingress,
                                   l_ctx_in, l_ctx_out);
         ovnacts_free(ovnacts.data, ovnacts.size);
@@ -953,7 +948,7 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
 
     bool pg_addr_set_ref = false;
     if (!expr) {
-        expr = convert_match_to_expr(lflow, prereqs, l_ctx_in->addr_sets,
+        expr = convert_match_to_expr(lflow, dp, prereqs, l_ctx_in->addr_sets,
                                      l_ctx_in->port_groups, l_ctx_out->lfrr,
                                      &pg_addr_set_ref);
         if (!expr) {
@@ -1011,7 +1006,7 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
     }
 
     /* Encode OVN logical actions into OpenFlow. */
-    add_matches_to_flow_table(lflow, matches, lc->conj_id_ofs,
+    add_matches_to_flow_table(lflow, dp, matches, lc->conj_id_ofs,
                               ptable, output_ptable, &ovnacts, ingress,
                               l_ctx_in, l_ctx_out);
     ovnacts_free(ovnacts.data, ovnacts.size);
@@ -1031,6 +1026,35 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
     }
 
     return true;
+}
+
+static bool
+consider_logical_flow(const struct sbrec_logical_flow *lflow,
+                      struct hmap *dhcp_opts, struct hmap *dhcpv6_opts,
+                      struct hmap *nd_ra_opts,
+                      struct controller_event_options *controller_event_opts,
+                      struct lflow_ctx_in *l_ctx_in,
+                      struct lflow_ctx_out *l_ctx_out)
+{
+    struct sbrec_logical_datapath_group *dp_group
+        = lflow->logical_datapath_group;
+    bool ret = true;
+
+    if (!dp_group) {
+        VLOG_DBG("lflow "UUID_FMT" has no datapath binding, skip",
+                 UUID_ARGS(&lflow->header_.uuid));
+        return true;
+    }
+
+    for (size_t i = 0; i < dp_group->n_datapaths; i++) {
+        if (!consider_logical_flow__(lflow, dp_group->datapaths[i],
+                                     dhcp_opts,  dhcpv6_opts, nd_ra_opts,
+                                     controller_event_opts,
+                                     l_ctx_in, l_ctx_out)) {
+            ret = false;
+        }
+    }
+    return ret;
 }
 
 static void
@@ -1235,22 +1259,29 @@ lflow_add_flows_for_datapath(const struct sbrec_datapath_binding *dp,
     struct controller_event_options controller_event_opts;
     controller_event_opts_init(&controller_event_opts);
 
-    struct sbrec_logical_flow *lf_row = sbrec_logical_flow_index_init_row(
-        l_ctx_in->sbrec_logical_flow_by_logical_datapath);
-    sbrec_logical_flow_index_set_logical_datapath(lf_row, dp);
-
     const struct sbrec_logical_flow *lflow;
-    SBREC_LOGICAL_FLOW_FOR_EACH_EQUAL (
-        lflow, lf_row, l_ctx_in->sbrec_logical_flow_by_logical_datapath) {
-        if (!consider_logical_flow(lflow, &dhcp_opts, &dhcpv6_opts,
-                                   &nd_ra_opts, &controller_event_opts,
-                                   l_ctx_in, l_ctx_out)) {
+    SBREC_LOGICAL_FLOW_TABLE_FOR_EACH (lflow, l_ctx_in->logical_flow_table) {
+        struct sbrec_logical_datapath_group *dp_group
+            = lflow->logical_datapath_group;
+        bool found = false;
+
+        if (dp_group) {
+            for (size_t i = 0; i < dp_group->n_datapaths; i++) {
+                if (dp_group->datapaths[i] == dp) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (found && !consider_logical_flow__(lflow, dp, &dhcp_opts,
+                                              &dhcpv6_opts, &nd_ra_opts,
+                                              &controller_event_opts,
+                                              l_ctx_in, l_ctx_out)) {
             handled = false;
             l_ctx_out->conj_id_overflow = true;
             break;
         }
     }
-    sbrec_logical_flow_index_destroy_row(lf_row);
 
     dhcp_opts_destroy(&dhcp_opts);
     dhcp_opts_destroy(&dhcpv6_opts);
