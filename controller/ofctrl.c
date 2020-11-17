@@ -2033,7 +2033,7 @@ ofctrl_put(struct ovn_desired_flow_table *flow_table,
         need_put = true;
     } else if (nb_cfg != old_nb_cfg) {
         /* nb_cfg changed since last ofctrl_put() call */
-        if (cur_cfg == old_nb_cfg) {
+        if (cur_cfg == old_nb_cfg && ovs_list_is_empty(&flow_updates)) {
             /* we were up-to-date already, so just update with the
              * new nb_cfg */
             cur_cfg = nb_cfg;
