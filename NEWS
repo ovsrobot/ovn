@@ -8,6 +8,9 @@ Post-v20.09.0
      server.
    - Support other_config:vlan-passthru=true to allow VLAN tagged incoming
      traffic.
+   - Support version pinning between ovn-northd and ovn-controller as an
+     option. If the option is enabled and the versions don't match,
+     ovn-controller will not process any DB changes.
 
 OVN v20.09.0 - 28 Sep 2020
 --------------------------

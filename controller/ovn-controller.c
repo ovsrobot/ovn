@@ -2136,6 +2136,37 @@ struct ovn_controller_exit_args {
     bool *restart;
 };
 
+static bool
+pin_to_northd(struct ovsdb_idl *ovs_idl)
+{
+    const struct ovsrec_open_vswitch *cfg = ovsrec_open_vswitch_first(ovs_idl);
+    return !cfg ? false : smap_get_bool(&cfg->external_ids,
+                                        "ovn-pin-to-northd", false);
+}
+
+/* Returns false if the northd internal version and ovn-controller internal
+ * version doesn't match.
+ */
+static bool
+check_northd_version(const struct sbrec_sb_global *sb, const char *my_version)
+{
+    if (!sb) {
+        return false;
+    }
+
+    const char *northd_version =
+        smap_get_def(&sb->options, "northd_internal_version", "");
+
+    bool mismatch = strcmp(northd_version, my_version);
+    if (mismatch) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_WARN_RL(&rl, "controller version - %s mismatch with northd "
+                     "version - %s", my_version, northd_version);
+    }
+
+    return mismatch;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -2428,10 +2459,14 @@ main(int argc, char *argv[])
         .enable_lflow_cache = true
     };
 
+    char *ovn_internal_version = ovn_get_internal_version();
+    VLOG_INFO("OVN internal version is : [%s]", ovn_internal_version);
+
     /* Main loop. */
     exiting = false;
     restart = false;
     bool sb_monitor_all = false;
+    bool version_mismatch_with_northd = false;
     while (!exiting) {
         /* If we're paused just run the unixctl server and skip most of the
          * processing loop.
@@ -2441,8 +2476,6 @@ main(int argc, char *argv[])
             unixctl_server_wait(unixctl);
             goto loop_done;
         }
-
-        engine_init_run();
 
         struct ovsdb_idl_txn *ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop);
         unsigned int new_ovs_cond_seqno
@@ -2473,6 +2506,22 @@ main(int argc, char *argv[])
             ovnsb_cond_seqno = new_ovnsb_cond_seqno;
         }
 
+        bool version_mismatched = false;
+        if (pin_to_northd(ovs_idl_loop.idl)) {
+            version_mismatched = check_northd_version(
+                sbrec_sb_global_first(ovnsb_idl_loop.idl),
+                ovn_internal_version);
+        } else {
+            version_mismatched = false;
+        }
+
+        if (version_mismatch_with_northd != version_mismatched) {
+            version_mismatch_with_northd = version_mismatched;
+            engine_set_force_recompute(true);
+        }
+
+        engine_init_run();
+
         struct engine_context eng_ctx = {
             .ovs_idl_txn = ovs_idl_txn,
             .ovnsb_idl_txn = ovnsb_idl_txn,
@@ -2481,7 +2530,8 @@ main(int argc, char *argv[])
 
         engine_set_context(&eng_ctx);
 
-        if (ovsdb_idl_has_ever_connected(ovnsb_idl_loop.idl)) {
+        if (ovsdb_idl_has_ever_connected(ovnsb_idl_loop.idl) &&
+            !version_mismatch_with_northd) {
             /* Contains the transport zones that this Chassis belongs to */
             struct sset transport_zones = SSET_INITIALIZER(&transport_zones);
             sset_from_delimited_string(&transport_zones,
@@ -2770,6 +2820,7 @@ loop_done:
         }
     }
 
+    free(ovn_internal_version);
     unixctl_server_destroy(unixctl);
     lflow_destroy();
     ofctrl_destroy();
@@ -2822,6 +2873,7 @@ parse_options(int argc, char *argv[])
 
         case 'V':
             ovs_print_version(OFP15_VERSION, OFP15_VERSION);
+            printf("SB DB Schema %s\n", sbrec_get_db_version());
             exit(EXIT_SUCCESS);
 
         VLOG_OPTION_HANDLERS
