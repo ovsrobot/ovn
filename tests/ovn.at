@@ -1743,6 +1743,180 @@ AT_CLEANUP
 
 AT_BANNER([OVN end-to-end tests])
 
+AT_SETUP([ovn -- cross-connectivity between two virtual chassis])
+AT_KEYWORDS([ovn])
+ovn_start
+ovn-nbctl ls-add lsw0
+net_add n1
+sim_add hv
+
+as hv
+
+ovn-nbctl lsp-add lsw0 ln-public
+ovn-nbctl lsp-set-type ln-public localnet
+ovn-nbctl lsp-set-addresses ln-public unknown
+ovn-nbctl lsp-set-options ln-public network_name=n1
+
+for i in 1 2; do
+    chassis=host-$i
+    ovs-vsctl add-br br-phys-$i
+    ovn_attach n1 br-phys-$i 192.168.$i.1 24 geneve br-int-$i $chassis
+
+    AT_CHECK([ovs-vsctl set Open_vSwitch . external-ids:ovn-bridge-mappings-$chassis=n1:br-phys-$i])
+
+    lpname=lp$i
+    ovn-nbctl lsp-add lsw0 $lpname
+    ovn-nbctl lsp-set-addresses $lpname "f0:00:00:00:00:0$i"
+    ovn-nbctl --wait=hv --timeout=3 lsp-set-options $lpname requested-chassis=$chassis
+    ovs-vsctl add-port br-int-$i vif$i -- set Interface vif$i external-ids:iface-id=$lpname \
+                                  options:tx_pcap=$i-tx.pcap \
+                                  options:rxq_pcap=$i-rx.pcap \
+                                  ofport-request=$i
+    OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up $lpname` = xup])
+
+    pb_chassis_id=$(ovn-sbctl --bare --columns chassis list port_binding $lpname)
+    pb_chassis_name=$(ovn-sbctl get chassis $pb_chassis_id name)
+    AT_FAIL_IF([test x$pb_chassis_name != x$chassis])
+done
+
+test_packet() {
+    local inport=$1 dst=$2 src=$3 eth=$4 eout=$5 lout=$6
+
+    # First try tracing the packet.
+    uflow="inport==\"lp$inport\" && eth.dst==$dst && eth.src==$src && eth.type==0x$eth"
+    echo "output(\"$lout\");" > expout
+    AT_CAPTURE_FILE([trace])
+    AT_CHECK([ovn-trace --all lsw0 "$uflow" | tee trace | sed '1,/Minimal trace/d'], [0], [expout])
+
+    # Then actually send a packet, for an end-to-end test.
+    local packet=$(echo $dst$src | sed 's/://g')${eth}
+    as hv ovs-appctl netdev-dummy/receive vif$inport $packet
+    echo $packet >> ${eout#lp}.expected
+}
+
+test_packet 1 f0:00:00:00:00:02 f0:00:00:00:00:01 1234 lp2 lp2
+test_packet 2 f0:00:00:00:00:01 f0:00:00:00:00:02 1234 lp1 lp1
+
+for i in 1 2; do
+    OVN_CHECK_PACKETS_REMOVE_BROADCAST([$i-tx.pcap], [$i.expected])
+done
+
+AT_CLEANUP
+
+AT_SETUP([ovn -- 3 virtual hosts, same node])
+AT_KEYWORDS([ovn])
+ovn_start
+ovn-nbctl ls-add lsw0
+net_add n1
+sim_add hv
+
+as hv
+for i in 1 2 3; do
+    chassis=host-$i
+    ovs-vsctl add-br br-phys-$i
+    ovn_attach n1 br-phys-$i 192.168.0.$i 24 geneve br-int-$i $chassis
+
+    for j in 1 2 3; do
+        lpname=lp$i$j
+        ovn-nbctl lsp-add lsw0 $lpname
+        ovn-nbctl --wait=hv --timeout=3 lsp-set-options $lpname requested-chassis=$chassis
+        ovs-vsctl add-port br-int-$i vif$i$j -- set Interface vif$i$j external-ids:iface-id=$lpname
+        OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up $lpname` = xup])
+
+        pb_chassis_id=$(ovn-sbctl --bare --columns chassis list port_binding $lpname)
+        pb_chassis_name=$(ovn-sbctl get chassis $pb_chassis_id name)
+        AT_FAIL_IF([test x$pb_chassis_name != x$chassis])
+    done
+done
+
+for i in 1 2 3; do
+    > expout
+    for vif in 1 2 3; do
+        echo vif$i$vif >> expout
+    done
+    AT_CHECK([ovs-vsctl list-ports br-int-$i | grep vif], [0], [expout])
+done
+
+# check that all tunnel endpoints are present
+AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
+[[ovn-host-1-host-2-0
+ovn-host-1-host-3-0
+ovn-host-2-host-1-0
+ovn-host-2-host-3-0
+ovn-host-3-host-1-0
+ovn-host-3-host-2-0
+]])
+
+# check no errors occurred during encaps creation
+AT_CHECK([ovs-vsctl --bare --columns=error find interface type="geneve" | awk NF | sort], [0], [])
+
+AT_CLEANUP
+
+AT_SETUP([ovn -- system-id in file])
+AT_KEYWORDS([ovn])
+
+ovn_start
+net_add n1
+sim_add hv
+
+as hv
+
+echo otherid > ${OVN_SYSCONFDIR}/system-id-override
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+# system-id-override file overrides chassis name selected via cli
+echo otherid > expout
+AT_CHECK([ovn-sbctl --bare --columns name list chassis], [0], [expout])
+
+AT_CLEANUP
+
+AT_SETUP([ovn -- concurrent controllers avoid fighting for each others' resources])
+AT_KEYWORDS([ovn])
+
+ovn_start
+sim_add hv
+
+for i in 1 2; do
+    net_add n-$i
+done
+
+as hv
+for i in 1 2; do
+    AT_CHECK([ovn-nbctl ls-add ls-$i])
+    AT_CHECK([ovn-nbctl lsp-add ls-$i ln_port-$i])
+    AT_CHECK([ovn-nbctl lsp-set-addresses ln_port-$i unknown])
+    AT_CHECK([ovn-nbctl lsp-set-type ln_port-$i localnet])
+    AT_CHECK([ovn-nbctl --wait=hv lsp-set-options ln_port-$i network_name=phys-$i])
+done
+
+for i in 1 2; do
+    as hv
+    ovs-vsctl add-br br-phys-$i
+    ovs-vsctl set open . external-ids:ovn-bridge-mappings-controller-$i=phys-$i:br-phys-$i
+    ovn_attach n-$i br-phys-$i 192.168.0.$i 24 geneve br-int-$i controller-$i
+
+    ovs-vsctl add-port br-int-$i vif-$i -- set Interface vif-$i external-ids:iface-id=lp-$i
+    ovn-nbctl lsp-add ls-$i lp-$i
+    OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up lp-$i` = xup])
+done
+
+# check that both patch ports are present
+AT_CHECK([ovs-vsctl --bare --columns=name find interface type="patch" | awk NF | sort], [0],
+[[patch-br-int-1-to-ln_port-1
+patch-br-int-2-to-ln_port-2
+patch-ln_port-1-to-br-int-1
+patch-ln_port-2-to-br-int-2
+]])
+
+# check that both tunnel endpoints are present
+AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
+[[ovn-controller-1-controller-2-0
+ovn-controller-2-controller-1-0
+]])
+
+AT_CLEANUP
+
 # 3 hypervisors, one logical switch, 3 logical ports per hypervisor
 AT_SETUP([ovn -- 3 HVs, 1 LS, 3 lports/HV])
 AT_KEYWORDS([ovnarp])
@@ -7027,6 +7201,72 @@ OVN_CLEANUP([hv1])
 
 AT_CLEANUP
 
+AT_SETUP([ovn -- obsolete patch ports and tunnel endpoints removed])
+AT_KEYWORDS([cleanup-test])
+ovn_start
+
+net_add n1
+net_add n2
+
+for i in 1 2; do
+    ovs-vsctl add-br br-phys$i
+    ovs-vsctl set open . external-ids:ovn-bridge-mappings-hv$i=physnet$i:br-phys$i
+    ovn_attach n$i br-phys$i 192.168.0.$i 24 geneve br-int$i hv$i
+done
+
+# create irrelevant patch and tunnel ports
+for i in 1 2; do
+    # patch without chassis owner set
+    ovs-vsctl add-port br-int$i fakepatch$i external-ids:ovn-logical-patch-port=fakeport$i -- \
+              set Interface fakepatch$i type=patch
+
+    # patch marked as owned by the chassis
+    ovs-vsctl add-port br-int$i owned_fakepatch$i external-ids:ovn-logical-patch-port=owned_fakeport$i \
+                                                  external-ids:ovn-chassis-id=hv$i -- \
+              set Interface owned_fakepatch$i type=patch
+
+    # patch marked as owned by some other chassis
+    ovs-vsctl add-port br-int$i alien_fakepatch$i external-ids:ovn-logical-patch-port=alien_fakeport$i \
+                                                  external-ids:ovn-chassis-id=alien_hv$i -- \
+              set Interface alien_fakepatch$i type=patch
+
+    # OVN tunnel endpoint on a bridge owned by a controller
+    ovs-vsctl add-port br-int$i faketunnel$i external-ids:ovn-chassis-id=fakechassis -- \
+              set Interface faketunnel$i type=geneve
+done
+
+# tunnel endpoint on a bridge NOT owned by a controller
+ovs-vsctl add-br alien_br
+ovs-vsctl add-port alien_br alien_tunnel external-ids:ovn-chassis-id=fakechassis -- \
+          set Interface alien_tunnel type=geneve
+
+AT_CHECK([ovn-nbctl ls-add lsw0])
+AT_CHECK([ovn-nbctl lsp-add lsw0 lnport])
+AT_CHECK([ovn-nbctl lsp-set-addresses lnport unknown])
+AT_CHECK([ovn-nbctl lsp-set-type lnport localnet])
+AT_CHECK([ovn-nbctl --wait=hv lsp-set-options lnport network_name=physnet1])
+
+ovs-vsctl add-port br-int1 vif -- set Interface vif external-ids:iface-id=lp0
+ovn-nbctl lsp-add lsw0 lp0
+OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up lp0` = xup])
+
+# check that only patch ports that belong to some other chassis and those for localnet ports are present
+AT_CHECK([ovs-vsctl --bare --columns=name find interface type="patch" | awk NF | sort], [0],
+[[alien_fakepatch1
+alien_fakepatch2
+patch-br-int1-to-lnport
+patch-lnport-to-br-int1
+]])
+
+# check that only controller tunnel endpoints and a tunnel on another bridge are present
+AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
+[[alien_tunnel
+ovn-hv1-hv2-0
+ovn-hv2-hv1-0
+]])
+
+AT_CLEANUP
+
 AT_SETUP([ovn -- nd_na ])
 ovn_start
 
@@ -11466,7 +11706,7 @@ bfd_dump() {
         for chassis2 in gw1 gw2 hv1 hv2; do
             if [[ "$chassis" != "$chassis2" ]]; then
                 echo " -> $chassis2:"
-                echo "   $(ovs-vsctl --bare --columns bfd,bfd_status find Interface name=ovn-$chassis2-0)"
+                echo "   $(ovs-vsctl --bare --columns bfd,bfd_status find Interface name=ovn-$chassis-$chassis2-0)"
             fi
         done
         echo "--------------------------"
@@ -11556,7 +11796,7 @@ wait_row_count Port_Binding 1 logical_port=cr-outside chassis=$gw2_chassis
 as gw1
 for chassis in gw2 hv1 hv2; do
     echo "checking gw1 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-gw1-$chassis-0],[0],
              [[enable=true
 ]])
 done
@@ -11566,7 +11806,7 @@ done
 as gw2
 for chassis in gw1 hv1 hv2; do
     echo "checking gw2 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-gw2-$chassis-0],[0],
              [[enable=true
 ]])
 done
@@ -11575,12 +11815,12 @@ done
 as hv1
 for chassis in gw1 gw2; do
     echo "checking hv1 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-$chassis-0],[0],
              [[enable=true
 ]])
 done
 # make sure BFD is not enabled to hv2, we don't need it
-AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-0],[0],
+AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-hv2-0],[0],
          [[
 ]])
 
@@ -11589,12 +11829,12 @@ AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-0],[0],
 as hv2
 for chassis in gw1 gw2; do
     echo "checking hv2 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-$chassis-0],[0],
              [[enable=true
 ]])
 done
 # make sure BFD is not enabled to hv1, we don't need it
-AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-0],[0],
+AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-hv1-0],[0],
          [[
 ]])
 
@@ -11629,7 +11869,7 @@ as gw2
 for chassis in gw1 hv1 hv2; do
     echo "checking gw2 -> $chassis"
     OVS_WAIT_UNTIL([
-    bfd_cfg=$(ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0)
+    bfd_cfg=$(ovs-vsctl --bare --columns bfd find Interface name=ovn-gw2-$chassis-0)
     test "$bfd_cfg" = "enable=true min_rx=2000"
 ])
 done
@@ -11637,7 +11877,7 @@ ovn-nbctl --wait=hv set NB_Global . options:"bfd-min-tx"=1500
 for chassis in gw1 hv1 hv2; do
     echo "checking gw2 -> $chassis"
     OVS_WAIT_UNTIL([
-    bfd_cfg=$(ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0)
+    bfd_cfg=$(ovs-vsctl --bare --columns bfd find Interface name=ovn-gw2-$chassis-0)
     test "$bfd_cfg" = "enable=true min_rx=2000 min_tx=1500"
 ])
 done
@@ -11646,7 +11886,7 @@ ovn-nbctl --wait=hv set NB_Global . options:"bfd-mult"=5
 for chassis in gw1 hv1 hv2; do
     echo "checking gw2 -> $chassis"
     OVS_WAIT_UNTIL([
-    bfd_cfg=$(ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0)
+    bfd_cfg=$(ovs-vsctl --bare --columns bfd find Interface name=ovn-gw2-$chassis-0)
     test "$bfd_cfg" = "enable=true min_tx=1500 mult=5"
 ])
 done
@@ -11782,7 +12022,7 @@ grep active_backup | grep slaves:$hv2_gw2_ofport,$hv2_gw1_ofport \
 as gw1
 for chassis in gw2 hv1 hv2; do
     echo "checking gw1 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-gw1-$chassis-0],[0],
              [[enable=true
 ]])
 done
@@ -11791,7 +12031,7 @@ done
 as gw2
 for chassis in gw1 hv1 hv2; do
     echo "checking gw2 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-gw2-$chassis-0],[0],
              [[enable=true
 ]])
 done
@@ -11800,12 +12040,12 @@ done
 as hv1
 for chassis in gw1 gw2; do
     echo "checking hv1 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-$chassis-0],[0],
              [[enable=true
 ]])
 done
 # make sure BFD is not enabled to hv2, we don't need it
-AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-0],[0],
+AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-hv2-0],[0],
          [[
 ]])
 
@@ -11813,12 +12053,12 @@ AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-0],[0],
 as hv2
 for chassis in gw1 gw2; do
     echo "checking hv2 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-$chassis-0],[0],
              [[enable=true
 ]])
 done
 # make sure BFD is not enabled to hv1, we don't need it
-AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-0],[0],
+AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-hv1-0],[0],
          [[
 ]])
 
@@ -15883,42 +16123,42 @@ check ovn-nbctl --wait=hv sync
 dnl Assert that each Chassis has a tunnel formed to every other Chassis
 as hv1
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv2-0
-ovn-hv3-0
-ovn-hv4-0
-ovn-hv5-0
+[[ovn-hv1-hv2-0
+ovn-hv1-hv3-0
+ovn-hv1-hv4-0
+ovn-hv1-hv5-0
 ]])
 
 as hv2
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv3-0
-ovn-hv4-0
-ovn-hv5-0
+[[ovn-hv2-hv1-0
+ovn-hv2-hv3-0
+ovn-hv2-hv4-0
+ovn-hv2-hv5-0
 ]])
 
 as hv3
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv2-0
-ovn-hv4-0
-ovn-hv5-0
+[[ovn-hv3-hv1-0
+ovn-hv3-hv2-0
+ovn-hv3-hv4-0
+ovn-hv3-hv5-0
 ]])
 
 as hv4
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv2-0
-ovn-hv3-0
-ovn-hv5-0
+[[ovn-hv4-hv1-0
+ovn-hv4-hv2-0
+ovn-hv4-hv3-0
+ovn-hv4-hv5-0
 ]])
 
 as hv5
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv2-0
-ovn-hv3-0
-ovn-hv4-0
+[[ovn-hv5-hv1-0
+ovn-hv5-hv2-0
+ovn-hv5-hv3-0
+ovn-hv5-hv4-0
 ]])
 
 dnl Let's now add some Chassis to different transport zones
@@ -15949,28 +16189,28 @@ check ovn-nbctl --wait=hv sync
 
 as hv1
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv2-0
-ovn-hv3-0
+[[ovn-hv1-hv2-0
+ovn-hv1-hv3-0
 ]])
 
 as hv2
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
+[[ovn-hv2-hv1-0
 ]])
 
 as hv3
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
+[[ovn-hv3-hv1-0
 ]])
 
 as hv4
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv5-0
+[[ovn-hv4-hv5-0
 ]])
 
 as hv5
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv4-0
+[[ovn-hv5-hv4-0
 ]])
 
 dnl Removing the transport zones should make all Chassis to create
@@ -15985,42 +16225,42 @@ check ovn-nbctl --wait=hv sync
 
 as hv1
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv2-0
-ovn-hv3-0
-ovn-hv4-0
-ovn-hv5-0
+[[ovn-hv1-hv2-0
+ovn-hv1-hv3-0
+ovn-hv1-hv4-0
+ovn-hv1-hv5-0
 ]])
 
 as hv2
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv3-0
-ovn-hv4-0
-ovn-hv5-0
+[[ovn-hv2-hv1-0
+ovn-hv2-hv3-0
+ovn-hv2-hv4-0
+ovn-hv2-hv5-0
 ]])
 
 as hv3
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv2-0
-ovn-hv4-0
-ovn-hv5-0
+[[ovn-hv3-hv1-0
+ovn-hv3-hv2-0
+ovn-hv3-hv4-0
+ovn-hv3-hv5-0
 ]])
 
 as hv4
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv2-0
-ovn-hv3-0
-ovn-hv5-0
+[[ovn-hv4-hv1-0
+ovn-hv4-hv2-0
+ovn-hv4-hv3-0
+ovn-hv4-hv5-0
 ]])
 
 as hv5
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv2-0
-ovn-hv3-0
-ovn-hv4-0
+[[ovn-hv5-hv1-0
+ovn-hv5-hv2-0
+ovn-hv5-hv3-0
+ovn-hv5-hv4-0
 ]])
 
 OVN_CLEANUP([hv1], [hv2], [hv3])
@@ -20457,14 +20697,14 @@ check ovn-nbctl fwd-group-del fwd_grp1
 check ovn-nbctl --wait=hv --liveness fwd-group-add fwd_grp1 ls2 172.16.1.11 00:11:de:ad:be:ef lsp21 lsp22
 
 # Verify openflow group members
-ofport_lsp21=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv2-0)
+ofport_lsp21=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv1-hv2-0)
 tunnel_key=`ovn-sbctl --bare --column tunnel_key find port_binding logical_port=lsp21`
 AT_CHECK([as hv1 ovs-ofctl -O OpenFlow13 dump-groups br-int | \
     grep "bucket=watch_port:$ofport_lsp21,actions=load:0x"$tunnel_key | wc -l], [0], [dnl
 1
 ])
 
-ofport_lsp22=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv3-0)
+ofport_lsp22=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv1-hv3-0)
 tunnel_key=`ovn-sbctl --bare --column tunnel_key find port_binding logical_port=lsp22`
 AT_CHECK([as hv1 ovs-ofctl -O OpenFlow13 dump-groups br-int | \
     grep "bucket=watch_port:$ofport_lsp22,actions=load:0x"$tunnel_key | wc -l], [0], [dnl

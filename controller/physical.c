@@ -432,7 +432,7 @@ populate_remote_chassis_macs(const struct sbrec_chassis *my_chassis,
         }
 
         const char *tokens
-            = get_chassis_mac_mappings(&chassis->other_config);
+            = get_chassis_mac_mappings(&chassis->other_config, NULL);
 
         if (!strlen(tokens)) {
             continue;

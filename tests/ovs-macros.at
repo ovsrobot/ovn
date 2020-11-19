@@ -55,6 +55,7 @@ ovs_setenv() {
     OVS_LOGDIR=$ovs_dir; export OVS_LOGDIR
     OVS_DBDIR=$ovs_dir; export OVS_DBDIR
     OVS_SYSCONFDIR=$ovs_dir; export OVS_SYSCONFDIR
+    OVN_SYSCONFDIR=$ovs_dir; export OVN_SYSCONFDIR
     OVS_PKGDATADIR=$ovs_dir; export OVS_PKGDATADIR
 }
 

@@ -255,12 +255,12 @@ done
 # Otherwise this may affect the lflow_run count.
 
 OVS_WAIT_UNTIL([
-    test $(as hv1 ovs-vsctl list interface ovn-hv2-0 | \
+    test $(as hv1 ovs-vsctl list interface ovn-hv1-hv2-0 | \
 grep tunnel_egress_iface_carrier=up | wc -l) -eq 1
 ])
 
 OVS_WAIT_UNTIL([
-    test $(as hv2 ovs-vsctl list interface ovn-hv1-0 | \
+    test $(as hv2 ovs-vsctl list interface ovn-hv2-hv1-0 | \
 grep tunnel_egress_iface_carrier=up | wc -l) -eq 1
 ])
 
