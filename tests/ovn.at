@@ -13788,6 +13788,11 @@ ovn-nbctl acl-add ls1 to-lport 3 '(ip4.src==10.0.0.1 || ip4.src==10.0.0.2) && (i
 ovn-nbctl acl-add ls1 to-lport 3 '(ip4.src==10.0.0.1 || ip4.src==10.0.0.42) && (ip4.dst == 10.0.0.3 || ip4.dst == 10.0.0.4)' allow
 ovn-nbctl --wait=hv sync
 
+# There's a bug in ovn-controller that usually makes this test fail
+# without the following (more often with ovn-northd than ovn-northd-ddlog).
+check as hv1 ovs-appctl -t ovn-controller recompute
+sleep 1
+
 # Traffic 10.0.0.1, 10.0.0.2 -> 10.0.0.3, 10.0.0.4 should be allowed.
 for src in `seq 1 2`; do
     for dst in `seq 3 4`; do
@@ -22383,6 +22388,14 @@ send_arp_request() {
     local arp=0001080006040001${eth_src}${spa}${eth_dst}${tpa}
 
     local request=${eth}${arp}
+
+    # There's a bug in ovn-controller incremental processing that
+    # makes this test fail most of the time without forcing full
+    # recomputation.
+    check as hv1 ovs-appctl -t ovn-controller recompute
+    check as hv2 ovs-appctl -t ovn-controller recompute
+    sleep 1
+
     as hv2 ovs-appctl netdev-dummy/receive hv2-phys1 $request
 }
 
