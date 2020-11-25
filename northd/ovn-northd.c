@@ -4837,75 +4837,71 @@ build_lswitch_input_port_sec_od(
     }
 }
 
+/* Egress table 8: Egress port security - IP (priorities 90 and 80)
+ * if port security enabled.
+ *
+ * Egress table 9: Egress port security - L2 (priorities 50 and 150).
+ *
+ * Priority 50 rules implement port security for enabled logical port.
+ *
+ * Priority 150 rules drop packets to disabled logical ports, so that
+ * they don't even receive multicast or broadcast packets.
+ */
+
 static void
-build_lswitch_output_port_sec(struct hmap *ports, struct hmap *datapaths,
-                              struct hmap *lflows)
+build_lswitch_output_port_sec_op(struct ovn_port *op,
+                                 struct hmap *lflows,
+                                 struct ds *match,
+                                 struct ds *actions)
 {
-    struct ds actions = DS_EMPTY_INITIALIZER;
-    struct ds match = DS_EMPTY_INITIALIZER;
-    struct ovn_port *op;
-
-    /* Egress table 8: Egress port security - IP (priorities 90 and 80)
-     * if port security enabled.
-     *
-     * Egress table 9: Egress port security - L2 (priorities 50 and 150).
-     *
-     * Priority 50 rules implement port security for enabled logical port.
-     *
-     * Priority 150 rules drop packets to disabled logical ports, so that
-     * they don't even receive multicast or broadcast packets.
-     */
-    HMAP_FOR_EACH (op, key_node, ports) {
-        if (!op->nbsp || lsp_is_external(op->nbsp)) {
-            continue;
-        }
-
-        ds_clear(&actions);
-        ds_clear(&match);
-
-        ds_put_format(&match, "outport == %s", op->json_key);
-        if (lsp_is_enabled(op->nbsp)) {
-            build_port_security_l2("eth.dst", op->ps_addrs, op->n_ps_addrs,
-                                   &match);
-
-            if (!strcmp(op->nbsp->type, "localnet")) {
-                const char *queue_id = smap_get(&op->sb->options,
-                                                "qdisc_queue_id");
-                if (queue_id) {
-                    ds_put_format(&actions, "set_queue(%s); ", queue_id);
-                }
-            }
-            ds_put_cstr(&actions, "output;");
-            ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_OUT_PORT_SEC_L2,
-                                    50, ds_cstr(&match), ds_cstr(&actions),
-                                    &op->nbsp->header_);
-        } else {
-            ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_OUT_PORT_SEC_L2,
-                                    150, ds_cstr(&match), "drop;",
-                                    &op->nbsp->header_);
-        }
-
-        if (op->nbsp->n_port_security) {
-            build_port_security_ip(P_OUT, op, lflows, &op->nbsp->header_);
-        }
+    if (!op->nbsp || lsp_is_external(op->nbsp)) {
+        return;
     }
+
+    ds_clear(actions);
+    ds_clear(match);
+
+    ds_put_format(match, "outport == %s", op->json_key);
+    if (lsp_is_enabled(op->nbsp)) {
+        build_port_security_l2("eth.dst", op->ps_addrs, op->n_ps_addrs,
+                               match);
+
+        if (!strcmp(op->nbsp->type, "localnet")) {
+            const char *queue_id = smap_get(&op->sb->options,
+                                            "qdisc_queue_id");
+            if (queue_id) {
+                ds_put_format(actions, "set_queue(%s); ", queue_id);
+            }
+        }
+        ds_put_cstr(actions, "output;");
+        ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_OUT_PORT_SEC_L2,
+                                50, ds_cstr(match), ds_cstr(actions),
+                                &op->nbsp->header_);
+    } else {
+        ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_OUT_PORT_SEC_L2,
+                                150, ds_cstr(match), "drop;",
+                                &op->nbsp->header_);
+    }
+
+    if (op->nbsp->n_port_security) {
+        build_port_security_ip(P_OUT, op, lflows, &op->nbsp->header_);
+    }
+}
 
     /* Egress tables 8: Egress port security - IP (priority 0)
      * Egress table 9: Egress port security L2 - multicast/broadcast
      *                 (priority 100). */
-    struct ovn_datapath *od;
-    HMAP_FOR_EACH (od, key_node, datapaths) {
-        if (!od->nbs) {
-            continue;
-        }
-
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PORT_SEC_IP, 0, "1", "next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PORT_SEC_L2, 100, "eth.mcast",
-                      "output;");
+static void
+build_lswitch_output_port_sec_od(struct ovn_datapath *od,
+                                 struct hmap *lflows)
+{
+    if (!od->nbs) {
+        return;
     }
 
-    ds_destroy(&match);
-    ds_destroy(&actions);
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PORT_SEC_IP, 0, "1", "next;");
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PORT_SEC_L2, 100, "eth.mcast",
+                  "output;");
 }
 
 static void
@@ -6683,14 +6679,11 @@ is_vlan_transparent(const struct ovn_datapath *od)
 }
 
 static void
-build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
-                    struct hmap *lflows)
+build_lswitch_flows(struct hmap *datapaths, struct hmap *lflows)
 {
     /* This flow table structure is documented in ovn-northd(8), so please
      * update ovn-northd.8.xml if you change anything. */
 
-    struct ds match = DS_EMPTY_INITIALIZER;
-    struct ds actions = DS_EMPTY_INITIALIZER;
     struct ovn_datapath *od;
 
     /* Ingress table 19: Destination lookup for unknown MACs (priority 0). */
@@ -6705,10 +6698,6 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    build_lswitch_output_port_sec(ports, datapaths, lflows);
-
-    ds_destroy(&match);
-    ds_destroy(&actions);
 }
 
 /* Build pre-ACL and ACL tables for both ingress and egress.
@@ -11157,6 +11146,7 @@ build_lswitch_and_lrouter_iterate_by_od(struct ovn_datapath *od,
     build_lswitch_dns_and_dhcp_defaults(od, lsi->lflows);
     build_lswitch_destination_bmcast_handling(od, lsi->lflows,
                                               &lsi->actions);
+    build_lswitch_output_port_sec_od(od, lsi->lflows);
 
     /* Build Logical Router Flows. */
     build_adm_ctrl_flows_for_lrouter(od, lsi->lflows);
@@ -11197,6 +11187,9 @@ build_lswitch_and_lrouter_iterate_by_op(struct ovn_port *op,
                                              lsi->mcgroups,
                                              &lsi->match,
                                              &lsi->actions);
+    build_lswitch_output_port_sec_op(op, lsi->lflows,
+                                     &lsi->match,
+                                     &lsi->actions);
 
     /* Build Logical Router Flows. */
     build_adm_ctrl_flows_for_lrouter_port(op, lsi->lflows, &lsi->match,
@@ -11417,7 +11410,7 @@ build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
     free(svc_check_match);
 
     /* Legacy lswitch build - to be migrated. */
-    build_lswitch_flows(datapaths, ports, lflows);
+    build_lswitch_flows(datapaths, lflows);
 
     /* Legacy lrouter build - to be migrated. */
     build_lrouter_flows(datapaths, ports, lflows, meter_groups, lbs);
