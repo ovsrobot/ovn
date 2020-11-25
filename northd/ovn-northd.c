@@ -6695,54 +6695,6 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
     struct ovn_datapath *od;
     struct ovn_port *op;
 
-    /* Logical switch ingress table 14 and 15: DHCP options and response
-     * priority 100 flows. */
-    HMAP_FOR_EACH (op, key_node, ports) {
-        if (!op->nbsp) {
-           continue;
-        }
-
-        if (!lsp_is_enabled(op->nbsp) || lsp_is_router(op->nbsp)) {
-            /* Don't add the DHCP flows if the port is not enabled or if the
-             * port is a router port. */
-            continue;
-        }
-
-        if (!op->nbsp->dhcpv4_options && !op->nbsp->dhcpv6_options) {
-            /* CMS has disabled both native DHCPv4 and DHCPv6 for this lport.
-             */
-            continue;
-        }
-
-        bool is_external = lsp_is_external(op->nbsp);
-        if (is_external && (!op->od->n_localnet_ports ||
-                            !op->nbsp->ha_chassis_group)) {
-            /* If it's an external port and there are no localnet ports
-             * and if it doesn't belong to an HA chassis group ignore it. */
-            continue;
-        }
-
-        for (size_t i = 0; i < op->n_lsp_addrs; i++) {
-            if (is_external) {
-                for (size_t j = 0; j < op->od->n_localnet_ports; j++) {
-                    build_dhcpv4_options_flows(
-                        op, &op->lsp_addrs[i],
-                        op->od->localnet_ports[j]->json_key, is_external,
-                        lflows);
-                    build_dhcpv6_options_flows(
-                        op, &op->lsp_addrs[i],
-                        op->od->localnet_ports[j]->json_key, is_external,
-                        lflows);
-                }
-            } else {
-                build_dhcpv4_options_flows(op, &op->lsp_addrs[i], op->json_key,
-                                           is_external, lflows);
-                build_dhcpv6_options_flows(op, &op->lsp_addrs[i], op->json_key,
-                                           is_external, lflows);
-            }
-        }
-    }
-
     /* Logical switch ingress table 17 and 18: DNS lookup and response
      * priority 100 flows.
      */
@@ -7387,6 +7339,57 @@ build_lswitch_arp_nd_responder_lb(struct ovn_northd_lb *lb,
                                     S_SWITCH_IN_ARP_ND_RSP, 110,
                                     ds_cstr(match), ds_cstr(actions),
                                     &lb->nlb->header_);
+        }
+    }
+}
+
+/* Logical switch ingress table 14 and 15: DHCP options and response
+ * priority 100 flows. */
+
+static void
+build_lswitch_dhcp_options_and_response(struct ovn_port *op,
+                                  struct hmap *lflows)
+{
+    if (!op->nbsp) {
+       return;
+    }
+    if (!lsp_is_enabled(op->nbsp) || lsp_is_router(op->nbsp)) {
+        /* Don't add the DHCP flows if the port is not enabled or if the
+         * port is a router port. */
+        return;
+    }
+
+    if (!op->nbsp->dhcpv4_options && !op->nbsp->dhcpv6_options) {
+        /* CMS has disabled both native DHCPv4 and DHCPv6 for this lport.
+         */
+        return;
+    }
+
+    bool is_external = lsp_is_external(op->nbsp);
+    if (is_external && (!op->od->n_localnet_ports ||
+                        !op->nbsp->ha_chassis_group)) {
+        /* If it's an external port and there are no localnet ports
+         * and if it doesn't belong to an HA chassis group ignore it. */
+        return;
+    }
+
+    for (size_t i = 0; i < op->n_lsp_addrs; i++) {
+        if (is_external) {
+            for (size_t j = 0; j < op->od->n_localnet_ports; j++) {
+                build_dhcpv4_options_flows(
+                    op, &op->lsp_addrs[i],
+                    op->od->localnet_ports[j]->json_key, is_external,
+                    lflows);
+                build_dhcpv6_options_flows(
+                    op, &op->lsp_addrs[i],
+                    op->od->localnet_ports[j]->json_key, is_external,
+                    lflows);
+            }
+        } else {
+            build_dhcpv4_options_flows(op, &op->lsp_addrs[i], op->json_key,
+                                       is_external, lflows);
+            build_dhcpv6_options_flows(op, &op->lsp_addrs[i], op->json_key,
+                                       is_external, lflows);
         }
     }
 }
@@ -11158,6 +11161,7 @@ build_lswitch_and_lrouter_iterate_by_op(struct ovn_port *op,
                                     &lsi->match);
     build_lswitch_arp_nd_responder_op(op, lsi->lflows, lsi->ports,
                                       &lsi->match, &lsi->actions);
+    build_lswitch_dhcp_options_and_response(op, lsi->lflows);
 
     /* Build Logical Router Flows. */
     build_adm_ctrl_flows_for_lrouter_port(op, lsi->lflows, &lsi->match,
