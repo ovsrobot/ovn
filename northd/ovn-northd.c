@@ -6684,8 +6684,7 @@ is_vlan_transparent(const struct ovn_datapath *od)
 
 static void
 build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
-                    struct hmap *lflows, struct hmap *mcgroups,
-                    struct hmap *igmp_groups)
+                    struct hmap *lflows, struct hmap *mcgroups)
 {
     /* This flow table structure is documented in ovn-northd(8), so please
      * update ovn-northd.8.xml if you change anything. */
@@ -6694,74 +6693,6 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
     struct ds actions = DS_EMPTY_INITIALIZER;
     struct ovn_datapath *od;
     struct ovn_port *op;
-
-    /* Ingress table 19: Add IP multicast flows learnt from IGMP/MLD
-     * (priority 90). */
-    struct ovn_igmp_group *igmp_group;
-
-    HMAP_FOR_EACH (igmp_group, hmap_node, igmp_groups) {
-        if (!igmp_group->datapath) {
-            continue;
-        }
-
-        ds_clear(&match);
-        ds_clear(&actions);
-
-        struct mcast_switch_info *mcast_sw_info =
-            &igmp_group->datapath->mcast_info.sw;
-
-        if (IN6_IS_ADDR_V4MAPPED(&igmp_group->address)) {
-            /* RFC 4541, section 2.1.2, item 2: Skip groups in the 224.0.0.X
-             * range.
-             */
-            ovs_be32 group_address =
-                in6_addr_get_mapped_ipv4(&igmp_group->address);
-            if (ip_is_local_multicast(group_address)) {
-                continue;
-            }
-
-            if (mcast_sw_info->active_v4_flows >= mcast_sw_info->table_size) {
-                continue;
-            }
-            mcast_sw_info->active_v4_flows++;
-            ds_put_format(&match, "eth.mcast && ip4 && ip4.dst == %s ",
-                          igmp_group->mcgroup.name);
-        } else {
-            /* RFC 4291, section 2.7.1: Skip groups that correspond to all
-             * hosts.
-             */
-            if (ipv6_is_all_hosts(&igmp_group->address)) {
-                continue;
-            }
-            if (mcast_sw_info->active_v6_flows >= mcast_sw_info->table_size) {
-                continue;
-            }
-            mcast_sw_info->active_v6_flows++;
-            ds_put_format(&match, "eth.mcast && ip6 && ip6.dst == %s ",
-                          igmp_group->mcgroup.name);
-        }
-
-        /* Also flood traffic to all multicast routers with relay enabled. */
-        if (mcast_sw_info->flood_relay) {
-            ds_put_cstr(&actions,
-                        "clone { "
-                            "outport = \""MC_MROUTER_FLOOD "\"; "
-                            "output; "
-                        "};");
-        }
-        if (mcast_sw_info->flood_static) {
-            ds_put_cstr(&actions,
-                        "clone { "
-                            "outport =\""MC_STATIC"\"; "
-                            "output; "
-                        "};");
-        }
-        ds_put_format(&actions, "outport = \"%s\"; output; ",
-                      igmp_group->mcgroup.name);
-
-        ovn_lflow_add(lflows, igmp_group->datapath, S_SWITCH_IN_L2_LKUP, 90,
-                      ds_cstr(&match), ds_cstr(&actions));
-    }
 
     /* Ingress table 19: Destination lookup, unicast handling (priority 50), */
     HMAP_FOR_EACH (op, key_node, ports) {
@@ -7405,6 +7336,81 @@ build_lswitch_destination_bmcast_handling(struct ovn_datapath *od,
     ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 70, "eth.mcast",
                   "outport = \""MC_FLOOD"\"; output;");
 }
+
+/* Ingress table 19: Add IP multicast flows learnt from IGMP/MLD
+ * (priority 90). */
+static void
+build_lswitch_igmp_mld_flows(struct ovn_igmp_group *igmp_group,
+                             struct hmap *lflows,
+                             struct ds *match,
+                             struct ds *actions)
+{
+    if (!igmp_group->datapath) {
+        return;
+    }
+
+    ds_clear(match);
+    ds_clear(actions);
+
+    /* This should be OK to access without locking as this is the only
+     * place where active_v4_flows is changed */
+
+    struct mcast_switch_info *mcast_sw_info =
+        &igmp_group->datapath->mcast_info.sw;
+
+    if (IN6_IS_ADDR_V4MAPPED(&igmp_group->address)) {
+        /* RFC 4541, section 2.1.2, item 2: Skip groups in the 224.0.0.X
+         * range.
+         */
+        ovs_be32 group_address =
+            in6_addr_get_mapped_ipv4(&igmp_group->address);
+        if (ip_is_local_multicast(group_address)) {
+            return;
+        }
+
+        if (mcast_sw_info->active_v4_flows >= mcast_sw_info->table_size) {
+            return;
+        }
+        mcast_sw_info->active_v4_flows++;
+        ds_put_format(match, "eth.mcast && ip4 && ip4.dst == %s ",
+                      igmp_group->mcgroup.name);
+    } else {
+        /* RFC 4291, section 2.7.1: Skip groups that correspond to all
+         * hosts.
+         */
+        if (ipv6_is_all_hosts(&igmp_group->address)) {
+            return;
+        }
+        if (mcast_sw_info->active_v6_flows >= mcast_sw_info->table_size) {
+            return;
+        }
+        mcast_sw_info->active_v6_flows++;
+        ds_put_format(match, "eth.mcast && ip6 && ip6.dst == %s ",
+                      igmp_group->mcgroup.name);
+    }
+
+    /* Also flood traffic to all multicast routers with relay enabled. */
+    if (mcast_sw_info->flood_relay) {
+        ds_put_cstr(actions,
+                    "clone { "
+                        "outport = \""MC_MROUTER_FLOOD "\"; "
+                        "output; "
+                    "};");
+    }
+    if (mcast_sw_info->flood_static) {
+        ds_put_cstr(actions,
+                    "clone { "
+                        "outport =\""MC_STATIC"\"; "
+                        "output; "
+                    "};");
+    }
+    ds_put_format(actions, "outport = \"%s\"; output; ",
+                  igmp_group->mcgroup.name);
+
+    ovn_lflow_add(lflows, igmp_group->datapath, S_SWITCH_IN_L2_LKUP, 90,
+                  ds_cstr(match), ds_cstr(actions));
+}
+
 
 
 /* Returns a string of the IP address of the router port 'op' that
@@ -11208,6 +11214,7 @@ static void *build_lflows_thread(void *arg) {
     struct ovn_datapath *od;
     struct ovn_port *op;
     struct ovn_northd_lb *lb;
+    struct ovn_igmp_group *igmp_group;
     int bnum;
 
     while (!cease_fire()) {
@@ -11250,6 +11257,20 @@ static void *build_lflows_thread(void *arg) {
                         return NULL;
                     }
                     build_lswitch_arp_nd_responder_lb(lb, lsi->lflows,
+                                                      &lsi->match,
+                                                      &lsi->actions);
+                }
+            }
+            for (bnum = control->id;
+                    bnum <= lsi->igmp_groups->mask;
+                    bnum += workload->pool->size)
+            {
+                HMAP_FOR_EACH_IN_PARALLEL (
+                        igmp_group, hmap_node, bnum, lsi->igmp_groups) {
+                    if (cease_fire()) {
+                        return NULL;
+                    }
+                    build_lswitch_igmp_mld_flows(igmp_group, lsi->lflows,
                                                       &lsi->match,
                                                       &lsi->actions);
                 }
@@ -11383,8 +11404,7 @@ build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
     free(svc_check_match);
 
     /* Legacy lswitch build - to be migrated. */
-    build_lswitch_flows(datapaths, ports, lflows, mcgroups,
-                        igmp_groups);
+    build_lswitch_flows(datapaths, ports, lflows, mcgroups);
 
     /* Legacy lrouter build - to be migrated. */
     build_lrouter_flows(datapaths, ports, lflows, meter_groups, lbs);
