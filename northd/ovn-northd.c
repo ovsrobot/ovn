@@ -6695,21 +6695,6 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
     struct ovn_datapath *od;
     struct ovn_port *op;
 
-    HMAP_FOR_EACH (op, key_node, ports) {
-        if (!op->nbsp || !lsp_is_external(op->nbsp)) {
-           continue;
-        }
-
-        /* Table 18: External port. Drop ARP request for router ips from
-         * external ports  on chassis not binding those ports.
-         * This makes the router pipeline to be run only on the chassis
-         * binding the external ports. */
-        for (size_t i = 0; i < op->od->n_localnet_ports; i++) {
-            build_drop_arp_nd_flows_for_unbound_router_ports(
-                op, op->od->localnet_ports[i], lflows);
-        }
-    }
-
     /* Ingress table 19: Destination lookup, broadcast and multicast handling
      * (priority 70 - 100). */
     HMAP_FOR_EACH (od, key_node, datapaths) {
@@ -7398,7 +7383,24 @@ build_lswitch_dns_and_dhcp_defaults(struct ovn_datapath *od,
     }
 }
 
+/* Table 18: External port. Drop ARP request for router ips from
+ * external ports  on chassis not binding those ports.
+ * This makes the router pipeline to be run only on the chassis
+ * binding the external ports. */
 
+static void
+build_lswitch_drop_arp_on_external(struct ovn_port *op,
+                                  struct hmap *lflows)
+{
+    if (!op->nbsp || !lsp_is_external(op->nbsp)) {
+       return;
+    }
+
+    for (size_t i = 0; i < op->od->n_localnet_ports; i++) {
+        build_drop_arp_nd_flows_for_unbound_router_ports(
+            op, op->od->localnet_ports[i], lflows);
+    }
+}
 
 /* Returns a string of the IP address of the router port 'op' that
  * overlaps with 'ip_s".  If one is not found, returns NULL.
@@ -11168,6 +11170,7 @@ build_lswitch_and_lrouter_iterate_by_op(struct ovn_port *op,
     build_lswitch_arp_nd_responder_op(op, lsi->lflows, lsi->ports,
                                       &lsi->match, &lsi->actions);
     build_lswitch_dhcp_options_and_response(op, lsi->lflows);
+    build_lswitch_drop_arp_on_external(op, lsi->lflows);
 
     /* Build Logical Router Flows. */
     build_adm_ctrl_flows_for_lrouter_port(op, lsi->lflows, &lsi->match,
