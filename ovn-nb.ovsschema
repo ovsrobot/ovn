@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
-    "version": "5.28.0",
-    "cksum": "610359755 26847",
+    "version": "5.29.0",
+    "cksum": "3632295919 27598",
     "tables": {
         "NB_Global": {
             "columns": {
@@ -519,5 +519,20 @@
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}}},
             "indexes": [["name"]],
+            "isRoot": true},
+        "BFD": {
+            "columns": {
+                "logical_port": {"type": "string"},
+                "dst_ip": {"type": "string"},
+                "min_tx": {"type": {"key": {"type": "integer"}}},
+                "min_rx": {"type": {"key": {"type": "integer"}}},
+                "detect_mult": {"type": {"key": {"type": "integer"}}},
+                "status": {
+                    "type": {"key": {"type": "string",
+                             "enum": ["set", ["down", "init", "up", "admin_down"]]}}},
+                "options": {
+                    "type": {"key": "string", "value": "string",
+                             "min": 0, "max": "unlimited"}}},
+            "indexes": [["logical_port", "dst_ip"]],
             "isRoot": true}}
     }

@@ -69,6 +69,7 @@ struct northd_context {
     struct ovsdb_idl_index *sbrec_ha_chassis_grp_by_name;
     struct ovsdb_idl_index *sbrec_mcast_group_by_name_dp;
     struct ovsdb_idl_index *sbrec_ip_mcast_by_dp;
+    struct ovsdb_idl_index *sbrec_bfd_by_logical_port;
 };
 
 struct northd_state {
@@ -90,6 +91,8 @@ static struct eth_addr mac_prefix;
 static bool controller_event_en;
 
 static bool check_lsp_is_up;
+
+static bool bfd_en;
 
 /* MAC allocated for service monitor usage. Just one mac is allocated
  * for this purpose and ovn-controller's on each chassis will make use
@@ -11322,6 +11325,112 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
     }
 }
 
+static struct ovsdb_idl_index *
+bfd_index_create(struct ovsdb_idl *idl)
+{
+    return ovsdb_idl_index_create2(idl, &sbrec_bfd_col_logical_port,
+                                   &sbrec_bfd_col_dst_ip);
+}
+
+static const struct sbrec_bfd *
+bfd_port_lookup(struct ovsdb_idl_index *bfd_index,
+                const char *logical_port, const char *dst_ip)
+{
+    struct sbrec_bfd *target = sbrec_bfd_index_init_row(bfd_index);
+    sbrec_bfd_index_set_logical_port(target, logical_port);
+    sbrec_bfd_index_set_dst_ip(target, dst_ip);
+
+    struct sbrec_bfd *bfd_entry = sbrec_bfd_index_find(bfd_index, target);
+    sbrec_bfd_index_destroy_row(target);
+
+    return bfd_entry;
+}
+
+struct bfd_entry {
+    struct hmap_node hmap_node;
+
+    char *logical_port;
+    char *dst_ip;
+
+    const struct sbrec_bfd *sb_bt;
+    bool found;
+};
+
+static void
+build_bfd_table(struct northd_context *ctx)
+{
+    const struct nbrec_nb_global *nb = nbrec_nb_global_first(ctx->ovnnb_idl);
+
+    bfd_en = smap_get_bool(&nb->options, "bfd", false);
+    if (!bfd_en) {
+        return;
+    }
+
+    struct hmap sb_only = HMAP_INITIALIZER(&sb_only);
+    struct bfd_entry *bfd_e, *next_bfd_e;
+    const struct sbrec_bfd *sb_bt;
+
+    SBREC_BFD_FOR_EACH (sb_bt, ctx->ovnsb_idl) {
+        bfd_e = xmalloc(sizeof *bfd_e);
+        bfd_e->logical_port = xstrdup(sb_bt->logical_port);
+        bfd_e->dst_ip = xstrdup(sb_bt->dst_ip);
+        bfd_e->sb_bt = sb_bt;
+        hmap_insert(&sb_only, &bfd_e->hmap_node,
+                    hash_string(bfd_e->dst_ip, 0));
+    }
+
+    const struct nbrec_bfd *nb_bt;
+    NBREC_BFD_FOR_EACH (nb_bt, ctx->ovnnb_idl) {
+        sb_bt = bfd_port_lookup(ctx->sbrec_bfd_by_logical_port,
+                                nb_bt->logical_port, nb_bt->dst_ip);
+        if (!sb_bt) {
+            sb_bt = sbrec_bfd_insert(ctx->ovnsb_txn);
+            sbrec_bfd_set_logical_port(sb_bt, nb_bt->logical_port);
+            sbrec_bfd_set_dst_ip(sb_bt, nb_bt->dst_ip);
+            sbrec_bfd_set_disc(sb_bt, 1 + random_uint32());
+            /* RFC 5881 section 4
+             * The source port MUST be in the range 49152 through 65535.
+             * The same UDP source port number MUST be used for all BFD
+             * Control packets associated with a particular session.
+             * The source port number SHOULD be unique among all BFD
+             * sessions on the system
+             */
+            uint16_t udp_src = random_range(16383) + 49152;
+            sbrec_bfd_set_src_port(sb_bt, udp_src);
+            sbrec_bfd_set_status(sb_bt, "down");
+            sbrec_bfd_set_min_tx(sb_bt, nb_bt->min_tx);
+            sbrec_bfd_set_min_rx(sb_bt, nb_bt->min_rx);
+            sbrec_bfd_set_detect_mult(sb_bt, nb_bt->detect_mult);
+        } else if (strcmp(sb_bt->status, nb_bt->status)) {
+            if (!strcmp(nb_bt->status, "admin_down") ||
+                !strcmp(sb_bt->status, "admin_down")) {
+                sbrec_bfd_set_status(sb_bt, nb_bt->status);
+            } else {
+                nbrec_bfd_set_status(nb_bt, sb_bt->status);
+            }
+        }
+        HMAP_FOR_EACH_WITH_HASH (bfd_e, hmap_node,
+                                 hash_string(nb_bt->dst_ip, 0), &sb_only) {
+            if (!strcmp(bfd_e->logical_port, nb_bt->logical_port) &&
+                !strcmp(bfd_e->dst_ip, nb_bt->dst_ip)) {
+                bfd_e->found = true;
+                break;
+            }
+        }
+    }
+
+    HMAP_FOR_EACH_SAFE (bfd_e, next_bfd_e, hmap_node, &sb_only) {
+        if (!bfd_e->found && bfd_e->sb_bt) {
+            sbrec_bfd_delete(bfd_e->sb_bt);
+        }
+        free(bfd_e->logical_port);
+        free(bfd_e->dst_ip);
+        hmap_remove(&sb_only, &bfd_e->hmap_node);
+        free(bfd_e);
+    }
+    hmap_destroy(&sb_only);
+}
+
 static void
 sync_address_set(struct northd_context *ctx, const char *name,
                  const char **addrs, size_t n_addrs,
@@ -12117,6 +12226,7 @@ ovnnb_db_run(struct northd_context *ctx,
     build_ip_mcast(ctx, datapaths);
     build_mcast_groups(ctx, datapaths, ports, &mcast_groups, &igmp_groups);
     build_meter_groups(ctx, &meter_groups);
+    build_bfd_table(ctx);
     build_lflows(ctx, datapaths, ports, &port_groups, &mcast_groups,
                  &igmp_groups, &meter_groups, &lbs);
     ovn_update_ipv6_prefix(ports);
@@ -13069,6 +13179,10 @@ main(int argc, char *argv[])
     add_column_noalert(ovnsb_idl_loop.idl,
                        &sbrec_load_balancer_col_external_ids);
 
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_bfd_col_logical_port);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_bfd_col_dst_ip);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_bfd_col_status);
+
     struct ovsdb_idl_index *sbrec_chassis_by_name
         = chassis_index_create(ovnsb_idl_loop.idl);
 
@@ -13080,6 +13194,9 @@ main(int argc, char *argv[])
 
     struct ovsdb_idl_index *sbrec_ip_mcast_by_dp
         = ip_mcast_index_create(ovnsb_idl_loop.idl);
+
+    struct ovsdb_idl_index *sbrec_bfd_by_logical_port
+        = bfd_index_create(ovnsb_idl_loop.idl);
 
     unixctl_command_register("sb-connection-status", "", 0, 0,
                              ovn_conn_show, ovnsb_idl_loop.idl);
@@ -13113,6 +13230,7 @@ main(int argc, char *argv[])
                 .sbrec_ha_chassis_grp_by_name = sbrec_ha_chassis_grp_by_name,
                 .sbrec_mcast_group_by_name_dp = sbrec_mcast_group_by_name_dp,
                 .sbrec_ip_mcast_by_dp = sbrec_ip_mcast_by_dp,
+                .sbrec_bfd_by_logical_port = sbrec_bfd_by_logical_port,
             };
 
             if (!state.had_lock && ovsdb_idl_has_lock(ovnsb_idl_loop.idl)) {
