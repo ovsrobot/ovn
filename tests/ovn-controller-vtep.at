@@ -203,7 +203,7 @@ ${chassis_uuid}
 
 # adds another logical switch port in ovn-nb database for lswitch0.
 OVN_NB_ADD_VTEP_PORT([br-test], [br-vtep_lswitch0_dup], [br-vtep], [lswitch0])
-check ovn-sbctl wait-until Port_Binding br-vtep_lswitch0_dup chassis!='[[]]'
+
 # it is not allowed to have more than one ovn-nb logical port for the same
 # vtep logical switch on a vtep gateway chassis, so should still see only
 # two port_binding entries bound.
