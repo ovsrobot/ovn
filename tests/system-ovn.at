@@ -1574,6 +1574,18 @@ OVS_WAIT_UNTIL([
     grep "selection_method=hash,fields(ip_src,ip_dst,sctp_src,sctp_dst)" -c) -eq 2
 ])
 
+ovn-nbctl --reject lb-add lb3 30.0.0.10:80 ""
+ovn-nbctl ls-lb-add foo lb3
+# Filter reset segments
+NS_CHECK_EXEC([foo1], [tcpdump -c 1 -neei foo1 ip[[33:1]]=0x14 > rst.pcap &])
+sleep 1
+NS_CHECK_EXEC([foo1], [wget -q 30.0.0.10],[4])
+
+OVS_WAIT_UNTIL([
+    n_reset=$(cat rst.pcap | wc -l)
+    test "${n_reset}" = "1"
+])
+
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
 
 as ovn-sb

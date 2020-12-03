@@ -3438,7 +3438,7 @@ static
 void build_lb_vip_ct_lb_actions(struct ovn_lb_vip *lb_vip,
                                 struct ovn_northd_lb_vip *lb_vip_nb,
                                 struct ds *action,
-                                char *selection_fields)
+                                char *selection_fields, bool ls_dp)
 {
     bool skip_hash_fields = false;
 
@@ -3470,6 +3470,13 @@ void build_lb_vip_ct_lb_actions(struct ovn_lb_vip *lb_vip,
             ds_put_cstr(action, ");");
         }
     } else {
+        if (lb_vip->empty_backend_rej && !lb_vip->n_backends) {
+            int stage = ls_dp ? ovn_stage_get_table(S_SWITCH_OUT_QOS_MARK)
+                              : ovn_stage_get_table(S_ROUTER_OUT_SNAT);
+            ds_put_format(action, "reg0 = 0; reject { outport <-> inport; "
+                          "next(pipeline=egress,table=%d);};", stage);
+            return;
+        }
         ds_put_format(action, "ct_lb(backends=%s);", lb_vip_nb->backend_ips);
     }
 
@@ -5023,7 +5030,8 @@ build_empty_lb_event_flow(struct ovn_datapath *od, struct hmap *lflows,
                           struct nbrec_load_balancer *lb,
                           int pl, struct shash *meter_groups)
 {
-    if (!controller_event_en || lb_vip->n_backends) {
+    if (!controller_event_en || lb_vip->n_backends ||
+        lb_vip->empty_backend_rej) {
         return;
     }
 
@@ -5914,7 +5922,7 @@ build_lb_rules(struct ovn_datapath *od, struct hmap *lflows,
         /* New connections in Ingress table. */
         struct ds action = DS_EMPTY_INITIALIZER;
         build_lb_vip_ct_lb_actions(lb_vip, lb_vip_nb, &action,
-                                   lb->selection_fields);
+                                   lb->selection_fields, true);
 
         struct ds match = DS_EMPTY_INITIALIZER;
         ds_put_format(&match, "ct.new && %s.dst == %s", ip_match,
@@ -9620,7 +9628,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                 struct ovn_northd_lb_vip *lb_vip_nb = &lb->vips_nb[j];
                 ds_clear(&actions);
                 build_lb_vip_ct_lb_actions(lb_vip, lb_vip_nb, &actions,
-                                           lb->selection_fields);
+                                           lb->selection_fields, false);
 
                 if (!sset_contains(&all_ips, lb_vip->vip_str)) {
                     sset_add(&all_ips, lb_vip->vip_str);
@@ -9671,7 +9679,8 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     prio = 120;
                 }
 
-                if (od->l3redirect_port) {
+                if (od->l3redirect_port &&
+                    (lb_vip->n_backends || !lb_vip->empty_backend_rej)) {
                     ds_put_format(&match, " && is_chassis_resident(%s)",
                                   od->l3redirect_port->json_key);
                 }
