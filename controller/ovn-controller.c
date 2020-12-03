@@ -824,8 +824,15 @@ get_nb_cfg(const struct sbrec_sb_global_table *sb_global_table,
     /* Delay getting nb_cfg if there are monitor condition changes
      * in flight.  It might be that those changes would instruct the
      * server to send updates that happened before SB_Global.nb_cfg.
+     *
+     * The IDL can decide to resend pending conditions upon reconnect in
+     * which case the expected_cond_seqno is not updated because the client
+     * (ovn-controller) did not explicitly request it.  That means that we
+     * cannot just check for cond_seqno != expected_cond_seqno and we also
+     * have to take into account potential unsigned int overflows.
      */
-    if (cond_seqno != expected_cond_seqno) {
+    if (cond_seqno < expected_cond_seqno &&
+            (cond_seqno != 0 || expected_cond_seqno != UINT_MAX)) {
         return nb_cfg;
     }
 
