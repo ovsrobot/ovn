@@ -8987,7 +8987,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
 
         if (!smap_get(&op->od->nbr->options, "chassis")
             && !op->od->l3dgw_port) {
-            /* UDP/TCP port unreachable. */
+            /* UDP/TCP/SCTP port unreachable. */
             for (int i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
                 ds_clear(&match);
                 ds_put_format(&match,
@@ -9009,6 +9009,18 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                               "ip4 && ip4.dst == %s && !ip.later_frag && tcp",
                               op->lrp_networks.ipv4_addrs[i].addr_s);
                 action = "tcp_reset {"
+                         "eth.dst <-> eth.src; "
+                         "ip4.dst <-> ip4.src; "
+                         "next; };";
+                ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+                                        80, ds_cstr(&match), action,
+                                        &op->nbrp->header_);
+
+                ds_clear(&match);
+                ds_put_format(&match,
+                              "ip4 && ip4.dst == %s && !ip.later_frag && sctp",
+                              op->lrp_networks.ipv4_addrs[i].addr_s);
+                action = "sctp_abort {"
                          "eth.dst <-> eth.src; "
                          "ip4.dst <-> ip4.src; "
                          "next; };";
@@ -11068,7 +11080,7 @@ build_ipv6_input_flows_for_lrouter_port(
                                   &op->nbrp->header_, lflows);
         }
 
-        /* UDP/TCP port unreachable */
+        /* UDP/TCP/SCTP port unreachable */
         if (!smap_get(&op->od->nbr->options, "chassis")
             && !op->od->l3dgw_port) {
             for (int i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
@@ -11080,6 +11092,18 @@ build_ipv6_input_flows_for_lrouter_port(
                                      "eth.dst <-> eth.src; "
                                      "ip6.dst <-> ip6.src; "
                                      "next; };";
+                ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+                                        80, ds_cstr(match), action,
+                                        &op->nbrp->header_);
+
+                ds_clear(match);
+                ds_put_format(match,
+                              "ip6 && ip6.dst == %s && !ip.later_frag && sctp",
+                              op->lrp_networks.ipv6_addrs[i].addr_s);
+                action = "sctp_abort {"
+                         "eth.dst <-> eth.src; "
+                         "ip6.dst <-> ip6.src; "
+                         "next; };";
                 ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT,
                                         80, ds_cstr(match), action,
                                         &op->nbrp->header_);
