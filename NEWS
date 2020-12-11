@@ -24,6 +24,8 @@ OVN v20.12.0 - xx xxx xxxx
      significantly decrease size of a Southbound DB.  However, in some cases,
      it could have performance penalty for ovn-controller.  Disabled by
      default.
+   - BFD protocol support according to RFC880 [0]
+     [0] https://tools.ietf.org/html/rfc5880)
 
 OVN v20.09.0 - 28 Sep 2020
 --------------------------
