@@ -7650,7 +7650,7 @@ build_ecmp_routing_policy_flows(struct hmap *lflows, struct ovn_datapath *od,
     struct ds match = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
 
-    for (uint16_t i = 0; i < rule->n_nexthops; i++) {
+    for (size_t i = 0; i < rule->n_nexthops; i++) {
         struct ovn_port *out_port = get_outport_for_routing_policy_nexthop(
              od, ports, rule->priority, rule->nexthops[i]);
         if (!out_port) {
@@ -7689,9 +7689,10 @@ build_ecmp_routing_policy_flows(struct hmap *lflows, struct ovn_datapath *od,
                       out_port->json_key);
 
         ds_clear(&match);
+        uint16_t member_id = (uint16_t) i + 1;
         ds_put_format(&match, REG_ECMP_GROUP_ID" == %"PRIu16" && "
                       REG_ECMP_MEMBER_ID" == %"PRIu16,
-                      ecmp_group_id, i + 1);
+                      ecmp_group_id, member_id);
         ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_POLICY_ECMP,
                                 100, ds_cstr(&match),
                                 ds_cstr(&actions), &rule->header_);
@@ -7702,12 +7703,13 @@ build_ecmp_routing_policy_flows(struct hmap *lflows, struct ovn_datapath *od,
                   "; %s = select(", REG_ECMP_GROUP_ID, ecmp_group_id,
                   REG_ECMP_MEMBER_ID);
 
-    for (uint16_t i = 0; i < rule->n_nexthops; i++) {
+    for (size_t i = 0; i < rule->n_nexthops; i++) {
+        uint16_t member_id = (uint16_t) i + 1;
         if (i > 0) {
             ds_put_cstr(&actions, ", ");
         }
 
-        ds_put_format(&actions, "%"PRIu16, i + 1);
+        ds_put_format(&actions, "%"PRIu16, member_id);
     }
     ds_put_cstr(&actions, ");");
     ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_POLICY,
