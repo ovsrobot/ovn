@@ -82,7 +82,7 @@ Obsoletes: openvswitch-ovn-central
 Provides: openvswitch-ovn-central = %{?epoch:%{epoch}:}%{version}-%{release}
 
 %description central
-OVN DB servers and ovn-northd running on a central node.
+OVN DB servers, ovn-northd and ovn-ic running on a central node.
 
 %package host
 Summary: Open Virtual Network support
@@ -161,7 +161,7 @@ install -p -D -m 0644 \
         rhel/usr_share_ovn_scripts_systemd_sysconfig.template \
         $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/ovn
 
-for service in ovn-controller ovn-controller-vtep ovn-northd; do
+for service in ovn-controller ovn-controller-vtep ovn-northd ovn-ic; do
         install -p -D -m 0644 \
                         rhel/usr_lib_systemd_system_${service}.service \
                         $RPM_BUILD_ROOT%{_unitdir}/${service}.service
@@ -264,11 +264,14 @@ fi
 %preun central
 %if 0%{?systemd_preun:1}
     %systemd_preun ovn-northd.service
+    %systemd_preun ovn-ic.service
 %else
     if [ $1 -eq 0 ] ; then
         # Package removal, not upgrade
         /bin/systemctl --no-reload disable ovn-northd.service >/dev/null 2>&1 || :
         /bin/systemctl stop ovn-northd.service >/dev/null 2>&1 || :
+        /bin/systemctl --no-reload disable ovn-ic.service >/dev/null 2>&1 || :
+        /bin/systemctl stop ovn-ic.service >/dev/null 2>&1 || :
     fi
 %endif
 
@@ -305,6 +308,7 @@ fi
 %post central
 %if 0%{?systemd_post:1}
     %systemd_post ovn-northd.service
+    %systemd_post ovn-ic.service
 %else
     # Package install, not upgrade
     if [ $1 -eq 1 ]; then
@@ -337,11 +341,13 @@ fi
 %postun central
 %if 0%{?systemd_postun_with_restart:1}
     %systemd_postun_with_restart ovn-northd.service
+    %systemd_postun_with_restart ovn-ic.service
 %else
     /bin/systemctl daemon-reload >/dev/null 2>&1 || :
     if [ "$1" -ge "1" ] ; then
     # Package upgrade, not uninstall
         /bin/systemctl try-restart ovn-northd.service >/dev/null 2>&1 || :
+        /bin/systemctl try-restart ovn-ic.service >/dev/null 2>&1 || :
     fi
 %endif
 
@@ -373,6 +379,10 @@ if [ $1 -eq 1 ]; then
     if [ -e %{_localstatedir}/lib/rpm-state/ovn-northd ]; then
         rm %{_localstatedir}/lib/rpm-state/ovn-northd
         /bin/systemctl start ovn-northd.service >/dev/null 2>&1 || :
+    fi
+    if [ -e %{_localstatedir}/lib/rpm-state/ovn-ic ]; then
+        rm %{_localstatedir}/lib/rpm-state/ovn-ic
+        /bin/systemctl start ovn-ic.service >/dev/null 2>&1 || :
     fi
 fi
 
@@ -421,7 +431,6 @@ fi
 %{_mandir}/man5/ovn-sb.5*
 %{_mandir}/man8/ovn-ic-nbctl.8*
 %{_mandir}/man8/ovn-ic-sbctl.8*
-%{_mandir}/man8/ovn-ic.8*
 %{_mandir}/man5/ovn-ic-nb.5*
 %{_mandir}/man5/ovn-ic-sb.5*
 %{_prefix}/lib/ocf/resource.d/ovn/ovndb-servers
@@ -435,11 +444,13 @@ fi
 %{_bindir}/ovn-northd
 %{_bindir}/ovn-ic
 %{_mandir}/man8/ovn-northd.8*
+%{_mandir}/man8/ovn-ic.8*
 %config %{_datadir}/ovn/ovn-nb.ovsschema
 %config %{_datadir}/ovn/ovn-sb.ovsschema
 %config %{_datadir}/ovn/ovn-ic-nb.ovsschema
 %config %{_datadir}/ovn/ovn-ic-sb.ovsschema
 %{_unitdir}/ovn-northd.service
+%{_unitdir}/ovn-ic.service
 %{_prefix}/lib/firewalld/services/ovn-central-firewall-service.xml
 
 %files host
@@ -454,5 +465,8 @@ fi
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Wed Dec 9 2020 Vladislav Odintsov <odivlad@gmail.com>
+- Added ovn-ic systemd-unit
+
 * Thu Dec 20 2018 Numan Siddique <nusiddiq@redhat.com>
 - OVS/OVN split.
