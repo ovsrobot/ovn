@@ -485,6 +485,19 @@ start_northd () {
 
 start_ic () {
     if [ ! -e $ovn_ic_db_conf_file ]; then
+        if test X"$OVN_MANAGE_OVSDB" = Xyes; then
+            start_ic_ovsdb
+
+            if ! pidfile_is_running $DB_IC_NB_PID; then
+                log_failure_msg "OVN IC Northbound DB is not running"
+                exit
+            fi
+            if ! pidfile_is_running $DB_IC_SB_PID; then
+                log_failure_msg "OVN IC Southbound DB is not running"
+                exit
+            fi
+        fi
+
         ovn_ic_params="--ovnnb-db=$OVN_NORTHD_NB_DB \
                        --ovnsb-db=$OVN_NORTHD_SB_DB \
                        --ic-nb-db=$OVN_IC_NB_DB \
@@ -581,6 +594,9 @@ stop_northd () {
 }
 
 stop_ic () {
+    if test X"$OVN_MANAGE_OVSDB" = Xyes; then
+        stop_ic_ovsdb
+    fi
     OVS_RUNDIR=${OVS_RUNDIR} stop_ovn_daemon ovn-ic
 }
 
@@ -906,7 +922,7 @@ Options:
   --ovn-northd-ssl-ca-cert=CERT OVN Northd SSL CA certificate file
   --ovn-manage-ovsdb=yes|no        Whether or not the OVN NB/SB databases should be
                                    automatically started and stopped along
-                                   with ovn-northd. The default is "yes". If
+                                   with ovn-northd and ovn-ic. The default is "yes". If
                                    this is set to "no", the "start_ovsdb" and
                                    "stop_ovsdb" commands must be used to start
                                    and stop the OVN databases.
