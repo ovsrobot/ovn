@@ -7783,6 +7783,16 @@ parsed_routes_add(struct ovs_list *routes,
         return NULL;
     }
 
+    if (route->n_bfd > 0) {
+        struct nbrec_bfd *nb_bt = route->bfd[0];
+
+        if (!strcmp(nb_bt->dst_ip, route->nexthop) &&
+            (!strcmp(nb_bt->status, "down") ||
+             !strcmp(nb_bt->status, "admin_down"))) {
+            return NULL;
+        }
+    }
+
     struct parsed_route *pr = xzalloc(sizeof *pr);
     pr->prefix = prefix;
     pr->plen = plen;

@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
     "version": "5.31.0",
-    "cksum": "3663844734 28178",
+    "cksum": "2123475422 28416",
     "tables": {
         "NB_Global": {
             "columns": {
@@ -374,6 +374,10 @@
                                     "min": 0, "max": 1}},
                 "nexthop": {"type": "string"},
                 "output_port": {"type": {"key": "string", "min": 0, "max": 1}},
+                "bfd": {"type": {"key": {"type": "uuid", "refTable": "BFD",
+                                          "refType": "weak"},
+                                  "min": 0,
+                                  "max": "unlimited"}},
                 "options": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}},
