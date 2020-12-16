@@ -2540,6 +2540,8 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
             break;
         case OVNACT_DHCP6_REPLY:
             break;
+        case OVNACT_BFD_MSG:
+            break;
         }
     }
     ds_destroy(&s);
