@@ -3,7 +3,7 @@
 set -o errexit
 set -x
 
-CFLAGS=""
+CFLAGS="-fsanitize=address -fno-omit-frame-pointer -fno-common"
 SPARSE_FLAGS=""
 EXTRA_OPTS="--enable-Werror"
 
