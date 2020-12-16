@@ -1473,6 +1473,8 @@ struct ovn_port {
 
     bool has_unknown; /* If the addresses have 'unknown' defined. */
 
+    bool has_bfd;
+
     /* The port's peer:
      *
      *     - A switch port S of type "router" has a router port R as a peer,
@@ -8223,16 +8225,15 @@ add_route(struct hmap *lflows, const struct ovn_port *op,
     build_route_match(op_inport, network_s, plen, is_src_route, is_ipv4,
                       &match, &priority);
 
-    struct ds actions = DS_EMPTY_INITIALIZER;
-    ds_put_format(&actions, "ip.ttl--; "REG_ECMP_GROUP_ID" = 0; %s = ",
+    struct ds common_actions = DS_EMPTY_INITIALIZER;
+    ds_put_format(&common_actions, REG_ECMP_GROUP_ID" = 0; %s = ",
                   is_ipv4 ? REG_NEXT_HOP_IPV4 : REG_NEXT_HOP_IPV6);
-
     if (gateway) {
-        ds_put_cstr(&actions, gateway);
+        ds_put_cstr(&common_actions, gateway);
     } else {
-        ds_put_format(&actions, "ip%s.dst", is_ipv4 ? "4" : "6");
+        ds_put_format(&common_actions, "ip%s.dst", is_ipv4 ? "4" : "6");
     }
-    ds_put_format(&actions, "; "
+    ds_put_format(&common_actions, "; "
                   "%s = %s; "
                   "eth.src = %s; "
                   "outport = %s; "
@@ -8242,11 +8243,20 @@ add_route(struct hmap *lflows, const struct ovn_port *op,
                   lrp_addr_s,
                   op->lrp_networks.ea_s,
                   op->json_key);
+    struct ds actions = DS_EMPTY_INITIALIZER;
+    ds_put_format(&actions, "ip.ttl--; %s", ds_cstr(&common_actions));
 
     ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_ROUTING, priority,
                             ds_cstr(&match), ds_cstr(&actions),
                             stage_hint);
+    if (op->has_bfd) {
+        ds_put_format(&match, " && udp.dst == 3784");
+        ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_ROUTING,
+                                priority + 1, ds_cstr(&match),
+                                ds_cstr(&common_actions), stage_hint);
+    }
     ds_destroy(&match);
+    ds_destroy(&common_actions);
     ds_destroy(&actions);
 }
 
@@ -8909,6 +8919,52 @@ build_lrouter_force_snat_flows(struct hmap *lflows, struct ovn_datapath *od,
 }
 
 static void
+build_lrouter_bfd_flows(struct hmap *lflows, struct ovn_port *op)
+{
+    if (!op->has_bfd) {
+        return;
+    }
+
+    struct ds ip_list = DS_EMPTY_INITIALIZER;
+    struct ds match = DS_EMPTY_INITIALIZER;
+
+    if (op->lrp_networks.n_ipv4_addrs) {
+        op_put_v4_networks(&ip_list, op, false);
+        ds_put_format(&match, "ip4.src == %s && udp.dst == 3784",
+                      ds_cstr(&ip_list));
+        ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT, 110,
+                                ds_cstr(&match), "next; ",
+                                &op->nbrp->header_);
+        ds_clear(&match);
+        ds_put_format(&match, "ip4.dst == %s && udp.dst == 3784",
+                      ds_cstr(&ip_list));
+        ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT, 110,
+                                ds_cstr(&match), "handle_bfd_msg(); ",
+                                &op->nbrp->header_);
+    }
+    if (op->lrp_networks.n_ipv6_addrs) {
+        ds_clear(&ip_list);
+        ds_clear(&match);
+
+        op_put_v6_networks(&ip_list, op);
+        ds_put_format(&match, "ip6.src == %s && udp.dst == 3784",
+                      ds_cstr(&ip_list));
+        ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT, 110,
+                                ds_cstr(&match), "next; ",
+                                &op->nbrp->header_);
+        ds_clear(&match);
+        ds_put_format(&match, "ip6.dst == %s && udp.dst == 3784",
+                      ds_cstr(&ip_list));
+        ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT, 110,
+                                ds_cstr(&match), "handle_bfd_msg(); ",
+                                &op->nbrp->header_);
+    }
+
+    ds_destroy(&ip_list);
+    ds_destroy(&match);
+}
+
+static void
 build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     struct hmap *lflows, struct shash *meter_groups,
                     struct hmap *lbs)
@@ -9011,6 +9067,9 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                                     ds_cstr(&match), icmp_actions,
                                     &op->nbrp->header_);
         }
+
+        /* BFD msg handling */
+        build_lrouter_bfd_flows(lflows, op);
 
         /* ICMP time exceeded */
         for (int i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
@@ -11733,7 +11792,7 @@ bfd_port_lookup(struct hmap *bfd_map, const char *logical_port,
 }
 
 static void
-build_bfd_table(struct northd_context *ctx)
+build_bfd_table(struct northd_context *ctx, struct hmap *ports)
 {
     struct hmap sb_only = HMAP_INITIALIZER(&sb_only);
     struct bfd_entry *bfd_e, *next_bfd_e;
@@ -11781,10 +11840,20 @@ build_bfd_table(struct northd_context *ctx)
         if (bfd_e) {
             bfd_e->found = true;
         }
+
+        struct ovn_port *op = ovn_port_find(ports, nb_bt->logical_port);
+        if (op) {
+            op->has_bfd = true;
+        }
     }
 
     HMAP_FOR_EACH_SAFE (bfd_e, next_bfd_e, hmap_node, &sb_only) {
         if (!bfd_e->found && bfd_e->sb_bt) {
+            struct ovn_port *op = ovn_port_find(ports,
+                                                bfd_e->sb_bt->logical_port);
+            if (op) {
+                op->has_bfd = false;
+            }
             sbrec_bfd_delete(bfd_e->sb_bt);
         }
         hmap_remove(&sb_only, &bfd_e->hmap_node);
@@ -12590,7 +12659,7 @@ ovnnb_db_run(struct northd_context *ctx,
     build_ip_mcast(ctx, datapaths);
     build_mcast_groups(ctx, datapaths, ports, &mcast_groups, &igmp_groups);
     build_meter_groups(ctx, &meter_groups);
-    build_bfd_table(ctx);
+    build_bfd_table(ctx, ports);
     build_lflows(ctx, datapaths, ports, &port_groups, &mcast_groups,
                  &igmp_groups, &meter_groups, &lbs);
     ovn_update_ipv6_prefix(ports);

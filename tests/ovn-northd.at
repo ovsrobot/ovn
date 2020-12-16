@@ -2322,3 +2322,34 @@ sed 's/reg8\[[0..15\]] == [[0-9]]*/reg8\[[0..15\]] == <cleared>/' | sort], [0], 
 ])
 
 AT_CLEANUP
+
+AT_SETUP([ovn -- check BFD config propagation to SBDB])
+ovn_start
+
+ovn-nbctl lr-add r0
+ovn-nbctl lrp-add r0 r0-sw0 00:00:00:00:00:01 192.168.0.1/24
+ovn-nbctl ls-add sw0
+ovn-nbctl lsp-add sw0 sw0-r0
+ovn-nbctl lsp-set-type sw0-r0 router
+ovn-nbctl lsp-set-options sw0-r0 router-port=r0-sw0
+ovn-nbctl lsp-set-addresses sw0-r0 00:00:00:00:00:01
+ovn-nbctl create bfd logical_port=r0-sw0 dst_ip=192.168.1.2 status=down min_tx=250 min_rx=250 detect_mult=10
+
+uuid=$(ovn-sbctl --columns=_uuid --bare find bfd logical_port=r0-sw0)
+AT_CHECK([ovn-sbctl get bfd ${uuid} detect_mult],
+[0], [10
+])
+AT_CHECK([ovn-sbctl get bfd ${uuid} dst_ip],
+[0], ["192.168.1.2"
+])
+AT_CHECK([ovn-sbctl get bfd ${uuid} min_rx],
+[0], [250
+])
+AT_CHECK([ovn-sbctl get bfd ${uuid} min_tx],
+[0], [250
+])
+AT_CHECK([ovn-sbctl get bfd ${uuid} status],
+[0], [down
+])
+
+AT_CLEANUP
