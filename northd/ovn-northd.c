@@ -11707,6 +11707,92 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
     }
 }
 
+struct bfd_entry {
+    struct hmap_node hmap_node;
+
+    const struct sbrec_bfd *sb_bt;
+    bool found;
+};
+
+static struct bfd_entry *
+bfd_port_lookup(struct hmap *bfd_map, const char *logical_port,
+                const char *dst_ip)
+{
+    struct bfd_entry *bfd_e;
+    uint32_t hash;
+
+    hash = hash_string(dst_ip, 0);
+    hash = hash_string(logical_port, hash);
+    HMAP_FOR_EACH_WITH_HASH (bfd_e, hmap_node, hash, bfd_map) {
+        if (!strcmp(bfd_e->sb_bt->logical_port, logical_port) &&
+            !strcmp(bfd_e->sb_bt->dst_ip, dst_ip)) {
+            return bfd_e;
+        }
+    }
+    return NULL;
+}
+
+static void
+build_bfd_table(struct northd_context *ctx)
+{
+    struct hmap sb_only = HMAP_INITIALIZER(&sb_only);
+    struct bfd_entry *bfd_e, *next_bfd_e;
+    const struct sbrec_bfd *sb_bt;
+    uint32_t hash;
+
+    SBREC_BFD_FOR_EACH (sb_bt, ctx->ovnsb_idl) {
+        bfd_e = xmalloc(sizeof *bfd_e);
+        bfd_e->sb_bt = sb_bt;
+        bfd_e->found = false;
+        hash = hash_string(sb_bt->dst_ip, 0);
+        hash = hash_string(sb_bt->logical_port, hash);
+        hmap_insert(&sb_only, &bfd_e->hmap_node, hash);
+    }
+
+    const struct nbrec_bfd *nb_bt;
+    NBREC_BFD_FOR_EACH (nb_bt, ctx->ovnnb_idl) {
+        bfd_e = bfd_port_lookup(&sb_only, nb_bt->logical_port, nb_bt->dst_ip);
+        if (!bfd_e) {
+            sb_bt = sbrec_bfd_insert(ctx->ovnsb_txn);
+            sbrec_bfd_set_logical_port(sb_bt, nb_bt->logical_port);
+            sbrec_bfd_set_dst_ip(sb_bt, nb_bt->dst_ip);
+            sbrec_bfd_set_disc(sb_bt, 1 + random_uint32());
+            /* RFC 5881 section 4
+             * The source port MUST be in the range 49152 through 65535.
+             * The same UDP source port number MUST be used for all BFD
+             * Control packets associated with a particular session.
+             * The source port number SHOULD be unique among all BFD
+             * sessions on the system
+             */
+            uint16_t udp_src = random_range(16383) + 49152;
+            sbrec_bfd_set_src_port(sb_bt, udp_src);
+            sbrec_bfd_set_status(sb_bt, "down");
+            sbrec_bfd_set_min_tx(sb_bt, nb_bt->min_tx);
+            sbrec_bfd_set_min_rx(sb_bt, nb_bt->min_rx);
+            sbrec_bfd_set_detect_mult(sb_bt, nb_bt->detect_mult);
+        } else if (strcmp(bfd_e->sb_bt->status, nb_bt->status)) {
+            if (!strcmp(nb_bt->status, "admin_down") ||
+                !strcmp(bfd_e->sb_bt->status, "admin_down")) {
+                sbrec_bfd_set_status(bfd_e->sb_bt, nb_bt->status);
+            } else {
+                nbrec_bfd_set_status(nb_bt, bfd_e->sb_bt->status);
+            }
+        }
+        if (bfd_e) {
+            bfd_e->found = true;
+        }
+    }
+
+    HMAP_FOR_EACH_SAFE (bfd_e, next_bfd_e, hmap_node, &sb_only) {
+        if (!bfd_e->found && bfd_e->sb_bt) {
+            sbrec_bfd_delete(bfd_e->sb_bt);
+        }
+        hmap_remove(&sb_only, &bfd_e->hmap_node);
+        free(bfd_e);
+    }
+    hmap_destroy(&sb_only);
+}
+
 static void
 sync_address_set(struct northd_context *ctx, const char *name,
                  const char **addrs, size_t n_addrs,
@@ -12504,6 +12590,7 @@ ovnnb_db_run(struct northd_context *ctx,
     build_ip_mcast(ctx, datapaths);
     build_mcast_groups(ctx, datapaths, ports, &mcast_groups, &igmp_groups);
     build_meter_groups(ctx, &meter_groups);
+    build_bfd_table(ctx);
     build_lflows(ctx, datapaths, ports, &port_groups, &mcast_groups,
                  &igmp_groups, &meter_groups, &lbs);
     ovn_update_ipv6_prefix(ports);
@@ -13462,6 +13549,10 @@ main(int argc, char *argv[])
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_load_balancer_col_protocol);
     add_column_noalert(ovnsb_idl_loop.idl,
                        &sbrec_load_balancer_col_external_ids);
+
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_bfd_col_logical_port);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_bfd_col_dst_ip);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_bfd_col_status);
 
     struct ovsdb_idl_index *sbrec_chassis_by_name
         = chassis_index_create(ovnsb_idl_loop.idl);
