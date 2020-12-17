@@ -38,6 +38,7 @@
 #include "lflow.h"
 #include "lib/vswitch-idl.h"
 #include "lport.h"
+#include "memory.h"
 #include "ofctrl.h"
 #include "openvswitch/vconn.h"
 #include "openvswitch/vlog.h"
@@ -54,6 +55,7 @@
 #include "openvswitch/poll-loop.h"
 #include "lib/bitmap.h"
 #include "lib/hash.h"
+#include "simap.h"
 #include "smap.h"
 #include "sset.h"
 #include "stream-ssl.h"
@@ -2679,6 +2681,15 @@ main(int argc, char *argv[])
     restart = false;
     bool sb_monitor_all = false;
     while (!exiting) {
+        memory_run();
+        if (memory_should_report()) {
+            struct simap usage = SIMAP_INITIALIZER(&usage);
+
+            /* Nothing special to report yet. */
+            memory_report(&usage);
+            simap_destroy(&usage);
+        }
+
         /* If we're paused just run the unixctl server and skip most of the
          * processing loop.
          */
