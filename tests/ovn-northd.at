@@ -2322,3 +2322,24 @@ sed 's/reg8\[[0..15\]] == [[0-9]]*/reg8\[[0..15\]] == <cleared>/' | sort], [0], 
 ])
 
 AT_CLEANUP
+
+AT_SETUP([ovn -- check BFD config propagation to SBDB])
+ovn_start
+
+check ovn-nbctl --wait=sb lr-add r0
+check ovn-nbctl --wait=sb lrp-add r0 r0-sw0 00:00:00:00:00:01 192.168.0.1/24
+check ovn-nbctl --wait=sb ls-add sw0
+check ovn-nbctl --wait=sb lsp-add sw0 sw0-r0
+check ovn-nbctl --wait=sb lsp-set-type sw0-r0 router
+check ovn-nbctl --wait=sb lsp-set-options sw0-r0 router-port=r0-sw0
+check ovn-nbctl --wait=sb lsp-set-addresses sw0-r0 00:00:00:00:00:01
+
+ovn-nbctl create bfd logical_port=r0-sw0 dst_ip=192.168.1.2 min_tx=250 min_rx=250 detect_mult=10
+
+check_column 10 bfd detect_mult logical_port=r0-sw0
+check_column "192.168.1.2" bfd dst_ip logical_port=r0-sw0
+check_column 250 bfd min_rx logical_port=r0-sw0
+check_column 250 bfd min_tx logical_port=r0-sw0
+check_column admin_down bfd status logical_port=r0-sw0
+
+AT_CLEANUP
