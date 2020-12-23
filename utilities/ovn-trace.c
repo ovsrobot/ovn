@@ -1127,10 +1127,13 @@ ovntrace_lookup_port(const void *dp_, const char *port_name,
         return false;
     }
 
-    const struct ovntrace_mcgroup *mcgroup = ovntrace_mcgroup_find_by_name(dp, port_name);
-    if (mcgroup) {
-        *portp = mcgroup->tunnel_key;
-        return true;
+    if (dp) {
+        const struct ovntrace_mcgroup *mcgroup =
+            ovntrace_mcgroup_find_by_name(dp, port_name);
+        if (mcgroup) {
+            *portp = mcgroup->tunnel_key;
+            return true;
+        }
     }
 
     VLOG_WARN("%s: unknown logical port", port_name);
@@ -2604,13 +2607,15 @@ trace__(const struct ovntrace_datapath *dp, struct flow *uflow,
         uint8_t table_id, enum ovnact_pipeline pipeline,
         struct ovs_list *super)
 {
-    const struct ovntrace_flow *f;
-    for (;;) {
-        f = ovntrace_flow_lookup(dp, uflow, table_id, pipeline);
-        if (!may_omit_stage(f, table_id)) {
-            break;
+    const struct ovntrace_flow *f = NULL;
+    if (dp) {
+        for (;;) {
+            f = ovntrace_flow_lookup(dp, uflow, table_id, pipeline);
+            if (!may_omit_stage(f, table_id)) {
+                break;
+            }
+            table_id++;
         }
-        table_id++;
     }
 
     struct ds s = DS_EMPTY_INITIALIZER;
@@ -2625,7 +2630,7 @@ trace__(const struct ovntrace_datapath *dp, struct flow *uflow,
         }
         ds_put_format(&s, "%s, priority %d, uuid %08x",
                       f->match_s, f->priority, f->uuid.parts[0]);
-    } else {
+    } else if (dp) {
         char *stage_name = ovntrace_stage_name(dp, table_id, pipeline);
         ds_put_format(&s, "%s%sno match (implicit drop)",
                       stage_name ? stage_name : "",
@@ -2738,7 +2743,7 @@ trace(const char *dp_s, const char *flow_s)
     struct ovs_list root = OVS_LIST_INITIALIZER(&root);
     struct ovntrace_node *node = ovntrace_node_append(
         &root, OVNTRACE_NODE_PIPELINE, "ingress(dp=\"%s\", inport=\"%s\")",
-        dp->friendly_name, inport_name);
+        dp ? dp->friendly_name : "", inport_name);
     trace__(dp, &uflow, 0, OVNACT_P_INGRESS, &node->subs);
 
     bool multiple = (detailed + summary + minimal) > 1;
