@@ -11531,7 +11531,7 @@ noop_callback(struct worker_pool *pool OVS_UNUSED,
 }
 
 
-static bool use_parallel_build = true;
+static bool use_parallel_build = false;
 
 static void
 build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
@@ -12748,6 +12748,8 @@ ovnnb_db_run(struct northd_context *ctx,
     northd_probe_interval_nb = get_probe_interval(ovnnb_db, nb);
     northd_probe_interval_sb = get_probe_interval(ovnsb_db, nb);
 
+    use_parallel_build = smap_get_bool(&nb->options,
+                                          "use_parallel_build", false);
     use_logical_dp_groups = smap_get_bool(&nb->options,
                                           "use_logical_dp_groups", false);
     controller_event_en = smap_get_bool(&nb->options,
