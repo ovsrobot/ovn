@@ -33,6 +33,7 @@
 
 VLOG_DEFINE_THIS_MODULE(fasthmap);
 
+#ifndef OVS_HAS_PARALLEL_HMAP
 
 static bool worker_pool_setup = false;
 static bool workers_must_exit = false;
@@ -279,3 +280,5 @@ void ovn_run_pool_hash(
 {
     ovn_run_pool_callback(pool, result, result_frags, merge_hash_results);
 }
+
+#endif
