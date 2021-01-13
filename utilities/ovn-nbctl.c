@@ -4208,6 +4208,30 @@ done:
     return ret;
 }
 
+static bool
+is_nat_rule_conflict(const struct nbrec_logical_router *lr,
+                     const char *logical_ip1,
+                     const char *logical_ip2,
+                     bool is_v6)
+{
+    int num_l3dgw_ports = 0;
+
+    /* TODO: Add a proper validation to confirm that multiple
+     * external ips for a logical ip do not belong to same router port. */
+    for (size_t i = 0; i < lr->n_ports; i++) {
+        const struct nbrec_logical_router_port *lrp = lr->ports[i];
+        if (lrp->n_gateway_chassis) {
+            num_l3dgw_ports++;
+        }
+    }
+
+    if (num_l3dgw_ports > 1) {
+        return false;
+    }
+
+    return true;
+}
+
 static void
 nbctl_lr_nat_add(struct ctl_context *ctx)
 {
@@ -4369,12 +4393,15 @@ nbctl_lr_nat_add(struct ctl_context *ctx)
                             should_return = true;
                         }
                 } else {
-                    ctl_error(ctx, "a NAT with this type (%s) and %s (%s) "
-                              "already exists",
-                              nat_type,
-                              is_snat ? "logical_ip" : "external_ip",
-                              is_snat ? new_logical_ip : new_external_ip);
-                    should_return = true;
+                    if (is_nat_rule_conflict(lr, old_logical_ip, logical_ip,
+                                             is_v6)) {
+                        ctl_error(ctx, "a NAT with this type (%s) and %s (%s) "
+                                  "already exists",
+                                  nat_type,
+                                  is_snat ? "logical_ip" : "external_ip",
+                                  is_snat ? new_logical_ip : new_external_ip);
+                        should_return = true;
+                    }
                 }
             }
         }
