@@ -10,6 +10,9 @@ Post-v20.12.0
     "ovn-installed".  This external-id is set by ovn-controller only after all
     openflow operations corresponding to the OVS interface being added have
     been processed.
+  - Add a new option to Load_Balancer.options, "hairpin_snat_ip", to allow
+    users to explicitly select which source IP should be used for load
+    balancer hairpin traffic.
 
 OVN v20.12.0 - 18 Dec 2020
 --------------------------
