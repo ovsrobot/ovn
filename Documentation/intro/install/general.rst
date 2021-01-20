@@ -66,6 +66,9 @@ To compile the userspace programs in the OVN distribution, you will
 need the following software:
 
 - Open vSwitch (https://docs.openvswitch.org/en/latest/intro/install/).
+  Open vSwitch is included as a submodule in the OVN source code. It is
+  kept at the minimum version required in order for OVN to compile. See
+  below for instructions about how to use a different OVS source location.
 
 - GNU make
 
@@ -153,9 +156,19 @@ Before configuring OVN, clone, configure and build Open vSwitch.
 Configuring
 -----------
 
-Configure the package by running the configure script. You need to
-invoke configure with atleast the argument --with-ovs-source.
-For example::
+OVN requires Open vSwitch source code to be present in order to compile.
+The easiest way to fulfill this requirement is to use the included ovs
+submodule. After cloning the OVN source, run the following to initialize
+the ovs submodule::
+
+    $ git submodule udpate --init
+
+Then configure the package by running the configure script::
+
+    $ ./configure
+
+If desired, you may override the default ovs source code location by
+specifying the location using --with-ovs-source::
 
     $ ./configure --with-ovs-source=/path/to/ovs/source
 
