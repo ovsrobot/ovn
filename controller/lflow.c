@@ -754,6 +754,13 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
                                       &m->match, &conj, &lflow->header_.uuid);
             ofpbuf_uninit(&conj);
         }
+
+        if (m->match.wc.masks.conj_id) {
+            /* Reset the conj_id back to relative conj id. If caching is
+             * enabled, then processing of the expr match next time (due to
+             * full recompute) will result in the wrong conj_id match flow. */
+            m->match.flow.conj_id -= conj_id_ofs;
+        }
     }
 
     ofpbuf_uninit(&ofpacts);
