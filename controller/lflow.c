@@ -668,9 +668,8 @@ update_conj_id_ofs(uint32_t *conj_id_ofs, uint32_t n_conjs)
 static void
 add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
                           const struct sbrec_datapath_binding *dp,
-                          struct hmap *matches, size_t conj_id_ofs,
-                          uint8_t ptable, uint8_t output_ptable,
-                          struct ofpbuf *ovnacts,
+                          struct hmap *matches, uint8_t ptable,
+                          uint8_t output_ptable, struct ofpbuf *ovnacts,
                           bool ingress, struct lflow_ctx_in *l_ctx_in,
                           struct lflow_ctx_out *l_ctx_out)
 {
@@ -708,9 +707,6 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
     struct expr_match *m;
     HMAP_FOR_EACH (m, hmap_node, matches) {
         match_set_metadata(&m->match, htonll(dp->tunnel_key));
-        if (m->match.wc.masks.conj_id) {
-            m->match.flow.conj_id += conj_id_ofs;
-        }
         if (datapath_is_switch(dp)) {
             unsigned int reg_index
                 = (ingress ? MFF_LOG_INPORT : MFF_LOG_OUTPORT) - MFF_REG0;
@@ -744,7 +740,7 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
                 struct ofpact_conjunction *dst;
 
                 dst = ofpact_put_CONJUNCTION(&conj);
-                dst->id = src->id + conj_id_ofs;
+                dst->id = src->id;
                 dst->clause = src->clause;
                 dst->n_clauses = src->n_clauses;
             }
@@ -813,6 +809,22 @@ convert_match_to_expr(const struct sbrec_logical_flow *lflow,
     }
 
     return expr_simplify(e);
+}
+
+static void
+prepare_expr_matches(struct hmap *matches, uint32_t conj_id_ofs)
+{
+    struct expr_match *m;
+    HMAP_FOR_EACH (m, hmap_node, matches) {
+        if (m->match.wc.masks.conj_id) {
+            m->match.flow.conj_id += conj_id_ofs;
+        }
+
+        for (int i = 0; i < m->n; i++) {
+            struct cls_conjunction *src = &m->conjunctions[i];
+            src->id += conj_id_ofs;
+        }
+    }
 }
 
 static bool
@@ -915,9 +927,9 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
             return true;
         }
 
-        add_matches_to_flow_table(lflow, dp, &matches, *l_ctx_out->conj_id_ofs,
-                                  ptable, output_ptable, &ovnacts, ingress,
-                                  l_ctx_in, l_ctx_out);
+        prepare_expr_matches(&matches, *l_ctx_out->conj_id_ofs);
+        add_matches_to_flow_table(lflow, dp, &matches, ptable, output_ptable,
+                                  &ovnacts, ingress, l_ctx_in, l_ctx_out);
 
         ovnacts_free(ovnacts.data, ovnacts.size);
         ofpbuf_uninit(&ovnacts);
@@ -930,10 +942,11 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
         lflow_cache_get(l_ctx_out->lflow_cache_map, lflow);
 
     if (lc && lc->type == LCACHE_T_MATCHES) {
-        /* 'matches' is cached. No need to do expr parsing.
+        /* 'matches' is cached. No need to do expr parsing and no need
+         * to call prepare_expr_matches() to update the conj ids.
          * Add matches to flow table and return. */
-        add_matches_to_flow_table(lflow, dp, lc->expr_matches, lc->conj_id_ofs,
-                                  ptable, output_ptable, &ovnacts, ingress,
+        add_matches_to_flow_table(lflow, dp, lc->expr_matches, ptable,
+                                  output_ptable, &ovnacts, ingress,
                                   l_ctx_in, l_ctx_out);
         ovnacts_free(ovnacts.data, ovnacts.size);
         ofpbuf_uninit(&ovnacts);
@@ -1009,10 +1022,11 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
         }
     }
 
+    prepare_expr_matches(matches, lc->conj_id_ofs);
+
     /* Encode OVN logical actions into OpenFlow. */
-    add_matches_to_flow_table(lflow, dp, matches, lc->conj_id_ofs,
-                              ptable, output_ptable, &ovnacts, ingress,
-                              l_ctx_in, l_ctx_out);
+    add_matches_to_flow_table(lflow, dp, matches, ptable, output_ptable,
+                              &ovnacts, ingress, l_ctx_in, l_ctx_out);
     ovnacts_free(ovnacts.data, ovnacts.size);
     ofpbuf_uninit(&ovnacts);
 
