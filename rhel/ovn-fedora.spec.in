@@ -169,7 +169,7 @@ install -p -D -m 0644 \
         rhel/usr_share_ovn_scripts_systemd_sysconfig.template \
         $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/ovn
 
-for service in ovn-controller ovn-controller-vtep ovn-northd ovn-ic; do
+for service in ovn-controller ovn-controller-vtep ovn-northd ovn-ic ovsdb-server-ic; do
         install -p -D -m 0644 \
                         rhel/usr_lib_systemd_system_${service}.service \
                         $RPM_BUILD_ROOT%{_unitdir}/${service}.service
@@ -291,6 +291,16 @@ fi
     fi
 %endif
 
+%if 0%{?systemd_preun:1}
+    %systemd_preun ovsdb-server-ic.service
+%else
+    if [ $1 -eq 0 ] ; then
+        # Package removal, not upgrade
+        /bin/systemctl --no-reload disable ovsdb-server-ic.service >/dev/null 2>&1 || :
+        /bin/systemctl stop ovsdb-server-ic.service >/dev/null 2>&1 || :
+    fi
+%endif
+
 %preun host
 %if 0%{?systemd_preun:1}
     %systemd_preun ovn-controller.service
@@ -341,6 +351,15 @@ fi
     fi
 %endif
 
+%if 0%{?systemd_post:1}
+    %systemd_post ovsdb-server-ic.service
+%else
+    # Package install, not upgrade
+    if [ $1 -eq 1 ]; then
+        /bin/systemctl daemon-reload >dev/null || :
+    fi
+%endif
+
 %post host
 %if 0%{?systemd_post:1}
     %systemd_post ovn-controller.service
@@ -383,6 +402,12 @@ fi
     # Package upgrade, not uninstall
         /bin/systemctl try-restart ovn-ic.service >/dev/null 2>&1 || :
     fi
+%endif
+
+%if 0%{?systemd_postun:1}
+    %systemd_postun ovsdb-server-ic.service
+%else
+    /bin/systemctl daemon-reload >/dev/null 2>&1 || :
 %endif
 
 %postun host
@@ -484,6 +509,7 @@ fi
 %config %{_datadir}/ovn/ovn-ic-nb.ovsschema
 %config %{_datadir}/ovn/ovn-ic-sb.ovsschema
 %{_unitdir}/ovn-ic.service
+%{_unitdir}/ovsdb-server-ic.service
 
 %files host
 %{_bindir}/ovn-controller
