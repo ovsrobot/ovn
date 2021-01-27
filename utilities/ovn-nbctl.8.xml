@@ -659,6 +659,7 @@
     <dl>
       <dt>[<code>--may-exist</code>] [<code>--policy</code>=<var>POLICY</var>]
         [<code>--ecmp</code>] [<code>--ecmp-symmetric-reply</code>]
+        [<code>--bfd=<var>UUID</var></code>]
         <code>lr-route-add</code> <var>router</var>
         <var>prefix</var> <var>nexthop</var> [<var>port</var>]</dt>
       <dd>
@@ -693,6 +694,13 @@
           sent out over that same route. Setting
           <code>--ecmp-symmetric-reply</code> implies <code>--ecmp</code> so
           it is not necessary to set both.
+        </p>
+
+        <p>
+          <code>--bfd</code> option is used to link a BFD session to the
+          OVN route. If the BFD session UUID is provided, it will be used
+          for the OVN route otherwise the next-hop will be used to perform
+          a lookup in the OVN BFD table.
         </p>
 
         <p>
