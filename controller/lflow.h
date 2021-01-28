@@ -34,6 +34,7 @@
  */
 
 #include <stdint.h>
+#include "lflow-cache.h"
 #include "openvswitch/hmap.h"
 #include "openvswitch/uuid.h"
 #include "openvswitch/list.h"
@@ -150,7 +151,7 @@ struct lflow_ctx_out {
     struct ovn_extend_table *group_table;
     struct ovn_extend_table *meter_table;
     struct lflow_resource_ref *lfrr;
-    struct hmap *lflow_cache_map;
+    struct lflow_cache *lflow_cache;
     uint32_t *conj_id_ofs;
     bool conj_id_overflow;
 };
@@ -168,9 +169,6 @@ void lflow_handle_changed_neighbors(
     struct ovn_desired_flow_table *);
 bool lflow_handle_changed_lbs(struct lflow_ctx_in *, struct lflow_ctx_out *);
 void lflow_destroy(void);
-
-void lflow_cache_init(struct hmap *);
-void lflow_cache_destroy(struct hmap *);
 
 bool lflow_add_flows_for_datapath(const struct sbrec_datapath_binding *,
                                   struct lflow_ctx_in *,
