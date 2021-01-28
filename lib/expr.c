@@ -471,6 +471,36 @@ expr_print(const struct expr *e)
     ds_destroy(&output);
 }
 
+/* Expr Size. */
+size_t
+expr_size(const struct expr *expr) {
+    size_t total_sz = sizeof *expr;
+    const struct expr *subexpr;
+
+    switch (expr->type) {
+    case EXPR_T_CMP:
+        return total_sz + (expr->cmp.symbol->width
+               ? 0
+               : strlen(expr->cmp.string));
+
+    case EXPR_T_AND:
+    case EXPR_T_OR:
+        LIST_FOR_EACH (subexpr, node, &expr->andor) {
+            total_sz += expr_size(subexpr);
+        }
+        return total_sz;
+
+    case EXPR_T_BOOLEAN:
+        return total_sz;
+
+    case EXPR_T_CONDITION:
+        return total_sz + strlen(expr->cond.string);
+
+    default:
+        OVS_NOT_REACHED();
+    }
+}
+
 /* Parsing. */
 
 #define MAX_PAREN_DEPTH 100
@@ -3160,6 +3190,18 @@ expr_matches_destroy(struct hmap *matches)
         free(m);
     }
     hmap_destroy(matches);
+}
+
+size_t
+expr_matches_size(const struct hmap *matches)
+{
+    size_t total_size = 0;
+
+    const struct expr_match *m;
+    HMAP_FOR_EACH (m, hmap_node, matches) {
+        total_size += sizeof *m + m->allocated * sizeof *m->conjunctions;
+    }
+    return total_size;
 }
 
 /* Prints a representation of the 'struct expr_match'es in 'matches' to

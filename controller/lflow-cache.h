@@ -20,6 +20,7 @@
 
 #include "openvswitch/hmap.h"
 #include "openvswitch/uuid.h"
+#include "simap.h"
 
 struct sbrec_logical_flow;
 struct lflow_cache;
@@ -29,7 +30,8 @@ struct lflow_cache;
  *    results in conjunctive OpenvSwitch flows.
  *
  *  - Caches
- *     (1) Nothing if the logical flow has port group/address set references.
+ *     (1) Conjunction ID offset if the logical flow has port group/address
+ *         set references.
  *     (2) expr tree if the logical flow has is_chassis_resident() match.
  *     (3) expr matches if (1) and (2) are false.
  */
@@ -53,7 +55,8 @@ struct lflow_cache_value {
 struct lflow_cache *lflow_cache_create(void);
 void lflow_cache_flush(struct lflow_cache *);
 void lflow_cache_destroy(struct lflow_cache *);
-void lflow_cache_enable(struct lflow_cache *, bool enabled, uint32_t capacity);
+void lflow_cache_enable(struct lflow_cache *, bool enabled, uint32_t capacity,
+                        uint64_t max_mem_usage_kb);
 bool lflow_cache_is_enabled(struct lflow_cache *);
 
 void lflow_cache_add_conj_id(struct lflow_cache *,
@@ -71,5 +74,8 @@ struct lflow_cache_value *lflow_cache_get(struct lflow_cache *,
                                           const struct sbrec_logical_flow *);
 void lflow_cache_delete(struct lflow_cache *,
                         const struct sbrec_logical_flow *);
+
+void lflow_cache_get_memory_usage(const struct lflow_cache *,
+                                  struct simap *usage);
 
 #endif /* controller/lflow-cache.h */

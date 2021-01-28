@@ -38,16 +38,20 @@ COVERAGE_DEFINE(lflow_cache_hit);
 COVERAGE_DEFINE(lflow_cache_miss);
 COVERAGE_DEFINE(lflow_cache_delete);
 COVERAGE_DEFINE(lflow_cache_full);
+COVERAGE_DEFINE(lflow_cache_mem_full);
 
 struct lflow_cache {
     struct hmap entries;
     uint32_t capacity;
+    uint64_t mem_usage;
+    uint64_t max_mem_usage;
     bool enabled;
 };
 
 struct lflow_cache_entry {
     struct hmap_node node;
     struct uuid lflow_uuid; /* key */
+    size_t size;
 
     struct lflow_cache_value value;
 };
@@ -55,7 +59,8 @@ struct lflow_cache_entry {
 static struct lflow_cache_value *lflow_cache_add__(
     struct lflow_cache *lc,
     const struct sbrec_logical_flow *lflow,
-    enum lflow_cache_type type);
+    enum lflow_cache_type type,
+    uint64_t value_size);
 static void lflow_cache_delete__(struct lflow_cache *lc,
                                  struct lflow_cache_entry *lce);
 
@@ -66,6 +71,7 @@ lflow_cache_create(void)
 
     hmap_init(&lc->entries);
     lc->enabled = true;
+    lc->mem_usage = 0;
     return lc;
 }
 
@@ -101,14 +107,20 @@ lflow_cache_destroy(struct lflow_cache *lc)
 }
 
 void
-lflow_cache_enable(struct lflow_cache *lc, bool enabled, uint32_t capacity)
+lflow_cache_enable(struct lflow_cache *lc, bool enabled, uint32_t capacity,
+                   uint64_t max_mem_usage_kb)
 {
-    if ((lc->enabled && !enabled) || capacity < hmap_count(&lc->entries)) {
+    uint64_t max_mem_usage = max_mem_usage_kb * 1024;
+
+    if ((lc->enabled && !enabled)
+            || capacity < hmap_count(&lc->entries)
+            || max_mem_usage < lc->mem_usage) {
         lflow_cache_flush(lc);
     }
 
     lc->enabled = enabled;
     lc->capacity = capacity;
+    lc->max_mem_usage = max_mem_usage;
 }
 
 bool
@@ -123,8 +135,7 @@ lflow_cache_add_conj_id(struct lflow_cache *lc,
                         uint32_t conj_id_ofs)
 {
     struct lflow_cache_value *lcv =
-        lflow_cache_add__(lc, lflow, LCACHE_T_CONJ_ID);
-
+        lflow_cache_add__(lc, lflow, LCACHE_T_CONJ_ID, 0);
     if (!lcv) {
         return;
     }
@@ -140,8 +151,7 @@ lflow_cache_add_expr(struct lflow_cache *lc,
                      struct expr *expr)
 {
     struct lflow_cache_value *lcv =
-        lflow_cache_add__(lc, lflow, LCACHE_T_EXPR);
-
+        lflow_cache_add__(lc, lflow, LCACHE_T_EXPR, expr_size(expr));
     if (!lcv) {
         return;
     }
@@ -157,8 +167,8 @@ lflow_cache_add_matches(struct lflow_cache *lc,
                         struct hmap *matches)
 {
     struct lflow_cache_value *lcv =
-        lflow_cache_add__(lc, lflow, LCACHE_T_MATCHES);
-
+        lflow_cache_add__(lc, lflow, LCACHE_T_MATCHES,
+                          expr_matches_size(matches));
     if (!lcv) {
         return;
     }
@@ -203,20 +213,38 @@ lflow_cache_delete(struct lflow_cache *lc,
     }
 }
 
+void
+lflow_cache_get_memory_usage(const struct lflow_cache *lc, struct simap *usage)
+{
+    simap_increase(usage, "lflow-cache-entries", hmap_count(&lc->entries));
+    simap_increase(usage, "lflow-cache-size-KB",
+                   ROUND_UP(lc->mem_usage, 1024) / 1024);
+}
+
 static struct lflow_cache_value *
 lflow_cache_add__(struct lflow_cache *lc,
                   const struct sbrec_logical_flow *lflow,
-                  enum lflow_cache_type type)
+                  enum lflow_cache_type type,
+                  uint64_t value_size)
 {
+    struct lflow_cache_entry *lce;
+
     if (hmap_count(&lc->entries) == lc->capacity) {
         COVERAGE_INC(lflow_cache_full);
         return NULL;
     }
 
-    struct lflow_cache_entry *lce = xzalloc(sizeof *lce);
+    size_t size = sizeof *lce + value_size;
+    if (size + lc->mem_usage > lc->max_mem_usage) {
+        COVERAGE_INC(lflow_cache_mem_full);
+        return NULL;
+    }
+    lc->mem_usage += size;
 
     COVERAGE_INC(lflow_cache_add);
+    lce = xzalloc(sizeof *lce);
     lce->lflow_uuid = lflow->header_.uuid;
+    lce->size = size;
     lce->value.type = type;
     hmap_insert(&lc->entries, &lce->node, uuid_hash(&lflow->header_.uuid));
     return &lce->value;
@@ -247,5 +275,8 @@ lflow_cache_delete__(struct lflow_cache *lc, struct lflow_cache_entry *lce)
         free(lce->value.expr_matches);
         break;
     }
+
+    ovs_assert(lc->mem_usage >= lce->size);
+    lc->mem_usage -= lce->size;
     free(lce);
 }

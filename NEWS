@@ -13,9 +13,11 @@ Post-v20.12.0
   - ovn-ctl: Added new command line argument '--ovsdb-disable-file-column-diff'
     to support ovsdb-server upgrades from version 2.14 and earlier to
     2.15 and later.  See ovsdb(7) for more details.
-  - ovn-controller: Add a configuration knob, through OVS external-id
-    "ovn-limit-lflow-cache", to allow enforcing a limit for the size of the
-    logical flow cache.
+  - ovn-controller: Add configuration knobs, through OVS external-id
+    "ovn-limit-lflow-cache" and "ovn-memlimit-lflow-cache-kb", to allow
+    enforcing a limit for the size of the logical flow cache based on
+    maximum number of entries and/or memory usage.
+  - ovn-controller: Add lflow cache related memory reports.
 
 OVN v20.12.0 - 18 Dec 2020
 --------------------------
