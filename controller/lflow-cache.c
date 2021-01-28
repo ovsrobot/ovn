@@ -17,6 +17,10 @@
 
 #include <config.h>
 
+#if HAVE_DECL_MALLOC_TRIM
+#include <malloc.h>
+#endif
+
 #include "coverage.h"
 #include "lib/ovn-sb-idl.h"
 #include "lflow-cache.h"
@@ -74,6 +78,12 @@ lflow_cache_flush(struct lflow_cache *lc)
     HMAP_FOR_EACH_SAFE (lce, lce_next, node, &lc->entries) {
         lflow_cache_delete__(lc, lce);
     }
+
+    hmap_shrink(&lc->entries);
+
+#if HAVE_DECL_MALLOC_TRIM
+    malloc_trim(0);
+#endif
 }
 
 void
