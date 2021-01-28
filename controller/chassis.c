@@ -49,6 +49,7 @@ struct ovs_chassis_cfg {
     const char *monitor_all;
     const char *chassis_macs;
     const char *enable_lflow_cache;
+    const char *limit_lflow_cache;
 
     /* Set of encap types parsed from the 'ovn-encap-type' external-id. */
     struct sset encap_type_set;
@@ -132,6 +133,12 @@ static const char *
 get_enable_lflow_cache(const struct smap *ext_ids)
 {
     return smap_get_def(ext_ids, "ovn-enable-lflow-cache", "true");
+}
+
+static const char *
+get_limit_lflow_cache(const struct smap *ext_ids)
+{
+    return smap_get_def(ext_ids, "ovn-limit-lflow-cache", "");
 }
 
 static const char *
@@ -256,6 +263,7 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
     ovs_cfg->monitor_all = get_monitor_all(&cfg->external_ids);
     ovs_cfg->chassis_macs = get_chassis_mac_mappings(&cfg->external_ids);
     ovs_cfg->enable_lflow_cache = get_enable_lflow_cache(&cfg->external_ids);
+    ovs_cfg->limit_lflow_cache = get_limit_lflow_cache(&cfg->external_ids);
 
     if (!chassis_parse_ovs_encap_type(encap_type, &ovs_cfg->encap_type_set)) {
         return false;
@@ -283,13 +291,16 @@ chassis_build_other_config(struct smap *config, const char *bridge_mappings,
                            const char *datapath_type, const char *cms_options,
                            const char *monitor_all, const char *chassis_macs,
                            const char *iface_types,
-                           const char *enable_lflow_cache, bool is_interconn)
+                           const char *enable_lflow_cache,
+                           const char *limit_lflow_cache,
+                           bool is_interconn)
 {
     smap_replace(config, "ovn-bridge-mappings", bridge_mappings);
     smap_replace(config, "datapath-type", datapath_type);
     smap_replace(config, "ovn-cms-options", cms_options);
     smap_replace(config, "ovn-monitor-all", monitor_all);
     smap_replace(config, "ovn-enable-lflow-cache", enable_lflow_cache);
+    smap_replace(config, "ovn-limit-lflow-cache", limit_lflow_cache);
     smap_replace(config, "iface-types", iface_types);
     smap_replace(config, "ovn-chassis-mac-mappings", chassis_macs);
     smap_replace(config, "is-interconn", is_interconn ? "true" : "false");
@@ -305,6 +316,7 @@ chassis_other_config_changed(const char *bridge_mappings,
                              const char *monitor_all,
                              const char *chassis_macs,
                              const char *enable_lflow_cache,
+                             const char *limit_lflow_cache,
                              const struct ds *iface_types,
                              bool is_interconn,
                              const struct sbrec_chassis *chassis_rec)
@@ -341,6 +353,13 @@ chassis_other_config_changed(const char *bridge_mappings,
         get_enable_lflow_cache(&chassis_rec->other_config);
 
     if (strcmp(enable_lflow_cache, chassis_enable_lflow_cache)) {
+        return true;
+    }
+
+    const char *chassis_limit_lflow_cache =
+        get_limit_lflow_cache(&chassis_rec->other_config);
+
+    if (strcmp(limit_lflow_cache, chassis_limit_lflow_cache)) {
         return true;
     }
 
@@ -523,6 +542,7 @@ chassis_update(const struct sbrec_chassis *chassis_rec,
                                      ovs_cfg->monitor_all,
                                      ovs_cfg->chassis_macs,
                                      ovs_cfg->enable_lflow_cache,
+                                     ovs_cfg->limit_lflow_cache,
                                      &ovs_cfg->iface_types,
                                      ovs_cfg->is_interconn,
                                      chassis_rec)) {
@@ -536,6 +556,7 @@ chassis_update(const struct sbrec_chassis *chassis_rec,
                                    ovs_cfg->chassis_macs,
                                    ds_cstr_ro(&ovs_cfg->iface_types),
                                    ovs_cfg->enable_lflow_cache,
+                                   ovs_cfg->limit_lflow_cache,
                                    ovs_cfg->is_interconn);
         sbrec_chassis_verify_other_config(chassis_rec);
         sbrec_chassis_set_other_config(chassis_rec, &other_config);

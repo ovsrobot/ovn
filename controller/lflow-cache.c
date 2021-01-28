@@ -37,9 +37,11 @@ COVERAGE_DEFINE(lflow_cache_add);
 COVERAGE_DEFINE(lflow_cache_hit);
 COVERAGE_DEFINE(lflow_cache_miss);
 COVERAGE_DEFINE(lflow_cache_delete);
+COVERAGE_DEFINE(lflow_cache_full);
 
 struct lflow_cache {
     struct hmap entries;
+    uint32_t capacity;
     bool enabled;
 };
 
@@ -99,12 +101,14 @@ lflow_cache_destroy(struct lflow_cache *lc)
 }
 
 void
-lflow_cache_enable(struct lflow_cache *lc, bool enabled)
+lflow_cache_enable(struct lflow_cache *lc, bool enabled, uint32_t capacity)
 {
-    if (lc->enabled && !enabled) {
+    if ((lc->enabled && !enabled) || capacity < hmap_count(&lc->entries)) {
         lflow_cache_flush(lc);
     }
+
     lc->enabled = enabled;
+    lc->capacity = capacity;
 }
 
 bool
@@ -121,6 +125,10 @@ lflow_cache_add_conj_id(struct lflow_cache *lc,
     struct lflow_cache_value *lcv =
         lflow_cache_add__(lc, lflow, LCACHE_T_CONJ_ID);
 
+    if (!lcv) {
+        return;
+    }
+
     COVERAGE_INC(lflow_cache_add_conj_id);
     lcv->conj_id_ofs = conj_id_ofs;
 }
@@ -134,6 +142,10 @@ lflow_cache_add_expr(struct lflow_cache *lc,
     struct lflow_cache_value *lcv =
         lflow_cache_add__(lc, lflow, LCACHE_T_EXPR);
 
+    if (!lcv) {
+        return;
+    }
+
     COVERAGE_INC(lflow_cache_add_expr);
     lcv->conj_id_ofs = conj_id_ofs;
     lcv->expr = expr;
@@ -146,6 +158,10 @@ lflow_cache_add_matches(struct lflow_cache *lc,
 {
     struct lflow_cache_value *lcv =
         lflow_cache_add__(lc, lflow, LCACHE_T_MATCHES);
+
+    if (!lcv) {
+        return;
+    }
 
     COVERAGE_INC(lflow_cache_add_matches);
     lcv->expr_matches = matches;
@@ -192,6 +208,11 @@ lflow_cache_add__(struct lflow_cache *lc,
                   const struct sbrec_logical_flow *lflow,
                   enum lflow_cache_type type)
 {
+    if (hmap_count(&lc->entries) == lc->capacity) {
+        COVERAGE_INC(lflow_cache_full);
+        return NULL;
+    }
+
     struct lflow_cache_entry *lce = xzalloc(sizeof *lce);
 
     COVERAGE_INC(lflow_cache_add);

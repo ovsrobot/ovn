@@ -53,7 +53,7 @@ struct lflow_cache_value {
 struct lflow_cache *lflow_cache_create(void);
 void lflow_cache_flush(struct lflow_cache *);
 void lflow_cache_destroy(struct lflow_cache *);
-void lflow_cache_enable(struct lflow_cache *, bool enabled);
+void lflow_cache_enable(struct lflow_cache *, bool enabled, uint32_t capacity);
 bool lflow_cache_is_enabled(struct lflow_cache *);
 
 void lflow_cache_add_conj_id(struct lflow_cache *,
