@@ -3960,6 +3960,41 @@ nbctl_lr_route_add(struct ctl_context *ctx)
         goto cleanup;
     }
 
+    struct shash_node *bfd = shash_find(&ctx->options, "--bfd");
+    const struct nbrec_bfd *nb_bt = NULL;
+    if (bfd) {
+        if (bfd->data) {
+            char *data = xstrdup(bfd->data);
+            struct uuid bfd_uuid;
+            if (uuid_from_string(&bfd_uuid, data)) {
+                nb_bt = nbrec_bfd_get_for_uuid(ctx->idl, &bfd_uuid);
+            }
+            free(data);
+            if (!nb_bt) {
+                ctl_error(ctx, "no entry found in the BFD table");
+                goto cleanup;
+            }
+        } else {
+            const struct nbrec_bfd *iter;
+            NBREC_BFD_FOR_EACH (iter, ctx->idl) {
+                if (!strcmp(iter->dst_ip, next_hop)) {
+                    nb_bt = iter;
+                    break;
+                }
+            }
+            if (!nb_bt) {
+                if (ctx->argc != 5) {
+                    ctl_error(ctx,
+                              "not able to create an entry in the BFD table");
+                    goto cleanup;
+                }
+                nb_bt = nbrec_bfd_insert(ctx->txn);
+                nbrec_bfd_set_dst_ip(nb_bt, next_hop);
+                nbrec_bfd_set_logical_port(nb_bt, ctx->argv[4]);
+            }
+        }
+    }
+
     bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
     bool ecmp_symmetric_reply = shash_find(&ctx->options,
                                            "--ecmp-symmetric-reply") != NULL;
@@ -4007,6 +4042,9 @@ nbctl_lr_route_add(struct ctl_context *ctx)
             nbrec_logical_router_static_route_verify_nexthop(route);
             nbrec_logical_router_static_route_set_ip_prefix(route, prefix);
             nbrec_logical_router_static_route_set_nexthop(route, next_hop);
+            if (nb_bt) {
+                nbrec_logical_router_static_route_set_bfd(route, nb_bt);
+            }
             if (ctx->argc == 5) {
                 nbrec_logical_router_static_route_set_output_port(
                     route, ctx->argv[4]);
@@ -4038,6 +4076,9 @@ nbctl_lr_route_add(struct ctl_context *ctx)
     }
 
     nbrec_logical_router_update_static_routes_addvalue(lr, route);
+    if (nb_bt) {
+        nbrec_logical_router_static_route_set_bfd(route, nb_bt);
+    }
 
 cleanup:
     free(next_hop);
@@ -6551,7 +6592,7 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     /* logical router route commands. */
     { "lr-route-add", 3, 4, "ROUTER PREFIX NEXTHOP [PORT]", NULL,
       nbctl_lr_route_add, NULL, "--may-exist,--ecmp,--ecmp-symmetric-reply,"
-      "--policy=", RW },
+      "--policy=,--bfd?", RW },
     { "lr-route-del", 1, 4, "ROUTER [PREFIX [NEXTHOP [PORT]]]", NULL,
       nbctl_lr_route_del, NULL, "--if-exists,--policy=", RW },
     { "lr-route-list", 1, 1, "ROUTER", NULL, nbctl_lr_route_list, NULL,
