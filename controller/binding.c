@@ -895,6 +895,12 @@ claim_lport(const struct sbrec_port_binding *pb,
         if (tracked_datapaths) {
             update_lport_tracking(pb, tracked_datapaths);
         }
+    } else if (!sb_readonly && pb->up && !(*pb->up)) {
+        /* For already claimed port bindings, potentially created by older
+         * versions of ovn-northd, make sure the 'pb->up' field gets updated
+         * only if it's explicitly set to 'false'.
+         */
+        binding_iface_bound_add(pb->logical_port);
     }
 
     /* Check if the port encap binding, if any, has changed */
@@ -942,7 +948,10 @@ release_lport(const struct sbrec_port_binding *pb, bool sb_readonly,
         sbrec_port_binding_set_virtual_parent(pb, NULL);
     }
 
-    sbrec_port_binding_set_up(pb, NULL, 0);
+    if (pb->up) {
+        bool up = false;
+        sbrec_port_binding_set_up(pb, &up, 1);
+    }
     update_lport_tracking(pb, tracked_datapaths);
     binding_iface_released_add(pb->logical_port);
     VLOG_INFO("Releasing lport %s from this chassis.", pb->logical_port);
@@ -2468,7 +2477,10 @@ binding_seqno_run(struct shash *local_bindings)
                 ovsrec_interface_update_external_ids_delkey(
                     lb->iface, OVN_INSTALLED_EXT_ID);
             }
-            sbrec_port_binding_set_up(lb->pb, NULL, 0);
+            if (lb->pb->up) {
+                bool up = false;
+                sbrec_port_binding_set_up(lb->pb, &up, 1);
+            }
             simap_put(&binding_iface_seqno_map, lb->name, new_seqno);
         }
         sset_delete(&binding_iface_bound_set, SSET_NODE_FROM_NAME(iface_id));
@@ -2501,7 +2513,6 @@ binding_seqno_install(struct shash *local_bindings)
 
     SIMAP_FOR_EACH_SAFE (node, node_next, &binding_iface_seqno_map) {
         struct shash_node *lb_node = shash_find(local_bindings, node->name);
-        bool up = true;
 
         if (!lb_node) {
             goto del_seqno;
@@ -2519,12 +2530,15 @@ binding_seqno_install(struct shash *local_bindings)
         ovsrec_interface_update_external_ids_setkey(lb->iface,
                                                     OVN_INSTALLED_EXT_ID,
                                                     "true");
-        sbrec_port_binding_set_up(lb->pb, &up, 1);
+        if (lb->pb->up) {
+            bool up = true;
 
-        struct shash_node *child_node;
-        SHASH_FOR_EACH (child_node, &lb->children) {
-            struct local_binding *lb_child = child_node->data;
-            sbrec_port_binding_set_up(lb_child->pb, &up, 1);
+            sbrec_port_binding_set_up(lb->pb, &up, 1);
+            struct shash_node *child_node;
+            SHASH_FOR_EACH (child_node, &lb->children) {
+                struct local_binding *lb_child = child_node->data;
+                sbrec_port_binding_set_up(lb_child->pb, &up, 1);
+            }
         }
 
 del_seqno:
