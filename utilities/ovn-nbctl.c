@@ -3917,6 +3917,48 @@ nbctl_lr_policy_list(struct ctl_context *ctx)
     }
     free(policies);
 }
+
+static struct nbrec_logical_router_static_route *
+nbctl_lr_get_route_prefix(const struct nbrec_logical_router *lr,
+                          char *prefix, char *next_hop, bool is_src_route,
+                          bool ecmp)
+{
+    for (int i = 0; i < lr->n_static_routes; i++) {
+        struct nbrec_logical_router_static_route *route = lr->static_routes[i];
+
+        /* Compare route policy. */
+        char *nb_policy = route->policy;
+        bool nb_is_src_route = false;
+        if (nb_policy && !strcmp(nb_policy, "src-ip")) {
+                nb_is_src_route = true;
+        }
+        if (is_src_route != nb_is_src_route) {
+            continue;
+        }
+
+        /* Compare route prefix. */
+        char *rt_prefix = normalize_prefix_str(route->ip_prefix);
+        if (!rt_prefix) {
+            /* Ignore existing prefix we couldn't parse. */
+            continue;
+        }
+
+        if (strcmp(rt_prefix, prefix)) {
+            free(rt_prefix);
+            continue;
+        }
+
+        if (ecmp && strcmp(next_hop, route->nexthop)) {
+            free(rt_prefix);
+            continue;
+        }
+
+        free(rt_prefix);
+        return route;
+    }
+    return NULL;
+}
+
 
 static void
 nbctl_lr_route_add(struct ctl_context *ctx)
@@ -3988,42 +4030,21 @@ nbctl_lr_route_add(struct ctl_context *ctx)
                                            "--ecmp-symmetric-reply") != NULL;
     bool ecmp = shash_find(&ctx->options, "--ecmp") != NULL ||
                 ecmp_symmetric_reply;
+    struct nbrec_logical_router_static_route *route =
+        nbctl_lr_get_route_prefix(lr, prefix, next_hop, is_src_route, ecmp);
     if (!ecmp) {
-        for (int i = 0; i < lr->n_static_routes; i++) {
-            const struct nbrec_logical_router_static_route *route
-                = lr->static_routes[i];
-            char *rt_prefix;
-
-            /* Compare route policy. */
-            char *nb_policy = lr->static_routes[i]->policy;
-            bool nb_is_src_route = false;
-            if (nb_policy && !strcmp(nb_policy, "src-ip")) {
-                    nb_is_src_route = true;
-            }
-            if (is_src_route != nb_is_src_route) {
-                continue;
-            }
-
-            /* Compare route prefix. */
-            rt_prefix = normalize_prefix_str(lr->static_routes[i]->ip_prefix);
-            if (!rt_prefix) {
-                /* Ignore existing prefix we couldn't parse. */
-                continue;
-            }
-
-            if (strcmp(rt_prefix, prefix)) {
-                free(rt_prefix);
-                continue;
-            }
-
+        if (route) {
             if (!may_exist) {
                 ctl_error(ctx, "duplicate prefix: %s (policy: %s). Use option"
                           " --ecmp to allow this for ECMP routing.",
                           prefix, is_src_route ? "src-ip" : "dst-ip");
-                free(rt_prefix);
                 goto cleanup;
             }
 
+            char *rt_prefix = normalize_prefix_str(route->ip_prefix);
+            if (!rt_prefix) {
+                goto cleanup;
+            }
             /* Update the next hop for an existing route. */
             nbrec_logical_router_verify_static_routes(lr);
             nbrec_logical_router_static_route_verify_ip_prefix(route);
@@ -4052,9 +4073,11 @@ nbctl_lr_route_add(struct ctl_context *ctx)
             free(rt_prefix);
             goto cleanup;
         }
+    } else if (route && !strcmp(route->nexthop, next_hop)) {
+        ctl_error(ctx, "duplicate nexthop for the same ECMP route");
+        goto cleanup;
     }
 
-    struct nbrec_logical_router_static_route *route;
     route = nbrec_logical_router_static_route_insert(ctx->txn);
     nbrec_logical_router_static_route_set_ip_prefix(route, prefix);
     nbrec_logical_router_static_route_set_nexthop(route, next_hop);
