@@ -17,9 +17,22 @@
 
 #include <config.h>
 
+#include "coverage.h"
 #include "lib/ovn-sb-idl.h"
 #include "lflow-cache.h"
 #include "ovn/expr.h"
+
+COVERAGE_DEFINE(lflow_cache_flush);
+COVERAGE_DEFINE(lflow_cache_add_conj_id);
+COVERAGE_DEFINE(lflow_cache_add_expr);
+COVERAGE_DEFINE(lflow_cache_add_matches);
+COVERAGE_DEFINE(lflow_cache_free_conj_id);
+COVERAGE_DEFINE(lflow_cache_free_expr);
+COVERAGE_DEFINE(lflow_cache_free_matches);
+COVERAGE_DEFINE(lflow_cache_add);
+COVERAGE_DEFINE(lflow_cache_hit);
+COVERAGE_DEFINE(lflow_cache_miss);
+COVERAGE_DEFINE(lflow_cache_delete);
 
 const char *lflow_cache_type_names[LCACHE_T_MAX] = {
     [LCACHE_T_CONJ_ID] = "cache-conj-id",
@@ -66,6 +79,7 @@ lflow_cache_flush(struct lflow_cache *lc)
         return;
     }
 
+    COVERAGE_INC(lflow_cache_flush);
     for (size_t i = 0; i < LCACHE_T_MAX; i++) {
         struct lflow_cache_entry *lce;
         struct lflow_cache_entry *lce_next;
@@ -135,6 +149,7 @@ lflow_cache_add_conj_id(struct lflow_cache *lc,
     if (!lcv) {
         return;
     }
+    COVERAGE_INC(lflow_cache_add_conj_id);
     lcv->conj_id_ofs = conj_id_ofs;
 }
 
@@ -151,6 +166,7 @@ lflow_cache_add_expr(struct lflow_cache *lc,
         expr_destroy(expr);
         return;
     }
+    COVERAGE_INC(lflow_cache_add_expr);
     lcv->conj_id_ofs = conj_id_ofs;
     lcv->expr = expr;
 }
@@ -168,6 +184,7 @@ lflow_cache_add_matches(struct lflow_cache *lc,
         free(matches);
         return;
     }
+    COVERAGE_INC(lflow_cache_add_matches);
     lcv->expr_matches = matches;
 }
 
@@ -185,10 +202,12 @@ lflow_cache_get(struct lflow_cache *lc, const struct sbrec_logical_flow *lflow)
 
         HMAP_FOR_EACH_WITH_HASH (lce, node, hash, &lc->entries[i]) {
             if (uuid_equals(&lce->lflow_uuid, &lflow->header_.uuid)) {
+                COVERAGE_INC(lflow_cache_hit);
                 return &lce->value;
             }
         }
     }
+    COVERAGE_INC(lflow_cache_miss);
     return NULL;
 }
 
@@ -202,6 +221,7 @@ lflow_cache_delete(struct lflow_cache *lc,
 
     struct lflow_cache_value *lcv = lflow_cache_get(lc, lflow);
     if (lcv) {
+        COVERAGE_INC(lflow_cache_delete);
         lflow_cache_delete__(lc, CONTAINER_OF(lcv, struct lflow_cache_entry,
                                               value));
     }
@@ -218,6 +238,7 @@ lflow_cache_add__(struct lflow_cache *lc,
 
     struct lflow_cache_entry *lce = xzalloc(sizeof *lce);
 
+    COVERAGE_INC(lflow_cache_add);
     lce->lflow_uuid = lflow->header_.uuid;
     lce->value.type = type;
     hmap_insert(&lc->entries[type], &lce->node,
@@ -238,11 +259,14 @@ lflow_cache_delete__(struct lflow_cache *lc, struct lflow_cache_entry *lce)
         OVS_NOT_REACHED();
         break;
     case LCACHE_T_CONJ_ID:
+        COVERAGE_INC(lflow_cache_free_conj_id);
         break;
     case LCACHE_T_EXPR:
+        COVERAGE_INC(lflow_cache_free_expr);
         expr_destroy(lce->value.expr);
         break;
     case LCACHE_T_MATCHES:
+        COVERAGE_INC(lflow_cache_free_matches);
         expr_matches_destroy(lce->value.expr_matches);
         free(lce->value.expr_matches);
         break;
