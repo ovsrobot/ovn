@@ -82,6 +82,7 @@ static unixctl_cb_func debug_pause_execution;
 static unixctl_cb_func debug_resume_execution;
 static unixctl_cb_func debug_status_execution;
 static unixctl_cb_func lflow_cache_flush_cmd;
+static unixctl_cb_func lflow_cache_show_stats_cmd;
 static unixctl_cb_func debug_delay_nb_cfg_report;
 
 #define DEFAULT_BRIDGE_NAME "br-int"
@@ -2662,6 +2663,9 @@ main(int argc, char *argv[])
     unixctl_command_register("lflow-cache/flush", "", 0, 0,
                              lflow_cache_flush_cmd,
                              &flow_output_data->pd);
+    unixctl_command_register("lflow-cache/show-stats", "", 0, 0,
+                             lflow_cache_show_stats_cmd,
+                             &flow_output_data->pd);
 
     bool reset_ovnsb_idl_min_index = false;
     unixctl_command_register("sb-cluster-state-reset", "", 0, 0,
@@ -3267,6 +3271,31 @@ lflow_cache_flush_cmd(struct unixctl_conn *conn OVS_UNUSED,
     engine_set_force_recompute(true);
     poll_immediate_wake();
     unixctl_command_reply(conn, NULL);
+}
+
+static void
+lflow_cache_show_stats_cmd(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                           const char *argv[] OVS_UNUSED, void *arg_)
+{
+    struct flow_output_persistent_data *fo_pd = arg_;
+    struct lflow_cache *lc = fo_pd->lflow_cache;
+    struct ds ds = DS_EMPTY_INITIALIZER;
+
+    ds_put_format(&ds, "Enabled: %s\n",
+                  lflow_cache_is_enabled(lc) ? "true" : "false");
+
+    struct lflow_cache_stats *stats = lflow_cache_get_stats(lc);
+    if (stats) {
+        for (size_t i = 0; i < LCACHE_T_MAX; i++) {
+            ds_put_format(&ds, "%-16s: %"PRIuSIZE"\n",
+                          lflow_cache_type_names[i],
+                          stats->n_entries[i]);
+        }
+    }
+    unixctl_command_reply(conn, ds_cstr(&ds));
+
+    ds_destroy(&ds);
+    free(stats);
 }
 
 static void

@@ -42,6 +42,8 @@ enum lflow_cache_type {
     LCACHE_T_NONE = LCACHE_T_MAX, /* Not found in cache. */
 };
 
+extern const char *lflow_cache_type_names[LCACHE_T_MAX];
+
 struct lflow_cache_value {
     enum lflow_cache_type type;
     uint32_t conj_id_ofs;
@@ -52,11 +54,16 @@ struct lflow_cache_value {
     };
 };
 
+struct lflow_cache_stats {
+    size_t n_entries[LCACHE_T_MAX];
+};
+
 struct lflow_cache *lflow_cache_create(void);
 void lflow_cache_flush(struct lflow_cache *);
 void lflow_cache_destroy(struct lflow_cache *);
 void lflow_cache_enable(struct lflow_cache *, bool enabled);
 bool lflow_cache_is_enabled(struct lflow_cache *);
+struct lflow_cache_stats *lflow_cache_get_stats(const struct lflow_cache *);
 
 void lflow_cache_add_conj_id(struct lflow_cache *,
                              const struct sbrec_logical_flow *,

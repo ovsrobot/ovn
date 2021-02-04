@@ -21,6 +21,12 @@
 #include "lflow-cache.h"
 #include "ovn/expr.h"
 
+const char *lflow_cache_type_names[LCACHE_T_MAX] = {
+    [LCACHE_T_CONJ_ID] = "cache-conj-id",
+    [LCACHE_T_EXPR]    = "cache-expr",
+    [LCACHE_T_MATCHES] = "cache-matches",
+};
+
 struct lflow_cache {
     struct hmap entries[LCACHE_T_MAX];
     bool enabled;
@@ -101,6 +107,21 @@ bool
 lflow_cache_is_enabled(struct lflow_cache *lc)
 {
     return lc && lc->enabled;
+}
+
+struct lflow_cache_stats *
+lflow_cache_get_stats(const struct lflow_cache *lc)
+{
+    if (!lc) {
+        return NULL;
+    }
+
+    struct lflow_cache_stats *stats = xmalloc(sizeof *stats);
+
+    for (size_t i = 0; i < LCACHE_T_MAX; i++) {
+        stats->n_entries[i] = hmap_count(&lc->entries[i]);
+    }
+    return stats;
 }
 
 void
