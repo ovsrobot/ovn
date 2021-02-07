@@ -1030,6 +1030,184 @@ expr_constant_set_destroy(struct expr_constant_set *cs)
     }
 }
 
+struct ip_v
+{
+    uint32_t *ip;
+    uint32_t size;
+};
+
+struct ip_r
+{
+    uint32_t *ip;
+    uint32_t *mask;
+    uint32_t used;
+    uint32_t size;
+    bool *masked;
+};
+
+/* Macro to check ip return data and realloc. */
+#define CHECK_REALLOC_IP_R_DATA(IP_R_DATA) \
+    if(IP_R_DATA->used >= IP_R_DATA->size){ \
+        IP_R_DATA->ip = realloc(IP_R_DATA->ip, 2 * IP_R_DATA->size * sizeof(uint32_t)); \
+        IP_R_DATA->mask = realloc(IP_R_DATA->mask, 2 * IP_R_DATA->size * sizeof(uint32_t)); \
+        IP_R_DATA->masked = realloc(IP_R_DATA->masked, 2 * IP_R_DATA->size * sizeof(bool)); \
+        IP_R_DATA->size = IP_R_DATA->size * 2; \
+    }
+
+static void combine_ipv4_in_mask(struct ip_v *ip_data, struct ip_r *ip_r_data){
+    int i = 0, recorded =0;
+    uint32_t diff, connect, start, end, continuous_size, mask_base;
+
+    start = 0;
+    continuous_size = 0;
+    mask_base = 0;
+    end = 0;
+
+    memset(ip_r_data, 0, sizeof(struct ip_r));
+    ip_r_data->ip = malloc(4 * sizeof(uint32_t));
+    ip_r_data->mask = malloc(4 * sizeof(uint32_t));
+    ip_r_data->masked = malloc(4 * sizeof(bool));
+    ip_r_data->size = 4;
+
+    while(i < ip_data->size){
+        if(i + 1 >= ip_data->size){
+            goto end_segment;
+        }
+
+        diff = ip_data->ip[i+1] - ip_data->ip[i];
+        /* Ignore equal node */
+        if(0 == diff){
+            i++;
+            continue;
+        }
+        /* Continuous in the segment */
+        if((diff & (diff-1)) == 0){
+            /* New segment */
+            if(0 == recorded){
+                connect = ip_data->ip[i+1] ^ ip_data->ip[i];
+                /* Only one bit different */
+                if(0 == (connect & (connect-1))){
+                    recorded = 1;
+                    start = ip_data->ip[i];
+                    continuous_size = 2;
+                    mask_base = connect;
+
+                    int j = 0;
+                    end = start;
+                    /*The first non-zero place in the high direction is the end of the segment*/
+                    while(j < 32 && (0 == (start & (mask_base << j)))){
+                        end |= (mask_base << j);
+                        j++;
+                    }
+
+                    i++;
+                    continue;
+                /* Different segments and different bit, dnot merge */
+                }else {
+                    CHECK_REALLOC_IP_R_DATA(ip_r_data)
+
+                    ip_r_data->ip[ip_r_data->used] = ip_data->ip[i];
+                    ip_r_data->masked[ip_r_data->used] = false;
+                    ip_r_data->used++;
+
+                    i++;
+                    continue;
+                }
+
+            /*Recording in the current segment*/
+            }else{
+                /*Stop and merge mask*/
+                if(ip_data->ip[i+1] > end){
+                    recorded = 0;
+                    while(continuous_size){
+                        CHECK_REALLOC_IP_R_DATA(ip_r_data)
+
+                        int segment_power, pow_base;
+                        if(0 == continuous_size){
+                            segment_power = 0;
+                        }else{
+                            segment_power = 31 - clz32(continuous_size);
+                        }
+                        
+                        if(0 == mask_base){
+                            pow_base = 0;
+                        }else{
+                            pow_base = 31 - clz32(mask_base);
+                        }
+
+                        ip_r_data->mask[ip_r_data->used] = ~(((1 << segment_power) - 1) << pow_base);
+                        ip_r_data->ip[ip_r_data->used] = ip_r_data->mask[ip_r_data->used] & start;                        
+                        ip_r_data->masked[ip_r_data->used] = true;
+                        ip_r_data->used++;
+
+                        continuous_size &= (~(1 << segment_power));
+                        start = ip_r_data->ip[ip_r_data->used - 1] + (1 << (segment_power + pow_base));
+                    }
+
+                    i++;
+                    continue;
+                }
+
+                continuous_size++;
+                i++;
+                continue;
+            }
+        /* Not  continuous in segment or is the end of the ip data*/
+        }else{
+end_segment:
+            if(recorded){
+                recorded = 0;
+                while(continuous_size){
+                    CHECK_REALLOC_IP_R_DATA(ip_r_data)
+
+                    int segment_power, pow_base;
+                    if(0 == continuous_size){
+                        segment_power = 0;
+                    }else{
+                        segment_power = 31 - clz32(continuous_size);
+                    }
+                    
+                    if(0 == mask_base){
+                        pow_base = 0;
+                    }else{
+                        pow_base = 31 - clz32(mask_base);
+                    }                    
+
+                    ip_r_data->mask[ip_r_data->used] = ~(((1 << segment_power) - 1) << pow_base);
+                    ip_r_data->ip[ip_r_data->used] = ip_r_data->mask[ip_r_data->used] & start;
+                    ip_r_data->masked[ip_r_data->used] = true;
+                    ip_r_data->used++;
+
+                    continuous_size &= (~(1 << segment_power));
+                    start = ip_r_data->ip[ip_r_data->used - 1] + (1 << (segment_power + pow_base));
+                }
+
+                i++;
+                continue;
+            }else{
+                CHECK_REALLOC_IP_R_DATA(ip_r_data)
+
+                ip_r_data->ip[ip_r_data->used] = ip_data->ip[i];
+                ip_r_data->masked[ip_r_data->used] = false;
+                ip_r_data->used++;
+
+                i++;
+                continue;
+            }
+        }
+    }
+    return;
+}
+
+static int
+compare_mask_ip(const void *a, const void *b)
+{
+    uint32_t a_ = *(uint32_t *)a;
+    uint32_t b_ = *(uint32_t *)b;
+
+    return a_ < b_ ? -1 : a_ > b_;
+}
+
 /* Adds an constant set named 'name' to 'const_sets', replacing any existing
  * constant set entry with the given name. */
 void
@@ -1044,6 +1222,11 @@ expr_const_sets_add(struct shash *const_sets, const char *name,
     cs->in_curlies = true;
     cs->n_values = 0;
     cs->values = xmalloc(n_values * sizeof *cs->values);
+    struct ip_r ip_r_data;
+    struct ip_v ip_data;
+    ip_data.ip = xmalloc(n_values * sizeof (uint32_t));
+    ip_data.size = 0;
+
     if (convert_to_integer) {
         cs->type = EXPR_C_INTEGER;
         for (size_t i = 0; i < n_values; i++) {
@@ -1056,6 +1239,10 @@ expr_const_sets_add(struct shash *const_sets, const char *name,
                 && lex.token.type != LEX_T_MASKED_INTEGER) {
                 VLOG_WARN("Invalid constant set entry: '%s', token type: %d",
                           values[i], lex.token.type);
+#ifdef HAVE_COMBINE_IPV4
+            } else if(lex.token.type == LEX_T_INTEGER && lex.token.format == LEX_F_IPV4){
+                ip_data.ip[ip_data.size++] = ntohl(lex.token.value.ipv4);
+#endif
             } else {
                 union expr_constant *c = &cs->values[cs->n_values++];
                 c->value = lex.token.value;
@@ -1073,6 +1260,26 @@ expr_const_sets_add(struct shash *const_sets, const char *name,
             union expr_constant *c = &cs->values[cs->n_values++];
             c->string = xstrdup(values[i]);
         }
+    }
+
+    if(ip_data.size > 0){
+        qsort(ip_data.ip, ip_data.size, sizeof(uint32_t), compare_mask_ip);
+        combine_ipv4_in_mask(&ip_data, &ip_r_data);
+        for (int i = 0; i < ip_r_data.used; ++i)
+        {
+            union expr_constant *c = &cs->values[cs->n_values++];
+            memset(&c->value, 0, sizeof c->value);
+            memset(&c->mask, 0, sizeof c->mask);
+            c->value.ipv4 = htonl(ip_r_data.ip[i]);
+            c->format = LEX_F_IPV4;
+            c->masked = ip_r_data.masked[i];
+            if (c->masked) {
+                c->mask.ipv4 = htonl(ip_r_data.mask[i]);
+            }
+        }
+        free(ip_r_data.ip);
+        free(ip_r_data.mask);
+        free(ip_r_data.masked);
     }
 
     shash_add(const_sets, name, cs);
