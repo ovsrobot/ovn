@@ -576,3 +576,24 @@ AC_DEFUN([OVN_CHECK_UNBOUND],
    fi
    AM_CONDITIONAL([HAVE_UNBOUND], [test "$HAVE_UNBOUND" = yes])
    AC_SUBST([HAVE_UNBOUND])])
+
+dnl Checks for combine multiple ipv4 with wildcard mask.
+AC_DEFUN([OVN_CHECK_COMBINE_IPV4],
+  [AC_ARG_ENABLE(
+     [combine-ipv4],
+     [AC_HELP_STRING([--disable-combine-ipv4], [Disable combine multiple ipv4 feature])],
+     [case "${enableval}" in
+        (yes) combine_ipv4=true ;;
+        (no)  combine_ipv4=false ;;
+        (*) AC_MSG_ERROR([bad value ${enableval} for --disable-combine-ipv4]) ;;
+      esac],
+     [combine_ipv4=true])
+
+   #AM_CONDITIONAL([HAVE_COMBINE_IPV4], [test "$combine_ipv4" = true])
+   #AC_DEFINE([HAVE_COMBINE_IPV4], [1], [Define to 1 if combine-ipv4 is enable.])
+   if test "$combine_ipv4" = true; then
+     AC_DEFINE([HAVE_COMBINE_IPV4], [1], [Define to 1 if combine-ipv4 is enable.])
+     HAVE_COMBINE_IPV4=yes
+   fi
+   AC_SUBST([HAVE_COMBINE_IPV4])
+   AM_CONDITIONAL([HAVE_COMBINE_IPV4], [test "$combine_ipv4" = true])])
