@@ -622,6 +622,7 @@ struct ovn_datapath {
 
     struct lport_addresses dnat_force_snat_addrs;
     struct lport_addresses lb_force_snat_addrs;
+    bool lb_force_snat_router_ip;
 
     struct ovn_port **localnet_ports;
     size_t n_localnet_ports;
@@ -720,6 +721,17 @@ init_nat_entries(struct ovn_datapath *od)
         if (od->lb_force_snat_addrs.n_ipv6_addrs) {
             snat_ip_add(od, od->lb_force_snat_addrs.ipv6_addrs[0].addr_s,
                         NULL);
+        }
+    } else {
+        const char *lb_force_snat =
+            smap_get(&od->nbr->options, "lb_force_snat_ip");
+        if (lb_force_snat && !strcmp(lb_force_snat, "router_ip")
+                && smap_get(&od->nbr->options, "chassis")) {
+            /* Set it to true only if its gateway router and
+             * options:lb_force_snat_ip=router_ip. */
+            od->lb_force_snat_router_ip = true;
+        } else {
+            od->lb_force_snat_router_ip = false;
         }
     }
 
@@ -8365,9 +8377,12 @@ get_force_snat_ip(struct ovn_datapath *od, const char *key_type,
     }
 
     if (!extract_ip_address(addresses, laddrs)) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-        VLOG_WARN_RL(&rl, "bad ip %s in options of router "UUID_FMT"",
-                     addresses, UUID_ARGS(&od->key));
+        if (strcmp(addresses, "router_ip") || strcmp(key_type, "lb")) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_WARN_RL(&rl, "bad ip %s in options of router "UUID_FMT"",
+                         addresses, UUID_ARGS(&od->key));
+        }
+
         return false;
     }
 
@@ -8941,6 +8956,48 @@ build_lrouter_force_snat_flows(struct hmap *lflows, struct ovn_datapath *od,
 
     ds_destroy(&match);
     ds_destroy(&actions);
+}
+
+static void
+build_lrouter_force_snat_flows_op(struct ovn_port *op,
+                                  struct hmap *lflows,
+                                  struct ds *match, struct ds *actions)
+{
+    if (!op->nbrp || !op->peer || !op->od->lb_force_snat_router_ip) {
+        return;
+    }
+
+    if (op->lrp_networks.n_ipv4_addrs) {
+        ds_clear(match);
+        ds_clear(actions);
+
+        /* Higher priority rules to force SNAT with the router port ip.
+         * This only takes effect when the packet has already been
+         * load balanced once. */
+        ds_put_format(match, "flags.force_snat_for_lb == 1 && ip4 && "
+                      "outport == %s", op->json_key);
+        ds_put_format(actions, "ct_snat(%s);",
+                      op->lrp_networks.ipv4_addrs[0].addr_s);
+        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 110,
+                      ds_cstr(match), ds_cstr(actions));
+    }
+
+    /* op->lrp_networks.ipv6_addrs will always have LLA and that will be
+     * last in the list. So add the flows only if n_ipv6_addrs > 1. */
+    if (op->lrp_networks.n_ipv6_addrs > 1) {
+        ds_clear(match);
+        ds_clear(actions);
+
+        /* Higher priority rules to force SNAT with the router port ip.
+         * This only takes effect when the packet has already been
+         * load balanced once. */
+        ds_put_format(match, "flags.force_snat_for_lb == 1 && ip6 && "
+                      "outport == %s", op->json_key);
+        ds_put_format(actions, "ct_snat(%s);",
+                      op->lrp_networks.ipv6_addrs[0].addr_s);
+        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 110,
+                      ds_cstr(match), ds_cstr(actions));
+    }
 }
 
 static void
@@ -11278,6 +11335,7 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od,
                         "dnat");
                 }
             }
+
             if (lb_force_snat_ip) {
                 if (od->lb_force_snat_addrs.n_ipv4_addrs) {
                     build_lrouter_force_snat_flows(lflows, od, "4",
@@ -11490,6 +11548,8 @@ build_lswitch_and_lrouter_iterate_by_op(struct ovn_port *op,
                                             &lsi->match, &lsi->actions);
     build_lrouter_ipv4_ip_input(op, lsi->lflows,
                                 &lsi->match, &lsi->actions);
+    build_lrouter_force_snat_flows_op(op, lsi->lflows, &lsi->match,
+                                      &lsi->actions);
 }
 
 static void
