@@ -17,6 +17,8 @@
 
 #include "ovn-controller.h"
 
+#include "coverage.h"
+
 #include <errno.h>
 #include <getopt.h>
 #include <signal.h>
@@ -84,6 +86,30 @@ static unixctl_cb_func debug_status_execution;
 static unixctl_cb_func lflow_cache_flush_cmd;
 static unixctl_cb_func lflow_cache_show_stats_cmd;
 static unixctl_cb_func debug_delay_nb_cfg_report;
+
+ENGINE_DEF_COVERAGE(flow_output);
+ENGINE_CHANGE_COVERAGE(flow_output_runtime_data);
+ENGINE_CHANGE_COVERAGE(flow_output_addr_sets);
+ENGINE_CHANGE_COVERAGE(flow_output_port_groups);
+ENGINE_CHANGE_COVERAGE(flow_output_physical_flow_changes);
+ENGINE_CHANGE_COVERAGE(flow_output_sb_multicast_group);
+ENGINE_CHANGE_COVERAGE(flow_output_sb_port_binding);
+ENGINE_CHANGE_COVERAGE(flow_output_sb_mac_binding);
+ENGINE_CHANGE_COVERAGE(flow_output_sb_logical_flow);
+ENGINE_CHANGE_COVERAGE(flow_output_sb_load_balancer);
+
+ENGINE_DEF_COVERAGE(runtime_data);
+ENGINE_CHANGE_COVERAGE(runtime_data_sb_datapath_binding);
+ENGINE_CHANGE_COVERAGE(runtime_data_sb_port_binding);
+
+ENGINE_DEF_COVERAGE(addr_sets);
+ENGINE_CHANGE_COVERAGE(addr_sets_sb_address_set);
+
+ENGINE_DEF_COVERAGE(port_groups);
+ENGINE_DEF_COVERAGE(ct_zones);
+ENGINE_DEF_COVERAGE(mff_ovn_geneve);
+ENGINE_DEF_COVERAGE(ofctrl_is_connected);
+ENGINE_DEF_COVERAGE(physical_flow_changes);
 
 #define DEFAULT_BRIDGE_NAME "br-int"
 #define DEFAULT_PROBE_INTERVAL_MSEC 5000
@@ -944,6 +970,10 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     SB_NODE(dns, "dns") \
     SB_NODE(load_balancer, "load_balancer")
 
+#define SB_NODE(NAME, NAME_STR) ENGINE_DEF_COVERAGE(sb_##NAME);
+    SB_NODES
+#undef SB_NODE
+
 enum sb_engine_node {
 #define SB_NODE(NAME, NAME_STR) SB_##NAME,
     SB_NODES
@@ -960,6 +990,10 @@ enum sb_engine_node {
     OVS_NODE(port, "port") \
     OVS_NODE(interface, "interface") \
     OVS_NODE(qos, "qos")
+
+#define OVS_NODE(NAME, NAME_STR) ENGINE_DEF_COVERAGE(ovs_##NAME);
+    OVS_NODES
+#undef OVS_NODE
 
 enum ovs_engine_node {
 #define OVS_NODE(NAME, NAME_STR) OVS_##NAME,
@@ -1000,6 +1034,7 @@ en_ofctrl_is_connected_run(struct engine_node *node, void *data)
             ofctrl_seqno_flush();
             binding_seqno_flush();
         }
+        ENGINE_COVERAGE_INC(ofctrl_is_connected);
         engine_set_node_state(node, EN_UPDATED);
         return;
     }
@@ -1056,6 +1091,7 @@ en_addr_sets_run(struct engine_node *node, void *data)
     addr_sets_init(as_table, &as->addr_sets);
 
     as->change_tracked = false;
+    ENGINE_COVERAGE_INC(addr_sets);
     engine_set_node_state(node, EN_UPDATED);
 }
 
@@ -1083,6 +1119,7 @@ addr_sets_sb_address_set_handler(struct engine_node *node, void *data)
     }
 
     as->change_tracked = true;
+    ENGINE_CHANGE_COVERAGE_INC(addr_sets_sb_address_set);
     return true;
 }
 
@@ -1136,6 +1173,7 @@ en_port_groups_run(struct engine_node *node, void *data)
     port_groups_init(pg_table, &pg->port_groups);
 
     pg->change_tracked = false;
+    ENGINE_COVERAGE_INC(port_groups);
     engine_set_node_state(node, EN_UPDATED);
 }
 
@@ -1471,6 +1509,7 @@ en_runtime_data_run(struct engine_node *node, void *data)
 
     binding_run(&b_ctx_in, &b_ctx_out);
 
+    ENGINE_COVERAGE_INC(runtime_data);
     engine_set_node_state(node, EN_UPDATED);
 }
 
@@ -1519,6 +1558,7 @@ runtime_data_sb_port_binding_handler(struct engine_node *node, void *data)
             !hmap_is_empty(b_ctx_out.tracked_dp_bindings)) {
         engine_set_node_state(node, EN_UPDATED);
     }
+    ENGINE_CHANGE_COVERAGE_INC(runtime_data_sb_port_binding);
 
     return true;
 }
@@ -1541,6 +1581,7 @@ runtime_data_sb_datapath_binding_handler(struct engine_node *node OVS_UNUSED,
             }
         }
     }
+    ENGINE_CHANGE_COVERAGE_INC(runtime_data_sb_datapath_binding);
 
     return true;
 }
@@ -1593,7 +1634,7 @@ en_ct_zones_run(struct engine_node *node, void *data)
                     &ct_zones_data->current, ct_zones_data->bitmap,
                     &ct_zones_data->pending, &rt_data->ct_updated_datapaths);
 
-
+    ENGINE_COVERAGE_INC(ct_zones);
     engine_set_node_state(node, EN_UPDATED);
 }
 
@@ -1629,6 +1670,7 @@ en_mff_ovn_geneve_run(struct engine_node *node, void *data)
     if (ed_mff_ovn_geneve->mff_ovn_geneve != mff_ovn_geneve) {
         ed_mff_ovn_geneve->mff_ovn_geneve = mff_ovn_geneve;
         engine_set_node_state(node, EN_UPDATED);
+        ENGINE_COVERAGE_INC(mff_ovn_geneve);
         return;
     }
     engine_set_node_state(node, EN_UNCHANGED);
@@ -1703,6 +1745,7 @@ en_physical_flow_changes_run(struct engine_node *node, void *data)
 {
     struct ed_type_pfc_data *pfc_tdata = data;
     pfc_tdata->recompute_physical_flows = true;
+    ENGINE_COVERAGE_INC(physical_flow_changes);
     engine_set_node_state(node, EN_UPDATED);
 }
 
@@ -2023,7 +2066,7 @@ en_flow_output_run(struct engine_node *node, void *data)
     init_physical_ctx(node, rt_data, &p_ctx);
 
     physical_run(&p_ctx, &fo->flow_table);
-
+    ENGINE_COVERAGE_INC(flow_output);
     engine_set_node_state(node, EN_UPDATED);
 }
 
@@ -2049,6 +2092,9 @@ flow_output_sb_logical_flow_handler(struct engine_node *node, void *data)
     bool handled = lflow_handle_changed_flows(&l_ctx_in, &l_ctx_out);
 
     engine_set_node_state(node, EN_UPDATED);
+    if (handled) {
+        ENGINE_CHANGE_COVERAGE_INC(flow_output_sb_logical_flow);
+    }
     return handled;
 }
 
@@ -2075,6 +2121,7 @@ flow_output_sb_mac_binding_handler(struct engine_node *node, void *data)
             mac_binding_table, local_datapaths, flow_table);
 
     engine_set_node_state(node, EN_UPDATED);
+    ENGINE_CHANGE_COVERAGE_INC(flow_output_sb_mac_binding);
     return true;
 }
 
@@ -2098,6 +2145,7 @@ flow_output_sb_port_binding_handler(struct engine_node *node,
     physical_handle_port_binding_changes(&p_ctx, flow_table);
 
     engine_set_node_state(node, EN_UPDATED);
+    ENGINE_CHANGE_COVERAGE_INC(flow_output_sb_port_binding);
     return true;
 }
 
@@ -2115,6 +2163,7 @@ flow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
 
     physical_handle_mc_group_changes(&p_ctx, flow_table);
 
+    ENGINE_CHANGE_COVERAGE_INC(flow_output_sb_multicast_group);
     engine_set_node_state(node, EN_UPDATED);
     return true;
 
@@ -2124,6 +2173,7 @@ static bool
 _flow_output_resource_ref_handler(struct engine_node *node, void *data,
                                   enum ref_type ref_type)
 {
+    bool update_cc = false;
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
 
@@ -2197,6 +2247,7 @@ _flow_output_resource_ref_handler(struct engine_node *node, void *data,
         }
         if (changed) {
             engine_set_node_state(node, EN_UPDATED);
+            update_cc = true;
         }
     }
     SSET_FOR_EACH (ref_name, updated) {
@@ -2206,6 +2257,7 @@ _flow_output_resource_ref_handler(struct engine_node *node, void *data,
         }
         if (changed) {
             engine_set_node_state(node, EN_UPDATED);
+            update_cc = true;
         }
     }
     SSET_FOR_EACH (ref_name, new) {
@@ -2215,6 +2267,21 @@ _flow_output_resource_ref_handler(struct engine_node *node, void *data,
         }
         if (changed) {
             engine_set_node_state(node, EN_UPDATED);
+            update_cc = true;
+        }
+    }
+
+    if (update_cc) {
+        switch (ref_type) {
+        case REF_TYPE_ADDRSET:
+            ENGINE_CHANGE_COVERAGE_INC(flow_output_addr_sets);
+            break;
+        case REF_TYPE_PORTGROUP:
+            ENGINE_CHANGE_COVERAGE_INC(flow_output_port_groups);
+            break;
+        case REF_TYPE_PORTBINDING:
+        default:
+            break;
         }
     }
 
@@ -2262,7 +2329,7 @@ flow_output_physical_flow_changes_handler(struct engine_node *node, void *data)
         physical_run(&p_ctx, &fo->flow_table);
         return true;
     }
-
+    ENGINE_CHANGE_COVERAGE_INC(flow_output_physical_flow_changes);
     return true;
 }
 
@@ -2314,6 +2381,7 @@ flow_output_runtime_data_handler(struct engine_node *node,
         }
     }
 
+    ENGINE_CHANGE_COVERAGE_INC(flow_output_runtime_data);
     engine_set_node_state(node, EN_UPDATED);
     return true;
 }
@@ -2332,6 +2400,9 @@ flow_output_sb_load_balancer_handler(struct engine_node *node, void *data)
     bool handled = lflow_handle_changed_lbs(&l_ctx_in, &l_ctx_out);
 
     engine_set_node_state(node, EN_UPDATED);
+    if (handled) {
+        ENGINE_CHANGE_COVERAGE_INC(flow_output_sb_load_balancer);
+    }
     return handled;
 }
 
