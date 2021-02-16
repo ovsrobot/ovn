@@ -1247,10 +1247,28 @@ ofctrl_flood_remove_flows(struct ovn_desired_flow_table *flow_table,
                           struct hmap *flood_remove_nodes)
 {
     struct ofctrl_flood_remove_node *ofrn;
+
+    /* flood_remove_flows_for_sb_uuid() modifies the hmap by inserting
+     * few entries when it calls itself recursively.  Clone the
+     * hmap 'flood_remove_nodes' before calling.  Inserting an item to
+     * hmap may expand it. */
+    struct hmap flood_remove_uuids = HMAP_INITIALIZER(&flood_remove_uuids);
     HMAP_FOR_EACH (ofrn, hmap_node, flood_remove_nodes) {
+        ofctrl_flood_remove_add_node(&flood_remove_uuids, &ofrn->sb_uuid);
+    }
+
+    /* Iterate using the cloned hmap - 'flood_remove_uuids', but pass
+     * the hmap 'flood_remove_nodes' provided by the caller.
+     * flood_remove_flows_for_sb_uuid() will delete the other lflows
+     * referenced by the sb_uuid,  which needs to be re-added later
+     * if those sb_uuids were not deleted. The caller
+     * (in lflow.c) will add re-add lflows which are not deleted. */
+    HMAP_FOR_EACH_POP (ofrn, hmap_node, &flood_remove_uuids) {
         flood_remove_flows_for_sb_uuid(flow_table, &ofrn->sb_uuid,
                                        flood_remove_nodes);
+        free(ofrn);
     }
+    hmap_destroy(&flood_remove_uuids);
 
     /* remove any related group and meter info */
     HMAP_FOR_EACH (ofrn, hmap_node, flood_remove_nodes) {
