@@ -69,6 +69,7 @@
 #include "stopwatch.h"
 #include "lib/inc-proc-eng.h"
 #include "hmapx.h"
+#include "coverage.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
 
@@ -84,6 +85,18 @@ static unixctl_cb_func debug_status_execution;
 static unixctl_cb_func lflow_cache_flush_cmd;
 static unixctl_cb_func lflow_cache_show_stats_cmd;
 static unixctl_cb_func debug_delay_nb_cfg_report;
+
+/* Coverage counters for run handlers of OVN controller
+ * incremental processing nodes
+ */
+ENGINE_RUN_COVERAGE_DEFINE(flow_output);
+ENGINE_RUN_COVERAGE_DEFINE(runtime_data);
+ENGINE_RUN_COVERAGE_DEFINE(addr_sets);
+ENGINE_RUN_COVERAGE_DEFINE(port_groups);
+ENGINE_RUN_COVERAGE_DEFINE(ct_zones);
+ENGINE_RUN_COVERAGE_DEFINE(mff_ovn_geneve);
+ENGINE_RUN_COVERAGE_DEFINE(ofctrl_is_connected);
+ENGINE_RUN_COVERAGE_DEFINE(physical_flow_changes);
 
 #define DEFAULT_BRIDGE_NAME "br-int"
 #define DEFAULT_PROBE_INTERVAL_MSEC 5000
@@ -955,6 +968,10 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     SB_NODE(dns, "dns") \
     SB_NODE(load_balancer, "load_balancer")
 
+#define SB_NODE(NAME, NAME_STR) ENGINE_RUN_COVERAGE_DEFINE(sb_##NAME);
+    SB_NODES
+#undef SB_NODE
+
 enum sb_engine_node {
 #define SB_NODE(NAME, NAME_STR) SB_##NAME,
     SB_NODES
@@ -971,6 +988,10 @@ enum sb_engine_node {
     OVS_NODE(port, "port") \
     OVS_NODE(interface, "interface") \
     OVS_NODE(qos, "qos")
+
+#define OVS_NODE(NAME, NAME_STR) ENGINE_RUN_COVERAGE_DEFINE(ovs_##NAME);
+    OVS_NODES
+#undef OVS_NODE
 
 enum ovs_engine_node {
 #define OVS_NODE(NAME, NAME_STR) OVS_##NAME,
@@ -1011,7 +1032,7 @@ en_ofctrl_is_connected_run(struct engine_node *node, void *data)
             ofctrl_seqno_flush();
             binding_seqno_flush();
         }
-        engine_set_node_state(node, EN_UPDATED);
+        engine_set_node_updated(node, ofctrl_is_connected);
         return;
     }
     engine_set_node_state(node, EN_UNCHANGED);
@@ -1067,7 +1088,7 @@ en_addr_sets_run(struct engine_node *node, void *data)
     addr_sets_init(as_table, &as->addr_sets);
 
     as->change_tracked = false;
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_node_updated(node, addr_sets);
 }
 
 static bool
@@ -1147,7 +1168,7 @@ en_port_groups_run(struct engine_node *node, void *data)
     port_groups_init(pg_table, &pg->port_groups);
 
     pg->change_tracked = false;
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_node_updated(node, port_groups);
 }
 
 static bool
@@ -1482,7 +1503,7 @@ en_runtime_data_run(struct engine_node *node, void *data)
 
     binding_run(&b_ctx_in, &b_ctx_out);
 
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_node_updated(node, runtime_data);
 }
 
 static bool
@@ -1604,8 +1625,7 @@ en_ct_zones_run(struct engine_node *node, void *data)
                     &ct_zones_data->current, ct_zones_data->bitmap,
                     &ct_zones_data->pending, &rt_data->ct_updated_datapaths);
 
-
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_node_updated(node, ct_zones);
 }
 
 /* The data in the ct_zones node is always valid (i.e., no stale pointers). */
@@ -1639,7 +1659,7 @@ en_mff_ovn_geneve_run(struct engine_node *node, void *data)
     enum mf_field_id mff_ovn_geneve = ofctrl_get_mf_field_id();
     if (ed_mff_ovn_geneve->mff_ovn_geneve != mff_ovn_geneve) {
         ed_mff_ovn_geneve->mff_ovn_geneve = mff_ovn_geneve;
-        engine_set_node_state(node, EN_UPDATED);
+        engine_set_node_updated(node, mff_ovn_geneve);
         return;
     }
     engine_set_node_state(node, EN_UNCHANGED);
@@ -1714,7 +1734,7 @@ en_physical_flow_changes_run(struct engine_node *node, void *data)
 {
     struct ed_type_pfc_data *pfc_tdata = data;
     pfc_tdata->recompute_physical_flows = true;
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_node_updated(node, physical_flow_changes);
 }
 
 /* ct_zone changes are not handled incrementally but a handler is required
@@ -2034,8 +2054,7 @@ en_flow_output_run(struct engine_node *node, void *data)
     init_physical_ctx(node, rt_data, &p_ctx);
 
     physical_run(&p_ctx, &fo->flow_table);
-
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_node_updated(node, flow_output);
 }
 
 static bool

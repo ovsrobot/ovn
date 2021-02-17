@@ -27,6 +27,7 @@
 #include "openvswitch/hmap.h"
 #include "openvswitch/vlog.h"
 #include "inc-proc-eng.h"
+#include "coverage.h"
 
 VLOG_DEFINE_THIS_MODULE(inc_proc_eng);
 
@@ -43,6 +44,9 @@ static const char *engine_node_state_name[EN_STATE_MAX] = {
     [EN_UNCHANGED] = "Unchanged",
     [EN_ABORTED]   = "Aborted",
 };
+
+/* global counter for engine abort */
+COVERAGE_DEFINE(engine_abort);
 
 void
 engine_set_force_recompute(bool val)
@@ -282,6 +286,7 @@ engine_recompute(struct engine_node *node, bool forced, bool allowed)
 
     if (!allowed) {
         VLOG_DBG("node: %s, recompute aborted", node->name);
+        COVERAGE_INC(engine_abort);
         engine_set_node_state(node, EN_ABORTED);
         return;
     }

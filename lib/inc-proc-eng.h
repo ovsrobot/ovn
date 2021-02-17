@@ -247,6 +247,10 @@ void *engine_get_internal_data(struct engine_node *node);
 #define engine_set_node_state(node, state) \
     engine_set_node_state_at(node, state, OVS_SOURCE_LOCATOR)
 
+#define engine_set_node_updated(node, NAME) \
+    engine_set_node_state(node, EN_UPDATED); \
+    ENGINE_RUN_COVERAGE_INC(NAME);
+
 struct ed_ovsdb_index {
     const char *name;
     struct ovsdb_idl_index *index;
@@ -311,7 +315,7 @@ en_##DB_NAME##_##TBL_NAME##_run(struct engine_node *node, \
     const struct DB_NAME##rec_##TBL_NAME##_table *table = \
         EN_OVSDB_GET(node); \
     if (DB_NAME##rec_##TBL_NAME##_table_track_get_first(table)) { \
-        engine_set_node_state(node, EN_UPDATED); \
+        engine_set_node_updated(node, DB_NAME##_##TBL_NAME); \
         return; \
     } \
     engine_set_node_state(node, EN_UNCHANGED); \
@@ -351,5 +355,11 @@ static void en_##DB_NAME##_##TBL_NAME##_cleanup(void *data OVS_UNUSED) \
  * DB */
 #define ENGINE_NODE_OVS(TBL_NAME, TBL_NAME_STR) \
     ENGINE_NODE_OVSDB(ovs, "OVS", TBL_NAME, TBL_NAME_STR);
+
+#define ENGINE_RUN_COVERAGE_DEFINE(NAME)    \
+    COVERAGE_DEFINE(en_##NAME##_run);
+
+#define ENGINE_RUN_COVERAGE_INC(NAME)       \
+    COVERAGE_INC(en_##NAME##_run);
 
 #endif /* lib/inc-proc-eng.h */
