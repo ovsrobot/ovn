@@ -1011,7 +1011,7 @@ en_ofctrl_is_connected_run(struct engine_node *node, void *data)
             ofctrl_seqno_flush();
             binding_seqno_flush();
         }
-        engine_set_node_state(node, EN_UPDATED);
+        engine_set_note_update_from_run(node);
         return;
     }
     engine_set_node_state(node, EN_UNCHANGED);
@@ -1067,7 +1067,7 @@ en_addr_sets_run(struct engine_node *node, void *data)
     addr_sets_init(as_table, &as->addr_sets);
 
     as->change_tracked = false;
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_run(node);
 }
 
 static bool
@@ -1088,7 +1088,7 @@ addr_sets_sb_address_set_handler(struct engine_node *node, void *data)
 
     if (!sset_is_empty(&as->new) || !sset_is_empty(&as->deleted) ||
             !sset_is_empty(&as->updated)) {
-        engine_set_node_state(node, EN_UPDATED);
+        engine_set_note_update_from_handler(node);
     } else {
         engine_set_node_state(node, EN_UNCHANGED);
     }
@@ -1147,7 +1147,7 @@ en_port_groups_run(struct engine_node *node, void *data)
     port_groups_init(pg_table, &pg->port_groups);
 
     pg->change_tracked = false;
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_run(node);
 }
 
 static bool
@@ -1168,7 +1168,7 @@ port_groups_sb_port_group_handler(struct engine_node *node, void *data)
 
     if (!sset_is_empty(&pg->new) || !sset_is_empty(&pg->deleted) ||
             !sset_is_empty(&pg->updated)) {
-        engine_set_node_state(node, EN_UPDATED);
+        engine_set_note_update_from_handler(node);
     } else {
         engine_set_node_state(node, EN_UNCHANGED);
     }
@@ -1482,7 +1482,7 @@ en_runtime_data_run(struct engine_node *node, void *data)
 
     binding_run(&b_ctx_in, &b_ctx_out);
 
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_run(node);
 }
 
 static bool
@@ -1500,7 +1500,7 @@ runtime_data_ovs_interface_handler(struct engine_node *node, void *data)
     }
 
     if (b_ctx_out.local_lports_changed) {
-        engine_set_node_state(node, EN_UPDATED);
+        engine_set_note_update_from_handler(node);
         rt_data->local_lports_changed = b_ctx_out.local_lports_changed;
     }
 
@@ -1528,7 +1528,7 @@ runtime_data_sb_port_binding_handler(struct engine_node *node, void *data)
     if (b_ctx_out.local_lport_ids_changed ||
             b_ctx_out.non_vif_ports_changed ||
             !hmap_is_empty(b_ctx_out.tracked_dp_bindings)) {
-        engine_set_node_state(node, EN_UPDATED);
+        engine_set_note_update_from_handler(node);
     }
 
     return true;
@@ -1605,7 +1605,7 @@ en_ct_zones_run(struct engine_node *node, void *data)
                     &ct_zones_data->pending, &rt_data->ct_updated_datapaths);
 
 
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_run(node);
 }
 
 /* The data in the ct_zones node is always valid (i.e., no stale pointers). */
@@ -1639,7 +1639,7 @@ en_mff_ovn_geneve_run(struct engine_node *node, void *data)
     enum mf_field_id mff_ovn_geneve = ofctrl_get_mf_field_id();
     if (ed_mff_ovn_geneve->mff_ovn_geneve != mff_ovn_geneve) {
         ed_mff_ovn_geneve->mff_ovn_geneve = mff_ovn_geneve;
-        engine_set_node_state(node, EN_UPDATED);
+        engine_set_note_update_from_run(node);
         return;
     }
     engine_set_node_state(node, EN_UNCHANGED);
@@ -1714,7 +1714,7 @@ en_physical_flow_changes_run(struct engine_node *node, void *data)
 {
     struct ed_type_pfc_data *pfc_tdata = data;
     pfc_tdata->recompute_physical_flows = true;
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_run(node);
 }
 
 /* ct_zone changes are not handled incrementally but a handler is required
@@ -1734,7 +1734,7 @@ physical_flow_changes_ovs_iface_handler(struct engine_node *node, void *data)
 {
     struct ed_type_pfc_data *pfc_tdata = data;
     pfc_tdata->ovs_ifaces_changed = true;
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_handler(node);
     return true;
 }
 
@@ -2035,7 +2035,7 @@ en_flow_output_run(struct engine_node *node, void *data)
 
     physical_run(&p_ctx, &fo->flow_table);
 
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_run(node);
 }
 
 static bool
@@ -2059,7 +2059,7 @@ flow_output_sb_logical_flow_handler(struct engine_node *node, void *data)
 
     bool handled = lflow_handle_changed_flows(&l_ctx_in, &l_ctx_out);
 
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_handler(node);
     return handled;
 }
 
@@ -2085,7 +2085,7 @@ flow_output_sb_mac_binding_handler(struct engine_node *node, void *data)
     lflow_handle_changed_neighbors(sbrec_port_binding_by_name,
             mac_binding_table, local_datapaths, flow_table);
 
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_handler(node);
     return true;
 }
 
@@ -2108,7 +2108,7 @@ flow_output_sb_port_binding_handler(struct engine_node *node,
      */
     physical_handle_port_binding_changes(&p_ctx, flow_table);
 
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_handler(node);
     return true;
 }
 
@@ -2126,7 +2126,7 @@ flow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
 
     physical_handle_mc_group_changes(&p_ctx, flow_table);
 
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_handler(node);
     return true;
 
 }
@@ -2135,6 +2135,7 @@ static bool
 _flow_output_resource_ref_handler(struct engine_node *node, void *data,
                                   enum ref_type ref_type)
 {
+    bool update_counter = false;
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
 
@@ -2208,6 +2209,7 @@ _flow_output_resource_ref_handler(struct engine_node *node, void *data,
         }
         if (changed) {
             engine_set_node_state(node, EN_UPDATED);
+            update_counter = true;
         }
     }
     SSET_FOR_EACH (ref_name, updated) {
@@ -2217,6 +2219,7 @@ _flow_output_resource_ref_handler(struct engine_node *node, void *data,
         }
         if (changed) {
             engine_set_node_state(node, EN_UPDATED);
+            update_counter = true;
         }
     }
     SSET_FOR_EACH (ref_name, new) {
@@ -2226,7 +2229,11 @@ _flow_output_resource_ref_handler(struct engine_node *node, void *data,
         }
         if (changed) {
             engine_set_node_state(node, EN_UPDATED);
+            update_counter = true;
         }
+    }
+    if (update_counter) {
+        node->stats.handler++;
     }
 
     return true;
@@ -2254,7 +2261,7 @@ flow_output_physical_flow_changes_handler(struct engine_node *node, void *data)
     struct physical_ctx p_ctx;
     init_physical_ctx(node, rt_data, &p_ctx);
 
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_handler(node);
     struct ed_type_pfc_data *pfc_data =
         engine_get_input_data("physical_flow_changes", node);
 
@@ -2293,7 +2300,7 @@ flow_output_runtime_data_handler(struct engine_node *node,
     struct hmap *tracked_dp_bindings = &rt_data->tracked_dp_bindings;
     if (hmap_is_empty(tracked_dp_bindings)) {
         if (rt_data->local_lports_changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            engine_set_note_update_from_handler(node);
         }
         return true;
     }
@@ -2325,7 +2332,7 @@ flow_output_runtime_data_handler(struct engine_node *node,
         }
     }
 
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_handler(node);
     return true;
 }
 
@@ -2342,7 +2349,7 @@ flow_output_sb_load_balancer_handler(struct engine_node *node, void *data)
 
     bool handled = lflow_handle_changed_lbs(&l_ctx_in, &l_ctx_out);
 
-    engine_set_node_state(node, EN_UPDATED);
+    engine_set_note_update_from_handler(node);
     return handled;
 }
 
@@ -2681,6 +2688,10 @@ main(int argc, char *argv[])
 
     unixctl_command_register("recompute", "", 0, 0, engine_recompute_cmd,
                              NULL);
+    unixctl_command_register("inc-engine/stats", "", 0, 0, engine_dump_stats,
+                             NULL);
+    unixctl_command_register("inc-engine/stats-clear", "", 0, 0,
+                             engine_clear_stats, NULL);
     unixctl_command_register("lflow-cache/flush", "", 0, 0,
                              lflow_cache_flush_cmd,
                              &flow_output_data->pd);

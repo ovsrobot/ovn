@@ -32,6 +32,7 @@ VLOG_DEFINE_THIS_MODULE(inc_proc_eng);
 
 static bool engine_force_recompute = false;
 static bool engine_run_aborted = false;
+static bool engine_stats_reset = false;
 static const struct engine_context *engine_context;
 
 static struct engine_node **engine_nodes;
@@ -283,6 +284,7 @@ engine_recompute(struct engine_node *node, bool forced, bool allowed)
     if (!allowed) {
         VLOG_DBG("node: %s, recompute aborted", node->name);
         engine_set_node_state(node, EN_ABORTED);
+        node->stats.abort++;
         return;
     }
 
@@ -383,9 +385,26 @@ engine_run(bool recompute_allowed)
     }
 }
 
+static void
+engine_reset_stats(void)
+{
+    if (!engine_stats_reset) {
+        return;
+    }
+
+    engine_stats_reset = false;
+    for (size_t i = 0; i < engine_n_nodes; i++) {
+        struct engine_node *node = engine_nodes[i];
+
+        memset(&node->stats, 0, sizeof(node->stats));
+    }
+}
+
 bool
 engine_need_run(void)
 {
+    engine_reset_stats();
+
     for (size_t i = 0; i < engine_n_nodes; i++) {
         /* Check only leaf nodes for updates. */
         if (engine_nodes[i]->n_inputs) {
@@ -400,4 +419,33 @@ engine_need_run(void)
         }
     }
     return false;
+}
+
+void
+engine_clear_stats(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                   const char *argv[] OVS_UNUSED, void *arg OVS_UNUSED)
+{
+    engine_stats_reset = true;
+    unixctl_command_reply(conn, NULL);
+}
+
+void
+engine_dump_stats(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                  const char *argv[] OVS_UNUSED, void *arg OVS_UNUSED)
+{
+    struct ds dump = DS_EMPTY_INITIALIZER;
+
+    engine_reset_stats();
+
+    for (size_t i = 0; i < engine_n_nodes; i++) {
+        struct engine_node *node = engine_nodes[i];
+
+        ds_put_format(&dump, "%s\n", node->name);
+        ds_put_format(&dump, "\trun\t%lu", node->stats.run);
+        ds_put_format(&dump, "\tabort\t%lu", node->stats.abort);
+        ds_put_format(&dump, "\thandler\t%lu\n", node->stats.handler);
+    }
+    unixctl_command_reply(conn, ds_cstr(&dump));
+
+    ds_destroy(&dump);
 }
