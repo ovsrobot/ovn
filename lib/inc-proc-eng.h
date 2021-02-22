@@ -60,6 +60,8 @@
  * against all its inputs.
  */
 
+#include "unixctl.h"
+
 #define ENGINE_MAX_INPUT 256
 #define ENGINE_MAX_OVSDB_INDEX 256
 
@@ -105,6 +107,12 @@ enum engine_node_state {
                    * this node.
                    */
     EN_STATE_MAX,
+};
+
+struct engine_stats {
+    unsigned long run;
+    unsigned long abort;
+    unsigned long change_handler;
 };
 
 struct engine_node {
@@ -154,6 +162,9 @@ struct engine_node {
     /* Method to clear up tracked data maintained by the engine node in the
      * engine 'data'. It may be NULL. */
     void (*clear_tracked_data)(void *tracked_data);
+
+    /* Engine stats */
+    struct engine_stats stats;
 };
 
 /* Initialize the data for the engine nodes. It calls each node's
@@ -312,6 +323,7 @@ en_##DB_NAME##_##TBL_NAME##_run(struct engine_node *node, \
         EN_OVSDB_GET(node); \
     if (DB_NAME##rec_##TBL_NAME##_table_track_get_first(table)) { \
         engine_set_node_state(node, EN_UPDATED); \
+        node->stats.run++; \
         return; \
     } \
     engine_set_node_state(node, EN_UNCHANGED); \
@@ -351,5 +363,11 @@ static void en_##DB_NAME##_##TBL_NAME##_cleanup(void *data OVS_UNUSED) \
  * DB */
 #define ENGINE_NODE_OVS(TBL_NAME, TBL_NAME_STR) \
     ENGINE_NODE_OVSDB(ovs, "OVS", TBL_NAME, TBL_NAME_STR);
+
+
+void engine_dump_stats(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                       const char *argv[] OVS_UNUSED, void *arg OVS_UNUSED);
+void engine_clear_stats(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                        const char *argv[] OVS_UNUSED, void *arg OVS_UNUSED);
 
 #endif /* lib/inc-proc-eng.h */

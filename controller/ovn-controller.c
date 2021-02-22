@@ -2710,6 +2710,10 @@ main(int argc, char *argv[])
 
     unixctl_command_register("recompute", "", 0, 0, engine_recompute_cmd,
                              NULL);
+    unixctl_command_register("inc-engine/stats", "", 0, 0, engine_dump_stats,
+                             NULL);
+    unixctl_command_register("inc-engine/stats-clear", "", 0, 0,
+                             engine_clear_stats, NULL);
     unixctl_command_register("lflow-cache/flush", "", 0, 0,
                              lflow_cache_flush_cmd,
                              &flow_output_data->pd);
