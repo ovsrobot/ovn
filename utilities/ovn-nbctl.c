@@ -2717,7 +2717,7 @@ nbctl_meter_list(struct ctl_context *ctx)
         ds_put_format(&ctx->output, "%s:", meter->name);
         if (meter->fair) {
             ds_put_format(&ctx->output, " (%s)",
-                          *meter->fair ? "fair" : "shared");
+                          *meter->fair ? "fairy" : "shared");
         }
         ds_put_format(&ctx->output, " bands:\n");
 
