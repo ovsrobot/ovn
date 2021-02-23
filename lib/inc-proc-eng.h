@@ -107,6 +107,12 @@ enum engine_node_state {
     EN_STATE_MAX,
 };
 
+struct engine_stats {
+    unsigned long recompute;
+    unsigned long compute;
+    unsigned long abort;
+};
+
 struct engine_node {
     /* A unique name for each node. */
     char *name;
@@ -154,6 +160,9 @@ struct engine_node {
     /* Method to clear up tracked data maintained by the engine node in the
      * engine 'data'. It may be NULL. */
     void (*clear_tracked_data)(void *tracked_data);
+
+    /* Engine stats */
+    struct engine_stats stats;
 };
 
 /* Initialize the data for the engine nodes. It calls each node's
@@ -351,5 +360,6 @@ static void en_##DB_NAME##_##TBL_NAME##_cleanup(void *data OVS_UNUSED) \
  * DB */
 #define ENGINE_NODE_OVS(TBL_NAME, TBL_NAME_STR) \
     ENGINE_NODE_OVSDB(ovs, "OVS", TBL_NAME, TBL_NAME_STR);
+
 
 #endif /* lib/inc-proc-eng.h */
