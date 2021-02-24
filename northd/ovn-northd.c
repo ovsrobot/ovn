@@ -5617,10 +5617,10 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          *
          * This is enforced at a higher priority than ACLs can be defined. */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
+                      "ct.est && ct.rpl && ct_label.blocked == 1",
                       "drop;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
+                      "ct.est && ct.rpl && ct_label.blocked == 1",
                       "drop;");
 
         /* Ingress and Egress ACL Table (Priority 65535).
@@ -5633,12 +5633,12 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          *
          * This is enforced at a higher priority than ACLs can be defined. */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "ct.est && !ct.rel && !ct.new && !ct.inv "
-                      "&& ct.rpl && ct_label.blocked == 0",
+                      "ct.est && !ct.rel && !ct.new && "
+                      "ct.rpl && ct_label.blocked == 0",
                       "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "ct.est && !ct.rel && !ct.new && !ct.inv "
-                      "&& ct.rpl && ct_label.blocked == 0",
+                      "ct.est && !ct.rel && !ct.new && "
+                      "ct.rpl && ct_label.blocked == 0",
                       "next;");
 
         /* Ingress and Egress ACL Table (Priority 65535).
@@ -5653,12 +5653,12 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          * related traffic such as an ICMP Port Unreachable through
          * that's generated from a non-listening UDP port.  */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "!ct.est && ct.rel && !ct.new && !ct.inv "
-                      "&& ct_label.blocked == 0",
+                      "!ct.est && ct.rel && !ct.new && "
+                      "ct_label.blocked == 0",
                       "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "!ct.est && ct.rel && !ct.new && !ct.inv "
-                      "&& ct_label.blocked == 0",
+                      "!ct.est && ct.rel && !ct.new && "
+                      "ct_label.blocked == 0",
                       "next;");
 
         /* Ingress and Egress ACL Table (Priority 65535).
@@ -5846,11 +5846,11 @@ build_lb(struct ovn_datapath *od, struct hmap *lflows)
          *
          * Send established traffic through conntrack for just NAT. */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_LB, UINT16_MAX - 1,
-                      "ct.est && !ct.rel && !ct.new && !ct.inv && "
+                      "ct.est && !ct.rel && !ct.new && "
                       "ct_label.natted == 1",
                       REGBIT_CONNTRACK_NAT" = 1; next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_LB, UINT16_MAX - 1,
-                      "ct.est && !ct.rel && !ct.new && !ct.inv && "
+                      "ct.est && !ct.rel && !ct.new && "
                       "ct_label.natted == 1",
                       REGBIT_CONNTRACK_NAT" = 1; next;");
     }
