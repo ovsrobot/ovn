@@ -9164,7 +9164,7 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
                       op->lrp_networks.ipv4_addrs[0].addr_s);
         ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 110,
                       ds_cstr(match), ds_cstr(actions));
-        if (op->lrp_networks.n_ipv4_addrs > 2) {
+        if (op->lrp_networks.n_ipv4_addrs > 1) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
             VLOG_WARN_RL(&rl, "Logical router port %s is configured with "
                               "multiple IPv4 addresses.  Only the first "
