@@ -4211,6 +4211,23 @@ nbctl_lr_route_del(struct ctl_context *ctx)
             }
         }
 
+        if (lr->static_routes[i]->bfd) {
+            /* Check if this is the last reference to the BFD entry. */
+            size_t j;
+
+            for (j = 0; j < lr->n_static_routes; j++) {
+                if (lr->static_routes[j] == lr->static_routes[i]) {
+                    continue;
+                }
+                if (lr->static_routes[j]->bfd == lr->static_routes[i]->bfd) {
+                    break;
+                }
+            }
+            if (j == lr->n_static_routes) {
+                nbrec_bfd_delete(lr->static_routes[i]->bfd);
+            }
+        }
+
         /* Everything matched. Removing. */
         nbrec_logical_router_update_static_routes_delvalue(
             lr, lr->static_routes[i]);
