@@ -13251,7 +13251,7 @@ static const char *rbac_encap_update[] =
 static const char *rbac_port_binding_auth[] =
     {""};
 static const char *rbac_port_binding_update[] =
-    {"chassis", "up"};
+    {"chassis", "up", "virtual_parent"};
 
 static const char *rbac_mac_binding_auth[] =
     {""};
