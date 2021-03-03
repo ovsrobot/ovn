@@ -836,7 +836,7 @@ ovn_start
 ovn-sbctl chassis-add gw1 geneve 127.0.0.1
 
 ovn-nbctl lr-add R1
-ovn-nbctl lrp-add R1 R1-S1 02:ac:10:01:00:01 172.16.1.1/24
+ovn-nbctl lrp-add R1 R1-S1 02:ac:10:01:00:01 172.16.1.1/24 3000::a/64
 
 ovn-nbctl ls-add S1
 ovn-nbctl lsp-add S1 S1-R1
@@ -877,13 +877,13 @@ ovn-nbctl lr-nat-del R1 dnat_and_snat  172.16.1.1
 
 echo
 echo "IPv6: stateful"
-ovn-nbctl --wait=sb lr-nat-add R1 dnat_and_snat fd01::1 fd11::2
+ovn-nbctl --wait=sb lr-nat-add R1 dnat_and_snat 3000::c 1000::3
 check_flow_match_sets 2 2 2 0 0 0 0
-ovn-nbctl lr-nat-del R1 dnat_and_snat  fd01::1
+ovn-nbctl lr-nat-del R1 dnat_and_snat  3000::c
 
 echo
 echo "IPv6: stateless"
-ovn-nbctl --wait=sb --stateless lr-nat-add R1 dnat_and_snat fd01::1 fd11::2
+ovn-nbctl --wait=sb --stateless lr-nat-add R1 dnat_and_snat 3000::c 1000::3
 check_flow_match_sets 2 0 0 0 0 2 2
 
 AT_CLEANUP
@@ -896,7 +896,7 @@ ovn_start
 ovn-sbctl chassis-add gw1 geneve 127.0.0.1
 
 ovn-nbctl lr-add R1
-ovn-nbctl lrp-add R1 R1-S1 02:ac:10:01:00:01 172.16.1.1/24
+ovn-nbctl lrp-add R1 R1-S1 02:ac:10:01:00:01 172.16.1.1/24 3000::a/64
 
 ovn-nbctl ls-add S1
 ovn-nbctl lsp-add S1 S1-R1
@@ -1398,6 +1398,117 @@ OVS_WAIT_FOR_OUTPUT(
 
 AT_CLEANUP
 ])
+
+AT_SETUP([ovn -- check Load balancer health check and Service Monitor sync for NAT])
+ovn_start
+
+ovn-nbctl lr-add lr0
+ovn-nbctl lrp-add lr0 lr0-public 00:00:01:01:02:04 192.168.2.1/24
+ovn-nbctl lrp-set-gateway-chassis lr0-public chassis1
+ovn-nbctl ls-add sw0
+ovn-nbctl ls-add sw1
+ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:00:05 10.0.0.1/24
+ovn-nbctl lrp-add lr0 lr0-sw1 02:00:00:00:00:05 20.0.0.1/24
+ovn-nbctl lsp-add sw0 sw0-lr0 -- set Logical_Switch_Port sw0-lr0 type=router options:router-port=lr0-sw0 -- lsp-set-addresses sw0-lr0 router
+ovn-nbctl lsp-add sw1 sw1-lr0 -- set Logical_Switch_Port sw1-lr0 type=router options:router-port=lr0-sw1 -- lsp-set-addresses sw1-lr0 router
+ovn-nbctl lr-nat-add lr0 snat 192.168.2.1 10.0.0.0/24
+
+ovn-nbctl --reject lb-add lb1 192.168.2.1:80 10.0.0.3:80,20.0.0.3:80
+
+AT_CHECK([ovn-nbctl --wait=sb -- --id=@hc create \
+Load_Balancer_Health_Check vip="192.168.2.1\:80" -- add Load_Balancer . \
+health_check @hc | uuidfilt], [0], [<0>
+])
+
+wait_row_count Service_Monitor 0
+
+ovn-nbctl --wait=sb lsp-add sw0 sw0-p1 -- lsp-set-addresses sw0-p1 \
+"00:00:00:00:00:03 10.0.0.3"
+ovn-nbctl --wait=sb lsp-add sw1 sw1-p1 -- lsp-set-addresses sw1-p1 \
+"02:00:00:00:00:03 20.0.0.3"
+
+ovn-nbctl --wait=sb set load_balancer . ip_port_mappings:10.0.0.3=sw0-p1:10.0.0.2
+wait_row_count Service_Monitor 1
+
+ovn-nbctl --wait=sb set load_balancer . ip_port_mappings:20.0.0.3=sw1-p1:20.0.0.2
+wait_row_count Service_Monitor 2
+
+check ovn-nbctl --wait=sb lr-lb-add lr0 lb1
+
+AT_CAPTURE_FILE([sbflows])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows lr0 | tee sbflows | grep 'priority=120.*ct_lb' | sed 's/table=..//'], 0, [dnl
+  (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 192.168.2.1 && tcp && tcp.dst == 80 && inport == "lr0-public" && is_chassis_resident("cr-lr0-public")), action=(ct_lb(backends=10.0.0.3:80,20.0.0.3:80);)
+])
+
+# Get the uuid of both the service_monitor
+sm_sw0_p1=$(fetch_column Service_Monitor _uuid logical_port=sw0-p1)
+sm_sw1_p1=$(fetch_column Service_Monitor _uuid logical_port=sw1-p1)
+
+# Set the service monitor for sw1-p1 to offline
+check ovn-sbctl set service_monitor sw1-p1 status=offline
+wait_row_count Service_Monitor 1 logical_port=sw1-p1 status=offline
+
+AT_CAPTURE_FILE([sbflows2])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows lr0 | tee sbflows2 | grep 'priority=120.*ct_lb' | sed 's/table=..//'], 0, [dnl
+  (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 192.168.2.1 && tcp && tcp.dst == 80 && inport == "lr0-public" && is_chassis_resident("cr-lr0-public")), action=(ct_lb(backends=10.0.0.3:80);)
+])
+
+# Set the service monitor for sw0-p1 to offline
+ovn-sbctl set service_monitor $sm_sw0_p1 status=offline
+
+wait_row_count Service_Monitor 1 logical_port=sw0-p1 status=offline
+
+AT_CAPTURE_FILE([sbflows3])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows lr0 | tee sbflows3 | grep 'ct.new && ip && ip4.dst == 192.168.2.1' | grep 'priority=120' | sed 's/table=..//'], [0], [dnl
+  (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 192.168.2.1 && tcp && tcp.dst == 80 && inport == "lr0-public" && is_chassis_resident("cr-lr0-public")), action=(reg0 = 0; reject { outport <-> inport; next(pipeline=egress,table=1);};)
+])
+
+# Set the service monitor for sw0-p1 and sw1-p1 to online
+ovn-sbctl set service_monitor $sm_sw0_p1 status=online
+ovn-sbctl set service_monitor $sm_sw1_p1 status=online
+
+wait_row_count Service_Monitor 1 logical_port=sw1-p1 status=online
+
+# Add another distributed gateway port
+ovn-nbctl lrp-add lr0 lr0-public1 00:00:01:01:02:06 172.64.1.1/24
+ovn-nbctl lrp-set-gateway-chassis lr0-public1 chassis2
+
+AT_CAPTURE_FILE([sbflows4])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows lr0 | tee sbflows4 | grep 'priority=120.*ct_lb' | sed 's/table=..//'], 0, [dnl
+  (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 192.168.2.1 && tcp && tcp.dst == 80 && inport == "lr0-public" && is_chassis_resident("cr-lr0-public")), action=(ct_lb(backends=10.0.0.3:80,20.0.0.3:80);)
+  (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 192.168.2.1 && tcp && tcp.dst == 80 && inport == "lr0-public1" && is_chassis_resident("cr-lr0-public1")), action=(ct_lb(backends=10.0.0.3:80,20.0.0.3:80);)
+])
+
+# Set the service monitors offline
+ovn-sbctl set service_monitor $sm_sw0_p1 status=offline
+ovn-sbctl set service_monitor $sm_sw1_p1 status=offline
+
+AT_CAPTURE_FILE([sbflows5])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows lr0 | tee sbflows5 | grep 'ct.new && ip && ip4.dst == 192.168.2.1' | grep 'priority=120' | sed 's/table=..//'], [0], [dnl
+  (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 192.168.2.1 && tcp && tcp.dst == 80 && inport == "lr0-public" && is_chassis_resident("cr-lr0-public")), action=(reg0 = 0; reject { outport <-> inport; next(pipeline=egress,table=1);};)
+  (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 192.168.2.1 && tcp && tcp.dst == 80 && inport == "lr0-public1" && is_chassis_resident("cr-lr0-public1")), action=(reg0 = 0; reject { outport <-> inport; next(pipeline=egress,table=1);};)
+])
+
+# Set reject=false on lb1
+ovn-nbctl set Load_Balancer lb1 options:reject=false
+
+AT_CAPTURE_FILE([sbflows6])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows lr0 | tee sbflows6 | grep 'priority=120.*ct_lb'], 1)
+
+AT_CAPTURE_FILE([sbflows7])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows lr0 | tee sbflows7 | grep 'ct.new && ip && ip4.dst == 192.168.2.1' | grep priority=120 | sed 's/table=..//'], [0], [dnl
+  (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 192.168.2.1 && tcp && tcp.dst == 80 && inport == "lr0-public" && is_chassis_resident("cr-lr0-public")), action=(drop;)
+  (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 192.168.2.1 && tcp && tcp.dst == 80 && inport == "lr0-public1" && is_chassis_resident("cr-lr0-public1")), action=(drop;)
+])
+
+AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- Load balancer VIP in NAT entries])
@@ -2674,6 +2785,348 @@ check ovn-nbctl ls-add ls \
 check ovn-nbctl --wait=sb sync
 
 AT_CHECK([grep -qE 'duplicate logical.*port p1' northd/ovn-northd.log], [0])
+AT_CLEANUP
+
+AT_SETUP([ovn-northd -- lr multiple gw ports])
+ovn_start
+
+# Logical network:
+# 1 LR, 3 Logical Switches,
+# 1 gateway chassis attached to each corresponding LRP.
+#
+#                | S1 (gw1)
+#                |
+#      ls  ----  DR -- S3 (gw3)
+# (20.0.0.0/24)  |
+#                | S2 (gw2)
+#
+# We will validate basic LR logical flows.
+
+ovn-sbctl chassis-add gw1 geneve 127.0.0.1
+ovn-sbctl chassis-add gw2 geneve 128.0.0.1
+ovn-sbctl chassis-add gw3 geneve 129.0.0.1
+
+ovn-nbctl lr-add DR
+ovn-nbctl lrp-add DR DR-S1 02:ac:10:01:00:01 172.16.1.1/24
+ovn-nbctl lrp-add DR DR-S2 03:ac:10:01:00:01 10.0.0.0/24
+ovn-nbctl lrp-add DR DR-S3 04:ac:10:01:00:01 192.168.0.0/24
+ovn-nbctl lrp-add DR DR-ls 04:ac:10:01:00:01 20.0.0.0/24
+
+ovn-nbctl ls-add S1
+ovn-nbctl lsp-add S1 S1-DR
+ovn-nbctl lsp-set-type S1-DR router
+ovn-nbctl lsp-set-addresses S1-DR router
+ovn-nbctl --wait=sb lsp-set-options S1-DR router-port=DR-S1
+
+ovn-nbctl ls-add S2
+ovn-nbctl lsp-add S2 S2-DR
+ovn-nbctl lsp-set-type S2-DR router
+ovn-nbctl lsp-set-addresses S2-DR router
+ovn-nbctl --wait=sb lsp-set-options S2-DR router-port=DR-S2
+
+ovn-nbctl ls-add S3
+ovn-nbctl lsp-add S3 S3-DR
+ovn-nbctl lsp-set-type S3-DR router
+ovn-nbctl lsp-set-addresses S3-DR router
+ovn-nbctl --wait=sb lsp-set-options S3-DR router-port=DR-S3
+
+ovn-nbctl ls-add  ls
+ovn-nbctl lsp-add ls ls-DR
+ovn-nbctl lsp-set-type ls-DR router
+ovn-nbctl lsp-set-addresses ls-DR router
+ovn-nbctl --wait=sb lsp-set-options ls-DR router-port=DR-ls
+
+ovn-nbctl lrp-set-gateway-chassis DR-S1 gw1
+ovn-nbctl lrp-set-gateway-chassis DR-S2 gw2
+ovn-nbctl lrp-set-gateway-chassis DR-S3 gw3
+
+ovn-nbctl --wait=sb sync
+
+ovn-sbctl dump-flows DR
+
+# Check the flows in lr_in_lookup_neighbor stage
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_lookup_neighbor | grep cr-DR | wc -l], [0], [3
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_lookup_neighbor | grep cr-DR-S1 | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_lookup_neighbor | grep cr-DR-S2 | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_lookup_neighbor | grep cr-DR-S3 | wc -l], [0], [1
+])
+
+# Check the flows in lr_in_gw_redirect stage
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_gw_redirect | grep cr-DR | wc -l], [0], [3
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_gw_redirect | grep cr-DR-S1 | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_gw_redirect | grep cr-DR-S2 | wc -l], [0], [1
+])
+AT_CLEANUP
+
+AT_SETUP([ovn-northd -- lr multiple gw ports NAT])
+ovn_start
+
+# Logical network:
+# 1 LR, 3 Logical Switches,
+# 1 gateway chassis attached to each corresponding LRP.
+#
+#                | S1 (gw1)
+#                |
+#      ls  ----  DR -- S3 (gw3)
+# (20.0.0.0/24)  |
+#                | S2 (gw2)
+#
+# We will validate basic SNAT, DNAT and DNAT_AND_SNAT with
+# multiple distributed gateway LRPs.
+ovn-sbctl chassis-add gw1 geneve 127.0.0.1
+ovn-sbctl chassis-add gw2 geneve 128.0.0.1
+ovn-sbctl chassis-add gw3 geneve 129.0.0.1
+
+ovn-nbctl lr-add DR
+ovn-nbctl lrp-add DR DR-S1 02:ac:10:01:00:01 172.16.1.1/24
+ovn-nbctl lrp-add DR DR-S2 03:ac:10:01:00:01 10.0.0.1/24
+ovn-nbctl lrp-add DR DR-S3 04:ac:10:01:00:01 192.168.0.1/24
+ovn-nbctl lrp-add DR DR-ls 05:ac:10:01:00:01 20.0.0.0/24
+
+ovn-nbctl ls-add S1
+ovn-nbctl lsp-add S1 S1-DR
+ovn-nbctl lsp-set-type S1-DR router
+ovn-nbctl lsp-set-addresses S1-DR router
+ovn-nbctl --wait=sb lsp-set-options S1-DR router-port=DR-S1
+
+ovn-nbctl ls-add S2
+ovn-nbctl lsp-add S2 S2-DR
+ovn-nbctl lsp-set-type S2-DR router
+ovn-nbctl lsp-set-addresses S2-DR router
+ovn-nbctl --wait=sb lsp-set-options S2-DR router-port=DR-S2
+
+ovn-nbctl ls-add S3
+ovn-nbctl lsp-add S3 S3-DR
+ovn-nbctl lsp-set-type S3-DR router
+ovn-nbctl lsp-set-addresses S3-DR router
+ovn-nbctl --wait=sb lsp-set-options S3-DR router-port=DR-S3
+
+ovn-nbctl ls-add  ls
+ovn-nbctl lsp-add ls ls-DR
+ovn-nbctl lsp-set-type ls-DR router
+ovn-nbctl lsp-set-addresses ls-DR router
+ovn-nbctl --wait=sb lsp-set-options ls-DR router-port=DR-ls
+
+ovn-nbctl lrp-set-gateway-chassis DR-S1 gw1
+ovn-nbctl lrp-set-gateway-chassis DR-S2 gw2
+ovn-nbctl lrp-set-gateway-chassis DR-S3 gw3
+
+ovn-nbctl --wait=sb sync
+
+# Configure SNAT
+ovn-nbctl lr-nat-add DR snat  172.16.1.1  20.0.0.10
+ovn-nbctl lr-nat-add DR snat  10.0.0.1    20.0.0.10
+ovn-nbctl lr-nat-add DR snat  192.168.0.1 20.0.0.10
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_unsnat | grep ct_snat| wc -l], [0], [3
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_snat | grep ct_snat| wc -l], [0], [3
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_unsnat | grep "ip4.dst == 172.16.1.1" | grep  cr-DR-S1 | grep ct_snat | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_snat | grep "ip4.src == 20.0.0.10" | grep cr-DR-S1 | grep "ct_snat(172.16.1.1)"| wc -l], [0], [1
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_unsnat | grep "ip4.dst == 10.0.0.1" | grep  cr-DR-S2 | grep ct_snat | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_snat | grep "ip4.src == 20.0.0.10" | grep cr-DR-S2 | grep "ct_snat(10.0.0.1)"| wc -l], [0], [1
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_unsnat | grep "ip4.dst == 192.168.0.1" | grep  cr-DR-S3 | grep ct_snat | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_snat | grep "ip4.src == 20.0.0.10" | grep cr-DR-S3 | grep "ct_snat(192.168.0.1)"| wc -l], [0], [1
+])
+
+ovn-nbctl lr-nat-del DR snat  20.0.0.10
+ovn-nbctl lr-nat-del DR snat  20.0.0.10
+ovn-nbctl lr-nat-del DR snat  20.0.0.10
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_unsnat | grep ct_snat| wc -l], [0], [0
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_snat | grep ct_snat| wc -l], [0], [0
+])
+
+# Configure DNAT
+ovn-nbctl lr-nat-add DR dnat  172.16.1.10  20.0.0.10
+ovn-nbctl lr-nat-add DR dnat  10.0.0.10    20.0.0.10
+ovn-nbctl lr-nat-add DR dnat  192.168.0.10 20.0.0.10
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep ct_dnat| wc -l], [0], [3
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_undnat | grep ct_dnat| wc -l], [0], [3
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep "ip4.dst == 172.16.1.10" | grep  cr-DR-S1 | grep "ct_dnat(20.0.0.10)" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_undnat | grep "ip4.src == 20.0.0.10" | grep cr-DR-S1 | grep ct_dnat | wc -l], [0], [1
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep "ip4.dst == 10.0.0.10" | grep  cr-DR-S2 | grep "ct_dnat(20.0.0.10)" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_undnat | grep "ip4.src == 20.0.0.10" | grep cr-DR-S2 | grep ct_dnat | wc -l], [0], [1
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep "ip4.dst == 192.168.0.10" | grep  cr-DR-S3 | grep "ct_dnat(20.0.0.10)" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_undnat | grep "ip4.src == 20.0.0.10" | grep cr-DR-S3 | grep ct_dnat | wc -l], [0], [1
+])
+
+ovn-nbctl lr-nat-del DR dnat  172.16.1.10
+ovn-nbctl lr-nat-del DR dnat  10.0.0.10
+ovn-nbctl lr-nat-del DR dnat  192.168.0.10
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep ct_dnat | wc -l], [0], [0
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_undnat | grep ct_dnat | wc -l], [0], [0
+])
+
+# Configure DNAT_AND_SNAT
+ovn-nbctl lr-nat-add DR dnat_and_snat  172.16.1.10    20.0.0.10
+ovn-nbctl lr-nat-add DR dnat_and_snat  10.0.0.10      20.0.0.10
+ovn-nbctl lr-nat-add DR dnat_and_snat  192.168.0.10   20.0.0.10
+
+ovn-sbctl dump-flows DR
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_unsnat | grep ct_snat| wc -l], [0], [3
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_snat | grep ct_snat| wc -l], [0], [3
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_unsnat | grep "ip4.dst == 172.16.1.10" | grep  cr-DR-S1 | grep ct_snat | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_snat | grep "ip4.src == 20.0.0.10" | grep cr-DR-S1 | grep "ct_snat(172.16.1.10)"| wc -l], [0], [1
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_unsnat | grep "ip4.dst == 10.0.0.10" | grep  cr-DR-S2 | grep ct_snat | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_snat | grep "ip4.src == 20.0.0.10" | grep cr-DR-S2 | grep "ct_snat(10.0.0.10)"| wc -l], [0], [1
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_unsnat | grep "ip4.dst == 192.168.0.10" | grep  cr-DR-S3 | grep ct_snat | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_snat | grep "ip4.src == 20.0.0.10" | grep cr-DR-S3 | grep "ct_snat(192.168.0.10)"| wc -l], [0], [1
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep ct_dnat| wc -l], [0], [3
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_undnat | grep ct_dnat| wc -l], [0], [3
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep "ip4.dst == 172.16.1.10" | grep  cr-DR-S1 | grep "ct_dnat(20.0.0.10)" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_undnat | grep "ip4.src == 20.0.0.10" | grep cr-DR-S1 | grep ct_dnat | wc -l], [0], [1
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep "ip4.dst == 10.0.0.10" | grep  cr-DR-S2 | grep "ct_dnat(20.0.0.10)" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_undnat | grep "ip4.src == 20.0.0.10" | grep cr-DR-S2 | grep ct_dnat | wc -l], [0], [1
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep "ip4.dst == 192.168.0.10" | grep  cr-DR-S3 | grep "ct_dnat(20.0.0.10)" | wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_undnat | grep "ip4.src == 20.0.0.10" | grep cr-DR-S3 | grep ct_dnat | wc -l], [0], [1
+])
+
+ovn-nbctl lr-nat-del DR dnat_and_snat  172.16.1.10
+ovn-nbctl lr-nat-del DR dnat_and_snat  10.0.0.10
+ovn-nbctl lr-nat-del DR dnat_and_snat  192.168.0.10
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_unsnat | grep ct_snat| wc -l], [0], [0
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_snat | grep ct_snat| wc -l], [0], [0
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep ct_dnat | wc -l], [0], [0
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_undnat | grep ct_dnat | wc -l], [0], [0
+])
+AT_CLEANUP
+
+AT_SETUP([ovn-northd -- lr multiple gw ports LB])
+ovn_start
+
+# Logical network:
+# 1 LR, 3 Logical Switches,
+# 1 gateway chassis attached to each corresponding LRP.
+#
+#                | S1 (gw1)
+#                |
+#      ls  ----  DR -- S3 (gw3)
+# (20.0.0.0/24)  |
+#                | S2 (gw2)
+#
+# We will validate LB with multiple distributed gateway LRPs.
+ovn-sbctl chassis-add gw1 geneve 127.0.0.1
+ovn-sbctl chassis-add gw2 geneve 128.0.0.1
+ovn-sbctl chassis-add gw3 geneve 129.0.0.1
+
+ovn-nbctl lr-add DR
+ovn-nbctl lrp-add DR DR-S1 02:ac:10:01:00:01 172.16.1.1/24
+ovn-nbctl lrp-add DR DR-S2 03:ac:10:01:00:01 10.0.0.1/24
+ovn-nbctl lrp-add DR DR-S3 04:ac:10:01:00:01 192.168.0.1/24
+ovn-nbctl lrp-add DR DR-ls 05:ac:10:01:00:01 20.0.0.0/24
+
+ovn-nbctl ls-add S1
+ovn-nbctl lsp-add S1 S1-DR
+ovn-nbctl lsp-set-type S1-DR router
+ovn-nbctl lsp-set-addresses S1-DR router
+ovn-nbctl --wait=sb lsp-set-options S1-DR router-port=DR-S1
+
+ovn-nbctl ls-add S2
+ovn-nbctl lsp-add S2 S2-DR
+ovn-nbctl lsp-set-type S2-DR router
+ovn-nbctl lsp-set-addresses S2-DR router
+ovn-nbctl --wait=sb lsp-set-options S2-DR router-port=DR-S2
+
+ovn-nbctl ls-add S3
+ovn-nbctl lsp-add S3 S3-DR
+ovn-nbctl lsp-set-type S3-DR router
+ovn-nbctl lsp-set-addresses S3-DR router
+ovn-nbctl --wait=sb lsp-set-options S3-DR router-port=DR-S3
+
+ovn-nbctl ls-add  ls
+ovn-nbctl lsp-add ls ls-DR
+ovn-nbctl lsp-set-type ls-DR router
+ovn-nbctl lsp-set-addresses ls-DR router
+ovn-nbctl --wait=sb lsp-set-options ls-DR router-port=DR-ls
+
+ovn-nbctl lrp-set-gateway-chassis DR-S1 gw1
+ovn-nbctl lrp-set-gateway-chassis DR-S2 gw2
+ovn-nbctl lrp-set-gateway-chassis DR-S3 gw3
+
+ovn-nbctl --wait=sb sync
+
+ovn-nbctl lb-add lb0 192.168.0.3:80 10.0.0.2:80,10.0.0.3:80
+ovn-nbctl lr-lb-add DR lb0
+
+ovn-sbctl dump-flows DR
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep ct.est| wc -l], [0], [3
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep ct.new| wc -l], [0], [3
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep ct.est| grep DR-S1 | grep cr-DR-S1| wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep ct.new| grep DR-S1| grep cr-DR-S1 | wc -l], [0], [1
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep ct.est| grep DR-S2 | grep cr-DR-S2| wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep ct.new| grep DR-S2| grep cr-DR-S2 | wc -l], [0], [1
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep ct.est| grep DR-S3 | grep cr-DR-S3| wc -l], [0], [1
+])
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_in_dnat | grep ct.new| grep DR-S3| grep cr-DR-S3 | wc -l], [0], [1
+])
+
+AT_CHECK([ovn-sbctl dump-flows DR | grep lr_out_undnat | grep priority=120| wc -l], [0], [3
+])
 
 AT_CLEANUP
 
