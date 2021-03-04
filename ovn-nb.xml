@@ -2381,8 +2381,8 @@
           </p>
 
           <p>
-            OVN honors this option only if the logical router has a distributed
-            gateway port and if the LRP's peer switch has a
+            OVN honors this option only if the logical router has a single
+            distributed gateway port and if the LRP's peer switch has a
             <code>localnet</code> port.
           </p>
         </column>
