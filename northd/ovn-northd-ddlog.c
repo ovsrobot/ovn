@@ -431,8 +431,10 @@ northd_parse_update(struct northd_ctx *ctx,
     if (ddlog_commit(ctx->ddlog)) {
         goto error;
     }
-    old_nb_cfg = new_nb_cfg;
-    old_nb_cfg_timestamp = new_nb_cfg_timestamp;
+    if (ctx->has_timestamp_columns) {
+        old_nb_cfg = new_nb_cfg;
+        old_nb_cfg_timestamp = new_nb_cfg_timestamp;
+    }
 
     /* This update may have implications for the other side, so
      * immediately wake to check for more changes to be applied. */
