@@ -4075,29 +4075,6 @@ for (SwitchPortStaticAddresses(.port = &SwitchPort{.lsp = lsp, .json_name = json
  * reliable in case this is a VLAN-backed network.
  * Priority: 75.
  */
-
-/* Returns 'true' if the IP 'addr' is on the same subnet with one of the
- * IPs configured on the router port.
- */
-function lrouter_port_ip_reachable(rp: Ref<RouterPort>, addr: v46_ip): bool {
-    match (addr) {
-        IPv4{ipv4} -> {
-            for (na in rp.networks.ipv4_addrs) {
-                if (ip_same_network((ipv4, na.addr), ipv4_netaddr_mask(na))) {
-                    return true
-                }
-            }
-        },
-        IPv6{ipv6} -> {
-            for (na in rp.networks.ipv6_addrs) {
-                if (ipv6_same_network((ipv6, na.addr), ipv6_netaddr_mask(na))) {
-                    return true
-                }
-            }
-        }
-    };
-    false
-}
 UniqueFlow[Flow{.logical_datapath = sw.ls._uuid,
                 .stage            = switch_stage(IN, L2_LKUP),
                 .priority         = 75,
@@ -4110,10 +4087,7 @@ UniqueFlow[Flow{.logical_datapath = sw.ls._uuid,
         var eth_src_set = set_singleton("${rp.networks.ea}");
         for (nat in rp.router.nats) {
             match (nat.nat.external_mac) {
-                Some{mac} ->
-                    if (lrouter_port_ip_reachable(rp, nat.external_ip)) {
-                        eth_src_set.insert(mac)
-                    } else (),
+                Some{mac} -> eth_src_set.insert(mac),
                 _ -> ()
             }
         };
@@ -4139,9 +4113,7 @@ function get_arp_forward_ips(rp: Ref<RouterPort>): (Set<string>, Set<string>) = 
          * expect ARP requests for the LB VIP.
          */
         match (ip_parse(a)) {
-            Some{ipv4} -> if (lrouter_port_ip_reachable(rp, IPv4{ipv4})) {
-                all_ips_v4.insert(a)
-            },
+            Some{ipv4} -> all_ips_v4.insert(a),
             _ -> ()
         }
     };
@@ -4150,9 +4122,7 @@ function get_arp_forward_ips(rp: Ref<RouterPort>): (Set<string>, Set<string>) = 
          * expect NS requests for the LB VIP.
          */
         match (ipv6_parse(a)) {
-            Some{ipv6} -> if (lrouter_port_ip_reachable(rp, IPv6{ipv6})) {
-                all_ips_v6.insert(a)
-            },
+            Some{ipv6} -> all_ips_v6.insert(a),
             _ -> ()
         }
     };
@@ -4162,11 +4132,9 @@ function get_arp_forward_ips(rp: Ref<RouterPort>): (Set<string>, Set<string>) = 
             /* Check if the ovn port has a network configured on which we could
              * expect ARP requests/NS for the DNAT external_ip.
              */
-            if (lrouter_port_ip_reachable(rp, nat.external_ip)) {
-                match (nat.external_ip) {
-                    IPv4{_} -> all_ips_v4.insert(nat.nat.external_ip),
-                    IPv6{_} -> all_ips_v6.insert(nat.nat.external_ip)
-                }
+            match (nat.external_ip) {
+                IPv4{_} -> all_ips_v4.insert(nat.nat.external_ip),
+                IPv6{_} -> all_ips_v6.insert(nat.nat.external_ip)
             }
         }
     };
