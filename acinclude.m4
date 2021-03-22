@@ -381,7 +381,7 @@ AC_DEFUN([OVN_CHECK_OVS], [
       AC_ERROR([$OVSDIR is not an OVS source directory])
     fi
   else
-    OVSDIR=$srcdir/ovs
+    OVSDIR=$(cd $srcdir/ovs; pwd)
   fi
 
   AC_MSG_RESULT([$OVSDIR])
