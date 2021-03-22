@@ -197,6 +197,7 @@ relation &Switch(
     ipv6_prefix:       Option<in6_addr>,
     mcast_cfg:         Ref<McastSwitchCfg>,
     is_vlan_transparent: bool,
+    use_ct_inv_match:  bool,
 
     /* Does this switch have at least one port with type != "router"? */
     has_non_router_port: bool
@@ -223,7 +224,8 @@ function ipv6_parse_prefix(s: string): Option<in6_addr> {
         .ipv6_prefix       = ipv6_prefix,
         .mcast_cfg         = mcast_cfg,
         .has_non_router_port = has_non_router_port,
-        .is_vlan_transparent = is_vlan_transparent) :-
+        .is_vlan_transparent = is_vlan_transparent,
+        .use_ct_inv_match = use_ct_inv_match) :-
     nb::Logical_Switch[ls],
     LogicalSwitchHasStatefulACL(ls._uuid, has_stateful_acl),
     LogicalSwitchHasLBVIP(ls._uuid, has_lb_vip),
@@ -232,6 +234,7 @@ function ipv6_parse_prefix(s: string): Option<in6_addr> {
     LogicalSwitchLocalnetPorts(ls._uuid, localnet_ports),
     LogicalSwitchHasNonRouterPort(ls._uuid, has_non_router_port),
     mcast_cfg in &McastSwitchCfg(.datapath = ls._uuid),
+    UseCtInvMatch(use_ct_inv_match),
     var subnet =
         match (ls.other_config.get("subnet")) {
             None -> None,
@@ -743,4 +746,12 @@ function put_svc_monitor_mac(options: Map<string,string>,
 }
 relation SvcMonitorMac(mac: eth_addr)
 SvcMonitorMac(get_svc_monitor_mac(options, uuid)) :-
+    nb::NB_Global(._uuid = uuid, .options = options).
+
+function can_use_ct_inv_match(options: Map<string,string>): bool {
+    map_get_bool_def(options, "use_ct_inv_match", true)
+}
+
+relation UseCtInvMatch(use_ct_inv_match: bool)
+UseCtInvMatch(can_use_ct_inv_match(options)) :-
     nb::NB_Global(._uuid = uuid, .options = options).

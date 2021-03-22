@@ -2396,16 +2396,25 @@ var has_stateful = sw.has_stateful_acl or sw.has_lb_vip in
          * for deletion (bit 0 of ct_label is set).
          *
          * This is enforced at a higher priority than ACLs can be defined. */
+        var __match = match (sw.use_ct_inv_match) {
+             true -> "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
+             false -> "(ct.est && ct.rpl && ct_label.blocked == 1)"
+        } in
         Flow(.logical_datapath = ls._uuid,
              .stage            = switch_stage(IN, ACL),
              .priority         = 65535,
-             .__match          = "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
+             .__match          = __match,
              .actions          = "drop;",
              .external_ids     = map_empty());
+
+        var __match = match (sw.use_ct_inv_match) {
+             true -> "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
+             false -> "(ct.est && ct.rpl && ct_label.blocked == 1)"
+        } in
         Flow(.logical_datapath = ls._uuid,
              .stage            = switch_stage(OUT, ACL),
              .priority         = 65535,
-             .__match          = "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
+             .__match          = __match,
              .actions          = "drop;",
              .external_ids     = map_empty());
 
@@ -2418,18 +2427,29 @@ var has_stateful = sw.has_stateful_acl or sw.has_lb_vip in
          * direction to hit the currently defined policy from ACLs.
          *
          * This is enforced at a higher priority than ACLs can be defined. */
+        var __match = match (sw.use_ct_inv_match) {
+             true -> "ct.est && !ct.rel && !ct.new && !ct.inv "
+                     "&& ct.rpl && ct_label.blocked == 0",
+             false -> "ct.est && !ct.rel && !ct.new "
+                      "&& ct.rpl && ct_label.blocked == 0"
+        } in
         Flow(.logical_datapath = ls._uuid,
              .stage            = switch_stage(IN, ACL),
              .priority         = 65535,
-             .__match          = "ct.est && !ct.rel && !ct.new && !ct.inv "
-                                 "&& ct.rpl && ct_label.blocked == 0",
+             .__match          = __match,
              .actions          = "next;",
              .external_ids     = map_empty());
+
+        var __match = match (sw.use_ct_inv_match) {
+             true -> "ct.est && !ct.rel && !ct.new && !ct.inv "
+                     "&& ct.rpl && ct_label.blocked == 0",
+             false -> "ct.est && !ct.rel && !ct.new "
+                      "&& ct.rpl && ct_label.blocked == 0"
+        } in
         Flow(.logical_datapath = ls._uuid,
              .stage            = switch_stage(OUT, ACL),
              .priority         = 65535,
-             .__match          = "ct.est && !ct.rel && !ct.new && !ct.inv "
-                                 "&& ct.rpl && ct_label.blocked == 0",
+             .__match          = __match,
              .actions          = "next;",
              .external_ids     = map_empty());
 
@@ -2444,18 +2464,29 @@ var has_stateful = sw.has_stateful_acl or sw.has_lb_vip in
          * a dynamically negotiated FTP data channel), but will allow
          * related traffic such as an ICMP Port Unreachable through
          * that's generated from a non-listening UDP port.  */
+        var __match = match (sw.use_ct_inv_match) {
+             true -> "!ct.est && ct.rel && !ct.new && !ct.inv "
+                     "&& ct_label.blocked == 0",
+             false -> "!ct.est && ct.rel && !ct.new "
+                      "&& ct_label.blocked == 0",
+        } in
         Flow(.logical_datapath = ls._uuid,
              .stage            = switch_stage(IN, ACL),
              .priority         = 65535,
-             .__match          = "!ct.est && ct.rel && !ct.new && !ct.inv "
-                                 "&& ct_label.blocked == 0",
+             .__match          = __match,
              .actions          = "next;",
              .external_ids     = map_empty());
+
+        var __match = match (sw.use_ct_inv_match) {
+             true -> "!ct.est && ct.rel && !ct.new && !ct.inv "
+                     "&& ct_label.blocked == 0",
+             false -> "!ct.est && ct.rel && !ct.new "
+                      "&& ct_label.blocked == 0",
+        } in
         Flow(.logical_datapath = ls._uuid,
              .stage            = switch_stage(OUT, ACL),
              .priority         = 65535,
-             .__match          = "!ct.est && ct.rel && !ct.new && !ct.inv "
-                                 "&& ct_label.blocked == 0",
+             .__match          = __match,
              .actions          = "next;",
              .external_ids     = map_empty());
 

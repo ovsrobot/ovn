@@ -7,6 +7,11 @@ Post-v21.03.0
     (This may take testing and tuning to be effective.)  This version of OVN
     requires DDLog 0.36.
   - Introduce ovn-controller incremetal processing engine statistics
+  - Add a new NB Global option - us_ct_inv_match with the default value of true.
+    If this is set to false, then the logical field - "ct.inv" will not be
+    used in the logical flow matches.  CMS can consider setting this to false,
+    if they want to use smart NICs which don't support offloading datapath flows
+    with this field used.
 
 OVN v21.03.0 - 12 Mar 2021
 -------------------------
