@@ -11304,6 +11304,7 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od,
         ovs_be32 ip, mask;
         struct in6_addr ipv6, mask_v6, v6_exact = IN6ADDR_EXACT_INIT;
         bool is_v6 = false;
+        bool is_masquerade = false;
         bool stateless = lrouter_nat_is_stateless(nat);
         struct nbrec_address_set *allowed_ext_ips =
                                   nat->allowed_ext_ips;
@@ -11343,9 +11344,15 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od,
         if (is_v6) {
             error = ipv6_parse_masked(nat->logical_ip, &ipv6, &mask_v6);
             cidr_bits = ipv6_count_cidr_bits(&mask_v6);
+            if (cidr_bits < 128) {
+                is_masquerade = true;
+            }
         } else {
             error = ip_parse_masked(nat->logical_ip, &ip, &mask);
             cidr_bits = ip_count_cidr_bits(mask);
+            if (cidr_bits < 32) {
+                is_masquerade = 32;
+            }
         }
         if (!strcmp(nat->type, "snat")) {
             if (error) {
@@ -11395,6 +11402,56 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od,
         /* S_ROUTER_IN_DNAT */
         build_lrouter_in_dnat_flow(lflows, od, nat, match, actions, distributed,
                                    mask, is_v6);
+
+        /* When router have SNAT enabled, and logical_ip is a network (router
+         * is doing masquerade), then we need to make sure that packets
+         * unrelated to any established connection that still have router's
+         * external IP as a next hop after going through lr_in_unsnat table
+         * are dropped properly. Otherwise such packets will loop around
+         * between tables until their ttl reaches zero - this additionally
+         * causes kernel module to drop such packages due to recirculation
+         * limit being exceeded.
+         *
+         * Install a logical flow in lr_in_ip_routing table that will
+         * match packet with router's external IP that have no related
+         * conntrack entries and drop them. Flow priority must be higher
+         * than any other flow in lr_in_ip_routing that matches router's
+         * external IP.
+         *
+         * The priority for destination routes is calculated as
+         * (prefix length * 2) + 1, and there is an additional flow
+         * for when BFD is in play with priority + 1. Set priority that
+         * is higher than any other potential routing flow for that
+         * network, that is (prefix length * 2) + offset, where offset
+         * is 1 (dst) + 1 (bfd) + 1. */
+        if (is_masquerade) {
+            uint16_t priority, prefix_length, offset;
+
+            if (is_v6) {
+                prefix_length = 128;
+            } else {
+                prefix_length = 32;
+            }
+            offset = 3;
+            priority = (prefix_length * 2) + offset;
+
+            ds_clear(match);
+
+            if (is_v6) {
+                ds_put_format(match,
+                              "ct.new && ip6.dst == %s",
+                              nat->external_ip);
+            } else {
+                ds_put_format(match,
+                              "ct.new && ip4.dst == %s",
+                              nat->external_ip);
+            }
+
+            ovn_lflow_add_unique_with_hint(lflows, od,
+                                           S_ROUTER_IN_IP_ROUTING, priority,
+                                           ds_cstr(match), "drop;",
+                                           &nat->header_);
+        }
 
         /* ARP resolve for NAT IPs. */
         if (od->l3dgw_port) {

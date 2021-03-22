@@ -23221,6 +23221,51 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- SNAT handling of unrelated packets with masquerade"])
+ovn_start
+
+ovn-nbctl lr-add R1
+
+ovn-nbctl ls-add sw0
+ovn-nbctl ls-add public
+
+ovn-nbctl lsp-add sw0 sw0-port1 \
+          -- lsp-set-addresses sw0-port1 "00:00:00:01:02:03 192.168.1.3"
+
+ovn-nbctl lrp-add R1 rp-sw0 00:00:01:01:02:03 192.168.1.1/24
+ovn-nbctl lrp-add R1 rp-public 00:00:02:01:02:03 172.16.1.254/24 \
+    -- lrp-set-gateway-chassis rp-public hv1
+
+ovn-nbctl lsp-add sw0 sw0-rp -- set Logical_Switch_Port sw0-rp \
+    type=router options:router-port=rp-sw0 \
+    -- lsp-set-addresses sw0-rp router
+
+ovn-nbctl lsp-add public public-rp -- set Logical_Switch_Port public-rp \
+    type=router options:router-port=rp-public \
+    -- lsp-set-addresses public-rp router
+
+AT_CHECK([ovn-nbctl lr-nat-add R1 dnat_and_snat 172.16.1.2 192.168.1.3 sw0-port1 00:00:00:01:02:03])
+AT_CHECK([ovn-nbctl lr-nat-add R1 dnat 172.16.1.3 192.168.1.4])
+AT_CHECK([check ovn-nbctl --wait=sb sync])
+
+# Before we add second NAT (masquerade) there should be no flows
+# in lr_in_ip_routing that match against conntrack state.
+AT_CHECK([ovn-sbctl lflow-list | grep -E "lr_in_ip_routing.*ct.new"], [1], [])
+
+ovn-nbctl lr-nat-add R1 snat 172.16.1.254 192.168.1.0/24
+AT_CHECK([check ovn-nbctl --wait=sb sync])
+
+AT_CHECK([ovn-sbctl lflow-list | grep -E "lr_in_ip_routing.*ct.new.*drop"],
+[0], [dnl
+  table=10(lr_in_ip_routing   ), priority=67   dnl
+, match=(ct.new && ip4.dst == 172.16.1.254), dnl
+action=(drop;)
+])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- ARP replies for SNAT external ips])
 ovn_start
 
