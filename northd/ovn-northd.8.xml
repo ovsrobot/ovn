@@ -419,7 +419,9 @@
       before eventually advancing to ingress table <code>ACLs</code>. If
       special ports such as route ports or localnet ports can't use ct(), a
       priority-110 flow is added to skip over stateful ACLs. IPv6 Neighbor
-      Discovery and MLD traffic also skips stateful ACLs.
+      Discovery and MLD traffic also skips stateful ACLs. For stateless "allow"
+      ACLs, a flow is added to bypass setting the hint for connection tracker
+      processing.
     </p>
 
     <p>
@@ -603,10 +605,7 @@
     <ul>
       <li>
         <code>allow</code> ACLs translate into logical flows with
-        the <code>next;</code> action.  If there are any stateful ACLs
-        on this datapath, then <code>allow</code> ACLs translate to
-        <code>ct_commit; next;</code> (which acts as a hint for the next tables
-        to commit the connection to conntrack),
+        the <code>next;</code> action.
       </li>
       <li>
         <code>allow-related</code> ACLs translate into logical
