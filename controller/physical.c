@@ -610,6 +610,28 @@ put_replace_chassis_mac_flows(const struct simap *ct_zones,
 }
 
 static void
+ofpact_put_push_vlan(struct ofpbuf *ofpacts, const struct smap *options, int tag)
+{
+    const char *ethtype_opt = NULL;
+    if (options) {
+        ethtype_opt = smap_get(options, "ethtype");
+    }
+
+    int ethtype;
+    if (!ethtype_opt || !str_to_int(ethtype_opt, 16, &ethtype)) {
+        ethtype = 0x8100;
+    }
+    struct ofpact_push_vlan *push_vlan;
+    push_vlan = ofpact_put_PUSH_VLAN(ofpacts);
+    push_vlan->ethertype = htons(ethtype);
+
+    struct ofpact_vlan_vid *vlan_vid;
+    vlan_vid = ofpact_put_SET_VLAN_VID(ofpacts);
+    vlan_vid->vlan_vid = tag;
+    vlan_vid->push_vlan_if_needed = false;
+}
+
+static void
 put_replace_router_port_mac_flows(struct ovsdb_idl_index
                                   *sbrec_port_binding_by_name,
                                   const struct
@@ -696,10 +718,7 @@ put_replace_router_port_mac_flows(struct ovsdb_idl_index
         replace_mac->mac = chassis_mac;
 
         if (tag) {
-            struct ofpact_vlan_vid *vlan_vid;
-            vlan_vid = ofpact_put_SET_VLAN_VID(ofpacts_p);
-            vlan_vid->vlan_vid = tag;
-            vlan_vid->push_vlan_if_needed = true;
+            ofpact_put_push_vlan(ofpacts_p, &localnet_port->options, tag);
         }
 
         ofpact_put_OUTPUT(ofpacts_p)->port = ofport;
@@ -1195,10 +1214,8 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
         if (tag) {
             /* For containers sitting behind a local vif, tag the packets
              * before delivering them. */
-            struct ofpact_vlan_vid *vlan_vid;
-            vlan_vid = ofpact_put_SET_VLAN_VID(ofpacts_p);
-            vlan_vid->vlan_vid = tag;
-            vlan_vid->push_vlan_if_needed = true;
+            ofpact_put_push_vlan(
+                ofpacts_p, localnet_port? &localnet_port->options: NULL, tag);
         }
         ofpact_put_OUTPUT(ofpacts_p)->port = ofport;
         if (tag) {
