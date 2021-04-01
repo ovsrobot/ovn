@@ -355,8 +355,14 @@ function lb_force_snat_router_ip(lr_options: Map<string, string>): bool {
     lr_options.contains_key("chassis")
 }
 
-function force_snat_for_lb(lr: nb::Logical_Router): bool {
-    not get_force_snat_ip(lr, "lb").is_empty() or lb_force_snat_router_ip(lr.options)
+function snat_for_lb(lr: nb::Logical_Router, lb: Ref<nb::Load_Balancer>): bit<8> {
+    if (lb.options.get_bool_def("lb_skip_snat", false)) {
+        return 2
+    };
+    if (not get_force_snat_ip(lr, "lb").is_empty() or lb_force_snat_router_ip(lr.options)) {
+        return 1
+    };
+    return 0
 }
 
 /* For each router, collect the set of IPv4 and IPv6 addresses used for SNAT,
