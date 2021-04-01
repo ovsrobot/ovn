@@ -830,6 +830,12 @@
           uses its local configuration to determine exactly how to connect to
           this locally accessible network, if at all.
         </column>
+
+        <column name="options" key="ethtype">
+          Optional. VLAN EtherType field value for encapsulating VLAN
+          headers. Supported values: 8100 (default), 8a88 (QinQ).
+        </column>
+
       </group>
 
       <group title="Options for l2gateway ports">
