@@ -1115,6 +1115,63 @@ sbctl_lflow_add(struct sbctl_lflow **lflows,
 }
 
 static void
+print_datapath_prompt(const struct sbrec_datapath_binding *dp,
+                      const struct uuid *uuid,
+                      char *pipeline) {
+        printf("Datapath: ");
+        print_datapath_name(dp);
+        printf(" ("UUID_FMT")  Pipeline: %s\n", UUID_ARGS(uuid), pipeline);
+}
+
+static void
+print_lflows_count(int64_t table_id, const char *name, long count) {
+    printf("  table=%-2"PRId64"(%-19s) lflows=%ld\n", \
+             table_id, name, count);
+}
+
+static void
+print_lfow_counters(size_t n_flows, struct sbctl_lflow *lflows)
+{
+    const struct sbctl_lflow *curr, *prev = NULL;
+    long table_lflows = 0;
+    long dp_lflows = 0;
+
+    for (size_t i = 0; i < n_flows; i++) {
+       bool new_datapath = false;
+       curr = &lflows[i];
+       if (!prev
+            || prev->dp != curr->dp
+            || strcmp(prev->lflow->pipeline, curr->lflow->pipeline)) {
+            new_datapath = true;
+        }
+
+        if (prev && (prev->lflow->table_id != curr->lflow->table_id || new_datapath)) {
+            print_lflows_count(prev->lflow->table_id,  smap_get_def(&prev->lflow->external_ids, "stage-name", ""), table_lflows);
+            table_lflows = 1;
+            if (new_datapath) {
+                printf("Total number of logical flows in the datapath = %ld\n\n", dp_lflows);
+                dp_lflows = 1;
+            } else {
+                dp_lflows++;
+            }
+        } else {
+            dp_lflows++;
+            table_lflows++;
+        }
+
+        if (new_datapath) {
+            print_datapath_prompt(curr->dp, &curr->dp->header_.uuid, curr->lflow->pipeline);
+        }
+        prev = curr;
+    }
+    if (n_flows > 0) {
+        print_lflows_count(prev->lflow->table_id,  smap_get_def(&prev->lflow->external_ids, "stage-name", ""), table_lflows);
+        printf("Total number of logical flows in the datapath = %ld\n\n", dp_lflows);
+    }
+    printf("Total number of logical flows =  %ld\n", n_flows);
+}
+
+static void
 cmd_lflow_list(struct ctl_context *ctx)
 {
     const struct sbrec_datapath_binding *datapath = NULL;
@@ -1176,6 +1233,10 @@ cmd_lflow_list(struct ctl_context *ctx)
         qsort(lflows, n_flows, sizeof *lflows, sbctl_lflow_cmp);
     }
 
+    if (shash_find(&ctx->options, "--count") != NULL) {
+        print_lfow_counters(n_flows, lflows);
+        goto cleanup;
+    }
     bool print_uuid = shash_find(&ctx->options, "--uuid") != NULL;
 
     const struct sbctl_lflow *curr, *prev = NULL;
@@ -1207,11 +1268,7 @@ cmd_lflow_list(struct ctl_context *ctx)
         if (!prev
             || prev->dp != curr->dp
             || strcmp(prev->lflow->pipeline, curr->lflow->pipeline)) {
-            printf("Datapath: ");
-            print_datapath_name(curr->dp);
-            printf(" ("UUID_FMT")  Pipeline: %s\n",
-                   UUID_ARGS(&curr->dp->header_.uuid),
-                   curr->lflow->pipeline);
+                print_datapath_prompt(curr->dp, &curr->dp->header_.uuid, curr->lflow->pipeline);
         }
 
         /* Print the flow. */
@@ -1238,6 +1295,7 @@ cmd_lflow_list(struct ctl_context *ctx)
         cmd_lflow_list_load_balancers(ctx, vconn, datapath, stats, print_uuid);
     }
 
+cleanup:
     vconn_close(vconn);
     free(lflows);
 }
@@ -1824,10 +1882,10 @@ static const struct ctl_command_syntax sbctl_commands[] = {
     /* Logical flow commands */
     {"lflow-list", 0, INT_MAX, "[DATAPATH] [LFLOW...]",
      pre_get_info, cmd_lflow_list, NULL,
-     "--uuid,--ovs?,--stats,--vflows?", RO},
+     "--uuid,--ovs?,--stats,--vflows?,--count?", RO},
     {"dump-flows", 0, INT_MAX, "[DATAPATH] [LFLOW...]",
      pre_get_info, cmd_lflow_list, NULL,
-     "--uuid,--ovs?,--stats,--vflows?",
+     "--uuid,--ovs?,--stats,--vflows?,--count?",
      RO}, /* Friendly alias for lflow-list */
 
     /* IP multicast commands. */
