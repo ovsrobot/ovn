@@ -148,3 +148,32 @@ inactivity_probe    : 30000
 
 OVN_SBCTL_TEST_STOP
 AT_CLEANUP
+
+dnl ---------------------------------------------------------------------
+
+AT_SETUP([ovn-sbctl --count lflow-list/dump-flows])
+OVN_SBCTL_TEST_START
+
+AT_CHECK([ovn-nbctl ls-add count-test])
+AT_CHECK([ovn-sbctl --count lflow-list |  cat <<EOF | python3
+import sys
+
+lflows=0
+dp_flows=0
+total_flows=0
+
+for line in sys.stdin:
+    x = line.rsplit("=", 1)
+    if "table=" in line:
+       lflows += int(x[1])
+    elif "flows in the datapath" in line:
+       dp_flows += int(x[1])
+    elif "Total number of logical flows =" in line:
+       total_flows = int(x[1])
+if lflows == dp_flows == total_flows:
+    sys.exit(0)
+sys.exit(1)
+EOF], [0], [ignore], [ignore])
+
+OVN_SBCTL_TEST_STOP
+AT_CLEANUP

@@ -207,6 +207,11 @@ conjunction with \fB\-\-vflows\fR.
 .IP "[\fB\-\-uuid\fR] \fBdump\-flows\fR [\fIlogical-datapath\fR]"
 Alias for \fBlflow\-list\fB.
 .
+.IP "[\fB\-\-count\fR] \fBlflow\-list\fR [\fIlogical-datapath\fR]"
+and
+.IP "[\fB\-\-count\fR] \fBdump\-flows\fR [\fIlogical-datapath\fR]"
+Print numbers of logical flows per table and per datapath.
+.
 .SS "Remote Connectivity Commands"
 .
 These commands manipulate the \fBconnections\fR column in the \fBSB_Global\fR
