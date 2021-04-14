@@ -11698,6 +11698,9 @@ test_packet() {
     fi
 }
 
+# Check the localport is not claimed by the hvs
+chassis_lp=$(fetch_column port_binding chassis logical_port=lp01)
+AT_CHECK([$(fetch_column port_binding chassis logical_port=lp01)], [0])
 
 # lp11 and lp21 are on different hypervisors
 test_packet 11 f0:00:00:00:00:21 f0:00:00:00:00:11 1121 lp21 lp21

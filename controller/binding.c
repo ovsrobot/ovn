@@ -1875,6 +1875,13 @@ consider_iface_claim(const struct ovsrec_interface *iface_rec,
     update_local_lports(iface_id, b_ctx_out);
     smap_replace(b_ctx_out->local_iface_ids, iface_rec->name, iface_id);
 
+    const struct sbrec_port_binding *pb =
+        lport_lookup_by_name(b_ctx_in->sbrec_port_binding_by_name, iface_id);
+    if (pb && get_lport_type(pb) == LP_LOCALPORT) {
+        /* nothing to do for localports. */
+        return true;
+    }
+
     struct shash *local_bindings = &b_ctx_out->lbinding_data->bindings;
     struct shash *binding_lports = &b_ctx_out->lbinding_data->lports;
     struct local_binding *lbinding = local_binding_find(local_bindings,
@@ -1888,10 +1895,7 @@ consider_iface_claim(const struct ovsrec_interface *iface_rec,
     }
 
     struct binding_lport *b_lport = local_binding_get_primary_lport(lbinding);
-    const struct sbrec_port_binding *pb = NULL;
     if (!b_lport) {
-        pb = lport_lookup_by_name(b_ctx_in->sbrec_port_binding_by_name,
-                                  lbinding->name);
         if (pb && get_lport_type(pb) == LP_VIF) {
             b_lport = local_binding_add_lport(binding_lports, lbinding, pb,
                                               LP_VIF);
