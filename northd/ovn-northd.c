@@ -4099,6 +4099,9 @@ do_ovn_lflow_add(struct hmap *lflow_map, bool shared,
     hmap_insert_fast(lflow_map, &lflow->hmap_node, hash);
 }
 
+/* If this option is 'true' northd will make use of ct.inv match fields.
+ * Otherwise, it will avoid using it.  The default is true. */
+static bool use_ct_inv_match = true;
 
 /* Adds a row with the specified contents to the Logical_Flow table. */
 static void
@@ -5712,12 +5715,13 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          * for deletion (bit 0 of ct_label is set).
          *
          * This is enforced at a higher priority than ACLs can be defined. */
+        char *match = xasprintf("%s(ct.est && ct.rpl && ct_label.blocked == 1)",
+                                use_ct_inv_match ? "ct.inv || " : "");
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
-                      "drop;");
+                      match, "drop;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
-                      "drop;");
+                      match, "drop;");
+        free(match);
 
         /* Ingress and Egress ACL Table (Priority 65535).
          *
@@ -5728,14 +5732,15 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          * direction to hit the currently defined policy from ACLs.
          *
          * This is enforced at a higher priority than ACLs can be defined. */
+        match = xasprintf("ct.est && !ct.rel && !ct.new%s && "
+                          "ct.rpl && ct_label.blocked == 0",
+                          use_ct_inv_match ? " && !ct.inv" : "");
+
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "ct.est && !ct.rel && !ct.new && !ct.inv "
-                      "&& ct.rpl && ct_label.blocked == 0",
-                      "next;");
+                      match, "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "ct.est && !ct.rel && !ct.new && !ct.inv "
-                      "&& ct.rpl && ct_label.blocked == 0",
-                      "next;");
+                      match, "next;");
+        free(match);
 
         /* Ingress and Egress ACL Table (Priority 65535).
          *
@@ -5748,14 +5753,14 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          * a dynamically negotiated FTP data channel), but will allow
          * related traffic such as an ICMP Port Unreachable through
          * that's generated from a non-listening UDP port.  */
+        match = xasprintf("!ct.est && ct.rel && !ct.new%s && "
+                          "ct_label.blocked == 0",
+                          use_ct_inv_match ? " && !ct.inv" : "");
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "!ct.est && ct.rel && !ct.new && !ct.inv "
-                      "&& ct_label.blocked == 0",
-                      "next;");
+                      match, "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "!ct.est && ct.rel && !ct.new && !ct.inv "
-                      "&& ct_label.blocked == 0",
-                      "next;");
+                      match, "next;");
+        free(match);
 
         /* Ingress and Egress ACL Table (Priority 65535).
          *
@@ -13195,6 +13200,9 @@ ovnnb_db_run(struct northd_context *ctx,
 
     use_logical_dp_groups = smap_get_bool(&nb->options,
                                           "use_logical_dp_groups", false);
+    use_ct_inv_match = smap_get_bool(&nb->options,
+                                     "use_ct_inv_match", true);
+
     /* deprecated, use --event instead */
     controller_event_en = smap_get_bool(&nb->options,
                                         "controller_event", false);
