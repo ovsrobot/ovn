@@ -764,6 +764,12 @@ sbctl_lflow_cmp(const void *a_, const void *b_)
     return cmp ? cmp : strcmp(a->actions, b->actions);
 }
 
+static bool
+is_uuid_with_prefix(const char *uuid)
+{   
+     return uuid[0] == '0' && (uuid[1] == 'x' || uuid[1] == 'X');
+}
+
 static char *
 parse_partial_uuid(char *s)
 {
@@ -774,8 +780,7 @@ parse_partial_uuid(char *s)
 
     /* Accept a full or partial UUID prefixed by 0x, since "ovs-ofctl
      * dump-flows" prints cookies prefixed by 0x. */
-    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')
-        && uuid_is_partial_string(s + 2)) {
+    if (is_uuid_with_prefix(s) && uuid_is_partial_string(s + 2)) {
         return s + 2;
     }
 
@@ -799,8 +804,11 @@ is_partial_uuid_match(const struct uuid *uuid, const char *match)
      * from UUIDs, and cookie values are printed without leading zeros because
      * they're just numbers. */
     const char *s1 = strip_leading_zero(uuid_s);
-    const char *s2 = strip_leading_zero(match);
-
+    const char *s2 = match;
+    if (is_uuid_with_prefix(s2)) {
+        s2 = s2 + 2;
+    }
+    s2 = strip_leading_zero(s2); 
     return !strncmp(s1, s2, strlen(s2));
 }
 
@@ -1139,7 +1147,6 @@ cmd_lflow_list(struct ctl_context *ctx)
             ctl_fatal("%s is not a UUID or the beginning of a UUID",
                       ctx->argv[i]);
         }
-        ctx->argv[i] = s;
     }
 
     struct vconn *vconn = sbctl_open_vconn(&ctx->options);
