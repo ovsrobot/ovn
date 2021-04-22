@@ -327,6 +327,11 @@ engine_recompute(struct engine_node *node, bool forced, bool allowed)
     }
 
     /* Run the node handler which might change state. */
+    /* Clear tracked data before calling run() so that partially tracked data
+     * from some of the change handler executions are cleared. */
+    if (node->clear_tracked_data) {
+        node->clear_tracked_data(node->data);
+    }
     node->run(node, node->data);
     node->stats.recompute++;
 }
