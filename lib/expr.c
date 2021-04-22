@@ -1065,7 +1065,7 @@ expr_constant_set_destroy(struct expr_constant_set *cs)
 void
 expr_const_sets_add(struct shash *const_sets, const char *name,
                     const char *const *values, size_t n_values,
-                    bool convert_to_integer)
+                    bool convert_to_integer, const struct sset *filter)
 {
     /* Replace any existing entry for this name. */
     expr_const_sets_remove(const_sets, name);
@@ -1075,6 +1075,7 @@ expr_const_sets_add(struct shash *const_sets, const char *name,
     cs->n_values = 0;
     cs->values = xmalloc(n_values * sizeof *cs->values);
     if (convert_to_integer) {
+        ovs_assert(!filter);
         cs->type = EXPR_C_INTEGER;
         for (size_t i = 0; i < n_values; i++) {
             /* Use the lexer to convert each constant set into the proper
@@ -1100,6 +1101,11 @@ expr_const_sets_add(struct shash *const_sets, const char *name,
     } else {
         cs->type = EXPR_C_STRING;
         for (size_t i = 0; i < n_values; i++) {
+            if (filter && !sset_find(filter, values[i])) {
+                VLOG_DBG("Skip constant set entry '%s' for '%s'",
+                         values[i], name);
+                continue;
+            }
             union expr_constant *c = &cs->values[cs->n_values++];
             c->string = xstrdup(values[i]);
         }

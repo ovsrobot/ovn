@@ -820,7 +820,7 @@ read_address_sets(void)
     SBREC_ADDRESS_SET_FOR_EACH (sbas, ovnsb_idl) {
         expr_const_sets_add(&address_sets, sbas->name,
                            (const char *const *) sbas->addresses,
-                           sbas->n_addresses, true);
+                           sbas->n_addresses, true, NULL);
     }
 }
 
@@ -833,7 +833,7 @@ read_port_groups(void)
     SBREC_PORT_GROUP_FOR_EACH (sbpg, ovnsb_idl) {
         expr_const_sets_add(&port_groups, sbpg->name,
                            (const char *const *) sbpg->ports,
-                           sbpg->n_ports, false);
+                           sbpg->n_ports, false, NULL);
     }
 }
 

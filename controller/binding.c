@@ -2987,3 +2987,16 @@ cleanup:
 
     return b_lport;
 }
+
+struct sset *
+binding_collect_local_binding_lports(struct local_binding_data *lbinding_data)
+{
+    struct sset *lports = xzalloc(sizeof *lports);
+    sset_init(lports);
+    struct shash_node *shash_node;
+    SHASH_FOR_EACH (shash_node, &lbinding_data->lports) {
+        struct binding_lport *b_lport = shash_node->data;
+        sset_add(lports, b_lport->name);
+    }
+    return lports;
+}
