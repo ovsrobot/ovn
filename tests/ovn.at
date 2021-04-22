@@ -26265,3 +26265,56 @@ primary lport : [[sw0p2]]
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
 ])
+
+# Tests the efficiency of conjunction flow generation when port groups are used
+# by ACLs. Make sure there is no open flow explosion in table 45 for an ACL
+# with self-referencing match condition of a port group:
+#
+# "outport == @pg1 && ip4.src == $pg1_ip4"
+#
+# 10 LSes (ls[0-9]), each has 2 LSPs (lsp[0-9][01]). All LSPs belong to port
+# group pg1, but only LSPs of LS0 are bound on HV1.
+#
+# The expected number of conjunction flows is 2 + 20 = 22.
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ACL with Port Group conjunction flow efficiency])
+ovn_start
+
+net_add n1
+
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+ovn-nbctl lr-add lr0
+
+for i in $(seq 0 9); do
+    ovn-nbctl ls-add ls$i
+    ovn-nbctl lrp-add lr0 lrp_lr0_ls$i aa:bb:bb:00:00:0$i 192.168.${i}.1/24
+
+    ovn-nbctl lsp-add ls$i lsp_ls${i}_lr0 -- \
+        lsp-set-addresses lsp_ls${i}_lr0 router -- \
+        lsp-set-type lsp_ls${i}_lr0 router -- \
+        lsp-set-options lsp_ls${i}_lr0 router-port=lrp_lr0_ls${i}
+
+    for j in 0 1; do
+        ovn-nbctl lsp-add ls$i lsp${i}-${j} -- \
+            lsp-set-addresses lsp${i}-${j} "aa:aa:aa:00:0$i:0$j 192.168.$i.1$j"
+    done
+done
+
+ovn-nbctl pg-add pg1
+ovn-nbctl pg-set-ports pg1 $(for i in 0 1 2 3 4 5 6 7 8 9; do for j in 0 1; do echo lsp${i}-${j}; done; done)
+
+ovn-nbctl --type=port-group acl-add pg1 to-lport 100 "outport == @pg1 && ip4.src == \$pg1_ip4" allow
+
+ovs-vsctl add-port br-int lsp0-0 -- set interface lsp0-0 external_ids:iface-id=lsp0-0
+ovs-vsctl add-port br-int lsp0-1 -- set interface lsp0-1 external_ids:iface-id=lsp0-1
+
+check ovn-nbctl --wait=hv sync
+AT_CHECK([test $(ovs-ofctl dump-flows br-int table=45 | grep conjunction | wc -l) == 22])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])

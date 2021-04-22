@@ -547,7 +547,7 @@ void expr_constant_set_destroy(struct expr_constant_set *cs);
 
 void expr_const_sets_add(struct shash *const_sets, const char *name,
                          const char * const *values, size_t n_values,
-                         bool convert_to_integer);
+                         bool convert_to_integer, const struct sset *filter);
 void expr_const_sets_remove(struct shash *const_sets, const char *name);
 void expr_const_sets_destroy(struct shash *const_sets);
 
