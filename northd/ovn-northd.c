@@ -5083,11 +5083,7 @@ build_empty_lb_event_flow(struct ovn_datapath *od, struct hmap *lflows,
 
     bool ipv4 = IN6_IS_ADDR_V4MAPPED(&lb_vip->vip);
     struct ds match = DS_EMPTY_INITIALIZER;
-    char *meter = "", *action;
-
-    if (meter_groups && shash_find(meter_groups, "event-elb")) {
-        meter = "event-elb";
-    }
+    char *action;
 
     ds_put_format(&match, "ip%s.dst == %s && %s",
                   ipv4 ? "4": "6", lb_vip->vip_str, lb->protocol);
@@ -5101,14 +5097,18 @@ build_empty_lb_event_flow(struct ovn_datapath *od, struct hmap *lflows,
     }
 
     action = xasprintf("trigger_event(event = \"%s\", "
-                       "meter = \"%s\", vip = \"%s\", "
+                       "vip = \"%s\", "
                        "protocol = \"%s\", "
                        "load_balancer = \"" UUID_FMT "\");",
                        event_to_string(OVN_EVENT_EMPTY_LB_BACKENDS),
-                       meter, vip, lb->protocol,
+                       vip, lb->protocol,
                        UUID_ARGS(&lb->header_.uuid));
-    ovn_lflow_add_with_hint(lflows, od, pl, 130, ds_cstr(&match), action,
-                            &lb->header_);
+
+    const struct nbrec_copp *copp = (od->nbr ? od->nbr->copp : od->nbs->copp);
+    ovn_lflow_add_with_hint__(lflows, od, pl, 130, ds_cstr(&match), action,
+                              copp_meter_get(COPP_EVENT_ELB, copp,
+                                             meter_groups),
+                              &lb->header_);
     ds_destroy(&match);
     if (lb_vip->vip_port) {
         free(vip);
