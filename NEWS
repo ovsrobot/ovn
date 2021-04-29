@@ -11,6 +11,7 @@ Post-v21.03.0
     'use_parallel_build' to enable it.  It is disabled by default.
   - Support vlan-passthru mode for tag=0 localnet ports.
   - Support custom 802.11ad EthType for localnet ports.
+  - Added Control Plane Protection support (control plane traffic metering).
 
 OVN v21.03.0 - 12 Mar 2021
 -------------------------
