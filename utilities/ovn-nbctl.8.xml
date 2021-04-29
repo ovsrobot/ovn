@@ -1151,6 +1151,7 @@
           <li>packets that need to be replied to with ICMP Errors</li>
           <li>packets that need to be replied to with TCP RST</li>
           <li>packets that need to be replied to with DHCP_OPTS</li>
+          <li>packets that trigger a reject action</li>
           <li>BFD</li>
       </ul>
     </p>
