@@ -1791,12 +1791,19 @@
       <p>The action to take when the ACL rule matches:</p>
       <ul>
         <li>
-          <code>allow</code>: Forward the packet.
+          <code>allow</code>: Forward the packet. It will also send the
+          packets through connection tracking when
+          <code>allow-related</code> rules exist on the logical switch.
         </li>
 
         <li>
           <code>allow-related</code>: Forward the packet and related traffic
           (e.g. inbound replies to an outbound connection).
+        </li>
+
+        <li>
+          <code>allow-stateless</code>: Always forward the packet in stateless
+          manner. May require defining additional rules for inbound replies.
         </li>
 
         <li>
