@@ -627,6 +627,7 @@ struct ovn_datapath {
     bool has_stateful_acl;
     bool has_lb_vip;
     bool has_unknown;
+    bool has_acls;
 
     /* IPAM data. */
     struct ipam_info ipam_info;
@@ -4783,6 +4784,23 @@ ls_has_stateful_acl(struct ovn_datapath *od)
     return false;
 }
 
+static bool
+ls_has_acls(struct ovn_datapath *od)
+{
+    if (od->nbs->n_acls) {
+        return true;
+    }
+
+    struct ovn_ls_port_group *ls_pg;
+    HMAP_FOR_EACH (ls_pg, key_node, &od->nb_pgs) {
+        if (ls_pg->nb_pg->n_acls) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 /* Logical switch ingress table 0: Ingress port security - L2
  *  (priority 50).
  *  Ingress table 1: Ingress port security - IP (priority 90 and 80)
@@ -5237,7 +5255,11 @@ build_acl_hints(struct ovn_datapath *od, struct hmap *lflows)
         enum ovn_stage stage = stages[i];
 
         /* In any case, advance to the next stage. */
-        ovn_lflow_add(lflows, od, stage, 0, "1", "next;");
+        if (!od->has_acls && !od->has_lb_vip) {
+            ovn_lflow_add(lflows, od, stage, UINT16_MAX, "1", "next;");
+        } else {
+            ovn_lflow_add(lflows, od, stage, 0, "1", "next;");
+        }
 
         if (!od->has_stateful_acl && !od->has_lb_vip) {
             continue;
@@ -5637,10 +5659,19 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
     bool has_stateful = od->has_stateful_acl || od->has_lb_vip;
 
     /* Ingress and Egress ACL Table (Priority 0): Packets are allowed by
-     * default.  A related rule at priority 1 is added below if there
+     * default.  If the logical switch has no ACLs or no load balancers,
+     * then add 65535-priority flow to advance the packet to next
+     * stage.
+     *
+     * A related rule at priority 1 is added below if there
      * are any stateful ACLs in this datapath. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, 0, "1", "next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, 0, "1", "next;");
+    if (!od->has_acls && !od->has_lb_vip) {
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX, "1", "next;");
+        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX, "1", "next;");
+    } else {
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, 0, "1", "next;");
+        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, 0, "1", "next;");
+    }
 
     if (has_stateful) {
         /* Ingress and Egress ACL Table (Priority 1).
@@ -5671,21 +5702,21 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
                       "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
                        REGBIT_CONNTRACK_COMMIT" = 1; next;");
 
-        /* Ingress and Egress ACL Table (Priority 65535).
+        /* Ingress and Egress ACL Table (Priority 65532).
          *
          * Always drop traffic that's in an invalid state.  Also drop
          * reply direction packets for connections that have been marked
          * for deletion (bit 0 of ct_label is set).
          *
          * This is enforced at a higher priority than ACLs can be defined. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX - 3,
                       "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
                       "drop;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
+        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX - 3,
                       "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
                       "drop;");
 
-        /* Ingress and Egress ACL Table (Priority 65535).
+        /* Ingress and Egress ACL Table (Priority 65535 - 3).
          *
          * Allow reply traffic that is part of an established
          * conntrack entry that has not been marked for deletion
@@ -5694,11 +5725,11 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          * direction to hit the currently defined policy from ACLs.
          *
          * This is enforced at a higher priority than ACLs can be defined. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX - 3,
                       "ct.est && !ct.rel && !ct.new && !ct.inv "
                       "&& ct.rpl && ct_label.blocked == 0",
                       "next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
+        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX - 3,
                       "ct.est && !ct.rel && !ct.new && !ct.inv "
                       "&& ct.rpl && ct_label.blocked == 0",
                       "next;");
@@ -5714,21 +5745,21 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
          * a dynamically negotiated FTP data channel), but will allow
          * related traffic such as an ICMP Port Unreachable through
          * that's generated from a non-listening UDP port.  */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX - 3,
                       "!ct.est && ct.rel && !ct.new && !ct.inv "
                       "&& ct_label.blocked == 0",
                       "next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
+        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX - 3,
                       "!ct.est && ct.rel && !ct.new && !ct.inv "
                       "&& ct_label.blocked == 0",
                       "next;");
 
-        /* Ingress and Egress ACL Table (Priority 65535).
+        /* Ingress and Egress ACL Table (Priority 65532).
          *
          * Not to do conntrack on ND packets. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX - 3,
                       "nd || nd_ra || nd_rs || mldv1 || mldv2", "next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
+        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX - 3,
                       "nd || nd_ra || nd_rs || mldv1 || mldv2", "next;");
     }
 
@@ -6827,6 +6858,7 @@ build_lswitch_lflows_pre_acl_and_acl(struct ovn_datapath *od,
     if (od->nbs) {
         od->has_stateful_acl = ls_has_stateful_acl(od);
         od->has_lb_vip = ls_has_lb_vip(od);
+        od->has_acls = ls_has_acls(od);
 
         build_pre_acls(od, lflows);
         build_pre_lb(od, lflows, meter_groups, lbs);
