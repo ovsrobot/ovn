@@ -401,6 +401,12 @@ process_br_int(struct ovsdb_idl_txn *ovs_idl_txn,
                                                     ovs_table);
     if (!br_int) {
         br_int = create_br_int(ovs_idl_txn, ovs_table);
+    } else if (ovs_idl_txn) {
+        const char *fail_mode = br_int->fail_mode;
+        if (!fail_mode || strcmp(fail_mode, "secure")) {
+            ovsrec_bridge_set_fail_mode(br_int, "secure");
+            VLOG_WARN("Integration bridge fail-mode set to secure.");
+        }
     }
     if (br_int && ovs_idl_txn) {
         const struct ovsrec_open_vswitch *cfg;
