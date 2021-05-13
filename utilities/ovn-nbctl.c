@@ -57,6 +57,11 @@ static bool oneline;
 /* --dry-run: Do not commit any changes. */
 static bool dry_run;
 
+/* SSL options */
+static const char *ssl_private_key_file;
+static const char *ssl_certificate_file;
+static const char *ssl_ca_cert_file;
+
 /* --wait=TYPE: Wait for configuration change to take effect? */
 enum nbctl_wait_type {
     NBCTL_WAIT_NONE,            /* Do not wait. */
@@ -550,6 +555,16 @@ add_local_option(const char *name, const char *arg,
 }
 
 static void
+update_ssl_config(void)
+{
+    if (!ssl_private_key_file || !ssl_certificate_file || !ssl_ca_cert_file) {
+        return;
+    }
+    stream_ssl_set_key_and_cert(ssl_private_key_file, ssl_certificate_file);
+    stream_ssl_set_ca_cert_file(ssl_ca_cert_file, false);
+}
+
+static void
 apply_options_direct(const struct ovs_cmdl_parsed_option *parsed_options,
                      size_t n, struct shash *local_options)
 {
@@ -621,7 +636,18 @@ apply_options_direct(const struct ovs_cmdl_parsed_option *parsed_options,
         OVN_DAEMON_OPTION_HANDLERS
         VLOG_OPTION_HANDLERS
         TABLE_OPTION_HANDLERS(&table_style)
-        STREAM_SSL_OPTION_HANDLERS
+
+        case 'p':
+            ssl_private_key_file = optarg;
+            break;
+
+        case 'c':
+            ssl_certificate_file = optarg;
+            break;
+
+        case 'C':
+            ssl_ca_cert_file = optarg;
+            break;
 
         case OPT_BOOTSTRAP_CA_CERT:
             stream_ssl_set_ca_cert_file(po->arg, true);
@@ -641,6 +667,7 @@ apply_options_direct(const struct ovs_cmdl_parsed_option *parsed_options,
     if (!db) {
         db = default_nb_db();
     }
+    update_ssl_config();
 }
 
 static void
@@ -6956,6 +6983,7 @@ server_loop(struct ovsdb_idl *idl, int argc, char *argv[])
     server_cmd_init(idl, &exiting);
 
     for (;;) {
+        update_ssl_config();
         memory_run();
         if (memory_should_report()) {
             struct simap usage = SIMAP_INITIALIZER(&usage);
