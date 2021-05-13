@@ -11870,6 +11870,27 @@ AT_CHECK([
     test 0 -eq $pkts
 ])
 
+AT_CHECK([ovs-ofctl dump-flows br-int |awk '/output/{print substr($8, 16, 16)}' |sort], [0], [dnl
+1
+2
+3
+])
+
+# remove the localport from br-int and re-create it
+check ovs-vsctl del-port vif2
+AT_CHECK([ovs-ofctl dump-flows br-int |awk '/output/{print substr($8, 16, 16)}' |sort], [0], [dnl
+1
+3
+])
+
+check ovs-vsctl add-port br-int vif2 \
+    -- set Interface vif2 external-ids:iface-id=lsp
+AT_CHECK([ovs-ofctl dump-flows br-int |awk '/output/{print substr($8, 16, 16)}' |sort], [0], [dnl
+1
+3
+4
+])
+
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
