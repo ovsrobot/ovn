@@ -5076,6 +5076,9 @@ build_stateful_override_filters(struct ovn_datapath *od,
     apply_to_each_acl_of_action(
         od, port_groups, lflows, "allow-related",
         build_stateful_override_filter);
+    apply_to_each_acl_of_action(
+        od, port_groups, lflows, "allow",
+        build_stateful_override_filter);
 }
 
 static void
