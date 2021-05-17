@@ -2683,6 +2683,78 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ACL priority: allow-stateless vs allow-related of different direction])
+ovn_start
+
+# Create two switches to validate direction. We can't use the same switch for
+# both ports, otherwise both in and out pipelines are triggered.
+ovn-nbctl lr-add r0
+for i in $(seq 1 2); do
+    check ovn-nbctl --wait=sb ls-add sw$i
+
+    check ovn-nbctl --wait=sb lrp-add r0 r0-sw$i f0:00:00:00:00:0$i 192.168.$i.1/24
+    check ovn-nbctl --wait=sb lsp-add sw$i sw$i-r0
+    check ovn-nbctl --wait=sb lsp-set-type sw$i-r0 router
+    check ovn-nbctl --wait=sb lsp-set-options sw$i-r0 router-port=r0-sw$i
+    check ovn-nbctl --wait=sb lsp-set-addresses sw$i-r0 router
+
+    check ovn-nbctl --wait=sb lsp-add sw$i lsp$i
+    check ovn-nbctl --wait=sb lsp-set-addresses lsp$i "fe:00:00:00:00:0$i 192.168.$i.100/24"
+done
+
+ovn-nbctl acl-add sw1 from-lport 3 tcp allow-stateless
+ovn-nbctl acl-add sw1 to-lport 4 tcp allow-related
+ovn-nbctl --wait=sb sync
+
+flow_eth='eth.src == fe:00:00:00:00:01 && eth.dst == f0:00:00:00:00:01'
+flow_ip='ip.ttl==64 && ip4.src == 192.168.1.100 && ip4.dst == 192.168.2.100'
+flow_tcp='tcp && tcp.dst == 80'
+flow_udp='udp && udp.dst == 80'
+lsp1_inport=$(fetch_column Port_Binding tunnel_key logical_port=lsp1)
+
+# TCP packets should not go to conntrack because allow-related direction is different.
+flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
+AT_CHECK_UNQUOTED([ovn-trace --minimal sw1 "${flow}"], [0], [dnl
+# tcp,reg14=0x2,vlan_tci=0x0000,dl_src=fe:00:00:00:00:01,dl_dst=f0:00:00:00:00:01,nw_src=192.168.1.100,nw_dst=192.168.2.100,nw_tos=0,nw_ecn=0,nw_ttl=64,tp_src=0,tp_dst=80,tcp_flags=0
+ip.ttl--;
+eth.src = f0:00:00:00:00:02;
+eth.dst = fe:00:00:00:00:02;
+output("lsp2");
+])
+
+# Add allow-related with the same direction.
+ovn-nbctl acl-add sw1 from-lport 4 tcp allow-related
+ovn-nbctl --wait=sb sync
+
+# TCP packets should now go to conntrack.
+AT_CHECK_UNQUOTED([ovn-trace --ct new --ct new --minimal sw1 "${flow}"], [0], [dnl
+# tcp,reg14=0x2,vlan_tci=0x0000,dl_src=fe:00:00:00:00:01,dl_dst=f0:00:00:00:00:01,nw_src=192.168.1.100,nw_dst=192.168.2.100,nw_tos=0,nw_ecn=0,nw_ttl=64,tp_src=0,tp_dst=80,tcp_flags=0
+ct_next(ct_state=new|trk) {
+    ip.ttl--;
+    eth.src = f0:00:00:00:00:02;
+    eth.dst = fe:00:00:00:00:02;
+    output("lsp2");
+};
+])
+
+# Reduce priority for allow-related rule of the same direction.
+ovn-nbctl acl-del sw1 from-lport 4 tcp
+ovn-nbctl acl-add sw1 from-lport 2 tcp allow-related
+ovn-nbctl --wait=sb sync
+
+# TCP packets should no longer go to conntrack
+AT_CHECK_UNQUOTED([ovn-trace --ct new --ct new --minimal sw1 "${flow}"], [0], [dnl
+# tcp,reg14=0x2,vlan_tci=0x0000,dl_src=fe:00:00:00:00:01,dl_dst=f0:00:00:00:00:01,nw_src=192.168.1.100,nw_dst=192.168.2.100,nw_tos=0,nw_ecn=0,nw_ttl=64,tp_src=0,tp_dst=80,tcp_flags=0
+ip.ttl--;
+eth.src = f0:00:00:00:00:02;
+eth.dst = fe:00:00:00:00:02;
+output("lsp2");
+])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- ACL priority: allow-stateless vs allow-related])
 ovn_start
 

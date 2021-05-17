@@ -1845,23 +1845,21 @@ for (&SwitchACL(.sw = sw@&Switch{.ls = ls}, .acl = &acl, .has_fair_meter = _)) {
 }
 
 for (&SwitchACL(.sw = sw@&Switch{.ls = ls}, .acl = &acl, .has_fair_meter = _)) {
-    if (sw.has_stateless_acl) {
-        if ((sw.has_stateful_acl and acl.action == "allow") or acl.action == "allow-related") {
-            if (acl.direction == "from-lport") {
-                Flow(.logical_datapath = ls._uuid,
-                     .stage            = s_SWITCH_IN_PRE_ACL(),
-                     .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                     .__match          = "ip && ${acl.__match}",
-                     .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
-                     .external_ids     = stage_hint(acl._uuid))
-            } else {
-                Flow(.logical_datapath = ls._uuid,
-                     .stage            = s_SWITCH_OUT_PRE_ACL(),
-                     .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                     .__match          = "ip && ${acl.__match}",
-                     .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
-                     .external_ids     = stage_hint(acl._uuid))
-            }
+    if ((sw.has_stateful_acl and acl.action == "allow") or acl.action == "allow-related") {
+        if (sw.has_stateless_from_acl and acl.direction == "from-lport") {
+            Flow(.logical_datapath = ls._uuid,
+                 .stage            = s_SWITCH_IN_PRE_ACL(),
+                 .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                 .__match          = "ip && ${acl.__match}",
+                 .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
+                 .external_ids     = stage_hint(acl._uuid))
+        } else if (sw.has_stateless_to_acl) {
+            Flow(.logical_datapath = ls._uuid,
+                 .stage            = s_SWITCH_OUT_PRE_ACL(),
+                 .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                 .__match          = "ip && ${acl.__match}",
+                 .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
+                 .external_ids     = stage_hint(acl._uuid))
         }
     }
 }
