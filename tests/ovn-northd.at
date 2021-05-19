@@ -1466,8 +1466,8 @@ ovn-nbctl set logical_router lr0 options:dnat_force_snat_ip=192.168.2.3
 ovn-nbctl --wait=sb sync
 
 AT_CHECK([ovn-sbctl lflow-list lr0 | grep lr_in_unsnat | sort], [0], [dnl
-  table=5 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(ip4 && ip4.dst == 192.168.2.3), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(ip4 && ip4.dst == 192.168.2.3), action=(ct_snat;)
 ])
 
 AT_CLEANUP
@@ -2596,11 +2596,11 @@ ovn-sbctl dump-flows lr0 > lr0flows3
 AT_CAPTURE_FILE([lr0flows3])
 
 AT_CHECK([grep "lr_in_policy" lr0flows3 | sort], [0], [dnl
-  table=12(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = 0; next;)
-  table=12(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.3), action=(reg8[[0..15]] = 1; reg8[[16..31]] = select(1, 2);)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == 1 && reg8[[16..31]] == 1), action=(reg0 = 172.168.0.101; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == 1 && reg8[[16..31]] == 2), action=(reg0 = 172.168.0.102; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=150  , match=(reg8[[0..15]] == 0), action=(next;)
+  table=14(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = 0; next;)
+  table=14(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.3), action=(reg8[[0..15]] = 1; reg8[[16..31]] = select(1, 2);)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == 1 && reg8[[16..31]] == 1), action=(reg0 = 172.168.0.101; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == 1 && reg8[[16..31]] == 2), action=(reg0 = 172.168.0.102; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=150  , match=(reg8[[0..15]] == 0), action=(next;)
 ])
 
 check ovn-nbctl --wait=sb lr-policy-add lr0  10 "ip4.src == 10.0.0.4" reroute 172.168.0.101,172.168.0.102,172.168.0.103
@@ -2610,15 +2610,15 @@ AT_CAPTURE_FILE([lr0flows3])
 AT_CHECK([grep "lr_in_policy" lr0flows3 |  \
 sed 's/reg8\[[0..15\]] = [[0-9]]*/reg8\[[0..15\]] = <cleared>/' | \
 sed 's/reg8\[[0..15\]] == [[0-9]]*/reg8\[[0..15\]] == <cleared>/' | sort], [0], [dnl
-  table=12(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = <cleared>; next;)
-  table=12(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.3), action=(reg8[[0..15]] = <cleared>; reg8[[16..31]] = select(1, 2);)
-  table=12(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.4), action=(reg8[[0..15]] = <cleared>; reg8[[16..31]] = select(1, 2, 3);)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 1), action=(reg0 = 172.168.0.101; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 1), action=(reg0 = 172.168.0.101; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 2), action=(reg0 = 172.168.0.102; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 2), action=(reg0 = 172.168.0.102; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 3), action=(reg0 = 172.168.0.103; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=150  , match=(reg8[[0..15]] == <cleared>), action=(next;)
+  table=14(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = <cleared>; next;)
+  table=14(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.3), action=(reg8[[0..15]] = <cleared>; reg8[[16..31]] = select(1, 2);)
+  table=14(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.4), action=(reg8[[0..15]] = <cleared>; reg8[[16..31]] = select(1, 2, 3);)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 1), action=(reg0 = 172.168.0.101; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 1), action=(reg0 = 172.168.0.101; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 2), action=(reg0 = 172.168.0.102; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 2), action=(reg0 = 172.168.0.102; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 3), action=(reg0 = 172.168.0.103; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=150  , match=(reg8[[0..15]] == <cleared>), action=(next;)
 ])
 
 check ovn-nbctl --wait=sb lr-policy-add lr0  10 "ip4.src == 10.0.0.5" reroute 172.168.0.110
@@ -2628,16 +2628,16 @@ AT_CAPTURE_FILE([lr0flows3])
 AT_CHECK([grep "lr_in_policy" lr0flows3 |  \
 sed 's/reg8\[[0..15\]] = [[0-9]]*/reg8\[[0..15\]] = <cleared>/' | \
 sed 's/reg8\[[0..15\]] == [[0-9]]*/reg8\[[0..15\]] == <cleared>/' | sort], [0], [dnl
-  table=12(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = <cleared>; next;)
-  table=12(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.3), action=(reg8[[0..15]] = <cleared>; reg8[[16..31]] = select(1, 2);)
-  table=12(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.4), action=(reg8[[0..15]] = <cleared>; reg8[[16..31]] = select(1, 2, 3);)
-  table=12(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.5), action=(reg0 = 172.168.0.110; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; reg8[[0..15]] = <cleared>; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 1), action=(reg0 = 172.168.0.101; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 1), action=(reg0 = 172.168.0.101; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 2), action=(reg0 = 172.168.0.102; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 2), action=(reg0 = 172.168.0.102; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 3), action=(reg0 = 172.168.0.103; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=150  , match=(reg8[[0..15]] == <cleared>), action=(next;)
+  table=14(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = <cleared>; next;)
+  table=14(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.3), action=(reg8[[0..15]] = <cleared>; reg8[[16..31]] = select(1, 2);)
+  table=14(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.4), action=(reg8[[0..15]] = <cleared>; reg8[[16..31]] = select(1, 2, 3);)
+  table=14(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.5), action=(reg0 = 172.168.0.110; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; reg8[[0..15]] = <cleared>; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 1), action=(reg0 = 172.168.0.101; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 1), action=(reg0 = 172.168.0.101; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 2), action=(reg0 = 172.168.0.102; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 2), action=(reg0 = 172.168.0.102; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 3), action=(reg0 = 172.168.0.103; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=150  , match=(reg8[[0..15]] == <cleared>), action=(next;)
 ])
 
 check ovn-nbctl --wait=sb lr-policy-del lr0  10 "ip4.src == 10.0.0.3"
@@ -2647,13 +2647,13 @@ AT_CAPTURE_FILE([lr0flows3])
 AT_CHECK([grep "lr_in_policy" lr0flows3 |  \
 sed 's/reg8\[[0..15\]] = [[0-9]]*/reg8\[[0..15\]] = <cleared>/' | \
 sed 's/reg8\[[0..15\]] == [[0-9]]*/reg8\[[0..15\]] == <cleared>/' | sort], [0], [dnl
-  table=12(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = <cleared>; next;)
-  table=12(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.4), action=(reg8[[0..15]] = <cleared>; reg8[[16..31]] = select(1, 2, 3);)
-  table=12(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.5), action=(reg0 = 172.168.0.110; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; reg8[[0..15]] = <cleared>; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 1), action=(reg0 = 172.168.0.101; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 2), action=(reg0 = 172.168.0.102; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 3), action=(reg0 = 172.168.0.103; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
-  table=13(lr_in_policy_ecmp  ), priority=150  , match=(reg8[[0..15]] == <cleared>), action=(next;)
+  table=14(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = <cleared>; next;)
+  table=14(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.4), action=(reg8[[0..15]] = <cleared>; reg8[[16..31]] = select(1, 2, 3);)
+  table=14(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.5), action=(reg0 = 172.168.0.110; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; reg8[[0..15]] = <cleared>; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 1), action=(reg0 = 172.168.0.101; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 2), action=(reg0 = 172.168.0.102; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=100  , match=(reg8[[0..15]] == <cleared> && reg8[[16..31]] == 3), action=(reg0 = 172.168.0.103; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; next;)
+  table=15(lr_in_policy_ecmp  ), priority=150  , match=(reg8[[0..15]] == <cleared>), action=(next;)
 ])
 
 check ovn-nbctl --wait=sb lr-policy-del lr0  10 "ip4.src == 10.0.0.4"
@@ -2663,9 +2663,9 @@ AT_CAPTURE_FILE([lr0flows3])
 AT_CHECK([grep "lr_in_policy" lr0flows3 |  \
 sed 's/reg8\[[0..15\]] = [[0-9]]*/reg8\[[0..15\]] = <cleared>/' | \
 sed 's/reg8\[[0..15\]] == [[0-9]]*/reg8\[[0..15\]] == <cleared>/' | sort], [0], [dnl
-  table=12(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = <cleared>; next;)
-  table=12(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.5), action=(reg0 = 172.168.0.110; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; reg8[[0..15]] = <cleared>; next;)
-  table=13(lr_in_policy_ecmp  ), priority=150  , match=(reg8[[0..15]] == <cleared>), action=(next;)
+  table=14(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = <cleared>; next;)
+  table=14(lr_in_policy       ), priority=10   , match=(ip4.src == 10.0.0.5), action=(reg0 = 172.168.0.110; reg1 = 172.168.0.100; eth.src = 00:00:20:20:12:13; outport = "lr0-public"; flags.loopback = 1; reg8[[0..15]] = <cleared>; next;)
+  table=15(lr_in_policy_ecmp  ), priority=150  , match=(reg8[[0..15]] == <cleared>), action=(next;)
 ])
 
 check ovn-nbctl --wait=sb add logical_router_policy . nexthops "2000\:\:b"
@@ -2675,8 +2675,8 @@ AT_CAPTURE_FILE([lr0flows3])
 AT_CHECK([grep "lr_in_policy" lr0flows3 |  \
 sed 's/reg8\[[0..15\]] = [[0-9]]*/reg8\[[0..15\]] = <cleared>/' | \
 sed 's/reg8\[[0..15\]] == [[0-9]]*/reg8\[[0..15\]] == <cleared>/' | sort], [0], [dnl
-  table=12(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = <cleared>; next;)
-  table=13(lr_in_policy_ecmp  ), priority=150  , match=(reg8[[0..15]] == <cleared>), action=(next;)
+  table=14(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = <cleared>; next;)
+  table=15(lr_in_policy_ecmp  ), priority=150  , match=(reg8[[0..15]] == <cleared>), action=(next;)
 ])
 
 AT_CLEANUP
@@ -3113,14 +3113,14 @@ ovn-sbctl dump-flows lr0 > lr0flows
 AT_CAPTURE_FILE([lr0flows])
 
 AT_CHECK([grep "lr_in_unsnat" lr0flows | sort], [0], [dnl
-  table=5 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
+  table=7 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
 ])
 
 AT_CHECK([grep "lr_in_dnat" lr0flows | sort], [0], [dnl
-  table=6 (lr_in_dnat         ), priority=0    , match=(1), action=(next;)
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(ct_dnat;)
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(ct_lb(backends=10.0.0.4:8080);)
-  table=6 (lr_in_dnat         ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
+  table=8 (lr_in_dnat         ), priority=0    , match=(1), action=(next;)
+  table=8 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(ct_dnat;)
+  table=8 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(ct_lb(backends=10.0.0.4:8080);)
+  table=8 (lr_in_dnat         ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
 check ovn-nbctl --wait=sb set logical_router lr0 options:lb_force_snat_ip="20.0.0.4 aef0::4"
@@ -3130,16 +3130,16 @@ AT_CAPTURE_FILE([lr0flows])
 
 
 AT_CHECK([grep "lr_in_unsnat" lr0flows | sort], [0], [dnl
-  table=5 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(ip4 && ip4.dst == 20.0.0.4), action=(ct_snat;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(ip6 && ip6.dst == aef0::4), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(ip4 && ip4.dst == 20.0.0.4), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(ip6 && ip6.dst == aef0::4), action=(ct_snat;)
 ])
 
 AT_CHECK([grep "lr_in_dnat" lr0flows | sort], [0], [dnl
-  table=6 (lr_in_dnat         ), priority=0    , match=(1), action=(next;)
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_dnat;)
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_lb(backends=10.0.0.4:8080);)
-  table=6 (lr_in_dnat         ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
+  table=8 (lr_in_dnat         ), priority=0    , match=(1), action=(next;)
+  table=8 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_dnat;)
+  table=8 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_lb(backends=10.0.0.4:8080);)
+  table=8 (lr_in_dnat         ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
 AT_CHECK([grep "lr_out_snat" lr0flows | sort], [0], [dnl
@@ -3158,17 +3158,17 @@ AT_CHECK([grep "lr_in_ip_input" lr0flows | grep "priority=60" | sort], [0], [dnl
 ])
 
 AT_CHECK([grep "lr_in_unsnat" lr0flows | sort], [0], [dnl
-  table=5 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-public" && ip4.dst == 172.168.0.100), action=(ct_snat;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw0" && ip4.dst == 10.0.0.1), action=(ct_snat;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw1" && ip4.dst == 20.0.0.1), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-public" && ip4.dst == 172.168.0.100), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw0" && ip4.dst == 10.0.0.1), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw1" && ip4.dst == 20.0.0.1), action=(ct_snat;)
 ])
 
 AT_CHECK([grep "lr_in_dnat" lr0flows | sort], [0], [dnl
-  table=6 (lr_in_dnat         ), priority=0    , match=(1), action=(next;)
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_dnat;)
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_lb(backends=10.0.0.4:8080);)
-  table=6 (lr_in_dnat         ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
+  table=8 (lr_in_dnat         ), priority=0    , match=(1), action=(next;)
+  table=8 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_dnat;)
+  table=8 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_lb(backends=10.0.0.4:8080);)
+  table=8 (lr_in_dnat         ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
 AT_CHECK([grep "lr_out_snat" lr0flows | sort], [0], [dnl
@@ -3185,7 +3185,7 @@ ovn-sbctl dump-flows lr0 > lr0flows
 AT_CAPTURE_FILE([lr0flows])
 
 AT_CHECK([grep "lr_in_unsnat" lr0flows | sort], [0], [dnl
-  table=5 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
+  table=7 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
 ])
 
 AT_CHECK([grep "lr_out_snat" lr0flows | sort], [0], [dnl
@@ -3200,18 +3200,18 @@ ovn-sbctl dump-flows lr0 > lr0flows
 AT_CAPTURE_FILE([lr0flows])
 
 AT_CHECK([grep "lr_in_unsnat" lr0flows | sort], [0], [dnl
-  table=5 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-public" && ip4.dst == 172.168.0.100), action=(ct_snat;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw0" && ip4.dst == 10.0.0.1), action=(ct_snat;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw1" && ip4.dst == 20.0.0.1), action=(ct_snat;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw1" && ip6.dst == bef0::1), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-public" && ip4.dst == 172.168.0.100), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw0" && ip4.dst == 10.0.0.1), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw1" && ip4.dst == 20.0.0.1), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw1" && ip6.dst == bef0::1), action=(ct_snat;)
 ])
 
 AT_CHECK([grep "lr_in_dnat" lr0flows | sort], [0], [dnl
-  table=6 (lr_in_dnat         ), priority=0    , match=(1), action=(next;)
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_dnat;)
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_lb(backends=10.0.0.4:8080);)
-  table=6 (lr_in_dnat         ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
+  table=8 (lr_in_dnat         ), priority=0    , match=(1), action=(next;)
+  table=8 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_dnat;)
+  table=8 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_lb(backends=10.0.0.4:8080);)
+  table=8 (lr_in_dnat         ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
 AT_CHECK([grep "lr_out_snat" lr0flows | sort], [0], [dnl
@@ -3230,16 +3230,16 @@ check ovn-nbctl --wait=sb lb-del lb1
 ovn-sbctl dump-flows lr0 > lr0flows
 
 AT_CHECK([grep "lr_in_unsnat" lr0flows | sort], [0], [dnl
-  table=5 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-public" && ip4.dst == 172.168.0.100), action=(ct_snat;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw0" && ip4.dst == 10.0.0.1), action=(ct_snat;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw1" && ip4.dst == 20.0.0.1), action=(ct_snat;)
-  table=5 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw1" && ip6.dst == bef0::1), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-public" && ip4.dst == 172.168.0.100), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw0" && ip4.dst == 10.0.0.1), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw1" && ip4.dst == 20.0.0.1), action=(ct_snat;)
+  table=7 (lr_in_unsnat       ), priority=110  , match=(inport == "lr0-sw1" && ip6.dst == bef0::1), action=(ct_snat;)
 ])
 
 AT_CHECK([grep "lr_in_dnat" lr0flows | grep skip_snat_for_lb | sort], [0], [dnl
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.20 && tcp && tcp.dst == 80), action=(flags.skip_snat_for_lb = 1; ct_dnat;)
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.20 && tcp && tcp.dst == 80), action=(flags.skip_snat_for_lb = 1; ct_lb(backends=10.0.0.40:8080);)
+  table=8 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.20 && tcp && tcp.dst == 80), action=(flags.skip_snat_for_lb = 1; ct_dnat;)
+  table=8 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.20 && tcp && tcp.dst == 80), action=(flags.skip_snat_for_lb = 1; ct_lb(backends=10.0.0.40:8080);)
 ])
 
 AT_CHECK([grep "lr_out_snat" lr0flows | grep skip_snat_for_lb | sort], [0], [dnl

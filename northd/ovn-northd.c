@@ -183,18 +183,18 @@ enum ovn_stage {
     PIPELINE_STAGE(ROUTER, IN,  LEARN_NEIGHBOR,  2, "lr_in_learn_neighbor") \
     PIPELINE_STAGE(ROUTER, IN,  IP_INPUT,        3, "lr_in_ip_input")     \
     PIPELINE_STAGE(ROUTER, IN,  DEFRAG,          4, "lr_in_defrag")       \
-    PIPELINE_STAGE(ROUTER, IN,  UNSNAT,          5, "lr_in_unsnat")       \
-    PIPELINE_STAGE(ROUTER, IN,  DNAT,            6, "lr_in_dnat")         \
-    PIPELINE_STAGE(ROUTER, IN,  ECMP_STATEFUL,   7, "lr_in_ecmp_stateful") \
-    PIPELINE_STAGE(ROUTER, IN,  ND_RA_OPTIONS,   8, "lr_in_nd_ra_options") \
-    PIPELINE_STAGE(ROUTER, IN,  ND_RA_RESPONSE,  9, "lr_in_nd_ra_response") \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      10, "lr_in_ip_routing")   \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 11, "lr_in_ip_routing_ecmp") \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY,          12, "lr_in_policy")       \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     13, "lr_in_policy_ecmp")  \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     14, "lr_in_arp_resolve")  \
-    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN   ,  15, "lr_in_chk_pkt_len")  \
-    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     16, "lr_in_larger_pkts")  \
+    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     5, "lr_in_chk_pkt_len")  \
+    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     6, "lr_in_larger_pkts")  \
+    PIPELINE_STAGE(ROUTER, IN,  UNSNAT,          7, "lr_in_unsnat")       \
+    PIPELINE_STAGE(ROUTER, IN,  DNAT,            8, "lr_in_dnat")         \
+    PIPELINE_STAGE(ROUTER, IN,  ECMP_STATEFUL,   9, "lr_in_ecmp_stateful") \
+    PIPELINE_STAGE(ROUTER, IN,  ND_RA_OPTIONS,   10, "lr_in_nd_ra_options") \
+    PIPELINE_STAGE(ROUTER, IN,  ND_RA_RESPONSE,  11, "lr_in_nd_ra_response") \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      12, "lr_in_ip_routing")   \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 13, "lr_in_ip_routing_ecmp") \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY,          14, "lr_in_policy")       \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     15, "lr_in_policy_ecmp")  \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     16, "lr_in_arp_resolve")  \
     PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     17, "lr_in_gw_redirect")  \
     PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     18, "lr_in_arp_request")  \
                                                                       \
@@ -10400,6 +10400,67 @@ build_arp_resolve_flows_for_lrouter_port(
 }
 
 static void
+build_icmperr_pkt_big_flows(struct ovn_port *op, int mtu, struct hmap *lflows,
+                            struct ds *match, struct ds *actions)
+{
+    if (op->lrp_networks.ipv4_addrs) {
+        ds_clear(match);
+        ds_put_format(match, "inport == %s && ip4 && "REGBIT_PKT_LARGER,
+                      op->json_key);
+
+        ds_clear(actions);
+        /* Set icmp4.frag_mtu to gw_mtu */
+        ds_put_format(actions,
+            "icmp4_error {"
+            REGBIT_EGRESS_LOOPBACK" = 1; "
+            REGBIT_PKT_LARGER" = 0; "
+            "eth.dst = %s; "
+            "ip4.dst = ip4.src; "
+            "ip4.src = %s; "
+            "ip.ttl = 255; "
+            "icmp4.type = 3; /* Destination Unreachable. */ "
+            "icmp4.code = 4; /* Frag Needed and DF was Set. */ "
+            "icmp4.frag_mtu = %d; "
+            "next(pipeline=ingress, table=%d); };",
+            op->lrp_networks.ea_s,
+            op->lrp_networks.ipv4_addrs[0].addr_s,
+            mtu, ovn_stage_get_table(S_ROUTER_IN_ADMISSION));
+        ovn_lflow_add_with_hint(lflows, op->od,
+                                S_ROUTER_IN_LARGER_PKTS, 50,
+                                ds_cstr(match), ds_cstr(actions),
+                                &op->nbrp->header_);
+    }
+
+    if (op->lrp_networks.ipv6_addrs) {
+        ds_clear(match);
+        ds_put_format(match, "inport == %s&& ip6 && "REGBIT_PKT_LARGER,
+                      op->json_key);
+
+        ds_clear(actions);
+        /* Set icmp6.frag_mtu to gw_mtu */
+        ds_put_format(actions,
+            "icmp6_error {"
+            REGBIT_EGRESS_LOOPBACK" = 1; "
+            REGBIT_PKT_LARGER" = 0; "
+            "eth.dst = %s; "
+            "ip6.dst = ip6.src; "
+            "ip6.src = %s; "
+            "ip.ttl = 255; "
+            "icmp6.type = 2; /* Packet Too Big. */ "
+            "icmp6.code = 0; "
+            "icmp6.frag_mtu = %d; "
+            "next(pipeline=ingress, table=%d); };",
+            op->lrp_networks.ea_s,
+            op->lrp_networks.ipv6_addrs[0].addr_s,
+            mtu, ovn_stage_get_table(S_ROUTER_IN_ADMISSION));
+        ovn_lflow_add_with_hint(lflows, op->od,
+                                S_ROUTER_IN_LARGER_PKTS, 50,
+                                ds_cstr(match), ds_cstr(actions),
+                                &op->nbrp->header_);
+    }
+}
+
+static void
 build_check_pkt_len_flows_for_lrp(struct ovn_port *op,
                                   struct hmap *lflows, struct hmap *ports,
                                   struct ds *match, struct ds *actions)
@@ -10414,81 +10475,26 @@ build_check_pkt_len_flows_for_lrp(struct ovn_port *op,
         return;
     }
 
-    ds_clear(match);
-    ds_put_format(match, "outport == %s", op->json_key);
-
     ds_clear(actions);
     ds_put_format(actions,
                   REGBIT_PKT_LARGER" = check_pkt_larger(%d);"
                   " next;", gw_mtu + VLAN_ETH_HEADER_LEN);
+
+    ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_CHK_PKT_LEN, 100,
+                            REGBIT_EGRESS_LOOPBACK, "next;",
+                            &op->nbrp->header_);
     ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_CHK_PKT_LEN, 50,
-                            ds_cstr(match), ds_cstr(actions),
+                            "1", ds_cstr(actions),
                             &op->nbrp->header_);
 
     for (size_t i = 0; i < op->od->nbr->n_ports; i++) {
         struct ovn_port *rp = ovn_port_find(ports,
                                             op->od->nbr->ports[i]->name);
-        if (!rp || rp == op) {
+        if (!rp) {
             continue;
         }
 
-        if (rp->lrp_networks.ipv4_addrs) {
-            ds_clear(match);
-            ds_put_format(match, "inport == %s && outport == %s"
-                          " && ip4 && "REGBIT_PKT_LARGER,
-                          rp->json_key, op->json_key);
-
-            ds_clear(actions);
-            /* Set icmp4.frag_mtu to gw_mtu */
-            ds_put_format(actions,
-                "icmp4_error {"
-                REGBIT_EGRESS_LOOPBACK" = 1; "
-                "eth.dst = %s; "
-                "ip4.dst = ip4.src; "
-                "ip4.src = %s; "
-                "ip.ttl = 255; "
-                "icmp4.type = 3; /* Destination Unreachable. */ "
-                "icmp4.code = 4; /* Frag Needed and DF was Set. */ "
-                "icmp4.frag_mtu = %d; "
-                "next(pipeline=ingress, table=%d); };",
-                rp->lrp_networks.ea_s,
-                rp->lrp_networks.ipv4_addrs[0].addr_s,
-                gw_mtu,
-                ovn_stage_get_table(S_ROUTER_IN_ADMISSION));
-            ovn_lflow_add_with_hint(lflows, op->od,
-                                    S_ROUTER_IN_LARGER_PKTS, 50,
-                                    ds_cstr(match), ds_cstr(actions),
-                                    &rp->nbrp->header_);
-        }
-
-        if (rp->lrp_networks.ipv6_addrs) {
-            ds_clear(match);
-            ds_put_format(match, "inport == %s && outport == %s"
-                          " && ip6 && "REGBIT_PKT_LARGER,
-                          rp->json_key, op->json_key);
-
-            ds_clear(actions);
-            /* Set icmp6.frag_mtu to gw_mtu */
-            ds_put_format(actions,
-                "icmp6_error {"
-                REGBIT_EGRESS_LOOPBACK" = 1; "
-                "eth.dst = %s; "
-                "ip6.dst = ip6.src; "
-                "ip6.src = %s; "
-                "ip.ttl = 255; "
-                "icmp6.type = 2; /* Packet Too Big. */ "
-                "icmp6.code = 0; "
-                "icmp6.frag_mtu = %d; "
-                "next(pipeline=ingress, table=%d); };",
-                rp->lrp_networks.ea_s,
-                rp->lrp_networks.ipv6_addrs[0].addr_s,
-                gw_mtu,
-                ovn_stage_get_table(S_ROUTER_IN_ADMISSION));
-            ovn_lflow_add_with_hint(lflows, op->od,
-                                    S_ROUTER_IN_LARGER_PKTS, 50,
-                                    ds_cstr(match), ds_cstr(actions),
-                                    &rp->nbrp->header_);
-        }
+        build_icmperr_pkt_big_flows(rp, gw_mtu, lflows, match, actions);
     }
 }
 
