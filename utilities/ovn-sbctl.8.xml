@@ -416,10 +416,20 @@
           <var>chassis</var>.  The <code>--ovs</code> and <code>--stats</code>
           can also be used in conjunction with <code>--vflows</code>.
         </p>
+       
+        <p>
+         <code>--count</code> <code>lflow-list</code> [<var>logical-datapath</var>]
+         prints numbers of logical flows per table and per datapath.
+        </p>
+
       </dd>
 
       <dt>[<code>--uuid</code>] <code>dump-flows</code> [<var>logical-datapath</var>]</dt>
       <dd>Alias for <code>lflow-list</code>.</dd>
+      
+      <dt><code>--count</code> <code>dump-flow</code> [<var>logical-datapath</var>]</dt>
+      <dd>Alias for <code>--count</code>  <code>lflow-list</code> [<var>logical-datapath</var>] </dd>
+      
     </dl>
 
     <h2>Remote Connectivity Commands</h2>
