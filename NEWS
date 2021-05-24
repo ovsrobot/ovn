@@ -23,6 +23,7 @@ Post-v21.03.0
   - Utilities:
     * ovn-nbctl daemon mode is no longer considered experimental.
     * ovn-sbctl now also supports daemon mode.
+  - Added Control Plane Protection support (control plane traffic metering).
 
 OVN v21.03.0 - 12 Mar 2021
 -------------------------
