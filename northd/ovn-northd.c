@@ -4579,6 +4579,14 @@ build_dhcpv4_action(struct ovn_port *op, ovs_be32 offer_ip,
                   REGBIT_DHCP_OPTS_RESULT" = put_dhcp_opts(offerip = "
                   IP_FMT", ", IP_ARGS(offer_ip));
 
+    /* hostname is a per Logical_Switch_Port dhcp option,
+     * so try to get it from ovn_port and put it to options_action
+     * if it exists. */
+    const char *hostname = smap_get(&op->nbsp->options, "hostname");
+    if (hostname) {
+        ds_put_format(options_action, "%s = %s, ", "hostname", hostname);
+    }
+
     /* We're not using SMAP_FOR_EACH because we want a consistent order of the
      * options on different architectures (big or little endian, SSE4.2) */
     const struct smap_node **sorted_opts = smap_sort(&dhcpv4_options);
@@ -13566,6 +13574,7 @@ static struct gen_opts_map supported_dhcp_opts[] = {
     DHCP_OPT_BOOTFILE,
     DHCP_OPT_PATH_PREFIX,
     DHCP_OPT_TFTP_SERVER_ADDRESS,
+    DHCP_OPT_HOSTNAME,
     DHCP_OPT_DOMAIN_NAME,
     DHCP_OPT_ARP_CACHE_TIMEOUT,
     DHCP_OPT_TCP_KEEPALIVE_INTERVAL,

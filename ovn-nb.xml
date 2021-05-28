@@ -929,6 +929,15 @@
           If set, indicates the maximum burst size for data sent from this
           interface, in bits.
         </column>
+
+        <column name="options" key="hostname">
+          <p>
+            If set, indicates the DHCPv4 option "Hostname" (option code 12)
+            associated for this Logical Switch Port. If DHCPv4 is enabled for
+            this Logical Switch Port, hostname dhcp option will be included in
+            DHCP reply.
+          </p>
+        </column>
       </group>
 
       <group title="Virtual port Options">
