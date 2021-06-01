@@ -660,6 +660,8 @@ struct ovn_datapath {
     struct lport_addresses dnat_force_snat_addrs;
     struct lport_addresses lb_force_snat_addrs;
     bool lb_force_snat_router_ip;
+    struct sset lb_ips_v4;
+    struct sset lb_ips_v6;
 
     struct ovn_port **localnet_ports;
     size_t n_localnet_ports;
@@ -826,6 +828,58 @@ destroy_nat_entries(struct ovn_datapath *od)
     }
 }
 
+static void
+init_lb_ips(struct ovn_datapath *od)
+{
+    if (!od->nbr) {
+        return;
+    }
+
+    sset_init(&od->lb_ips_v4);
+    sset_init(&od->lb_ips_v6);
+
+    for (int i = 0; i < od->nbr->n_load_balancer; i++) {
+        struct nbrec_load_balancer *lb = od->nbr->load_balancer[i];
+        struct smap *vips = &lb->vips;
+        struct smap_node *node;
+
+        SMAP_FOR_EACH (node, vips) {
+            /* node->key contains IP:port or just IP. */
+            char *ip_address;
+            uint16_t port;
+            int addr_family;
+
+            if (!ip_address_and_port_from_lb_key(node->key, &ip_address, &port,
+                                                 &addr_family)) {
+                continue;
+            }
+
+            struct sset *all_ips;
+            if (addr_family == AF_INET) {
+                all_ips = &od->lb_ips_v4;
+            } else {
+                all_ips = &od->lb_ips_v6;
+            }
+
+            if (!sset_contains(all_ips, ip_address)) {
+                sset_add(all_ips, ip_address);
+            }
+
+            free(ip_address);
+        }
+    }
+}
+
+static void
+destroy_lb_ips(struct ovn_datapath *od)
+{
+    if (!od->nbr) {
+        return;
+    }
+    sset_destroy(&od->lb_ips_v4);
+    sset_destroy(&od->lb_ips_v6);
+}
+
 /* A group of logical router datapaths which are connected - either
  * directly or indirectly.
  * Each logical router can belong to only one group. */
@@ -870,6 +924,7 @@ ovn_datapath_destroy(struct hmap *datapaths, struct ovn_datapath *od)
         destroy_ipam_info(&od->ipam_info);
         free(od->router_ports);
         destroy_nat_entries(od);
+        destroy_lb_ips(od);
         free(od->nat_entries);
         free(od->localnet_ports);
         ovn_ls_port_group_destroy(&od->nb_pgs);
@@ -1223,6 +1278,7 @@ join_datapaths(struct northd_context *ctx, struct hmap *datapaths,
         }
         init_mcast_info_for_datapath(od);
         init_nat_entries(od);
+        init_lb_ips(od);
         ovs_list_push_back(lr_list, &od->lr_list);
     }
 }
@@ -2436,46 +2492,6 @@ join_logical_ports(struct northd_context *ctx,
     }
 }
 
-static void
-get_router_load_balancer_ips(const struct ovn_datapath *od,
-                             struct sset *all_ips_v4, struct sset *all_ips_v6)
-{
-    if (!od->nbr) {
-        return;
-    }
-
-    for (int i = 0; i < od->nbr->n_load_balancer; i++) {
-        struct nbrec_load_balancer *lb = od->nbr->load_balancer[i];
-        struct smap *vips = &lb->vips;
-        struct smap_node *node;
-
-        SMAP_FOR_EACH (node, vips) {
-            /* node->key contains IP:port or just IP. */
-            char *ip_address;
-            uint16_t port;
-            int addr_family;
-
-            if (!ip_address_and_port_from_lb_key(node->key, &ip_address, &port,
-                                                 &addr_family)) {
-                continue;
-            }
-
-            struct sset *all_ips;
-            if (addr_family == AF_INET) {
-                all_ips = all_ips_v4;
-            } else {
-                all_ips = all_ips_v6;
-            }
-
-            if (!sset_contains(all_ips, ip_address)) {
-                sset_add(all_ips, ip_address);
-            }
-
-            free(ip_address);
-        }
-    }
-}
-
 /* Returns an array of strings, each consisting of a MAC address followed
  * by one or more IP addresses, and if the port is a distributed gateway
  * port, followed by 'is_chassis_resident("LPORT_NAME")', where the
@@ -2560,22 +2576,15 @@ get_nat_addresses(const struct ovn_port *op, size_t *n)
         }
     }
 
-    /* Two sets to hold all load-balancer vips. */
-    struct sset all_ips_v4 = SSET_INITIALIZER(&all_ips_v4);
-    struct sset all_ips_v6 = SSET_INITIALIZER(&all_ips_v6);
-    get_router_load_balancer_ips(op->od, &all_ips_v4, &all_ips_v6);
-
     const char *ip_address;
-    SSET_FOR_EACH (ip_address, &all_ips_v4) {
+    SSET_FOR_EACH (ip_address, &op->od->lb_ips_v4) {
         ds_put_format(&c_addresses, " %s", ip_address);
         central_ip_address = true;
     }
-    SSET_FOR_EACH (ip_address, &all_ips_v6) {
+    SSET_FOR_EACH (ip_address, &op->od->lb_ips_v6) {
         ds_put_format(&c_addresses, " %s", ip_address);
         central_ip_address = true;
     }
-    sset_destroy(&all_ips_v4);
-    sset_destroy(&all_ips_v6);
 
     if (central_ip_address) {
         /* Gratuitous ARP for centralized NAT rules on distributed gateway
@@ -6460,7 +6469,7 @@ build_lswitch_rport_arp_req_self_orig_flow(struct ovn_port *op,
  * switching domain as regular broadcast.
  */
 static void
-build_lswitch_rport_arp_req_flow_for_ip(struct sset *ips,
+build_lswitch_rport_arp_req_flow_for_ip(struct ds *ip_match,
                                         int addr_family,
                                         struct ovn_port *patch_op,
                                         struct ovn_datapath *od,
@@ -6484,13 +6493,7 @@ build_lswitch_rport_arp_req_flow_for_ip(struct sset *ips,
         ds_put_cstr(&match, "nd_ns && nd.target == { ");
     }
 
-    const char *ip_address;
-    SSET_FOR_EACH (ip_address, ips) {
-        ds_put_format(&match, "%s, ", ip_address);
-    }
-
-    ds_chomp(&match, ' ');
-    ds_chomp(&match, ',');
+    ds_put_cstr(&match, ds_cstr_ro(ip_match));
     ds_put_cstr(&match, "}");
 
     /* Send a the packet to the router pipeline.  If the switch has non-router
@@ -6540,14 +6543,12 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
      * router port.
      * Priority: 80.
      */
-    struct sset all_ips_v4 = SSET_INITIALIZER(&all_ips_v4);
-    struct sset all_ips_v6 = SSET_INITIALIZER(&all_ips_v6);
-
-    get_router_load_balancer_ips(op->od, &all_ips_v4, &all_ips_v6);
+    struct ds ips_v4_match = DS_EMPTY_INITIALIZER;
+    struct ds ips_v6_match = DS_EMPTY_INITIALIZER;
 
     const char *ip_addr;
     const char *ip_addr_next;
-    SSET_FOR_EACH_SAFE (ip_addr, ip_addr_next, &all_ips_v4) {
+    SSET_FOR_EACH_SAFE (ip_addr, ip_addr_next, &op->od->lb_ips_v4) {
         ovs_be32 ipv4_addr;
 
         /* Check if the ovn port has a network configured on which we could
@@ -6555,12 +6556,10 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
          */
         if (ip_parse(ip_addr, &ipv4_addr) &&
                 lrouter_port_ipv4_reachable(op, ipv4_addr)) {
-            continue;
+            ds_put_format(&ips_v4_match, "%s, ", ip_addr);
         }
-
-        sset_delete(&all_ips_v4, SSET_NODE_FROM_NAME(ip_addr));
     }
-    SSET_FOR_EACH_SAFE (ip_addr, ip_addr_next, &all_ips_v6) {
+    SSET_FOR_EACH_SAFE (ip_addr, ip_addr_next, &op->od->lb_ips_v6) {
         struct in6_addr ipv6_addr;
 
         /* Check if the ovn port has a network configured on which we could
@@ -6568,10 +6567,8 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
          */
         if (ipv6_parse(ip_addr, &ipv6_addr) &&
                 lrouter_port_ipv6_reachable(op, &ipv6_addr)) {
-            continue;
+            ds_put_format(&ips_v6_match, "%s, ", ip_addr);
         }
-
-        sset_delete(&all_ips_v6, SSET_NODE_FROM_NAME(ip_addr));
     }
 
     for (size_t i = 0; i < op->od->nbr->n_nat; i++) {
@@ -6592,38 +6589,43 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
         if (nat_entry_is_v6(nat_entry)) {
             struct in6_addr *addr = &nat_entry->ext_addrs.ipv6_addrs[0].addr;
 
-            if (lrouter_port_ipv6_reachable(op, addr)) {
-                sset_add(&all_ips_v6, nat->external_ip);
+            if (lrouter_port_ipv6_reachable(op, addr) &&
+                    !sset_contains(&op->od->lb_ips_v6, nat->external_ip)) {
+                ds_put_format(&ips_v6_match, "%s, ", nat->external_ip);
             }
         } else {
             ovs_be32 addr = nat_entry->ext_addrs.ipv4_addrs[0].addr;
 
-            if (lrouter_port_ipv4_reachable(op, addr)) {
-                sset_add(&all_ips_v4, nat->external_ip);
+            if (lrouter_port_ipv4_reachable(op, addr) &&
+                    !sset_contains(&op->od->lb_ips_v4, nat->external_ip)) {
+                ds_put_format(&ips_v4_match, "%s, ", nat->external_ip);
             }
         }
     }
 
     for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
-        sset_add(&all_ips_v4, op->lrp_networks.ipv4_addrs[i].addr_s);
+        ds_put_format(&ips_v4_match, "%s, ",
+                      op->lrp_networks.ipv4_addrs[i].addr_s);
     }
     for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
-        sset_add(&all_ips_v6, op->lrp_networks.ipv6_addrs[i].addr_s);
+        ds_put_format(&ips_v6_match, "%s, ",
+                      op->lrp_networks.ipv6_addrs[i].addr_s);
     }
 
-    if (!sset_is_empty(&all_ips_v4)) {
-        build_lswitch_rport_arp_req_flow_for_ip(&all_ips_v4, AF_INET, sw_op,
+    if (ds_last(&ips_v4_match) != EOF) {
+        ds_chomp(&ips_v4_match, ' ');
+        ds_chomp(&ips_v4_match, ',');
+        build_lswitch_rport_arp_req_flow_for_ip(&ips_v4_match, AF_INET, sw_op,
                                                 sw_od, 80, lflows,
                                                 stage_hint);
     }
-    if (!sset_is_empty(&all_ips_v6)) {
-        build_lswitch_rport_arp_req_flow_for_ip(&all_ips_v6, AF_INET6, sw_op,
+    if (ds_last(&ips_v6_match) != EOF) {
+        ds_chomp(&ips_v6_match, ' ');
+        ds_chomp(&ips_v6_match, ',');
+        build_lswitch_rport_arp_req_flow_for_ip(&ips_v6_match, AF_INET6, sw_op,
                                                 sw_od, 80, lflows,
                                                 stage_hint);
     }
-
-    sset_destroy(&all_ips_v4);
-    sset_destroy(&all_ips_v6);
 
     /* Self originated ARP requests/ND need to be flooded as usual.
      *
@@ -6635,6 +6637,8 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
     if (sw_od->n_router_ports != sw_od->nbs->n_ports) {
         build_lswitch_rport_arp_req_self_orig_flow(op, 75, sw_od, lflows);
     }
+    ds_destroy(&ips_v4_match);
+    ds_destroy(&ips_v6_match);
 }
 
 static void
@@ -11073,13 +11077,8 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
                                    &op->nbrp->header_, lflows);
         }
 
-        /* A set to hold all load-balancer vips that need ARP responses. */
-        struct sset all_ips_v4 = SSET_INITIALIZER(&all_ips_v4);
-        struct sset all_ips_v6 = SSET_INITIALIZER(&all_ips_v6);
-        get_router_load_balancer_ips(op->od, &all_ips_v4, &all_ips_v6);
-
         const char *ip_address;
-        if (sset_count(&all_ips_v4)) {
+        if (sset_count(&op->od->lb_ips_v4)) {
             ds_clear(match);
             if (op == op->od->l3dgw_port) {
                 ds_put_format(match, "is_chassis_resident(%s)",
@@ -11091,7 +11090,7 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
             /* For IPv4 we can just create one rule with all required IPs. */
             ds_put_cstr(&load_balancer_ips_v4, "{ ");
             ds_put_and_free_cstr(&load_balancer_ips_v4,
-                                 sset_join(&all_ips_v4, ", ", " }"));
+                                 sset_join(&op->od->lb_ips_v4, ", ", " }"));
 
             build_lrouter_arp_flow(op->od, op, ds_cstr(&load_balancer_ips_v4),
                                    REG_INPORT_ETH_ADDR,
@@ -11099,7 +11098,7 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
             ds_destroy(&load_balancer_ips_v4);
         }
 
-        SSET_FOR_EACH (ip_address, &all_ips_v6) {
+        SSET_FOR_EACH (ip_address, &op->od->lb_ips_v6) {
             ds_clear(match);
             if (op == op->od->l3dgw_port) {
                 ds_put_format(match, "is_chassis_resident(%s)",
@@ -11110,9 +11109,6 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
                                   ip_address, NULL, REG_INPORT_ETH_ADDR,
                                   match, false, 90, NULL, lflows);
         }
-
-        sset_destroy(&all_ips_v4);
-        sset_destroy(&all_ips_v6);
 
         if (!smap_get(&op->od->nbr->options, "chassis")
             && !op->od->l3dgw_port) {
