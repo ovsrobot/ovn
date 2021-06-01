@@ -1862,7 +1862,7 @@ for (&SwitchACL(.sw = sw@&Switch{._uuid = ls_uuid}, .acl = &acl)) {
         }
     };
     if (sw.has_stateless_acl) {
-        if (acl.action == "allow-related") {
+        if ((sw.has_stateful_acl and acl.action == "allow") or acl.action == "allow-related") {
             if (acl.direction == "from-lport") {
                 Flow(.logical_datapath = ls_uuid,
                      .stage            = s_SWITCH_IN_PRE_ACL(),
