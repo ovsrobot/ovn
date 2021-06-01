@@ -450,7 +450,9 @@
       priority-110 flow is added to skip over stateful ACLs. IPv6 Neighbor
       Discovery and MLD traffic also skips stateful ACLs. For "allow-stateless"
       ACLs, a flow is added to bypass setting the hint for connection tracker
-      processing.
+      processing. If both "allow-stateless" and "allow-related" rules are
+      present, rules with appropriate priority are added to set
+      <code>reg0[0]</code> for stateful traffic.
     </p>
 
     <p>

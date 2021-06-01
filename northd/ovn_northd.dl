@@ -1841,7 +1841,7 @@ for (&Switch(._uuid =ls_uuid)) {
          .external_ids     = map_empty())
 }
 
-for (&SwitchACL(.sw = sw@&Switch{._uuid = ls_uuid}, .acl = &acl, .has_fair_meter = fair_meter)) {
+for (&SwitchACL(.sw = sw@&Switch{._uuid = ls_uuid}, .acl = &acl)) {
     if (sw.has_stateful_acl) {
         if (acl.action == "allow-stateless") {
             if (acl.direction == "from-lport") {
@@ -1857,6 +1857,25 @@ for (&SwitchACL(.sw = sw@&Switch{._uuid = ls_uuid}, .acl = &acl, .has_fair_meter
                      .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
                      .__match          = acl.__match,
                      .actions          = "next;",
+                     .external_ids     = stage_hint(acl._uuid))
+            }
+        }
+    };
+    if (sw.has_stateless_acl) {
+        if (acl.action == "allow-related") {
+            if (acl.direction == "from-lport") {
+                Flow(.logical_datapath = ls_uuid,
+                     .stage            = s_SWITCH_IN_PRE_ACL(),
+                     .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                     .__match          = "ip && ${acl.__match}",
+                     .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
+                     .external_ids     = stage_hint(acl._uuid))
+            } else {
+                Flow(.logical_datapath = ls_uuid,
+                     .stage            = s_SWITCH_OUT_PRE_ACL(),
+                     .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                     .__match          = "ip && ${acl.__match}",
+                     .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
                      .external_ids     = stage_hint(acl._uuid))
             }
         }

@@ -4989,6 +4989,38 @@ skip_port_from_conntrack(struct ovn_datapath *od, struct ovn_port *op,
     ds_destroy(&match_out);
 }
 
+static bool
+apply_to_each_acl_of_action(struct ovn_datapath *od,
+                            const struct hmap *port_groups,
+                            struct hmap *lflows, const char *action,
+                            void (*func)(struct ovn_datapath *,
+                                         const struct nbrec_acl *,
+                                         struct hmap *))
+{
+    bool applied = false;
+    for (size_t i = 0; i < od->nbs->n_acls; i++) {
+        const struct nbrec_acl *acl = od->nbs->acls[i];
+        if (!strcmp(acl->action, action)) {
+            func(od, acl, lflows);
+            applied = true;
+        }
+    }
+
+    struct ovn_port_group *pg;
+    HMAP_FOR_EACH (pg, key_node, port_groups) {
+        if (ovn_port_group_ls_find(pg, &od->nbs->header_.uuid)) {
+            for (size_t i = 0; i < pg->nb_pg->n_acls; i++) {
+                const struct nbrec_acl *acl = pg->nb_pg->acls[i];
+                if (!strcmp(acl->action, action)) {
+                    func(od, acl, lflows);
+                    applied = true;
+                }
+            }
+        }
+    }
+    return applied;
+}
+
 static void
 build_stateless_filter(struct ovn_datapath *od,
                        const struct nbrec_acl *acl,
@@ -5009,28 +5041,47 @@ build_stateless_filter(struct ovn_datapath *od,
     }
 }
 
-static void
-build_stateless_filters(struct ovn_datapath *od, struct hmap *port_groups,
+static bool
+build_stateless_filters(struct ovn_datapath *od,
+                        const struct hmap *port_groups,
                         struct hmap *lflows)
 {
-    for (size_t i = 0; i < od->nbs->n_acls; i++) {
-        const struct nbrec_acl *acl = od->nbs->acls[i];
-        if (!strcmp(acl->action, "allow-stateless")) {
-            build_stateless_filter(od, acl, lflows);
-        }
-    }
+    return apply_to_each_acl_of_action(
+        od, port_groups, lflows, "allow-stateless", build_stateless_filter);
+}
 
-    struct ovn_port_group *pg;
-    HMAP_FOR_EACH (pg, key_node, port_groups) {
-        if (ovn_port_group_ls_find(pg, &od->nbs->header_.uuid)) {
-            for (size_t i = 0; i < pg->nb_pg->n_acls; i++) {
-                const struct nbrec_acl *acl = pg->nb_pg->acls[i];
-                if (!strcmp(acl->action, "allow-stateless")) {
-                    build_stateless_filter(od, acl, lflows);
-                }
-            }
-        }
+static void
+build_stateful_override_filter(struct ovn_datapath *od,
+                               const struct nbrec_acl *acl,
+                               struct hmap *lflows)
+{
+    struct ds match = DS_EMPTY_INITIALIZER;
+    ds_put_format(&match, "ip && %s", acl->match);
+
+    if (!strcmp(acl->direction, "from-lport")) {
+        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_PRE_ACL,
+                                acl->priority + OVN_ACL_PRI_OFFSET,
+                                ds_cstr(&match),
+                                REGBIT_CONNTRACK_DEFRAG" = 1; next;",
+                                &acl->header_);
+    } else {
+        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
+                                acl->priority + OVN_ACL_PRI_OFFSET,
+                                ds_cstr(&match),
+                                REGBIT_CONNTRACK_DEFRAG" = 1; next;",
+                                &acl->header_);
     }
+    ds_destroy(&match);
+}
+
+static void
+build_stateful_override_filters(struct ovn_datapath *od,
+                                const struct hmap *port_groups,
+                                struct hmap *lflows)
+{
+    apply_to_each_acl_of_action(
+        od, port_groups, lflows, "allow-related",
+        build_stateful_override_filter);
 }
 
 static void
@@ -5063,7 +5114,9 @@ build_pre_acls(struct ovn_datapath *od, struct hmap *port_groups,
                                      110, lflows);
         }
 
-        build_stateless_filters(od, port_groups, lflows);
+        if (build_stateless_filters(od, port_groups, lflows)) {
+            build_stateful_override_filters(od, port_groups, lflows);
+        }
 
         /* Ingress and Egress Pre-ACL Table (Priority 110).
          *
