@@ -633,6 +633,8 @@ struct ovn_datapath {
     uint32_t port_key_hint;
 
     bool has_stateful_acl;
+    bool has_stateless_from;
+    bool has_stateless_to;
     bool has_lb_vip;
     bool has_unknown;
     bool has_acls;
@@ -4765,19 +4767,46 @@ ovn_ls_port_group_destroy(struct hmap *nb_pgs)
     hmap_destroy(nb_pgs);
 }
 
+static bool
+ls_get_acl_flags_for_acl(struct ovn_datapath *od,
+                         const struct nbrec_acl *acl)
+{
+    if (!strcmp(acl->action, "allow-related")) {
+        od->has_stateful_acl = true;
+        if (od->has_stateless_to && od->has_stateless_from) {
+            return true;
+        }
+    }
+    if (!strcmp(acl->action, "allow-stateless")) {
+        if (!strcmp(acl->direction, "from-lport")) {
+            od->has_stateless_from = true;
+            if (od->has_stateful_acl && od->has_stateless_to) {
+                return true;
+            }
+        } else {
+            od->has_stateless_to = true;
+            if (od->has_stateful_acl && od->has_stateless_from) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static void
 ls_get_acl_flags(struct ovn_datapath *od)
 {
     od->has_acls = false;
     od->has_stateful_acl = false;
+    od->has_stateless_from = false;
+    od->has_stateless_to = false;
 
     if (od->nbs->n_acls) {
         od->has_acls = true;
 
         for (size_t i = 0; i < od->nbs->n_acls; i++) {
             struct nbrec_acl *acl = od->nbs->acls[i];
-            if (!strcmp(acl->action, "allow-related")) {
-                od->has_stateful_acl = true;
+            if (ls_get_acl_flags_for_acl(od, acl)) {
                 return;
             }
         }
@@ -4790,8 +4819,7 @@ ls_get_acl_flags(struct ovn_datapath *od)
 
             for (size_t i = 0; i < ls_pg->nb_pg->n_acls; i++) {
                 struct nbrec_acl *acl = ls_pg->nb_pg->acls[i];
-                if (!strcmp(acl->action, "allow-related")) {
-                    od->has_stateful_acl = true;
+                if (ls_get_acl_flags_for_acl(od, acl)) {
                     return;
                 }
             }
@@ -4990,17 +5018,20 @@ skip_port_from_conntrack(struct ovn_datapath *od, struct ovn_port *op,
 }
 
 static bool
-apply_to_each_acl_of_action(struct ovn_datapath *od,
-                            const struct hmap *port_groups,
-                            struct hmap *lflows, const char *action,
-                            void (*func)(struct ovn_datapath *,
-                                         const struct nbrec_acl *,
-                                         struct hmap *))
+apply_to_each_acl_of_action_and_direction(
+        struct ovn_datapath *od,
+        const struct hmap *port_groups,
+        struct hmap *lflows,
+        const char *action, const char *direction,
+        void (*func)(struct ovn_datapath *,
+                     const struct nbrec_acl *,
+                     struct hmap *))
 {
     bool applied = false;
     for (size_t i = 0; i < od->nbs->n_acls; i++) {
         const struct nbrec_acl *acl = od->nbs->acls[i];
-        if (!strcmp(acl->action, action)) {
+        if (!strcmp(acl->action, action) &&
+                (!direction || !strcmp(acl->direction, direction))) {
             func(od, acl, lflows);
             applied = true;
         }
@@ -5011,7 +5042,8 @@ apply_to_each_acl_of_action(struct ovn_datapath *od,
         if (ovn_port_group_ls_find(pg, &od->nbs->header_.uuid)) {
             for (size_t i = 0; i < pg->nb_pg->n_acls; i++) {
                 const struct nbrec_acl *acl = pg->nb_pg->acls[i];
-                if (!strcmp(acl->action, action)) {
+                if (!strcmp(acl->action, action) &&
+                        (!direction || !strcmp(acl->direction, direction))) {
                     func(od, acl, lflows);
                     applied = true;
                 }
@@ -5046,8 +5078,9 @@ build_stateless_filters(struct ovn_datapath *od,
                         const struct hmap *port_groups,
                         struct hmap *lflows)
 {
-    return apply_to_each_acl_of_action(
-        od, port_groups, lflows, "allow-stateless", build_stateless_filter);
+    return apply_to_each_acl_of_action_and_direction(
+        od, port_groups, lflows, "allow-stateless", NULL,
+        build_stateless_filter);
 }
 
 static void
@@ -5075,16 +5108,32 @@ build_stateful_override_filter(struct ovn_datapath *od,
 }
 
 static void
+build_stateful_override_filters_for_direction(struct ovn_datapath *od,
+                                              const struct hmap *port_groups,
+                                              struct hmap *lflows,
+                                              const char *direction)
+{
+    apply_to_each_acl_of_action_and_direction(
+        od, port_groups, lflows, "allow-related", direction,
+        build_stateful_override_filter);
+    apply_to_each_acl_of_action_and_direction(
+        od, port_groups, lflows, "allow", direction,
+        build_stateful_override_filter);
+}
+
+static void
 build_stateful_override_filters(struct ovn_datapath *od,
                                 const struct hmap *port_groups,
                                 struct hmap *lflows)
 {
-    apply_to_each_acl_of_action(
-        od, port_groups, lflows, "allow-related",
-        build_stateful_override_filter);
-    apply_to_each_acl_of_action(
-        od, port_groups, lflows, "allow",
-        build_stateful_override_filter);
+    if (od->has_stateless_from) {
+        build_stateful_override_filters_for_direction(
+            od, port_groups, lflows, "from-lport");
+    }
+    if (od->has_stateless_to) {
+        build_stateful_override_filters_for_direction(
+            od, port_groups, lflows, "to-lport");
+    }
 }
 
 static void

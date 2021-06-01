@@ -134,16 +134,39 @@ LogicalSwitchStatelessACL(ls, acl) :-
     LogicalSwitchACL(ls, acl),
     &nb::ACL(._uuid = acl, .action = "allow-stateless").
 
+relation LogicalSwitchStatelessFromACL(ls: uuid, acl: uuid)
+
+LogicalSwitchStatelessFromACL(ls, acl) :-
+    LogicalSwitchStatelessACL(ls, acl),
+    &nb::ACL(._uuid = acl, .direction = "from-lport").
+
 // "Pitfalls of projections" in ddlog-new-feature.rst explains why this
 // is an output relation:
-output relation LogicalSwitchHasStatelessACL(ls: uuid, has_stateless_acl: bool)
+output relation LogicalSwitchHasStatelessFromACL(ls: uuid, has_stateless_from_acl: bool)
 
-LogicalSwitchHasStatelessACL(ls, true) :-
-    LogicalSwitchStatelessACL(ls, _).
+LogicalSwitchHasStatelessFromACL(ls, true) :-
+    LogicalSwitchStatelessFromACL(ls, _).
 
-LogicalSwitchHasStatelessACL(ls, false) :-
+LogicalSwitchHasStatelessFromACL(ls, false) :-
     nb::Logical_Switch(._uuid = ls),
-    not LogicalSwitchStatelessACL(ls, _).
+    not LogicalSwitchStatelessFromACL(ls, _).
+
+relation LogicalSwitchStatelessToACL(ls: uuid, acl: uuid)
+
+LogicalSwitchStatelessToACL(ls, acl) :-
+    LogicalSwitchStatelessACL(ls, acl),
+    &nb::ACL(._uuid = acl, .direction = "to-lport").
+
+// "Pitfalls of projections" in ddlog-new-feature.rst explains why this
+// is an output relation:
+output relation LogicalSwitchHasStatelessToACL(ls: uuid, has_stateless_to_acl: bool)
+
+LogicalSwitchHasStatelessToACL(ls, true) :-
+    LogicalSwitchStatelessToACL(ls, _).
+
+LogicalSwitchHasStatelessToACL(ls, false) :-
+    nb::Logical_Switch(._uuid = ls),
+    not LogicalSwitchStatelessToACL(ls, _).
 
 // "Pitfalls of projections" in ddlog-new-feature.rst explains why this
 // is an output relation:
@@ -230,17 +253,18 @@ typedef Switch = Switch {
     external_ids:      Map<string,string>,
 
     /* Additional computed fields. */
-    has_stateful_acl:  bool,
-    has_stateless_acl: bool,
-    has_acls:          bool,
-    has_lb_vip:        bool,
-    has_dns_records:   bool,
-    has_unknown_ports: bool,
-    localnet_ports:    Vec<(uuid, string)>,  // UUID and name of each localnet port.
-    subnet:            Option<(in_addr/*subnet*/, in_addr/*mask*/, bit<32>/*start_ipv4*/, bit<32>/*total_ipv4s*/)>,
-    ipv6_prefix:       Option<in6_addr>,
-    mcast_cfg:         Intern<McastSwitchCfg>,
-    is_vlan_transparent: bool,
+    has_stateful_acl:       bool,
+    has_stateless_from_acl: bool,
+    has_stateless_to_acl:   bool,
+    has_acls:               bool,
+    has_lb_vip:             bool,
+    has_dns_records:        bool,
+    has_unknown_ports:      bool,
+    localnet_ports:         Vec<(uuid, string)>,  // UUID and name of each localnet port.
+    subnet:                 Option<(in_addr/*subnet*/, in_addr/*mask*/, bit<32>/*start_ipv4*/, bit<32>/*total_ipv4s*/)>,
+    ipv6_prefix:            Option<in6_addr>,
+    mcast_cfg:              Intern<McastSwitchCfg>,
+    is_vlan_transparent:    bool,
 
     /* Does this switch have at least one port with type != "router"? */
     has_non_router_port: bool
@@ -267,8 +291,9 @@ Switch[Switch{
            .other_config      = ls.other_config,
            .external_ids      = ls.external_ids,
 
-           .has_stateful_acl  = has_stateful_acl,
-           .has_stateless_acl = has_stateless_acl,
+           .has_stateful_acl       = has_stateful_acl,
+           .has_stateless_from_acl = has_stateless_from_acl,
+           .has_stateless_to_acl   = has_stateless_to_acl,
            .has_acls          = has_acls,
            .has_lb_vip        = has_lb_vip,
            .has_dns_records   = has_dns_records,
@@ -282,7 +307,8 @@ Switch[Switch{
        }.intern()] :-
     nb::Logical_Switch[ls],
     LogicalSwitchHasStatefulACL(ls._uuid, has_stateful_acl),
-    LogicalSwitchHasStatelessACL(ls._uuid, has_stateless_acl),
+    LogicalSwitchHasStatelessFromACL(ls._uuid, has_stateless_from_acl),
+    LogicalSwitchHasStatelessToACL(ls._uuid, has_stateless_to_acl),
     LogicalSwitchHasACLs(ls._uuid, has_acls),
     LogicalSwitchHasLBVIP(ls._uuid, has_lb_vip),
     LogicalSwitchHasDNSRecords(ls._uuid, has_dns_records),
