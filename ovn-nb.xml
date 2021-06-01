@@ -1812,7 +1812,12 @@
           for inbound replies.  For example, if you define a rule to allow
           outgoing TCP traffic directed to an IP address, then you probably
           also want to define another rule to allow incoming TCP traffic coming
-          from this same IP address.
+          from this same IP address. When used in combination with stateful
+          ACLs with overlapping matching rules, attention should be given to
+          the fact that <code>allow-stateless</code> ACLs may "cancel out"
+          effect for stateful rules by omitting sending some returning traffic
+          to connection tracker even when it may belong to other overlapping
+          rules too.
         </li>
 
         <li>
