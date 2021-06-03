@@ -13,26 +13,27 @@
  * limitations under the License.
  */
 
-#ifndef OVN_FEATURES_H
-#define OVN_FEATURES_H 1
+#include <config.h>
 
-#include <stdbool.h>
+#include "ovn/features.h"
 
-/* ovn-controller supported feature names. */
-#define OVN_FEATURE_PORT_UP_NOTIF "port-up-notif"
+static enum ovs_feature_support ovs_features;
 
-/* OVS datapath supported features.  Based on availability OVN might generate
- * different types of openflows.
+enum ovs_feature_support
+ovs_feature_support_get(void)
+{
+    return ovs_features;
+}
+
+/* Returns 'true' if the OVS feature set has been updated since the last
+ * call.
  */
-enum ovs_feature_support_bits {
-    OVS_CT_ZERO_SNAT_SUPPORT_BIT,
-};
-
-enum ovs_feature_support {
-    OVS_CT_ZERO_SNAT_SUPPORT = (1 << OVS_CT_ZERO_SNAT_SUPPORT_BIT),
-};
-
-enum ovs_feature_support ovs_feature_support_get(void);
-bool ovs_feature_support_update(enum ovs_feature_support features);
-
-#endif
+bool
+ovs_feature_support_update(enum ovs_feature_support features)
+{
+    if (features != ovs_features) {
+        ovs_features = features;
+        return true;
+    }
+    return false;
+}
