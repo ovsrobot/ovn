@@ -582,6 +582,7 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
         .is_switch = datapath_is_switch(dp),
         .group_table = l_ctx_out->group_table,
         .meter_table = l_ctx_out->meter_table,
+        .dp_features = ovs_feature_support_get(),
         .lflow_uuid = lflow->header_.uuid,
 
         .pipeline = ingress ? OVNACT_P_INGRESS : OVNACT_P_EGRESS,

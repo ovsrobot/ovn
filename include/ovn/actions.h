@@ -25,6 +25,7 @@
 #include "openvswitch/hmap.h"
 #include "openvswitch/uuid.h"
 #include "util.h"
+#include "ovn/features.h"
 
 struct expr;
 struct lexer;
@@ -755,6 +756,9 @@ struct ovnact_encode_params {
 
     /* A struct to figure out the meter_id for meter actions. */
     struct ovn_extend_table *meter_table;
+
+    /* OVS datapath supported features. */
+    enum ovs_feature_support dp_features;
 
     /* The logical flow uuid that drove this action. */
     struct uuid lflow_uuid;
