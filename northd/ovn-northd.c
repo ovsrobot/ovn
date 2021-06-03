@@ -1455,13 +1455,14 @@ destroy_routable_addresses(struct ovn_port_routable_addresses *ra)
     free(ra->laddrs);
 }
 
-static char **get_nat_addresses(const struct ovn_port *op, size_t *n);
+static char **get_nat_addresses(const struct ovn_port *op, size_t *n,
+                                bool routable_only);
 
 static void
 assign_routable_addresses(struct ovn_port *op)
 {
     size_t n;
-    char **nats = get_nat_addresses(op, &n);
+    char **nats = get_nat_addresses(op, &n, true);
 
     if (!nats) {
         return;
@@ -2511,7 +2512,7 @@ join_logical_ports(struct northd_context *ctx,
 }
 
 static void
-get_router_load_balancer_ips(const struct ovn_datapath *od,
+get_router_load_balancer_ips(const struct ovn_datapath *od, bool routable_only,
                              struct sset *all_ips_v4, struct sset *all_ips_v6)
 {
     if (!od->nbr) {
@@ -2522,6 +2523,11 @@ get_router_load_balancer_ips(const struct ovn_datapath *od,
         struct nbrec_load_balancer *lb = od->nbr->load_balancer[i];
         struct smap *vips = &lb->vips;
         struct smap_node *node;
+
+        if (routable_only &&
+            !smap_get_bool(&lb->options, "add_route", false)) {
+            continue;
+        }
 
         SMAP_FOR_EACH (node, vips) {
             /* node->key contains IP:port or just IP. */
@@ -2561,7 +2567,7 @@ get_router_load_balancer_ips(const struct ovn_datapath *od,
  * The caller must free each of the n returned strings with free(),
  * and must free the returned array when it is no longer needed. */
 static char **
-get_nat_addresses(const struct ovn_port *op, size_t *n)
+get_nat_addresses(const struct ovn_port *op, size_t *n, bool routable_only)
 {
     size_t n_nats = 0;
     struct eth_addr mac;
@@ -2583,6 +2589,12 @@ get_nat_addresses(const struct ovn_port *op, size_t *n)
     for (size_t i = 0; i < op->od->nbr->n_nat; i++) {
         const struct nbrec_nat *nat = op->od->nbr->nat[i];
         ovs_be32 ip, mask;
+
+        if (routable_only &&
+            (!strcmp(nat->type, "snat") ||
+             !smap_get_bool(&nat->options, "add_route", false))) {
+            continue;
+        }
 
         char *error = ip_parse_masked(nat->external_ip, &ip, &mask);
         if (error || mask != OVS_BE32_MAX) {
@@ -2637,7 +2649,8 @@ get_nat_addresses(const struct ovn_port *op, size_t *n)
     /* Two sets to hold all load-balancer vips. */
     struct sset all_ips_v4 = SSET_INITIALIZER(&all_ips_v4);
     struct sset all_ips_v6 = SSET_INITIALIZER(&all_ips_v6);
-    get_router_load_balancer_ips(op->od, &all_ips_v4, &all_ips_v6);
+    get_router_load_balancer_ips(op->od, routable_only,
+                                 &all_ips_v4, &all_ips_v6);
 
     const char *ip_address;
     SSET_FOR_EACH (ip_address, &all_ips_v4) {
@@ -3160,7 +3173,7 @@ ovn_port_update_sbrec(struct northd_context *ctx,
             if (nat_addresses && !strcmp(nat_addresses, "router")) {
                 if (op->peer && op->peer->od
                     && (chassis || op->peer->od->l3redirect_port)) {
-                    nats = get_nat_addresses(op->peer, &n_nats);
+                    nats = get_nat_addresses(op->peer, &n_nats, false);
                 }
             /* Only accept manual specification of ethernet address
              * followed by IPv4 addresses on type "l3gateway" ports. */
@@ -6616,7 +6629,7 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
     struct sset all_ips_v4 = SSET_INITIALIZER(&all_ips_v4);
     struct sset all_ips_v6 = SSET_INITIALIZER(&all_ips_v6);
 
-    get_router_load_balancer_ips(op->od, &all_ips_v4, &all_ips_v6);
+    get_router_load_balancer_ips(op->od, false, &all_ips_v4, &all_ips_v6);
 
     const char *ip_addr;
     const char *ip_addr_next;
@@ -11178,7 +11191,7 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
         /* A set to hold all load-balancer vips that need ARP responses. */
         struct sset all_ips_v4 = SSET_INITIALIZER(&all_ips_v4);
         struct sset all_ips_v6 = SSET_INITIALIZER(&all_ips_v6);
-        get_router_load_balancer_ips(op->od, &all_ips_v4, &all_ips_v6);
+        get_router_load_balancer_ips(op->od, false, &all_ips_v4, &all_ips_v6);
 
         const char *ip_address;
         if (sset_count(&all_ips_v4)) {
