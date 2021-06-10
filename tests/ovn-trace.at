@@ -270,3 +270,81 @@ AT_CHECK([ovn-trace --ovs lsw0 'inport == "lp1" && eth.type == 0x1234' | grep "d
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- trace with IPv4 dnat])
+AT_KEYWORDS([dnat])
+ovn_start
+
+ovn-nbctl ls-add sw0
+ovn-nbctl lsp-add sw0 sw0-port1
+ovn-nbctl lsp-set-addresses sw0-port1 "50:54:00:00:00:01 192.168.0.2"
+
+ovn-nbctl ls-add sw1
+ovn-nbctl lsp-add sw1 sw1-port1
+ovn-nbctl lsp-set-addresses sw1-port1 "50:54:00:00:00:03 11.0.0.2"
+
+ovn-nbctl lr-add lr0
+ovn-nbctl lrp-add lr0 lrp0 00:00:00:00:ff:01 192.168.0.1/24
+ovn-nbctl lsp-add sw0 lrp0-attachment
+ovn-nbctl lsp-set-type lrp0-attachment router
+ovn-nbctl lsp-set-addresses lrp0-attachment 00:00:00:00:ff:01
+ovn-nbctl lsp-set-options lrp0-attachment router-port=lrp0
+ovn-nbctl lrp-add lr0 lrp1 00:00:00:00:ff:02 11.0.0.1/24 -- lrp-set-gateway-chassis lrp1 chassis-1
+ovn-nbctl lsp-add sw1 lrp1-attachment
+ovn-nbctl lsp-set-type lrp1-attachment router
+ovn-nbctl lsp-set-addresses lrp1-attachment 00:00:00:00:ff:02
+ovn-nbctl lsp-set-options lrp1-attachment router-port=lrp1
+
+ovn-nbctl lr-nat-add lr0 dnat 42.42.42.42 192.168.0.2
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([ovn-trace --minimal 'inport == "sw1-port1" && eth.src == 50:54:00:00:00:03 && eth.dst == 00:00:00:00:ff:02 && ip4.dst == 42.42.42.42 && ip4.src == 11.0.0.2 && ip.ttl == 64' | grep "output(\"sw0-port1\")"], [0], [ignore])
+
+dnl If we remove the DNAT entry we will be unable to trace to the DNAT address
+ovn-nbctl lr-nat-del lr0 dnat 42.42.42.42
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([ovn-trace --minimal 'inport == "sw1-port1" && eth.src == 50:54:00:00:00:03 && eth.dst == 00:00:00:00:ff:02 && ip4.dst == 42.42.42.42 && ip4.src == 11.0.0.2 && ip.ttl == 64' | grep "output(\"sw0-port1\")"], [1], [ignore])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- trace with IPv6 dnat])
+AT_KEYWORDS([dnat])
+ovn_start
+
+ovn-nbctl ls-add sw0
+ovn-nbctl lsp-add sw0 sw0-port1
+ovn-nbctl lsp-set-addresses sw0-port1 "50:54:00:00:00:01 fd68::2"
+
+ovn-nbctl ls-add sw1
+ovn-nbctl lsp-add sw1 sw1-port1
+ovn-nbctl lsp-set-addresses sw1-port1 "50:54:00:00:00:03 fd11::2"
+
+ovn-nbctl lr-add lr0
+ovn-nbctl lrp-add lr0 lrp0 00:00:00:00:ff:01 fd68::1/64
+ovn-nbctl lsp-add sw0 lrp0-attachment
+ovn-nbctl lsp-set-type lrp0-attachment router
+ovn-nbctl lsp-set-addresses lrp0-attachment 00:00:00:00:ff:01
+ovn-nbctl lsp-set-options lrp0-attachment router-port=lrp0
+ovn-nbctl lrp-add lr0 lrp1 00:00:00:00:ff:02 fd11::1/64 -- lrp-set-gateway-chassis lrp1 chassis-1
+ovn-nbctl lsp-add sw1 lrp1-attachment
+ovn-nbctl lsp-set-type lrp1-attachment router
+ovn-nbctl lsp-set-addresses lrp1-attachment 00:00:00:00:ff:02
+ovn-nbctl lsp-set-options lrp1-attachment router-port=lrp1
+
+ovn-nbctl lr-nat-add lr0 dnat fd42::42 fd68::2
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([ovn-trace --minimal 'inport == "sw1-port1" && eth.src == 50:54:00:00:00:03 && eth.dst == 00:00:00:00:ff:02 && ip6.dst == fd42::42 && ip6.src == fd11::2 && ip.ttl == 64' | grep "output(\"sw0-port1\")"], [0], [ignore])
+
+dnl If we remove the DNAT entry we will be unable to trace to the DNAT address
+ovn-nbctl lr-nat-del lr0 dnat fd42::42
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([ovn-trace --minimal 'inport == "sw1-port1" && eth.src == 50:54:00:00:00:03 && eth.dst == 00:00:00:00:ff:02 && ip6.dst == fd42::42 && ip6.src == fd11::2 && ip.ttl == 64' | grep "output(\"sw0-port1\")"], [1], [ignore])
+
+AT_CLEANUP
+])
