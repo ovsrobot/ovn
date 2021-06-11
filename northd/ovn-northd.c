@@ -3663,9 +3663,6 @@ build_ports(struct northd_context *ctx,
     sset_destroy(&active_ha_chassis_grps);
 }
 
-/* XXX: The 'ovn_lflow_add_unique*()' functions should be used for logical
- *      flows using a multicast group.
- *      See the comment on 'ovn_lflow_add_unique()' for details. */
 struct multicast_group {
     const char *name;
     uint16_t key;               /* OVN_MIN_MULTICAST...OVN_MAX_MULTICAST. */
@@ -4087,14 +4084,14 @@ static struct hashrow_locks lflow_locks;
  * Version to use when locking is required.
  */
 static void
-do_ovn_lflow_add(struct hmap *lflow_map, bool shared,
+do_ovn_lflow_add(struct hmap *lflow_map,
                  struct ovn_datapath *od,
                  uint32_t hash, struct ovn_lflow *lflow)
 {
 
     struct ovn_lflow *old_lflow;
 
-    if (shared && use_logical_dp_groups) {
+    if (use_logical_dp_groups) {
         old_lflow = ovn_lflow_find_by_lflow(lflow_map, lflow, hash);
         if (old_lflow) {
             ovn_lflow_destroy(NULL, lflow);
@@ -4111,7 +4108,7 @@ do_ovn_lflow_add(struct hmap *lflow_map, bool shared,
 static void
 ovn_lflow_add_at(struct hmap *lflow_map, struct ovn_datapath *od,
                  enum ovn_stage stage, uint16_t priority,
-                 const char *match, const char *actions, bool shared,
+                 const char *match, const char *actions,
                  const struct ovsdb_idl_row *stage_hint, const char *where)
 {
     ovs_assert(ovn_stage_to_datapath_type(stage) == ovn_datapath_get_type(od));
@@ -4131,40 +4128,21 @@ ovn_lflow_add_at(struct hmap *lflow_map, struct ovn_datapath *od,
 
     if (use_logical_dp_groups && use_parallel_build) {
         lock_hash_row(&lflow_locks, hash);
-        do_ovn_lflow_add(lflow_map, shared, od, hash, lflow);
+        do_ovn_lflow_add(lflow_map, od, hash, lflow);
         unlock_hash_row(&lflow_locks, hash);
     } else {
-        do_ovn_lflow_add(lflow_map, shared, od, hash, lflow);
+        do_ovn_lflow_add(lflow_map, od, hash, lflow);
     }
 }
 
 /* Adds a row with the specified contents to the Logical_Flow table. */
 #define ovn_lflow_add_with_hint(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, \
                                 ACTIONS, STAGE_HINT) \
-    ovn_lflow_add_at(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, ACTIONS, true, \
+    ovn_lflow_add_at(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
                      STAGE_HINT, OVS_SOURCE_LOCATOR)
 
 #define ovn_lflow_add(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, ACTIONS) \
-    ovn_lflow_add_at(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, ACTIONS, true, \
-                     NULL, OVS_SOURCE_LOCATOR)
-
-/* Adds a row with the specified contents to the Logical_Flow table.
- * Combining of this logical flow with already existing ones, e.g., by using
- * Logical Datapath Groups, is forbidden.
- *
- * XXX: ovn-controller assumes that a logical flow using multicast group always
- *      comes after or in the same database update with the corresponding
- *      multicast group.  That will not be the case with datapath groups.
- *      For this reason, the 'ovn_lflow_add_unique*()' functions should be used
- *      for such logical flows.
- */
-#define ovn_lflow_add_unique_with_hint(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, \
-                                       ACTIONS, STAGE_HINT) \
-    ovn_lflow_add_at(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, ACTIONS, false, \
-                     STAGE_HINT, OVS_SOURCE_LOCATOR)
-
-#define ovn_lflow_add_unique(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, ACTIONS) \
-    ovn_lflow_add_at(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, ACTIONS, false, \
+    ovn_lflow_add_at(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
                      NULL, OVS_SOURCE_LOCATOR)
 
 static struct ovn_lflow *
@@ -6447,9 +6425,8 @@ build_lswitch_rport_arp_req_self_orig_flow(struct ovn_port *op,
 
     ds_put_format(&match, "eth.src == %s && (arp.op == 1 || nd_ns)",
                   ds_cstr(&eth_src));
-    ovn_lflow_add_unique(lflows, od, S_SWITCH_IN_L2_LKUP, priority,
-                         ds_cstr(&match),
-                         "outport = \""MC_FLOOD_L2"\"; output;");
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, priority, ds_cstr(&match),
+                  "outport = \""MC_FLOOD_L2"\"; output;");
 
     sset_destroy(&all_eth_addrs);
     ds_destroy(&eth_src);
@@ -6502,7 +6479,7 @@ build_lswitch_rport_arp_req_flow_for_ip(struct sset *ips,
         ds_put_format(&actions, "clone {outport = %s; output; }; "
                                 "outport = \""MC_FLOOD_L2"\"; output;",
                       patch_op->json_key);
-        ovn_lflow_add_unique_with_hint(lflows, od, S_SWITCH_IN_L2_LKUP,
+        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_L2_LKUP,
                                        priority, ds_cstr(&match),
                                        ds_cstr(&actions), stage_hint);
     } else {
@@ -6858,9 +6835,9 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *lflows)
                       "outport = get_fdb(eth.dst); next;");
 
         if (od->has_unknown) {
-            ovn_lflow_add_unique(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 50,
-                                 "outport == \"none\"",
-                                 "outport = \""MC_UNKNOWN "\"; output;");
+            ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 50,
+                          "outport == \"none\"",
+                          "outport = \""MC_UNKNOWN "\"; output;");
         } else {
             ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 50,
                           "outport == \"none\"", "drop;");
@@ -7304,26 +7281,26 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
             }
             ds_put_cstr(actions, "igmp;");
             /* Punt IGMP traffic to controller. */
-            ovn_lflow_add_unique(lflows, od, S_SWITCH_IN_L2_LKUP, 100,
-                                 "ip4 && ip.proto == 2", ds_cstr(actions));
+            ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 100,
+                          "ip4 && ip.proto == 2", ds_cstr(actions));
 
             /* Punt MLD traffic to controller. */
-            ovn_lflow_add_unique(lflows, od, S_SWITCH_IN_L2_LKUP, 100,
-                                 "mldv1 || mldv2", ds_cstr(actions));
+            ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 100,
+                          "mldv1 || mldv2", ds_cstr(actions));
 
             /* Flood all IP multicast traffic destined to 224.0.0.X to all
              * ports - RFC 4541, section 2.1.2, item 2.
              */
-            ovn_lflow_add_unique(lflows, od, S_SWITCH_IN_L2_LKUP, 85,
-                                 "ip4.mcast && ip4.dst == 224.0.0.0/24",
-                                 "outport = \""MC_FLOOD"\"; output;");
+            ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 85,
+                          "ip4.mcast && ip4.dst == 224.0.0.0/24",
+                          "outport = \""MC_FLOOD"\"; output;");
 
             /* Flood all IPv6 multicast traffic destined to reserved
              * multicast IPs (RFC 4291, 2.7.1).
              */
-            ovn_lflow_add_unique(lflows, od, S_SWITCH_IN_L2_LKUP, 85,
-                                 "ip6.mcast_flood",
-                                 "outport = \""MC_FLOOD"\"; output;");
+            ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 85,
+                          "ip6.mcast_flood",
+                          "outport = \""MC_FLOOD"\"; output;");
 
             /* Forward uregistered IP multicast to routers with relay enabled
              * and to any ports configured to flood IP multicast traffic.
@@ -7353,14 +7330,14 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
                     ds_put_cstr(actions, "drop;");
                 }
 
-                ovn_lflow_add_unique(lflows, od, S_SWITCH_IN_L2_LKUP, 80,
-                                     "ip4.mcast || ip6.mcast",
-                                     ds_cstr(actions));
+                ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 80,
+                              "ip4.mcast || ip6.mcast",
+                              ds_cstr(actions));
             }
         }
 
-        ovn_lflow_add_unique(lflows, od, S_SWITCH_IN_L2_LKUP, 70, "eth.mcast",
-                             "outport = \""MC_FLOOD"\"; output;");
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 70, "eth.mcast",
+                      "outport = \""MC_FLOOD"\"; output;");
     }
 }
 
@@ -7438,8 +7415,8 @@ build_lswitch_ip_mcast_igmp_mld(struct ovn_igmp_group *igmp_group,
         ds_put_format(actions, "outport = \"%s\"; output; ",
                       igmp_group->mcgroup.name);
 
-        ovn_lflow_add_unique(lflows, igmp_group->datapath, S_SWITCH_IN_L2_LKUP,
-                             90, ds_cstr(match), ds_cstr(actions));
+        ovn_lflow_add(lflows, igmp_group->datapath, S_SWITCH_IN_L2_LKUP,
+                      90, ds_cstr(match), ds_cstr(actions));
     }
 }
 
@@ -9980,15 +9957,15 @@ build_mcast_lookup_flows_for_lrouter(
             }
             ds_put_format(actions, "outport = \"%s\"; ip.ttl--; next;",
                           igmp_group->mcgroup.name);
-            ovn_lflow_add_unique(lflows, od, S_ROUTER_IN_IP_ROUTING, 500,
-                                 ds_cstr(match), ds_cstr(actions));
+            ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 500,
+                          ds_cstr(match), ds_cstr(actions));
         }
 
         /* If needed, flood unregistered multicast on statically configured
          * ports. Otherwise drop any multicast traffic.
          */
         if (od->mcast_info.rtr.flood_static) {
-            ovn_lflow_add_unique(lflows, od, S_ROUTER_IN_IP_ROUTING, 450,
+            ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 450,
                           "ip4.mcast || ip6.mcast",
                           "clone { "
                                 "outport = \""MC_STATIC"\"; "
