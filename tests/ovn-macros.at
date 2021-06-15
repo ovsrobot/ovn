@@ -184,7 +184,7 @@ ovn_start_northd() {
 # ovn-sbctl and ovn-nbctl use them by default, and starts ovn-northd running
 # against them.
 #
-# Normally this starts an active northd and a backup norhtd.  The following
+# Normally this starts an active northd and a backup northd.  The following
 # options are accepted to adjust that:
 #   --backup-northd=none    Don't start a backup northd.
 #   --backup-northd=paused  Start the backup northd in the paused state.
