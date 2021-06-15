@@ -6844,8 +6844,6 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *lflows)
     /* This flow table structure is documented in ovn-northd(8), so please
      * update ovn-northd.8.xml if you change anything. */
 
-    struct ds match = DS_EMPTY_INITIALIZER;
-    struct ds actions = DS_EMPTY_INITIALIZER;
     struct ovn_datapath *od;
 
     /* Ingress table 23: Destination lookup for unknown MACs (priority 0). */
@@ -6868,9 +6866,6 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *lflows)
         ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 0, "1",
                       "output;");
     }
-
-    ds_destroy(&match);
-    ds_destroy(&actions);
 }
 
 /* Build pre-ACL and ACL tables for both ingress and egress.
