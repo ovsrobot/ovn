@@ -256,6 +256,16 @@ ovn_northd_lb_add_lr(struct ovn_northd_lb *lb, struct ovn_datapath *od)
 }
 
 void
+ovn_northd_lb_add_ls(struct ovn_northd_lb *lb, struct ovn_datapath *od)
+{
+    if (lb->n_allocated_nb_ls == lb->n_nb_ls) {
+        lb->nb_ls = x2nrealloc(lb->nb_ls, &lb->n_allocated_nb_ls,
+                               sizeof *lb->nb_ls);
+    }
+    lb->nb_ls[lb->n_nb_ls++] = od;
+}
+
+void
 ovn_northd_lb_destroy(struct ovn_northd_lb *lb)
 {
     for (size_t i = 0; i < lb->n_vips; i++) {
@@ -269,6 +279,7 @@ ovn_northd_lb_destroy(struct ovn_northd_lb *lb)
     free(lb->selection_fields);
     free(lb->dps);
     free(lb->nb_lr);
+    free(lb->nb_ls);
     free(lb);
 }
 
