@@ -3384,6 +3384,30 @@ void build_lb_vip_actions(struct ovn_lb_vip *lb_vip,
 }
 
 static void
+build_ovn_lr_lbs(struct hmap *datapaths, struct hmap *lbs)
+{
+    struct ovn_northd_lb *lb;
+    struct ovn_datapath *od;
+
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        if (!od->nbr) {
+            continue;
+        }
+        if (!smap_get(&od->nbr->options, "chassis") && !od->l3dgw_port) {
+            continue;
+        }
+
+        for (size_t i = 0; i < od->nbr->n_load_balancer; i++) {
+            const struct uuid *lb_uuid =
+                &od->nbr->load_balancer[i]->header_.uuid;
+            lb = ovn_northd_lb_find(lbs, lb_uuid);
+
+            ovn_northd_lb_add_lr(lb, od);
+        }
+    }
+}
+
+static void
 build_ovn_lbs(struct northd_context *ctx, struct hmap *datapaths,
               struct hmap *lbs)
 {
@@ -3410,23 +3434,6 @@ build_ovn_lbs(struct northd_context *ctx, struct hmap *datapaths,
             lb = ovn_northd_lb_find(lbs, lb_uuid);
 
             ovn_northd_lb_add_datapath(lb, od->sb);
-        }
-    }
-
-    HMAP_FOR_EACH (od, key_node, datapaths) {
-        if (!od->nbr) {
-            continue;
-        }
-        if (!smap_get(&od->nbr->options, "chassis") && !od->l3dgw_port) {
-            continue;
-        }
-
-        for (size_t i = 0; i < od->nbr->n_load_balancer; i++) {
-            const struct uuid *lb_uuid =
-                &od->nbr->load_balancer[i]->header_.uuid;
-            lb = ovn_northd_lb_find(lbs, lb_uuid);
-
-            ovn_northd_lb_add_lr(lb, od);
         }
     }
 
@@ -8738,41 +8745,10 @@ enum lb_snat_type {
 
 static void
 add_router_lb_flow(struct hmap *lflows, struct ovn_datapath *od,
-                   struct ds *match, struct ds *actions, int priority,
                    enum lb_snat_type snat_type, struct ovn_lb_vip *lb_vip,
                    const char *proto, struct nbrec_load_balancer *lb,
                    struct sset *nat_entries)
 {
-    /* A match and actions for new connections. */
-    char *new_match = xasprintf("ct.new && %s", ds_cstr(match));
-    if (snat_type == FORCE_SNAT || snat_type == SKIP_SNAT) {
-        char *new_actions = xasprintf("flags.%s_snat_for_lb = 1; %s",
-                snat_type == SKIP_SNAT ? "skip" : "force",
-                ds_cstr(actions));
-        ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, priority,
-                                new_match, new_actions, &lb->header_);
-        free(new_actions);
-    } else {
-        ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, priority,
-                                new_match, ds_cstr(actions), &lb->header_);
-    }
-
-    /* A match and actions for established connections. */
-    char *est_match = xasprintf("ct.est && %s", ds_cstr(match));
-    if (snat_type == FORCE_SNAT || snat_type == SKIP_SNAT) {
-        char *est_actions = xasprintf("flags.%s_snat_for_lb = 1; ct_dnat;",
-                snat_type == SKIP_SNAT ? "skip" : "force");
-        ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, priority,
-                                est_match, est_actions, &lb->header_);
-        free(est_actions);
-    } else {
-        ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, priority,
-                                est_match, "ct_dnat;", &lb->header_);
-    }
-
-    free(new_match);
-    free(est_match);
-
     const char *ip_match = NULL;
     if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
         ip_match = "ip4";
@@ -8854,6 +8830,126 @@ add_router_lb_flow(struct hmap *lflows, struct ovn_datapath *od,
 }
 
 static void
+build_lrouter_snat_flows_for_lb(struct ovn_lb_vip *lb_vip,
+                                struct ovn_northd_lb *lb,
+                                struct ovn_northd_lb_vip *vips_nb,
+                                struct hmap *lflows)
+{
+    char *new_match, *skip_snat_new_action = NULL;
+    char *est_match, *skip_snat_est_action = NULL;
+    struct ds action = DS_EMPTY_INITIALIZER;
+    struct ds match = DS_EMPTY_INITIALIZER;
+
+    build_lb_vip_actions(lb_vip, vips_nb, &action,
+                         lb->selection_fields, false);
+
+    /* Higher priority rules are added for load-balancing in DNAT
+     * table.  For every match (on a VIP[:port]), we add two flows.
+     * One flow is for specific matching on ct.new with an action
+     * of "ct_lb($targets);". The other flow is for ct.est with
+     * an action of "ct_dnat;".
+     */
+    if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
+        ds_put_format(&match, "ip && ip4.dst == %s", lb_vip->vip_str);
+    } else {
+        ds_put_format(&match, "ip && ip6.dst == %s", lb_vip->vip_str);
+    }
+
+    int prio = 110;
+    bool is_udp = nullable_string_is_equal(lb->nlb->protocol, "udp");
+    bool is_sctp = nullable_string_is_equal(lb->nlb->protocol,
+                                            "sctp");
+    const char *proto = is_udp ? "udp" : is_sctp ? "sctp" : "tcp";
+    if (lb_vip->vip_port) {
+        ds_put_format(&match, " && %s && %s.dst == %d", proto,
+                      proto, lb_vip->vip_port);
+        prio = 120;
+    }
+
+    enum lb_snat_type snat_type = NO_FORCE_SNAT;
+    if (smap_get_bool(&lb->nlb->options, "skip_snat", false)) {
+        snat_type = SKIP_SNAT;
+        skip_snat_new_action = xasprintf("flags.skip_snat_for_lb = 1; %s",
+                                         ds_cstr(&action));
+        skip_snat_est_action = xasprintf("flags.skip_snat_for_lb = 1; "
+                                         "ct_dnat;");
+    }
+    new_match = xasprintf("ct.new && %s", ds_cstr(&match));
+    est_match = xasprintf("ct.est && %s", ds_cstr(&match));
+
+    for (int i = 0; i < lb->n_nb_lr; i++) {
+        char *new_match_p = new_match, *est_match_p = est_match;
+        struct ovn_datapath *od = lb->nb_lr[i];
+
+        if (od->l3redirect_port &&
+            (lb_vip->n_backends || !lb_vip->empty_backend_rej)) {
+            new_match_p = xasprintf("ct.new && %s && is_chassis_resident(%s)",
+                                    ds_cstr(&match),
+                                    od->l3redirect_port->json_key);
+            est_match_p = xasprintf("ct.est && %s && is_chassis_resident(%s)",
+                                    ds_cstr(&match),
+                                    od->l3redirect_port->json_key);
+        }
+
+        if (snat_type == NO_FORCE_SNAT &&
+            (!lport_addresses_is_empty(&od->lb_force_snat_addrs) ||
+             od->lb_force_snat_router_ip)) {
+            snat_type = FORCE_SNAT;
+        }
+
+        if (snat_type == SKIP_SNAT) {
+            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
+                                    new_match_p, skip_snat_new_action,
+                                    &lb->nlb->header_);
+            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
+                                    est_match_p, skip_snat_est_action,
+                                    &lb->nlb->header_);
+        } else if (snat_type == FORCE_SNAT) {
+            char *new_actions = xasprintf("flags.force_snat_for_lb = 1; %s",
+                                          ds_cstr(&action));
+            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
+                                    new_match_p, new_actions,
+                                    &lb->nlb->header_);
+            free(new_actions);
+
+            char *est_actions = xasprintf("flags.force_snat_for_lb = 1; "
+                                          "ct_dnat;");
+            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
+                                    est_match_p, est_actions,
+                                    &lb->nlb->header_);
+            free(est_actions);
+        } else {
+            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
+                                    new_match_p, ds_cstr(&action),
+                                    &lb->nlb->header_);
+            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
+                                    est_match_p, "ct_dnat;",
+                                    &lb->nlb->header_);
+        }
+
+        if (new_match_p != new_match) {
+            free(new_match_p);
+        }
+        if (est_match_p != est_match) {
+            free(est_match_p);
+        }
+    }
+
+    ds_destroy(&action);
+    ds_destroy(&match);
+
+    if (skip_snat_new_action) {
+        free(skip_snat_new_action);
+    }
+    if (skip_snat_est_action) {
+        free(skip_snat_est_action);
+    }
+
+    free(est_match);
+    free(new_match);
+}
+
+static void
 build_lrouter_flows_for_lb(struct ovn_northd_lb *lb, struct hmap *lflows,
                            struct shash *meter_groups)
 {
@@ -8865,7 +8961,9 @@ build_lrouter_flows_for_lb(struct ovn_northd_lb *lb, struct hmap *lflows,
     struct ds match = DS_EMPTY_INITIALIZER;
 
     for (size_t i = 0; i < lb->n_vips; i++) {
-        if (build_empty_lb_event_flow(&lb->vips[i], lb->nlb, meter_groups,
+        struct ovn_lb_vip *lb_vip = &lb->vips[i];
+
+        if (build_empty_lb_event_flow(lb_vip, lb->nlb, meter_groups,
                                       &match, &action)) {
             for (int j = 0; j < lb->n_nb_lr; j++) {
                 ovn_lflow_add_with_hint(lflows, lb->nb_lr[j], S_ROUTER_IN_DNAT,
@@ -8874,6 +8972,9 @@ build_lrouter_flows_for_lb(struct ovn_northd_lb *lb, struct hmap *lflows,
                                         &lb->nlb->header_);
             }
         }
+
+        build_lrouter_snat_flows_for_lb(lb_vip, lb, &lb->vips_nb[i],
+                                        lflows);
     }
 
     ds_destroy(&action);
@@ -8949,7 +9050,6 @@ build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
                               lb_vip->vip_str);
             }
 
-            int prio = 110;
             bool is_udp = nullable_string_is_equal(nb_lb->protocol, "udp");
             bool is_sctp = nullable_string_is_equal(nb_lb->protocol,
                                                     "sctp");
@@ -8958,7 +9058,6 @@ build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
             if (lb_vip->vip_port) {
                 ds_put_format(match, " && %s && %s.dst == %d", proto,
                               proto, lb_vip->vip_port);
-                prio = 120;
             }
 
             if (od->l3redirect_port &&
@@ -8966,8 +9065,7 @@ build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
                 ds_put_format(match, " && is_chassis_resident(%s)",
                               od->l3redirect_port->json_key);
             }
-            add_router_lb_flow(lflows, od, match, actions, prio,
-                               snat_type, lb_vip, proto, nb_lb,
+            add_router_lb_flow(lflows, od, snat_type, lb_vip, proto, nb_lb,
                                nat_entries);
         }
     }
@@ -13375,6 +13473,7 @@ ovnnb_db_run(struct northd_context *ctx,
     build_ovn_lbs(ctx, datapaths, &lbs);
     build_lrouter_lbs(datapaths, &lbs);
     build_ports(ctx, sbrec_chassis_by_name, datapaths, ports);
+    build_ovn_lr_lbs(datapaths, &lbs);
     build_ovn_lb_svcs(ctx, ports, &lbs);
     build_ipam(datapaths, ports);
     build_port_group_lswitches(ctx, &port_groups, ports);
