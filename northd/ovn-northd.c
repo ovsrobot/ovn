@@ -49,6 +49,7 @@
 #include "smap.h"
 #include "sset.h"
 #include "svec.h"
+#include "stopwatch.h"
 #include "stream.h"
 #include "stream-ssl.h"
 #include "timeval.h"
@@ -58,6 +59,10 @@
 #include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(ovn_northd);
+
+#define NORTHD_LOOP_STOPWATCH_NAME "ovn-northd-loop"
+#define OVNNB_DB_RUN_STOPWATCH_NAME "ovnnb_db_run"
+#define OVNSB_DB_RUN_STOPWATCH_NAME "ovnsb_db_run"
 
 static unixctl_cb_func ovn_northd_exit;
 static unixctl_cb_func ovn_northd_pause;
@@ -13238,6 +13243,9 @@ ovnnb_db_run(struct northd_context *ctx,
     if (!ctx->ovnsb_txn || !ctx->ovnnb_txn) {
         return;
     }
+
+    stopwatch_start(OVNNB_DB_RUN_STOPWATCH_NAME, time_msec());
+
     struct hmap port_groups;
     struct hmap mcast_groups;
     struct hmap igmp_groups;
@@ -13381,6 +13389,8 @@ ovnnb_db_run(struct northd_context *ctx,
      * as well.
      */
     cleanup_macam();
+
+    stopwatch_stop(OVNNB_DB_RUN_STOPWATCH_NAME, time_msec());
 }
 
 /* Stores the list of chassis which references an ha_chassis_group.
@@ -13972,6 +13982,8 @@ ovnsb_db_run(struct northd_context *ctx,
         return;
     }
 
+    stopwatch_start(OVNSB_DB_RUN_STOPWATCH_NAME, time_msec());
+
     struct shash ha_ref_chassis_map = SHASH_INITIALIZER(&ha_ref_chassis_map);
     handle_port_binding_changes(ctx, ports, &ha_ref_chassis_map);
     update_northbound_cfg(ctx, sb_loop, loop_start_time);
@@ -13979,6 +13991,8 @@ ovnsb_db_run(struct northd_context *ctx,
         update_sb_ha_group_ref_chassis(&ha_ref_chassis_map);
     }
     shash_destroy(&ha_ref_chassis_map);
+
+    stopwatch_stop(OVNSB_DB_RUN_STOPWATCH_NAME, time_msec());
 }
 
 static void
@@ -14427,6 +14441,10 @@ main(int argc, char *argv[])
     char *ovn_internal_version = ovn_get_internal_version();
     VLOG_INFO("OVN internal version is : [%s]", ovn_internal_version);
 
+    stopwatch_create(NORTHD_LOOP_STOPWATCH_NAME, SW_MS);
+    stopwatch_create(OVNNB_DB_RUN_STOPWATCH_NAME, SW_MS);
+    stopwatch_create(OVNSB_DB_RUN_STOPWATCH_NAME, SW_MS);
+
     /* Main loop. */
     exiting = false;
 
@@ -14510,6 +14528,8 @@ main(int argc, char *argv[])
             ovsdb_idl_wait(ovnsb_idl_loop.idl);
         }
 
+        stopwatch_stop(NORTHD_LOOP_STOPWATCH_NAME, time_msec());
+        stopwatch_start(NORTHD_LOOP_STOPWATCH_NAME, time_msec());
         unixctl_server_run(unixctl);
         unixctl_server_wait(unixctl);
         memory_wait();
