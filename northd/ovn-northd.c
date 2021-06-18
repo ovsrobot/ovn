@@ -3413,6 +3413,23 @@ build_ovn_lbs(struct northd_context *ctx, struct hmap *datapaths,
         }
     }
 
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        if (!od->nbr) {
+            continue;
+        }
+        if (!smap_get(&od->nbr->options, "chassis") && !od->l3dgw_port) {
+            continue;
+        }
+
+        for (size_t i = 0; i < od->nbr->n_load_balancer; i++) {
+            const struct uuid *lb_uuid =
+                &od->nbr->load_balancer[i]->header_.uuid;
+            lb = ovn_northd_lb_find(lbs, lb_uuid);
+
+            ovn_northd_lb_add_lr(lb, od);
+        }
+    }
+
     /* Delete any stale SB load balancer rows. */
     const struct sbrec_load_balancer *sbrec_lb, *next;
     SBREC_LOAD_BALANCER_FOR_EACH_SAFE (sbrec_lb, next, ctx->ovnsb_idl) {
