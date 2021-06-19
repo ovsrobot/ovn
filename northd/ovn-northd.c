@@ -187,8 +187,8 @@ enum ovn_stage {
     PIPELINE_STAGE(ROUTER, IN,  LOOKUP_NEIGHBOR, 1, "lr_in_lookup_neighbor") \
     PIPELINE_STAGE(ROUTER, IN,  LEARN_NEIGHBOR,  2, "lr_in_learn_neighbor") \
     PIPELINE_STAGE(ROUTER, IN,  IP_INPUT,        3, "lr_in_ip_input")     \
-    PIPELINE_STAGE(ROUTER, IN,  DEFRAG,          4, "lr_in_defrag")       \
-    PIPELINE_STAGE(ROUTER, IN,  UNSNAT,          5, "lr_in_unsnat")       \
+    PIPELINE_STAGE(ROUTER, IN,  UNSNAT,          4, "lr_in_unsnat")       \
+    PIPELINE_STAGE(ROUTER, IN,  DEFRAG,          5, "lr_in_defrag")       \
     PIPELINE_STAGE(ROUTER, IN,  DNAT,            6, "lr_in_dnat")         \
     PIPELINE_STAGE(ROUTER, IN,  ECMP_STATEFUL,   7, "lr_in_ecmp_stateful") \
     PIPELINE_STAGE(ROUTER, IN,  ND_RA_OPTIONS,   8, "lr_in_nd_ra_options") \
@@ -204,10 +204,11 @@ enum ovn_stage {
     PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     18, "lr_in_arp_request")  \
                                                                       \
     /* Logical router egress stages. */                               \
-    PIPELINE_STAGE(ROUTER, OUT, UNDNAT,    0, "lr_out_undnat")        \
-    PIPELINE_STAGE(ROUTER, OUT, SNAT,      1, "lr_out_snat")          \
-    PIPELINE_STAGE(ROUTER, OUT, EGR_LOOP,  2, "lr_out_egr_loop")      \
-    PIPELINE_STAGE(ROUTER, OUT, DELIVERY,  3, "lr_out_delivery")
+    PIPELINE_STAGE(ROUTER, OUT, UNDNAT,      0, "lr_out_undnat")        \
+    PIPELINE_STAGE(ROUTER, OUT, POST_UNDNAT, 1, "lr_out_post_undnat")   \
+    PIPELINE_STAGE(ROUTER, OUT, SNAT,        2, "lr_out_snat")          \
+    PIPELINE_STAGE(ROUTER, OUT, EGR_LOOP,    3, "lr_out_egr_loop")      \
+    PIPELINE_STAGE(ROUTER, OUT, DELIVERY,    4, "lr_out_delivery")
 
 #define PIPELINE_STAGE(DP_TYPE, PIPELINE, STAGE, TABLE, NAME)   \
     S_##DP_TYPE##_##PIPELINE##_##STAGE                          \
@@ -642,6 +643,12 @@ struct ovn_datapath {
 
     /* Multicast data. */
     struct mcast_info mcast_info;
+
+    /* Applies to only logical router datapath.
+     * True if logical router is a gateway router. i.e options:chassis is set.
+     * If this is true, then 'l3dgw_port' and 'l3redirect_port' will be
+     * ignored. */
+    bool is_gw_router;
 
     /* OVN northd only needs to know about the logical router gateway port for
      * NAT on a distributed router.  This "distributed gateway port" is
@@ -1247,6 +1254,9 @@ join_datapaths(struct northd_context *ctx, struct hmap *datapaths,
         init_mcast_info_for_datapath(od);
         init_nat_entries(od);
         init_lb_ips(od);
+        if (smap_get(&od->nbr->options, "chassis")) {
+            od->is_gw_router = true;
+        }
         ovs_list_push_back(lr_list, &od->lr_list);
     }
 }
@@ -8731,20 +8741,33 @@ add_router_lb_flow(struct hmap *lflows, struct ovn_datapath *od,
     }
 
     /* A match and actions for established connections. */
-    char *est_match = xasprintf("ct.est && %s", ds_cstr(match));
+    struct ds est_match = DS_EMPTY_INITIALIZER;
+    ds_put_format(&est_match,
+                  "ct.est && ip && %sreg0 == %s && ct_label.natted == 1",
+                  IN6_IS_ADDR_V4MAPPED(&lb_vip->vip) ? "" : "xx",
+                  lb_vip->vip_str);
+    if (lb_vip->vip_port) {
+        ds_put_format(&est_match, " && %s", proto);
+    }
+    if (od->l3redirect_port &&
+        (lb_vip->n_backends || !lb_vip->empty_backend_rej)) {
+        ds_put_format(&est_match, " && is_chassis_resident(%s)",
+                      od->l3redirect_port->json_key);
+    }
     if (snat_type == FORCE_SNAT || snat_type == SKIP_SNAT) {
-        char *est_actions = xasprintf("flags.%s_snat_for_lb = 1; ct_dnat;",
+        char *est_actions = xasprintf("flags.%s_snat_for_lb = 1; next;",
                 snat_type == SKIP_SNAT ? "skip" : "force");
         ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, priority,
-                                est_match, est_actions, &lb->header_);
+                                ds_cstr(&est_match), est_actions,
+                                &lb->header_);
         free(est_actions);
     } else {
         ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, priority,
-                                est_match, "ct_dnat;", &lb->header_);
+                                ds_cstr(&est_match), "next;", &lb->header_);
     }
 
     free(new_match);
-    free(est_match);
+    ds_destroy(&est_match);
 
     const char *ip_match = NULL;
     if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
@@ -8829,8 +8852,8 @@ add_router_lb_flow(struct hmap *lflows, struct ovn_datapath *od,
 static void
 build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
                        struct hmap *lbs, struct shash *meter_groups,
-                       struct sset *nat_entries, struct ds *match,
-                       struct ds *actions)
+                       struct sset *nat_entries,
+                       struct ds *match, struct ds *actions)
 {
     /* A set to hold all ips that need defragmentation and tracking. */
     struct sset all_ips = SSET_INITIALIZER(&all_ips);
@@ -8852,10 +8875,17 @@ build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
         for (size_t j = 0; j < lb->n_vips; j++) {
             struct ovn_lb_vip *lb_vip = &lb->vips[j];
             struct ovn_northd_lb_vip *lb_vip_nb = &lb->vips_nb[j];
+
+            bool is_udp = nullable_string_is_equal(nb_lb->protocol, "udp");
+            bool is_sctp = nullable_string_is_equal(nb_lb->protocol,
+                                                    "sctp");
+            const char *proto = is_udp ? "udp" : is_sctp ? "sctp" : "tcp";
+
             ds_clear(actions);
             build_lb_vip_actions(lb_vip, lb_vip_nb, actions,
                                  lb->selection_fields, false);
 
+            struct ds defrag_actions = DS_EMPTY_INITIALIZER;
             if (!sset_contains(&all_ips, lb_vip->vip_str)) {
                 sset_add(&all_ips, lb_vip->vip_str);
                 /* If there are any load balancing rules, we should send
@@ -8867,17 +8897,28 @@ build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
                  * 2. If there are L4 ports in load balancing rules, we
                  *    need the defragmentation to match on L4 ports. */
                 ds_clear(match);
+                ds_clear(&defrag_actions);
                 if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
                     ds_put_format(match, "ip && ip4.dst == %s",
+                                  lb_vip->vip_str);
+                    ds_put_format(&defrag_actions, "reg0 = %s; ct_dnat;",
                                   lb_vip->vip_str);
                 } else {
                     ds_put_format(match, "ip && ip6.dst == %s",
                                   lb_vip->vip_str);
+                    ds_put_format(&defrag_actions, "xxreg0 = %s; ct_dnat;",
+                                  lb_vip->vip_str);
+                }
+
+                if (lb_vip->vip_port) {
+                    ds_put_format(match, " && %s", proto);
                 }
                 ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DEFRAG,
-                                        100, ds_cstr(match), "ct_next;",
+                                        100, ds_cstr(match),
+                                        ds_cstr(&defrag_actions),
                                         &nb_lb->header_);
             }
+            ds_destroy(&defrag_actions);
 
             /* Higher priority rules are added for load-balancing in DNAT
              * table.  For every match (on a VIP[:port]), we add two flows
@@ -8886,18 +8927,14 @@ build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
              * flow is for ct.est with an action of "ct_dnat;". */
             ds_clear(match);
             if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
-                ds_put_format(match, "ip && ip4.dst == %s",
+                ds_put_format(match, "ip && reg0 == %s",
                               lb_vip->vip_str);
             } else {
-                ds_put_format(match, "ip && ip6.dst == %s",
+                ds_put_format(match, "ip && xxreg0 == %s",
                               lb_vip->vip_str);
             }
 
             int prio = 110;
-            bool is_udp = nullable_string_is_equal(nb_lb->protocol, "udp");
-            bool is_sctp = nullable_string_is_equal(nb_lb->protocol,
-                                                    "sctp");
-            const char *proto = is_udp ? "udp" : is_sctp ? "sctp" : "tcp";
 
             if (lb_vip->vip_port) {
                 ds_put_format(match, " && %s && %s.dst == %d", proto,
@@ -11400,8 +11437,7 @@ build_lrouter_out_undnat_flow(struct hmap *lflows, struct ovn_datapath *od,
     * part of a reply. We undo the DNAT here.
     *
     * Note that this only applies for NAT on a distributed router.
-    * Undo DNAT on a gateway router is done in the ingress DNAT
-    * pipeline stage. */
+    */
     if (!od->l3dgw_port ||
         (strcmp(nat->type, "dnat") && strcmp(nat->type, "dnat_and_snat"))) {
         return;
@@ -11681,8 +11717,21 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od,
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 0, "1", "next;");
+    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_EGR_LOOP, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_IN_ECMP_STATEFUL, 0, "1", "next;");
+
+    /* For Gateway routers, if the gateway router has load balancer or DNAT
+     * rules, we commit  newly initiated connections in the reply direction
+     * to the DNAT zone. This ensures that these flows are tracked. If the flow
+     * was not committed, it would produce ongoing datapath flows with the
+     * ct.new flag set. Some NICs are unable to offload these flows.
+     */
+    if (od->is_gw_router &&
+        (od->nbr->n_nat || od->nbr->n_load_balancer)) {
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 50,
+                        "ip && ct.new", "ct_commit { } ; next; ");
+    }
 
     /* Send the IPv6 NS packets to next table. When ovn-controller
      * generates IPv6 NS (for the action - nd_ns{}), the injected
@@ -11848,18 +11897,12 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od,
                     od->lb_force_snat_addrs.ipv6_addrs[0].addr_s, "lb");
             }
         }
-
-        /* For gateway router, re-circulate every packet through
-         * the DNAT zone.  This helps with the following.
-         *
-         * Any packet that needs to be unDNATed in the reverse
-         * direction gets unDNATed. Ideally this could be done in
-         * the egress pipeline. But since the gateway router
-         * does not have any feature that depends on the source
-         * ip address being external IP address for IP routing,
-         * we can do it here, saving a future re-circulation. */
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 50,
-                      "ip", "flags.loopback = 1; ct_dnat;");
+        /* For gateway router, re-circulate every packet through the DNAT zone
+         * so that packets that need to be unDNATed in the reverse direction
+         * get unDNATed.
+         */
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 50,
+                "ip", "flags.loopback = 1; ct_dnat;");
     }
 
     /* Load balancing and packet defrag are only valid on
