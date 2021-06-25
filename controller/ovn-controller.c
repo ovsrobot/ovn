@@ -1635,11 +1635,8 @@ en_port_groups_run(struct engine_node *node, void *data)
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
 
-    struct sset *local_b_lports = binding_collect_local_binding_lports(
-        &rt_data->lbinding_data);
-    port_groups_init(pg_table, local_b_lports, &pg->port_group_ssets,
-                     &pg->port_groups_cs_local);
-    binding_destroy_local_binding_lports(local_b_lports);
+    port_groups_init(pg_table, &rt_data->lbinding_data.port_bindings,
+                     &pg->port_group_ssets, &pg->port_groups_cs_local);
 
     engine_set_node_state(node, EN_UPDATED);
 }
@@ -1656,12 +1653,9 @@ port_groups_sb_port_group_handler(struct engine_node *node, void *data)
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
 
-    struct sset *local_b_lports = binding_collect_local_binding_lports(
-        &rt_data->lbinding_data);
-    port_groups_update(pg_table, local_b_lports, &pg->port_group_ssets,
-                       &pg->port_groups_cs_local, &pg->new, &pg->deleted,
-                       &pg->updated);
-    binding_destroy_local_binding_lports(local_b_lports);
+    port_groups_update(pg_table, &rt_data->lbinding_data.port_bindings,
+                       &pg->port_group_ssets, &pg->port_groups_cs_local,
+                       &pg->new, &pg->deleted, &pg->updated);
 
     if (!sset_is_empty(&pg->new) || !sset_is_empty(&pg->deleted) ||
             !sset_is_empty(&pg->updated)) {
@@ -1694,9 +1688,6 @@ port_groups_runtime_data_handler(struct engine_node *node, void *data)
         goto out;
     }
 
-    struct sset *local_b_lports = binding_collect_local_binding_lports(
-        &rt_data->lbinding_data);
-
     const struct sbrec_port_group *pg_sb;
     SBREC_PORT_GROUP_TABLE_FOR_EACH (pg_sb, pg_table) {
         struct sset *pg_lports = shash_find_data(&pg->port_group_ssets,
@@ -1723,12 +1714,11 @@ port_groups_runtime_data_handler(struct engine_node *node, void *data)
         if (need_update) {
             expr_const_sets_add_strings(&pg->port_groups_cs_local, pg_sb->name,
                                         (const char *const *) pg_sb->ports,
-                                        pg_sb->n_ports, local_b_lports);
+                                        pg_sb->n_ports,
+                                        &rt_data->lbinding_data.port_bindings);
             sset_add(&pg->updated, pg_sb->name);
         }
     }
-
-    binding_destroy_local_binding_lports(local_b_lports);
 
 out:
     if (!sset_is_empty(&pg->new) || !sset_is_empty(&pg->deleted) ||

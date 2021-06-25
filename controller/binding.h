@@ -22,6 +22,7 @@
 #include "openvswitch/hmap.h"
 #include "openvswitch/uuid.h"
 #include "openvswitch/list.h"
+#include "sset.h"
 
 struct hmap;
 struct ovsdb_idl;
@@ -93,6 +94,7 @@ struct binding_ctx_out {
 struct local_binding_data {
     struct shash bindings;
     struct shash lports;
+    struct sset port_bindings;
 };
 
 void local_binding_data_init(struct local_binding_data *);
@@ -133,13 +135,4 @@ bool binding_handle_port_binding_changes(struct binding_ctx_in *,
 void binding_tracked_dp_destroy(struct hmap *tracked_datapaths);
 
 void binding_dump_local_bindings(struct local_binding_data *, struct ds *);
-
-/* Generates a sset of lport names from local_binding_data.
- * Note: the caller is responsible for destroying and freeing the returned
- * sset, by calling binding_detroy_local_binding_lports(). */
-struct sset *binding_collect_local_binding_lports(struct local_binding_data *);
-
-/* Destroy and free the lports sset returned by
- * binding_collect_local_binding_lports(). */
-void binding_destroy_local_binding_lports(struct sset *lports);
 #endif /* controller/binding.h */

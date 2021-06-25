@@ -549,6 +549,7 @@ update_local_lport_ids(const struct sbrec_port_binding *pb,
             tracked_binding_datapath_lport_add(pb, b_ctx->tracked_dp_bindings);
         }
     }
+    sset_add(&b_ctx->lbinding_data->port_bindings, pb->logical_port);
 }
 
 /* Remove a port binding id from the set of local lport IDs. Also track if
@@ -569,6 +570,8 @@ remove_local_lport_ids(const struct sbrec_port_binding *pb,
             tracked_binding_datapath_lport_add(pb, b_ctx->tracked_dp_bindings);
         }
     }
+    sset_find_and_delete(&b_ctx->lbinding_data->port_bindings,
+                         pb->logical_port);
 }
 
 /* Corresponds to each Port_Binding.type. */
@@ -683,6 +686,7 @@ local_binding_data_init(struct local_binding_data *lbinding_data)
 {
     shash_init(&lbinding_data->bindings);
     shash_init(&lbinding_data->lports);
+    sset_init(&lbinding_data->port_bindings);
 }
 
 void
@@ -702,6 +706,7 @@ local_binding_data_destroy(struct local_binding_data *lbinding_data)
         shash_delete(&lbinding_data->bindings, node);
     }
 
+    sset_destroy(&lbinding_data->port_bindings);
     shash_destroy(&lbinding_data->lports);
     shash_destroy(&lbinding_data->bindings);
 }
@@ -2925,24 +2930,4 @@ cleanup:
     }
 
     return b_lport;
-}
-
-struct sset *
-binding_collect_local_binding_lports(struct local_binding_data *lbinding_data)
-{
-    struct sset *lports = xzalloc(sizeof *lports);
-    sset_init(lports);
-    struct shash_node *shash_node;
-    SHASH_FOR_EACH (shash_node, &lbinding_data->lports) {
-        struct binding_lport *b_lport = shash_node->data;
-        sset_add(lports, b_lport->name);
-    }
-    return lports;
-}
-
-void
-binding_destroy_local_binding_lports(struct sset *lports)
-{
-    sset_destroy(lports);
-    free(lports);
 }
