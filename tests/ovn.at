@@ -26940,7 +26940,7 @@ ovs-vsctl -- add-port br-int vif1 -- \
 # And proxy ARP flows for 69.254.239.254 and 169.254.239.2
 # and check that SB flows have been added.
 ovn-nbctl --wait=hv add Logical_Switch_Port rp-ls1 \
-options arp_proxy='"169.254.239.254 169.254.239.2"'
+options arp_proxy='"169.254.239.254,169.254.239.2"'
 ovn-sbctl dump-flows > sbflows
 AT_CAPTURE_FILE([sbflows])
 
@@ -26957,7 +26957,7 @@ AT_CHECK([ovn-sbctl dump-flows | grep ls_in_arp_rsp | grep "169.254.239.2"], [1]
 
 # Add the flows back send arp request and check we see an ARP response
 ovn-nbctl --wait=hv add Logical_Switch_Port rp-ls1 \
-options arp_proxy='"169.254.239.254 169.254.239.2"'
+options arp_proxy='"169.254.239.254,169.254.239.2"'
 
 ls1_p1_mac=00:00:00:01:02:03
 ls1_p1_ip=192.16.1.6
