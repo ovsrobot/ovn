@@ -49,6 +49,10 @@ struct ovn_northd_lb {
     size_t n_nb_lr;
     size_t n_allocated_nb_lr;
     struct ovn_datapath **nb_lr;
+
+    size_t n_nb_ls;
+    size_t n_allocated_nb_ls;
+    struct ovn_datapath **nb_ls;
 };
 
 struct ovn_lb_vip {
@@ -91,6 +95,8 @@ void ovn_northd_lb_add_datapath(struct ovn_northd_lb *,
                                 const struct sbrec_datapath_binding *);
 void
 ovn_northd_lb_add_lr(struct ovn_northd_lb *lb, struct ovn_datapath *od);
+void
+ovn_northd_lb_add_ls(struct ovn_northd_lb *lb, struct ovn_datapath *od);
 
 struct ovn_controller_lb {
     const struct sbrec_load_balancer *slb; /* May be NULL. */

@@ -3435,6 +3435,7 @@ build_ovn_lbs(struct northd_context *ctx, struct hmap *datapaths,
             lb = ovn_northd_lb_find(lbs, lb_uuid);
 
             ovn_northd_lb_add_datapath(lb, od->sb);
+            ovn_northd_lb_add_ls(lb, od);
         }
     }
 
