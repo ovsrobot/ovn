@@ -39,7 +39,8 @@ nodist_lib_libovn_la_SOURCES = \
 	lib/ovn-ic-nb-idl.c \
 	lib/ovn-ic-nb-idl.h \
 	lib/ovn-ic-sb-idl.c \
-	lib/ovn-ic-sb-idl.h
+	lib/ovn-ic-sb-idl.h \
+	lib/stopwatch-names.h
 
 CLEANFILES += $(nodist_lib_libovn_la_SOURCES)
 
