@@ -27,6 +27,7 @@
 #include "openvswitch/hmap.h"
 #include "openvswitch/vlog.h"
 #include "inc-proc-eng.h"
+#include "timeval.h"
 #include "unixctl.h"
 
 VLOG_DEFINE_THIS_MODULE(inc_proc_eng);
@@ -333,8 +334,10 @@ engine_recompute(struct engine_node *node, bool forced, bool allowed)
     }
 
     /* Run the node handler which might change state. */
+    long long int now = time_msec();
     node->run(node, node->data);
     node->stats.recompute++;
+    VLOG_DBG("node: %s, recompute took %lldms", node->name, time_msec() - now);
 }
 
 /* Return true if the node could be computed, false otherwise. */
@@ -350,7 +353,12 @@ engine_compute(struct engine_node *node, bool recompute_allowed)
             /* If the input change can't be handled incrementally, run
              * the node handler.
              */
-            if (!node->inputs[i].change_handler(node, node->data)) {
+            long long int now = time_msec();
+            bool handled = node->inputs[i].change_handler(node, node->data);
+            VLOG_DBG("node: %s, handling change for input %s took %lldms",
+                     node->name, node->inputs[i].node->name,
+                     time_msec() - now);
+            if (!handled) {
                 VLOG_DBG("node: %s, can't handle change for input %s, "
                          "fall back to recompute",
                          node->name, node->inputs[i].node->name);
@@ -369,8 +377,11 @@ engine_run_node(struct engine_node *node, bool recompute_allowed)
 {
     if (!node->n_inputs) {
         /* Run the node handler which might change state. */
+        long long int now = time_msec();
         node->run(node, node->data);
         node->stats.recompute++;
+        VLOG_DBG("node: %s, recompute took %lldms", node->name,
+                 time_msec() - now);
         return;
     }
 
@@ -389,6 +400,9 @@ engine_run_node(struct engine_node *node, bool recompute_allowed)
 
             /* Trigger a recompute if we don't have a change handler. */
             if (!node->inputs[i].change_handler) {
+                VLOG_DBG("node %s, no handler for input %s, "
+                         "fall back to recompute",
+                         node->name, node->inputs[i].node->name);
                 engine_recompute(node, false, recompute_allowed);
                 return;
             }
