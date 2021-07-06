@@ -8993,6 +8993,48 @@ build_lswitch_flows_for_lb(struct ovn_northd_lb *lb, struct hmap *lflows,
     build_lb_rules(lflows, lb, match, action);
 }
 
+/* If there are any load balancing rules, we should send the packet to
+ * conntrack for defragmentation and tracking.  This helps with two things.
+ *
+ * 1. With tracking, we can send only new connections to pick a DNAT ip address
+ *    from a group.
+ * 2. If there are L4 ports in load balancing rules, we need the
+ *    defragmentation to match on L4 ports.
+ */
+static void
+build_lrouter_defrag_flows_for_lb(struct ovn_northd_lb *lb,
+                                  struct hmap *lflows,
+                                  struct ds *match)
+{
+    if (!lb->n_nb_lr) {
+        return;
+    }
+
+    /* A set to hold all ips that need defragmentation and tracking. */
+    struct sset all_ips = SSET_INITIALIZER(&all_ips);
+    for (size_t i = 0; i < lb->n_vips; i++) {
+        struct ovn_lb_vip *lb_vip = &lb->vips[i];
+
+        if (!sset_add(&all_ips, lb_vip->vip_str)) {
+            continue;
+        }
+
+        ds_clear(match);
+        if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
+            ds_put_format(match, "ip && ip4.dst == %s", lb_vip->vip_str);
+        } else {
+            ds_put_format(match, "ip && ip6.dst == %s", lb_vip->vip_str);
+        }
+        for (size_t j = 0; j < lb->n_nb_lr; j++) {
+            ovn_lflow_add_with_hint(lflows, lb->nb_lr[j],
+                                    S_ROUTER_IN_DEFRAG, 100,
+                                    ds_cstr(match), "ct_next;",
+                                    &lb->nlb->header_);
+        }
+    }
+    sset_destroy(&all_ips);
+}
+
 static void
 build_lrouter_flows_for_lb(struct ovn_northd_lb *lb, struct hmap *lflows,
                            struct shash *meter_groups,
@@ -9025,49 +9067,6 @@ build_lrouter_flows_for_lb(struct ovn_northd_lb *lb, struct hmap *lflows,
                           "flags.skip_snat_for_lb == 1 && ip", "next;");
         }
     }
-}
-
-static void
-build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
-                       struct hmap *lbs, struct ds *match)
-{
-    /* A set to hold all ips that need defragmentation and tracking. */
-    struct sset all_ips = SSET_INITIALIZER(&all_ips);
-
-    for (int i = 0; i < od->nbr->n_load_balancer; i++) {
-        struct nbrec_load_balancer *nb_lb = od->nbr->load_balancer[i];
-        struct ovn_northd_lb *lb =
-            ovn_northd_lb_find(lbs, &nb_lb->header_.uuid);
-        ovs_assert(lb);
-
-        for (size_t j = 0; j < lb->n_vips; j++) {
-            struct ovn_lb_vip *lb_vip = &lb->vips[j];
-
-            if (!sset_contains(&all_ips, lb_vip->vip_str)) {
-                sset_add(&all_ips, lb_vip->vip_str);
-                /* If there are any load balancing rules, we should send
-                 * the packet to conntrack for defragmentation and
-                 * tracking.  This helps with two things.
-                 *
-                 * 1. With tracking, we can send only new connections to
-                 *    pick a DNAT ip address from a group.
-                 * 2. If there are L4 ports in load balancing rules, we
-                 *    need the defragmentation to match on L4 ports. */
-                ds_clear(match);
-                if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
-                    ds_put_format(match, "ip && ip4.dst == %s",
-                                  lb_vip->vip_str);
-                } else {
-                    ds_put_format(match, "ip && ip6.dst == %s",
-                                  lb_vip->vip_str);
-                }
-                ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DEFRAG,
-                                        100, ds_cstr(match), "ct_next;",
-                                        &nb_lb->header_);
-            }
-        }
-    }
-    sset_destroy(&all_ips);
 }
 
 #define ND_RA_MAX_INTERVAL_MAX 1800
@@ -11810,9 +11809,7 @@ lrouter_check_nat_entry(struct ovn_datapath *od, const struct nbrec_nat *nat,
 
 /* NAT, Defrag and load balancing. */
 static void
-build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od,
-                                struct hmap *lflows,
-                                struct hmap *lbs,
+build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
                                 struct ds *match, struct ds *actions)
 {
     if (!od->nbr) {
@@ -12007,8 +12004,6 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od,
                       "ip", "flags.loopback = 1; ct_dnat;");
     }
 
-    build_lrouter_lb_flows(lflows, od, lbs, match);
-
     sset_destroy(&nat_entries);
 }
 
@@ -12073,8 +12068,8 @@ build_lswitch_and_lrouter_iterate_by_od(struct ovn_datapath *od,
                                         &lsi->actions);
     build_misc_local_traffic_drop_flows_for_lrouter(od, lsi->lflows);
     build_lrouter_arp_nd_for_datapath(od, lsi->lflows);
-    build_lrouter_nat_defrag_and_lb(od, lsi->lflows, lsi->lbs,
-                                    &lsi->match, &lsi->actions);
+    build_lrouter_nat_defrag_and_lb(od, lsi->lflows, &lsi->match,
+                                    &lsi->actions);
 }
 
 /* Helper function to combine all lflow generation which is iterated by port.
@@ -12182,6 +12177,8 @@ build_lflows_thread(void *arg)
                     build_lswitch_arp_nd_service_monitor(lb, lsi->lflows,
                                                          &lsi->match,
                                                          &lsi->actions);
+                    build_lrouter_defrag_flows_for_lb(lb, lsi->lflows,
+                                                      &lsi->match);
                     build_lrouter_flows_for_lb(lb, lsi->lflows,
                                                lsi->meter_groups,
                                                &lsi->match, &lsi->actions);
@@ -12351,6 +12348,7 @@ build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             build_lswitch_arp_nd_service_monitor(lb, lsi.lflows,
                                                  &lsi.actions,
                                                  &lsi.match);
+            build_lrouter_defrag_flows_for_lb(lb, lsi.lflows, &lsi.match);
             build_lrouter_flows_for_lb(lb, lsi.lflows, lsi.meter_groups,
                                        &lsi.match, &lsi.actions);
             build_lswitch_flows_for_lb(lb, lsi.lflows, lsi.meter_groups,
