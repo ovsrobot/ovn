@@ -2016,6 +2016,7 @@ init_lflow_ctx(struct engine_node *node,
         engine_get_input_data("port_groups", node);
     struct shash *port_groups = &pg_data->port_groups_cs_local;
 
+    l_ctx_in->sb_idl = engine_get_context()->ovnsb_idl;
     l_ctx_in->sbrec_multicast_group_by_name_datapath =
         sbrec_mc_group_by_name_dp;
     l_ctx_in->sbrec_logical_flow_by_logical_datapath =
@@ -3124,6 +3125,7 @@ main(int argc, char *argv[])
         }
 
         struct engine_context eng_ctx = {
+            .ovnsb_idl = ovnsb_idl_loop.idl,
             .ovs_idl_txn = ovs_idl_txn,
             .ovnsb_idl_txn = ovnsb_idl_txn,
             .client_ctx = &ctrl_engine_ctx

@@ -64,6 +64,7 @@
 #define ENGINE_MAX_OVSDB_INDEX 256
 
 struct engine_context {
+    struct ovsdb_idl *ovnsb_idl;
     struct ovsdb_idl_txn *ovs_idl_txn;
     struct ovsdb_idl_txn *ovnsb_idl_txn;
     void *client_ctx;

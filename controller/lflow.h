@@ -40,6 +40,7 @@
 #include "openvswitch/list.h"
 
 struct ovn_extend_table;
+struct ovsdb_idl;
 struct ovsdb_idl_index;
 struct ovn_desired_flow_table;
 struct hmap;
@@ -126,6 +127,7 @@ void lflow_resource_destroy(struct lflow_resource_ref *);
 void lflow_resource_clear(struct lflow_resource_ref *);
 
 struct lflow_ctx_in {
+    struct ovsdb_idl *sb_idl;
     struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath;
     struct ovsdb_idl_index *sbrec_logical_flow_by_logical_datapath;
     struct ovsdb_idl_index *sbrec_logical_flow_by_logical_dp_group;
