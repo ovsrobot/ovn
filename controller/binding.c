@@ -574,6 +574,33 @@ remove_related_lport(const struct sbrec_port_binding *pb,
     }
 }
 
+static void
+update_active_pb_ras_pd(const struct sbrec_port_binding *pb,
+                        struct hmap *local_datapaths,
+                        struct hmap *map, const char *conf)
+{
+    const char *ras_pd_conf = smap_get(&pb->options, conf);
+    if (!ras_pd_conf) {
+        return;
+    }
+
+    struct pb_active_ra_pd *ras_pd =
+        get_pb_active_ras_pd(map, pb->logical_port);
+    if (ras_pd && !strcmp(ras_pd_conf, "false")) {
+        hmap_remove(map, &ras_pd->hmap_node);
+        return;
+    }
+    if (!ras_pd && !strcmp(ras_pd_conf, "true")) {
+        ras_pd = xzalloc(sizeof *ras_pd);
+        ras_pd->pb = pb;
+        hmap_insert(map, &ras_pd->hmap_node, hash_string(pb->logical_port, 0));
+    }
+    if (ras_pd) {
+        ras_pd->ld = get_local_datapath(local_datapaths,
+                                        pb->datapath->tunnel_key);
+    }
+}
+
 /* Corresponds to each Port_Binding.type. */
 enum en_lport_type {
     LP_UNKNOWN,
@@ -1645,6 +1672,10 @@ binding_run(struct binding_ctx_in *b_ctx_in, struct binding_ctx_out *b_ctx_out)
     const struct sbrec_port_binding *pb;
     SBREC_PORT_BINDING_TABLE_FOR_EACH (pb,
                                        b_ctx_in->port_binding_table) {
+        update_active_pb_ras_pd(pb, b_ctx_out->local_datapaths,
+                                b_ctx_out->local_active_ports_ipv6_pd,
+                                "ipv6_prefix_delegation");
+
         enum en_lport_type lport_type = get_lport_type(pb);
 
         switch (lport_type) {
@@ -2481,6 +2512,10 @@ delete_done:
         if (sbrec_port_binding_is_deleted(pb)) {
             continue;
         }
+
+        update_active_pb_ras_pd(pb, b_ctx_out->local_datapaths,
+                                b_ctx_out->local_active_ports_ipv6_pd,
+                                "ipv6_prefix_delegation");
 
         enum en_lport_type lport_type = get_lport_type(pb);
 

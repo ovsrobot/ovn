@@ -133,6 +133,20 @@ get_local_datapath(const struct hmap *local_datapaths, uint32_t tunnel_key)
             : NULL);
 }
 
+struct pb_active_ra_pd *
+get_pb_active_ras_pd(const struct hmap *map, const char *name)
+{
+    uint32_t key = hash_string(name, 0);
+    struct hmap_node *node;
+
+    node = hmap_first_with_hash(map, key);
+    if (node) {
+        return CONTAINER_OF(node, struct pb_active_ra_pd, hmap_node);
+    }
+
+    return NULL;
+}
+
 uint32_t
 get_tunnel_type(const char *name)
 {
@@ -1028,6 +1042,8 @@ struct ed_type_runtime_data {
     bool tracked;
     bool local_lports_changed;
     struct hmap tracked_dp_bindings;
+
+    struct hmap local_active_ports_ipv6_pd;
 };
 
 /* struct ed_type_runtime_data has the below members for tracking the
@@ -1115,6 +1131,7 @@ en_runtime_data_init(struct engine_node *node OVS_UNUSED,
     sset_init(&data->egress_ifaces);
     smap_init(&data->local_iface_ids);
     local_binding_data_init(&data->lbinding_data);
+    hmap_init(&data->local_active_ports_ipv6_pd);
 
     /* Init the tracked data. */
     hmap_init(&data->tracked_dp_bindings);
@@ -1140,6 +1157,7 @@ en_runtime_data_cleanup(void *data)
         free(cur_node);
     }
     hmap_destroy(&rt_data->local_datapaths);
+    hmap_destroy(&rt_data->local_active_ports_ipv6_pd);
     local_binding_data_destroy(&rt_data->lbinding_data);
 }
 
@@ -1218,6 +1236,8 @@ init_binding_ctx(struct engine_node *node,
     b_ctx_in->ovs_table = ovs_table;
 
     b_ctx_out->local_datapaths = &rt_data->local_datapaths;
+    b_ctx_out->local_active_ports_ipv6_pd =
+        &rt_data->local_active_ports_ipv6_pd;
     b_ctx_out->local_lports = &rt_data->local_lports;
     b_ctx_out->local_lports_changed = false;
     b_ctx_out->related_lports = &rt_data->related_lports;
@@ -1235,6 +1255,7 @@ en_runtime_data_run(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data = data;
     struct hmap *local_datapaths = &rt_data->local_datapaths;
+    struct hmap *local_active_ipv6_pd = &rt_data->local_active_ports_ipv6_pd;
     struct sset *local_lports = &rt_data->local_lports;
     struct sset *active_tunnels = &rt_data->active_tunnels;
 
@@ -1250,6 +1271,7 @@ en_runtime_data_run(struct engine_node *node, void *data)
             free(cur_node);
         }
         hmap_clear(local_datapaths);
+        hmap_clear(local_active_ipv6_pd);
         local_binding_data_destroy(&rt_data->lbinding_data);
         sset_destroy(local_lports);
         related_lports_destroy(&rt_data->related_lports);
@@ -3263,7 +3285,8 @@ main(int argc, char *argv[])
                                     sbrec_bfd_table_get(ovnsb_idl_loop.idl),
                                     br_int, chassis,
                                     &runtime_data->local_datapaths,
-                                    &runtime_data->active_tunnels);
+                                    &runtime_data->active_tunnels,
+                                    &runtime_data->local_active_ports_ipv6_pd);
                         /* Updating monitor conditions if runtime data or
                          * logical datapath goups changed. */
                         if (engine_node_changed(&en_runtime_data)

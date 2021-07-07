@@ -1249,80 +1249,77 @@ fill_ipv6_prefix_state(struct ovsdb_idl_txn *ovnsb_idl_txn,
 static void
 prepare_ipv6_prefixd(struct ovsdb_idl_txn *ovnsb_idl_txn,
                      struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                     const struct hmap *local_datapaths,
+                     const struct hmap *local_active_ports_ipv6_pd,
                      const struct sbrec_chassis *chassis,
                      const struct sset *active_tunnels)
     OVS_REQUIRES(pinctrl_mutex)
 {
-    const struct local_datapath *ld;
+    const struct pb_active_ra_pd *pb_ipv6;
     bool changed = false;
 
-    HMAP_FOR_EACH (ld, hmap_node, local_datapaths) {
-        if (datapath_is_switch(ld->datapath)) {
-            /* logical switch */
+    HMAP_FOR_EACH (pb_ipv6, hmap_node, local_active_ports_ipv6_pd) {
+        const struct sbrec_port_binding *pb = pb_ipv6->pb;
+        int j;
+
+        if (!smap_get_bool(&pb->options, "ipv6_prefix_delegation",
+                           false)) {
             continue;
         }
 
-        for (size_t i = 0; i < ld->n_peer_ports; i++) {
-            const struct sbrec_port_binding *pb = ld->peer_ports[i].local;
-            int j;
-
-            if (!smap_get_bool(&pb->options, "ipv6_prefix_delegation",
-                               false)) {
-                continue;
-            }
-
-            const char *peer_s = smap_get(&pb->options, "peer");
-            if (!peer_s) {
-                continue;
-            }
-
-            const struct sbrec_port_binding *peer
-                = lport_lookup_by_name(sbrec_port_binding_by_name, peer_s);
-            if (!peer) {
-                continue;
-            }
-
-            char *redirect_name = xasprintf("cr-%s", pb->logical_port);
-            bool resident = lport_is_chassis_resident(
-                    sbrec_port_binding_by_name, chassis, active_tunnels,
-                    redirect_name);
-            free(redirect_name);
-            if (!resident && strcmp(pb->type, "l3gateway")) {
-                continue;
-            }
-
-            struct in6_addr ip6_addr;
-            struct eth_addr ea = eth_addr_zero;
-            for (j = 0; j < pb->n_mac; j++) {
-                struct lport_addresses laddrs;
-
-                if (!extract_lsp_addresses(pb->mac[j], &laddrs)) {
-                    continue;
-                }
-
-                ea = laddrs.ea;
-                if (laddrs.n_ipv6_addrs > 0) {
-                    ip6_addr = laddrs.ipv6_addrs[0].addr;
-                    destroy_lport_addresses(&laddrs);
-                    break;
-                }
-                destroy_lport_addresses(&laddrs);
-            }
-
-            if (eth_addr_is_zero(ea)) {
-                continue;
-            }
-
-            if (j == pb->n_mac) {
-                in6_generate_lla(ea, &ip6_addr);
-            }
-
-            changed |= fill_ipv6_prefix_state(ovnsb_idl_txn, ld,
-                                              ea, ip6_addr,
-                                              peer->tunnel_key,
-                                              peer->datapath->tunnel_key);
+        if (!pb_ipv6->ld) {
+            continue;
         }
+
+        const char *peer_s = smap_get(&pb->options, "peer");
+        if (!peer_s) {
+            continue;
+        }
+
+        const struct sbrec_port_binding *peer
+            = lport_lookup_by_name(sbrec_port_binding_by_name, peer_s);
+        if (!peer) {
+            continue;
+        }
+
+        char *redirect_name = xasprintf("cr-%s", pb->logical_port);
+        bool resident = lport_is_chassis_resident(
+                sbrec_port_binding_by_name, chassis, active_tunnels,
+                redirect_name);
+        free(redirect_name);
+        if (!resident && strcmp(pb->type, "l3gateway")) {
+            continue;
+        }
+
+        struct in6_addr ip6_addr;
+        struct eth_addr ea = eth_addr_zero;
+        for (j = 0; j < pb->n_mac; j++) {
+            struct lport_addresses laddrs;
+
+            if (!extract_lsp_addresses(pb->mac[j], &laddrs)) {
+                continue;
+            }
+
+            ea = laddrs.ea;
+            if (laddrs.n_ipv6_addrs > 0) {
+                ip6_addr = laddrs.ipv6_addrs[0].addr;
+                destroy_lport_addresses(&laddrs);
+                break;
+            }
+            destroy_lport_addresses(&laddrs);
+        }
+
+        if (eth_addr_is_zero(ea)) {
+            continue;
+        }
+
+        if (j == pb->n_mac) {
+            in6_generate_lla(ea, &ip6_addr);
+        }
+
+        changed |= fill_ipv6_prefix_state(ovnsb_idl_txn, pb_ipv6->ld,
+                                          ea, ip6_addr,
+                                          peer->tunnel_key,
+                                          peer->datapath->tunnel_key);
     }
 
     struct shash_node *iter, *next;
@@ -3411,7 +3408,8 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             const struct ovsrec_bridge *br_int,
             const struct sbrec_chassis *chassis,
             const struct hmap *local_datapaths,
-            const struct sset *active_tunnels)
+            const struct sset *active_tunnels,
+            const struct hmap *local_active_ports_ipv6_pd)
 {
     ovs_mutex_lock(&pinctrl_mutex);
     pinctrl_set_br_int_name_(br_int->name);
@@ -3426,7 +3424,8 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                            local_datapaths, active_tunnels);
     prepare_ipv6_ras(local_datapaths);
     prepare_ipv6_prefixd(ovnsb_idl_txn, sbrec_port_binding_by_name,
-                         local_datapaths, chassis, active_tunnels);
+                         local_active_ports_ipv6_pd, chassis,
+                         active_tunnels);
     sync_dns_cache(dns_table);
     controller_event_run(ovnsb_idl_txn, ce_table, chassis);
     ip_mcast_sync(ovnsb_idl_txn, chassis, local_datapaths,

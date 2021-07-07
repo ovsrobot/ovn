@@ -71,6 +71,8 @@ struct local_datapath {
 
 struct local_datapath *get_local_datapath(const struct hmap *,
                                           uint32_t tunnel_key);
+struct pb_active_ra_pd *
+get_pb_active_ras_pd(const struct hmap *map, const char *name);
 
 const struct ovsrec_bridge *get_bridge(const struct ovsrec_bridge_table *,
                                        const char *br_name);
@@ -86,5 +88,11 @@ enum chassis_tunnel_type {
 };
 
 uint32_t get_tunnel_type(const char *name);
+
+struct pb_active_ra_pd {
+    const struct sbrec_port_binding *pb;
+    const struct local_datapath *ld;
+    struct hmap_node hmap_node;
+};
 
 #endif /* controller/ovn-controller.h */
