@@ -1044,6 +1044,7 @@ struct ed_type_runtime_data {
     struct hmap tracked_dp_bindings;
 
     struct hmap local_active_ports_ipv6_pd;
+    struct hmap local_active_ports_ras;
 };
 
 /* struct ed_type_runtime_data has the below members for tracking the
@@ -1132,6 +1133,7 @@ en_runtime_data_init(struct engine_node *node OVS_UNUSED,
     smap_init(&data->local_iface_ids);
     local_binding_data_init(&data->lbinding_data);
     hmap_init(&data->local_active_ports_ipv6_pd);
+    hmap_init(&data->local_active_ports_ras);
 
     /* Init the tracked data. */
     hmap_init(&data->tracked_dp_bindings);
@@ -1158,6 +1160,7 @@ en_runtime_data_cleanup(void *data)
     }
     hmap_destroy(&rt_data->local_datapaths);
     hmap_destroy(&rt_data->local_active_ports_ipv6_pd);
+    hmap_destroy(&rt_data->local_active_ports_ras);
     local_binding_data_destroy(&rt_data->lbinding_data);
 }
 
@@ -1238,6 +1241,8 @@ init_binding_ctx(struct engine_node *node,
     b_ctx_out->local_datapaths = &rt_data->local_datapaths;
     b_ctx_out->local_active_ports_ipv6_pd =
         &rt_data->local_active_ports_ipv6_pd;
+    b_ctx_out->local_active_ports_ras =
+        &rt_data->local_active_ports_ras;
     b_ctx_out->local_lports = &rt_data->local_lports;
     b_ctx_out->local_lports_changed = false;
     b_ctx_out->related_lports = &rt_data->related_lports;
@@ -1256,6 +1261,7 @@ en_runtime_data_run(struct engine_node *node, void *data)
     struct ed_type_runtime_data *rt_data = data;
     struct hmap *local_datapaths = &rt_data->local_datapaths;
     struct hmap *local_active_ipv6_pd = &rt_data->local_active_ports_ipv6_pd;
+    struct hmap *local_active_ras = &rt_data->local_active_ports_ras;
     struct sset *local_lports = &rt_data->local_lports;
     struct sset *active_tunnels = &rt_data->active_tunnels;
 
@@ -1272,6 +1278,7 @@ en_runtime_data_run(struct engine_node *node, void *data)
         }
         hmap_clear(local_datapaths);
         hmap_clear(local_active_ipv6_pd);
+        hmap_clear(local_active_ras);
         local_binding_data_destroy(&rt_data->lbinding_data);
         sset_destroy(local_lports);
         related_lports_destroy(&rt_data->related_lports);
@@ -3286,7 +3293,8 @@ main(int argc, char *argv[])
                                     br_int, chassis,
                                     &runtime_data->local_datapaths,
                                     &runtime_data->active_tunnels,
-                                    &runtime_data->local_active_ports_ipv6_pd);
+                                    &runtime_data->local_active_ports_ipv6_pd,
+                                    &runtime_data->local_active_ports_ras);
                         /* Updating monitor conditions if runtime data or
                          * logical datapath goups changed. */
                         if (engine_node_changed(&en_runtime_data)
