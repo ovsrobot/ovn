@@ -920,6 +920,7 @@ get_binding_peer(struct ovsdb_idl_index *sbrec_port_binding_by_name,
 
 static void
 consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
+                      const struct sbrec_port_binding_table *pb_table,
                       enum mf_field_id mff_ovn_geneve,
                       const struct simap *ct_zones,
                       const struct sset *active_tunnels,
@@ -1281,6 +1282,52 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
             ofctrl_add_flow(flow_table, OFTABLE_CHECK_LOOPBACK, 160,
                             binding->header_.uuid.parts[0], &match,
                             ofpacts_p, &binding->header_.uuid);
+
+            /* Localport traffic directed to external is *not* local. */
+            const struct sbrec_port_binding *peer;
+            SBREC_PORT_BINDING_TABLE_FOR_EACH (peer, pb_table) {
+                if (strcmp(peer->type, "external")) {
+                    continue;
+                }
+                if (!peer->chassis) {
+                    continue;
+                }
+                if (peer->datapath->tunnel_key != dp_key) {
+                    continue;
+                }
+                if (strcmp(peer->chassis->name, chassis->name)) {
+                    continue;
+                }
+
+                ofpbuf_clear(ofpacts_p);
+                for (int i = 0; i < MFF_N_LOG_REGS; i++) {
+                    put_load(0, MFF_REG0 + i, 0, 32, ofpacts_p);
+                }
+                put_resubmit(OFTABLE_LOG_EGRESS_PIPELINE, ofpacts_p);
+
+                for (int i = 0; i < peer->n_mac; i++) {
+                    char *err_str;
+                    struct eth_addr peer_mac;
+                    if ((err_str = str_to_mac(peer->mac[i], &peer_mac))) {
+                        VLOG_WARN("Parsing MAC failed for external port: %s, "
+                                "with error: %s", peer->logical_port, err_str);
+                        free(err_str);
+                        continue;
+                    }
+
+                    match_init_catchall(&match);
+                    match_set_metadata(&match, htonll(dp_key));
+                    match_set_reg(&match, MFF_LOG_OUTPORT - MFF_REG0,
+                                  port_key);
+                    match_set_reg_masked(&match, MFF_LOG_FLAGS - MFF_REG0,
+                                         MLF_LOCALPORT, MLF_LOCALPORT);
+                    match_set_dl_dst(&match, peer_mac);
+
+                    ofctrl_add_flow(flow_table, OFTABLE_CHECK_LOOPBACK, 170,
+                                    binding->header_.uuid.parts[0], &match,
+                                    ofpacts_p, &binding->header_.uuid);
+                }
+            }
         }
 
     } else if (!tun && !is_ha_remote) {
@@ -1504,6 +1551,7 @@ physical_handle_port_binding_changes(struct physical_ctx *p_ctx,
                 ofctrl_remove_flows(flow_table, &binding->header_.uuid);
             }
             consider_port_binding(p_ctx->sbrec_port_binding_by_name,
+                                  p_ctx->port_binding_table,
                                   p_ctx->mff_ovn_geneve, p_ctx->ct_zones,
                                   p_ctx->active_tunnels,
                                   p_ctx->local_datapaths,
@@ -1684,6 +1732,7 @@ physical_run(struct physical_ctx *p_ctx,
     const struct sbrec_port_binding *binding;
     SBREC_PORT_BINDING_TABLE_FOR_EACH (binding, p_ctx->port_binding_table) {
         consider_port_binding(p_ctx->sbrec_port_binding_by_name,
+                              p_ctx->port_binding_table,
                               p_ctx->mff_ovn_geneve, p_ctx->ct_zones,
                               p_ctx->active_tunnels, p_ctx->local_datapaths,
                               binding, p_ctx->chassis,
@@ -1932,6 +1981,7 @@ physical_handle_ovs_iface_changes(struct physical_ctx *p_ctx,
 
             simap_put(&localvif_to_ofport, iface_id, ofport);
             consider_port_binding(p_ctx->sbrec_port_binding_by_name,
+                                  p_ctx->port_binding_table,
                                   p_ctx->mff_ovn_geneve, p_ctx->ct_zones,
                                   p_ctx->active_tunnels,
                                   p_ctx->local_datapaths,
