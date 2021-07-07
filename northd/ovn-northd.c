@@ -4153,6 +4153,7 @@ ovn_lflow_init(struct ovn_lflow *lflow, struct ovn_datapath *od,
  * logical datapath only by creating a datapath group. */
 static bool use_logical_dp_groups = false;
 static bool use_parallel_build = true;
+static unsigned int num_parallel_threads;
 
 static struct hashrow_locks lflow_locks;
 
@@ -12219,7 +12220,8 @@ init_lflows_thread_pool(void)
     int index;
 
     if (!pool_init_done) {
-        struct worker_pool *pool = add_worker_pool(build_lflows_thread);
+        struct worker_pool *pool = add_worker_pool(build_lflows_thread,
+                                                   num_parallel_threads);
         pool_init_done = true;
         if (pool) {
             build_lflows_pool = xmalloc(sizeof(*build_lflows_pool));
@@ -13455,6 +13457,9 @@ ovnnb_db_run(struct northd_context *ctx,
     use_parallel_build =
         (smap_get_bool(&nb->options, "use_parallel_build", false) &&
          ovn_can_parallelize_hashes(false));
+
+    num_parallel_threads =
+        smap_get_uint(&nb->options, "num_parallel_threads", 0);
 
     use_logical_dp_groups = smap_get_bool(&nb->options,
                                           "use_logical_dp_groups", false);

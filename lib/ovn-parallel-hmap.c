@@ -62,7 +62,7 @@ static int pool_size;
 static int sembase;
 
 static void worker_pool_hook(void *aux OVS_UNUSED);
-static void setup_worker_pools(bool force);
+static void setup_worker_pools(bool force, unsigned int thread_num);
 static void merge_list_results(struct worker_pool *pool OVS_UNUSED,
                                void *fin_result, void *result_frags,
                                int index);
@@ -86,14 +86,14 @@ ovn_can_parallelize_hashes(bool force_parallel)
             &test,
             true)) {
         ovs_mutex_lock(&init_mutex);
-        setup_worker_pools(force_parallel);
+        setup_worker_pools(force_parallel, 0);
         ovs_mutex_unlock(&init_mutex);
     }
     return can_parallelize;
 }
 
 struct worker_pool *
-ovn_add_worker_pool(void *(*start)(void *))
+ovn_add_worker_pool(void *(*start)(void *), unsigned int thread_num)
 {
     struct worker_pool *new_pool = NULL;
     struct worker_control *new_control;
@@ -109,7 +109,7 @@ ovn_add_worker_pool(void *(*start)(void *))
             &test,
             true)) {
         ovs_mutex_lock(&init_mutex);
-        setup_worker_pools(false);
+        setup_worker_pools(false, thread_num);
         ovs_mutex_unlock(&init_mutex);
     }
 
@@ -401,14 +401,14 @@ worker_pool_hook(void *aux OVS_UNUSED) {
 }
 
 static void
-setup_worker_pools(bool force) {
+setup_worker_pools(bool force, unsigned int thread_num) {
     int cores, nodes;
 
     nodes = ovs_numa_get_n_numas();
     if (nodes == OVS_NUMA_UNSPEC || nodes <= 0) {
         nodes = 1;
     }
-    cores = ovs_numa_get_n_cores();
+    cores = thread_num ? thread_num : ovs_numa_get_n_cores();
 
     /* If there is no NUMA config, use 4 cores.
      * If there is NUMA config use half the cores on

@@ -95,7 +95,8 @@ struct worker_pool {
 /* Add a worker pool for thread function start() which expects a pointer to
  * a worker_control structure as an argument. */
 
-struct worker_pool *ovn_add_worker_pool(void *(*start)(void *));
+struct worker_pool *ovn_add_worker_pool(void *(*start)(void *),
+                                        unsigned int thread_num);
 
 /* Setting this to true will make all processing threads exit */
 
@@ -265,7 +266,7 @@ bool ovn_can_parallelize_hashes(bool force_parallel);
 
 #define stop_parallel_processing() ovn_stop_parallel_processing()
 
-#define add_worker_pool(start) ovn_add_worker_pool(start)
+#define add_worker_pool(start, thread_num) ovn_add_worker_pool(start, thread_num)
 
 #define fast_hmap_size_for(hmap, size) ovn_fast_hmap_size_for(hmap, size)
 

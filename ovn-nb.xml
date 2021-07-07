@@ -226,6 +226,16 @@
           The default value is <code>false</code>.
         </p>
       </column>
+      <column name="options" key="num_parallel_threads">
+        <p>
+          Manually specify the number of threads to be used for parallel
+          logical flow computation.
+        </p>
+        <p>
+          The number of threads utilized will be determined by the number
+          of vCPUs on the system if this value is not specified.
+        </p>
+      </column>
 
       <column name="options" key="ignore_lsp_down">
         <p>
