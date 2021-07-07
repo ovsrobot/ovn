@@ -1348,7 +1348,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
@@ -3121,7 +3121,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
@@ -4577,7 +4577,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
@@ -4663,7 +4663,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
@@ -4903,7 +4903,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
@@ -5287,7 +5287,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
@@ -5717,7 +5717,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
@@ -5879,7 +5879,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
@@ -5928,7 +5928,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
@@ -6021,7 +6021,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/.*error receiving.*/d
@@ -6083,7 +6083,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/.*error receiving.*/d
@@ -6234,7 +6234,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 as
 OVS_TRAFFIC_VSWITCHD_STOP(["/.*error receiving.*/d
