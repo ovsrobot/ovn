@@ -1988,6 +1988,9 @@ nbctl_acl_list(struct ctl_context *ctx)
             ds_chomp(&ctx->output, ',');
             ds_put_cstr(&ctx->output, ")");
         }
+        if (acl->label) {
+          ds_put_format(&ctx->output, " label=%s", acl->label);
+        }
         ds_put_cstr(&ctx->output, "\n");
     }
 
@@ -2070,6 +2073,7 @@ nbctl_pre_acl_list(struct ctl_context *ctx)
     ovsdb_idl_add_column(ctx->idl, &nbrec_acl_col_name);
     ovsdb_idl_add_column(ctx->idl, &nbrec_acl_col_severity);
     ovsdb_idl_add_column(ctx->idl, &nbrec_acl_col_meter);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_acl_col_label);
 }
 
 static void
@@ -2135,6 +2139,32 @@ nbctl_acl_add(struct ctl_context *ctx)
     }
     if (meter) {
         nbrec_acl_set_meter(acl, meter);
+    }
+
+    /* Set the ACL label */
+    const char *label = shash_find_data(&ctx->options, "--label");
+    if (label) {
+      /* Ensure that the action is either allow or allow-related */
+      if (strcmp(action, "allow") && strcmp(action, "allow-related")) {
+        ctl_error(ctx, "label can only be set with actions \"allow\" or "
+                  "\"allow-related\"");
+        return;
+      }
+      /* Validate that label is in the hex format (for example: 0x1234) */
+      size_t label_len = strlen(label);
+      if (strncmp(label, "0x", 2)) {
+        ctl_error(ctx, "label: %s, should start with \"0x\"", label);
+        return;
+      }
+      if (label_len < 3 || label_len > 10) {
+        ctl_error(ctx, "label should be between 0x0 and 0xffffffff");
+        return;
+      }
+      if (strspn(label + 2, "0123456789abcdefABCDEF") + 2 != label_len) {
+        ctl_error(ctx, "label: %s, should be in hex format", label);
+        return;
+      }
+      nbrec_acl_set_label(acl, label);
     }
 
     /* Check if same acl already exists for the ls/portgroup */
@@ -6593,7 +6623,7 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     /* acl commands. */
     { "acl-add", 5, 6, "{SWITCH | PORTGROUP} DIRECTION PRIORITY MATCH ACTION",
       nbctl_pre_acl, nbctl_acl_add, NULL,
-      "--log,--may-exist,--type=,--name=,--severity=,--meter=", RW },
+      "--log,--may-exist,--type=,--name=,--severity=,--meter=,--label=", RW },
     { "acl-del", 1, 4, "{SWITCH | PORTGROUP} [DIRECTION [PRIORITY MATCH]]",
       nbctl_pre_acl, nbctl_acl_del, NULL, "--type=", RW },
     { "acl-list", 1, 1, "{SWITCH | PORTGROUP}",
