@@ -1286,6 +1286,7 @@ en_runtime_data_run(struct engine_node *node, void *data)
         struct local_datapath *cur_node, *next_node;
         HMAP_FOR_EACH_SAFE (cur_node, next_node, hmap_node, local_datapaths) {
             free(cur_node->peer_ports);
+            shash_clear(&cur_node->external_ports);
             hmap_remove(local_datapaths, &cur_node->hmap_node);
             free(cur_node);
         }
