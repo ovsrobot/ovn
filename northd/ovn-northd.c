@@ -9217,11 +9217,6 @@ build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
         for (size_t j = 0; j < lb->n_vips; j++) {
             struct ovn_lb_vip *lb_vip = &lb->vips[j];
 
-            bool is_udp = nullable_string_is_equal(nb_lb->protocol, "udp");
-            bool is_sctp = nullable_string_is_equal(nb_lb->protocol,
-                                                    "sctp");
-            const char *proto = is_udp ? "udp" : is_sctp ? "sctp" : "tcp";
-
             struct ds defrag_actions = DS_EMPTY_INITIALIZER;
             if (!sset_contains(&all_ips, lb_vip->vip_str)) {
                 sset_add(&all_ips, lb_vip->vip_str);
@@ -9247,9 +9242,6 @@ build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
                                   lb_vip->vip_str);
                 }
 
-                if (lb_vip->vip_port) {
-                    ds_put_format(match, " && %s", proto);
-                }
                 ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DEFRAG,
                                         100, ds_cstr(match),
                                         ds_cstr(&defrag_actions),

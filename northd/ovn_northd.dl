@@ -6167,14 +6167,7 @@ for (RouterLBVIP(
          *    pick a DNAT ip address from a group.
          * 2. If there are L4 ports in load balancing rules, we
          *    need the defragmentation to match on L4 ports. */
-        var match1 = "ip && ${ipX}.dst == ${ip_address}" in
-        var match2 =
-            if (port != 0) {
-                " && ${proto}"
-            } else {
-                ""
-            } in
-        var __match = match1 ++ match2 in
+        var __match = "ip && ${ipX}.dst == ${ip_address}" in
         var xx = ip_address.xxreg() in
         var __actions = "${xx}${rEG_NEXT_HOP()} = ${ip_address}; ct_dnat;" in
         /* One of these flows must be created for each unique LB VIP address.
