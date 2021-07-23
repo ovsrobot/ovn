@@ -2405,6 +2405,42 @@ lflow_output_port_groups_handler(struct engine_node *node, void *data)
     return _lflow_output_resource_ref_handler(node, data, REF_TYPE_PORTGROUP);
 }
 
+static void
+init_lbs_per_datapath(struct ed_type_runtime_data *rt_data,
+                      const struct sbrec_load_balancer_table *lb_table)
+{
+    const struct sbrec_load_balancer *lb;
+    SBREC_LOAD_BALANCER_TABLE_FOR_EACH (lb, lb_table) {
+        for (size_t i = 0; i < lb->n_datapaths; i++) {
+            struct local_datapath *ldp =
+                get_local_datapath(&rt_data->local_datapaths,
+                                   lb->datapaths[i]->tunnel_key);
+            if (!ldp) {
+                continue;
+            }
+            if (ldp->n_load_balancers == ldp->n_allocated_load_balancers) {
+                ldp->load_balancers =
+                    x2nrealloc(ldp->load_balancers,
+                               &ldp->n_allocated_load_balancers,
+                               sizeof *ldp->load_balancers);
+            }
+            ldp->load_balancers[ldp->n_load_balancers++] = lb;
+        }
+    }
+}
+
+static void
+cleanup_lbs_per_datapath(struct ed_type_runtime_data *rt_data)
+{
+    struct local_datapath *dp;
+    HMAP_FOR_EACH (dp, hmap_node, &rt_data->local_datapaths) {
+        free(dp->load_balancers);
+        dp->load_balancers = NULL;
+        dp->n_allocated_load_balancers = 0;
+        dp->n_load_balancers = 0;
+    }
+}
+
 static bool
 lflow_output_runtime_data_handler(struct engine_node *node,
                                   void *data OVS_UNUSED)
@@ -2430,6 +2466,7 @@ lflow_output_runtime_data_handler(struct engine_node *node,
     struct lflow_ctx_out l_ctx_out;
     struct ed_type_lflow_output *fo = data;
     init_lflow_ctx(node, rt_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lbs_per_datapath(rt_data, l_ctx_in.lb_table);
 
     struct tracked_binding_datapath *tdp;
     HMAP_FOR_EACH (tdp, node, tracked_dp_bindings) {
@@ -2450,6 +2487,7 @@ lflow_output_runtime_data_handler(struct engine_node *node,
         }
     }
 
+    cleanup_lbs_per_datapath(rt_data);
     engine_set_node_state(node, EN_UPDATED);
     return true;
 }

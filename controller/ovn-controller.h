@@ -69,6 +69,11 @@ struct local_datapath {
     size_t n_allocated_peer_ports;
 
     struct shash external_ports;
+
+    const struct sbrec_load_balancer **load_balancers;
+
+    size_t n_load_balancers;
+    size_t n_allocated_load_balancers;
 };
 
 struct local_datapath *get_local_datapath(const struct hmap *,
