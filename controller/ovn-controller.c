@@ -1939,6 +1939,78 @@ en_mff_ovn_geneve_run(struct engine_node *node, void *data)
     engine_set_node_state(node, EN_UNCHANGED);
 }
 
+/* Engine node which is used to handle the Non VIF data like
+ *   - OVS patch ports
+ *   - Tunnel ports and the related chassis information.
+ */
+struct ed_type_non_vif_data {
+    struct simap patch_ofports; /* simap of patch ovs ports. */
+    struct hmap chassis_tunnels; /* hmap of 'struct chassis_tunnel' from the
+                                  * tunnel OVS ports. */
+};
+
+static void *
+en_non_vif_data_init(struct engine_node *node OVS_UNUSED,
+                     struct engine_arg *arg OVS_UNUSED)
+{
+    struct ed_type_non_vif_data *data = xzalloc(sizeof *data);
+    simap_init(&data->patch_ofports);
+    hmap_init(&data->chassis_tunnels);
+    return data;
+}
+
+static void
+en_non_vif_data_cleanup(void *data OVS_UNUSED)
+{
+    struct ed_type_non_vif_data *ed_non_vif_data = data;
+    simap_destroy(&ed_non_vif_data->patch_ofports);
+    chassis_tunnels_destroy(&ed_non_vif_data->chassis_tunnels);
+}
+
+static void
+en_non_vif_data_run(struct engine_node *node, void *data)
+{
+    struct ed_type_non_vif_data *ed_non_vif_data = data;
+    simap_destroy(&ed_non_vif_data->patch_ofports);
+    chassis_tunnels_destroy(&ed_non_vif_data->chassis_tunnels);
+    simap_init(&ed_non_vif_data->patch_ofports);
+    hmap_init(&ed_non_vif_data->chassis_tunnels);
+
+    struct ovsrec_open_vswitch_table *ovs_table =
+        (struct ovsrec_open_vswitch_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_open_vswitch", node));
+    struct ovsrec_bridge_table *bridge_table =
+        (struct ovsrec_bridge_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_bridge", node));
+
+    const struct ovsrec_bridge *br_int = get_br_int(bridge_table, ovs_table);
+    const char *chassis_id = get_ovs_chassis_id(ovs_table);
+    ovs_assert(br_int && chassis_id);
+
+    struct ovsdb_idl_index *sbrec_chassis_by_name =
+        engine_ovsdb_node_get_index(
+            engine_get_input("SB_chassis", node),
+            "name");
+
+    const struct sbrec_chassis *chassis
+        = chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id);
+    ovs_assert(chassis);
+
+    local_nonvif_data_run(br_int, chassis, &ed_non_vif_data->patch_ofports,
+                          &ed_non_vif_data->chassis_tunnels);
+    engine_set_node_state(node, EN_UPDATED);
+}
+
+static bool
+non_vif_data_ovs_iface_handler(struct engine_node *node, void *data OVS_UNUSED)
+{
+    struct ovsrec_interface_table *iface_table =
+        (struct ovsrec_interface_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_interface", node));
+
+    return local_nonvif_data_handle_ovs_iface_changes(iface_table);
+}
+
 struct lflow_output_persistent_data {
     uint32_t conj_id_ofs;
     struct lflow_cache *lflow_cache;
@@ -1962,6 +2034,7 @@ struct ed_type_lflow_output {
 static void
 init_lflow_ctx(struct engine_node *node,
                struct ed_type_runtime_data *rt_data,
+               struct ed_type_non_vif_data *non_vif_data,
                struct ed_type_lflow_output *fo,
                struct lflow_ctx_in *l_ctx_in,
                struct lflow_ctx_out *l_ctx_out)
@@ -2068,6 +2141,7 @@ init_lflow_ctx(struct engine_node *node,
     l_ctx_in->port_groups = port_groups;
     l_ctx_in->active_tunnels = &rt_data->active_tunnels;
     l_ctx_in->related_lport_ids = &rt_data->related_lports.lport_ids;
+    l_ctx_in->chassis_tunnels = &non_vif_data->chassis_tunnels;
 
     l_ctx_out->flow_table = &fo->flow_table;
     l_ctx_out->group_table = &fo->group_table;
@@ -2107,6 +2181,8 @@ en_lflow_output_run(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
 
     struct ovsrec_open_vswitch_table *ovs_table =
         (struct ovsrec_open_vswitch_table *)EN_OVSDB_GET(
@@ -2155,7 +2231,7 @@ en_lflow_output_run(struct engine_node *node, void *data)
 
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, rt_data, non_vif_data, fo, &l_ctx_in, &l_ctx_out);
     lflow_run(&l_ctx_in, &l_ctx_out);
 
     if (l_ctx_out.conj_id_overflow) {
@@ -2182,6 +2258,8 @@ lflow_output_sb_logical_flow_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
     struct ovsrec_open_vswitch_table *ovs_table =
         (struct ovsrec_open_vswitch_table *)EN_OVSDB_GET(
             engine_get_input("OVS_open_vswitch", node));
@@ -2194,7 +2272,7 @@ lflow_output_sb_logical_flow_handler(struct engine_node *node, void *data)
     struct ed_type_lflow_output *fo = data;
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, rt_data, non_vif_data, fo, &l_ctx_in, &l_ctx_out);
 
     bool handled = lflow_handle_changed_flows(&l_ctx_in, &l_ctx_out);
 
@@ -2232,12 +2310,14 @@ lflow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
 
     struct ed_type_lflow_output *lfo = data;
 
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, lfo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, rt_data, non_vif_data, lfo, &l_ctx_in, &l_ctx_out);
     if (!lflow_handle_changed_mc_groups(&l_ctx_in, &l_ctx_out)) {
         return false;
     }
@@ -2251,12 +2331,14 @@ lflow_output_sb_port_binding_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
 
     struct ed_type_lflow_output *lfo = data;
 
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, lfo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, rt_data, non_vif_data, lfo, &l_ctx_in, &l_ctx_out);
     if (!lflow_handle_changed_port_bindings(&l_ctx_in, &l_ctx_out)) {
         return false;
     }
@@ -2271,6 +2353,8 @@ _lflow_output_resource_ref_handler(struct engine_node *node, void *data,
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
 
     struct ed_type_addr_sets *as_data =
         engine_get_input_data("addr_sets", node);
@@ -2302,7 +2386,7 @@ _lflow_output_resource_ref_handler(struct engine_node *node, void *data,
 
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, rt_data, non_vif_data, fo, &l_ctx_in, &l_ctx_out);
 
     bool changed;
     const char *ref_name;
@@ -2389,6 +2473,8 @@ lflow_output_runtime_data_handler(struct engine_node *node,
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
 
     /* There is no tracked data. Fall back to full recompute of
      * flow_output. */
@@ -2407,7 +2493,7 @@ lflow_output_runtime_data_handler(struct engine_node *node,
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
     struct ed_type_lflow_output *fo = data;
-    init_lflow_ctx(node, rt_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, rt_data, non_vif_data, fo, &l_ctx_in, &l_ctx_out);
 
     struct tracked_datapath *tdp;
     HMAP_FOR_EACH (tdp, node, tracked_dp_bindings) {
@@ -2437,11 +2523,13 @@ lflow_output_sb_load_balancer_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
 
     struct ed_type_lflow_output *fo = data;
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, rt_data, non_vif_data, fo, &l_ctx_in, &l_ctx_out);
 
     bool handled = lflow_handle_changed_lbs(&l_ctx_in, &l_ctx_out);
 
@@ -2454,11 +2542,13 @@ lflow_output_sb_fdb_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
 
     struct ed_type_lflow_output *fo = data;
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, rt_data, non_vif_data, fo, &l_ctx_in, &l_ctx_out);
 
     bool handled = lflow_handle_changed_fdbs(&l_ctx_in, &l_ctx_out);
 
@@ -2473,6 +2563,7 @@ struct ed_type_pflow_output {
 
 static void init_physical_ctx(struct engine_node *node,
                               struct ed_type_runtime_data *rt_data,
+                              struct ed_type_non_vif_data *non_vif_data,
                               struct physical_ctx *p_ctx)
 {
     struct ovsdb_idl_index *sbrec_port_binding_by_name =
@@ -2514,10 +2605,6 @@ static void init_physical_ctx(struct engine_node *node,
 
     ovs_assert(br_int && chassis);
 
-    struct ovsrec_interface_table *iface_table =
-        (struct ovsrec_interface_table *)EN_OVSDB_GET(
-            engine_get_input("OVS_interface", node));
-
     struct ed_type_ct_zones *ct_zones_data =
         engine_get_input_data("ct_zones", node);
     struct simap *ct_zones = &ct_zones_data->current;
@@ -2527,7 +2614,6 @@ static void init_physical_ctx(struct engine_node *node,
     p_ctx->mc_group_table = multicast_group_table;
     p_ctx->br_int = br_int;
     p_ctx->chassis_table = chassis_table;
-    p_ctx->iface_table = iface_table;
     p_ctx->chassis = chassis;
     p_ctx->active_tunnels = &rt_data->active_tunnels;
     p_ctx->local_datapaths = &rt_data->local_datapaths;
@@ -2535,6 +2621,8 @@ static void init_physical_ctx(struct engine_node *node,
     p_ctx->ct_zones = ct_zones;
     p_ctx->mff_ovn_geneve = ed_mff_ovn_geneve->mff_ovn_geneve;
     p_ctx->local_bindings = &rt_data->lbinding_data.bindings;
+    p_ctx->patch_ofports = &non_vif_data->patch_ofports;
+    p_ctx->chassis_tunnels = &non_vif_data->chassis_tunnels;
 }
 
 static void *
@@ -2567,9 +2655,11 @@ en_pflow_output_run(struct engine_node *node, void *data)
 
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
 
     struct physical_ctx p_ctx;
-    init_physical_ctx(node, rt_data, &p_ctx);
+    init_physical_ctx(node, rt_data, non_vif_data, &p_ctx);
     physical_run(&p_ctx, pflow_table);
 
     engine_set_node_state(node, EN_UPDATED);
@@ -2581,17 +2671,23 @@ pflow_output_sb_port_binding_handler(struct engine_node *node,
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
 
     struct ed_type_pflow_output *pfo = data;
 
     struct physical_ctx p_ctx;
-    init_physical_ctx(node, rt_data, &p_ctx);
+    init_physical_ctx(node, rt_data, non_vif_data, &p_ctx);
 
     /* We handle port-binding changes for physical flow processing
      * only. flow_output runtime data handler takes care of processing
      * logical flows for any port binding changes.
      */
-    physical_handle_port_binding_changes(&p_ctx, &pfo->flow_table);
+    const struct sbrec_port_binding *pb;
+    SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (pb, p_ctx.port_binding_table) {
+        bool removed = sbrec_port_binding_is_deleted(pb);
+        physical_handle_flows_for_lport(pb, removed, &p_ctx, &pfo->flow_table);
+    }
 
     engine_set_node_state(node, EN_UPDATED);
     return true;
@@ -2602,11 +2698,13 @@ pflow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
 
     struct ed_type_pflow_output *pfo = data;
 
     struct physical_ctx p_ctx;
-    init_physical_ctx(node, rt_data, &p_ctx);
+    init_physical_ctx(node, rt_data, non_vif_data, &p_ctx);
 
     physical_handle_mc_group_changes(&p_ctx, &pfo->flow_table);
 
@@ -2615,19 +2713,49 @@ pflow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
 }
 
 static bool
-pflow_output_ovs_iface_handler(struct engine_node *node OVS_UNUSED,
-                               void *data OVS_UNUSED)
+pflow_output_runtime_data_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
+
+    /* There is no tracked data. Fall back to full recompute of
+     * pflow_output. */
+    if (!rt_data->tracked) {
+        return false;
+    }
+
+    struct hmap *tracked_dp_bindings = &rt_data->tracked_dp_bindings;
+    if (hmap_is_empty(tracked_dp_bindings)) {
+        return true;
+    }
 
     struct ed_type_pflow_output *pfo = data;
 
     struct physical_ctx p_ctx;
-    init_physical_ctx(node, rt_data, &p_ctx);
+    init_physical_ctx(node, rt_data, non_vif_data, &p_ctx);
+
+    struct tracked_datapath *tdp;
+    HMAP_FOR_EACH (tdp, node, tracked_dp_bindings) {
+        if (tdp->tracked_type != TRACKED_RESOURCE_UPDATED) {
+            /* Fall back to full recompute when a local datapath
+             * is added or deleted. */
+            return false;
+        }
+
+        struct shash_node *shash_node;
+        SHASH_FOR_EACH (shash_node, &tdp->lports) {
+            struct tracked_lport *lport = shash_node->data;
+            bool removed =
+                lport->tracked_type == TRACKED_RESOURCE_REMOVED ? true: false;
+            physical_handle_flows_for_lport(lport->pb, removed, &p_ctx,
+                                            &pfo->flow_table);
+        }
+    }
 
     engine_set_node_state(node, EN_UPDATED);
-    return physical_handle_ovs_iface_changes(&p_ctx, &pfo->flow_table);
+    return true;
 }
 
 static void *
@@ -2887,6 +3015,7 @@ main(int argc, char *argv[])
     /* Define inc-proc-engine nodes. */
     ENGINE_NODE_CUSTOM_DATA(ct_zones, "ct_zones");
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA(runtime_data, "runtime_data");
+    ENGINE_NODE(non_vif_data, "non_vif_data");
     ENGINE_NODE(mff_ovn_geneve, "mff_ovn_geneve");
     ENGINE_NODE(ofctrl_is_connected, "ofctrl_is_connected");
     ENGINE_NODE(pflow_output, "physical_flow_output");
@@ -2914,11 +3043,17 @@ main(int argc, char *argv[])
     engine_add_input(&en_port_groups, &en_runtime_data,
                      port_groups_runtime_data_handler);
 
+    engine_add_input(&en_non_vif_data, &en_ovs_open_vswitch, NULL);
+    engine_add_input(&en_non_vif_data, &en_ovs_bridge, NULL);
+    engine_add_input(&en_non_vif_data, &en_sb_chassis, NULL);
+    engine_add_input(&en_non_vif_data, &en_ovs_interface,
+                     non_vif_data_ovs_iface_handler);
+
     /* Note: The order of inputs is important, all OVS interface changes must
      * be handled before any ct_zone changes.
      */
-    engine_add_input(&en_pflow_output, &en_ovs_interface,
-                     pflow_output_ovs_iface_handler);
+    engine_add_input(&en_pflow_output, &en_non_vif_data,
+                     NULL);
     engine_add_input(&en_pflow_output, &en_ct_zones, NULL);
     engine_add_input(&en_pflow_output, &en_sb_chassis,
                      pflow_lflow_output_sb_chassis_handler);
@@ -2929,7 +3064,7 @@ main(int argc, char *argv[])
                      pflow_output_sb_multicast_group_handler);
 
     engine_add_input(&en_pflow_output, &en_runtime_data,
-                     NULL);
+                     pflow_output_runtime_data_handler);
     engine_add_input(&en_pflow_output, &en_sb_encap, NULL);
     engine_add_input(&en_pflow_output, &en_mff_ovn_geneve, NULL);
     engine_add_input(&en_pflow_output, &en_ovs_open_vswitch, NULL);
@@ -2941,6 +3076,8 @@ main(int argc, char *argv[])
                      lflow_output_port_groups_handler);
     engine_add_input(&en_lflow_output, &en_runtime_data,
                      lflow_output_runtime_data_handler);
+    engine_add_input(&en_lflow_output, &en_non_vif_data,
+                     NULL);
 
     engine_add_input(&en_lflow_output, &en_sb_multicast_group,
                      lflow_output_sb_multicast_group_handler);
