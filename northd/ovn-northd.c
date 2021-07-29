@@ -6651,7 +6651,7 @@ build_lswitch_rport_arp_req_self_orig_flow(struct ovn_port *op,
 }
 
 static void
-arp_nd_ns_match(struct ds *ips, int addr_family, struct ds *match)
+arp_nd_ns_match(const char *ips, int addr_family, struct ds *match)
 {
     /* Packets received from VXLAN tunnels have already been through the
      * router pipeline so we should skip them. Normally this is done by the
@@ -6661,13 +6661,10 @@ arp_nd_ns_match(struct ds *ips, int addr_family, struct ds *match)
     ds_put_cstr(match, FLAGBIT_NOT_VXLAN " && ");
 
     if (addr_family == AF_INET) {
-        ds_put_cstr(match, "arp.op == 1 && arp.tpa == {");
+        ds_put_format(match, "arp.op == 1 && arp.tpa == %s", ips);
     } else {
-        ds_put_cstr(match, "nd_ns && nd.target == {");
+        ds_put_format(match, "nd_ns && nd.target == %s", ips);
     }
-
-    ds_put_cstr(match, ds_cstr_ro(ips));
-    ds_put_cstr(match, "}");
 }
 
 /*
@@ -6676,7 +6673,7 @@ arp_nd_ns_match(struct ds *ips, int addr_family, struct ds *match)
  * switching domain as regular broadcast.
  */
 static void
-build_lswitch_rport_arp_req_flow_for_reachable_ip(struct ds *ips,
+build_lswitch_rport_arp_req_flow_for_reachable_ip(const char *ips,
     int addr_family, struct ovn_port *patch_op, struct ovn_datapath *od,
     uint32_t priority, struct hmap *lflows,
     const struct ovsdb_idl_row *stage_hint)
@@ -6715,7 +6712,7 @@ build_lswitch_rport_arp_req_flow_for_reachable_ip(struct ds *ips,
  * broadcast.
  */
 static void
-build_lswitch_rport_arp_req_flow_for_unreachable_ip(struct ds *ips,
+build_lswitch_rport_arp_req_flow_for_unreachable_ip(const char *ips,
     int addr_family, struct ovn_datapath *od, uint32_t priority,
     struct hmap *lflows, const struct ovsdb_idl_row *stage_hint)
 {
@@ -6757,10 +6754,6 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
      * router port.
      * Priority: 80.
      */
-    struct ds ips_v4_match_reachable = DS_EMPTY_INITIALIZER;
-    struct ds ips_v6_match_reachable = DS_EMPTY_INITIALIZER;
-    struct ds ips_v4_match_unreachable = DS_EMPTY_INITIALIZER;
-    struct ds ips_v6_match_unreachable = DS_EMPTY_INITIALIZER;
 
     const char *ip_addr;
     SSET_FOR_EACH (ip_addr, &op->od->lb_ips_v4) {
@@ -6771,9 +6764,13 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
          */
         if (ip_parse(ip_addr, &ipv4_addr)) {
             if (lrouter_port_ipv4_reachable(op, ipv4_addr)) {
-                ds_put_format(&ips_v4_match_reachable, "%s, ", ip_addr);
+                build_lswitch_rport_arp_req_flow_for_reachable_ip(
+                    ip_addr, AF_INET, sw_op, sw_od, 80, lflows,
+                    stage_hint);
             } else {
-                ds_put_format(&ips_v4_match_unreachable, "%s, ", ip_addr);
+                build_lswitch_rport_arp_req_flow_for_unreachable_ip(
+                        ip_addr, AF_INET, sw_od, 90, lflows,
+                        stage_hint);
             }
         }
     }
@@ -6785,9 +6782,13 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
          */
         if (ipv6_parse(ip_addr, &ipv6_addr)) {
             if (lrouter_port_ipv6_reachable(op, &ipv6_addr)) {
-                ds_put_format(&ips_v6_match_reachable, "%s, ", ip_addr);
+                build_lswitch_rport_arp_req_flow_for_reachable_ip(
+                    ip_addr, AF_INET6, sw_op, sw_od, 80, lflows,
+                    stage_hint);
             } else {
-                ds_put_format(&ips_v6_match_unreachable, "%s, ", ip_addr);
+                build_lswitch_rport_arp_req_flow_for_unreachable_ip(
+                    ip_addr, AF_INET6, sw_od, 90, lflows,
+                    stage_hint);
             }
         }
     }
@@ -6812,65 +6813,42 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
 
             if (!sset_contains(&op->od->lb_ips_v6, nat->external_ip)) {
                 if (lrouter_port_ipv6_reachable(op, addr)) {
-                    ds_put_format(&ips_v6_match_reachable, "%s, ",
-                                  nat->external_ip);
+                    build_lswitch_rport_arp_req_flow_for_reachable_ip(
+                        nat->external_ip, AF_INET6, sw_op, sw_od, 80, lflows,
+                        stage_hint);
                 } else {
-                    ds_put_format(&ips_v6_match_unreachable, "%s, ",
-                                  nat->external_ip);
+                    build_lswitch_rport_arp_req_flow_for_unreachable_ip(
+                        nat->external_ip, AF_INET6, sw_od, 90, lflows,
+                        stage_hint);
                 }
             }
         } else {
             ovs_be32 addr = nat_entry->ext_addrs.ipv4_addrs[0].addr;
             if (!sset_contains(&op->od->lb_ips_v4, nat->external_ip)) {
                 if (lrouter_port_ipv4_reachable(op, addr)) {
-                    ds_put_format(&ips_v4_match_reachable, "%s, ",
-                                  nat->external_ip);
+                    build_lswitch_rport_arp_req_flow_for_reachable_ip(
+                        nat->external_ip, AF_INET, sw_op, sw_od, 80, lflows,
+                        stage_hint);
                 } else {
-                    ds_put_format(&ips_v4_match_unreachable, "%s, ",
-                                  nat->external_ip);
+                    build_lswitch_rport_arp_req_flow_for_unreachable_ip(
+                        nat->external_ip, AF_INET, sw_od, 90, lflows,
+                        stage_hint);
                 }
             }
         }
     }
 
     for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
-        ds_put_format(&ips_v4_match_reachable, "%s, ",
-                      op->lrp_networks.ipv4_addrs[i].addr_s);
+        build_lswitch_rport_arp_req_flow_for_reachable_ip(
+            op->lrp_networks.ipv4_addrs[i].addr_s, AF_INET, sw_op, sw_od, 80,
+            lflows, stage_hint);
     }
     for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
-        ds_put_format(&ips_v6_match_reachable, "%s, ",
-                      op->lrp_networks.ipv6_addrs[i].addr_s);
+        build_lswitch_rport_arp_req_flow_for_reachable_ip(
+            op->lrp_networks.ipv6_addrs[i].addr_s, AF_INET6, sw_op, sw_od, 80,
+            lflows, stage_hint);
     }
 
-    if (ds_last(&ips_v4_match_reachable) != EOF) {
-        ds_chomp(&ips_v4_match_reachable, ' ');
-        ds_chomp(&ips_v4_match_reachable, ',');
-        build_lswitch_rport_arp_req_flow_for_reachable_ip(
-            &ips_v4_match_reachable, AF_INET, sw_op, sw_od, 80, lflows,
-            stage_hint);
-    }
-    if (ds_last(&ips_v6_match_reachable) != EOF) {
-        ds_chomp(&ips_v6_match_reachable, ' ');
-        ds_chomp(&ips_v6_match_reachable, ',');
-        build_lswitch_rport_arp_req_flow_for_reachable_ip(
-            &ips_v6_match_reachable, AF_INET6, sw_op, sw_od, 80, lflows,
-            stage_hint);
-    }
-
-    if (ds_last(&ips_v4_match_unreachable) != EOF) {
-        ds_chomp(&ips_v4_match_unreachable, ' ');
-        ds_chomp(&ips_v4_match_unreachable, ',');
-        build_lswitch_rport_arp_req_flow_for_unreachable_ip(
-            &ips_v4_match_unreachable, AF_INET, sw_od, 90, lflows,
-            stage_hint);
-    }
-    if (ds_last(&ips_v6_match_unreachable) != EOF) {
-        ds_chomp(&ips_v6_match_unreachable, ' ');
-        ds_chomp(&ips_v6_match_unreachable, ',');
-        build_lswitch_rport_arp_req_flow_for_unreachable_ip(
-            &ips_v6_match_unreachable, AF_INET6, sw_od, 90, lflows,
-            stage_hint);
-    }
     /* Self originated ARP requests/ND need to be flooded as usual.
      *
      * However, if the switch doesn't have any non-router ports we shouldn't
@@ -6881,10 +6859,6 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
     if (sw_od->n_router_ports != sw_od->nbs->n_ports) {
         build_lswitch_rport_arp_req_self_orig_flow(op, 75, sw_od, lflows);
     }
-    ds_destroy(&ips_v4_match_reachable);
-    ds_destroy(&ips_v6_match_reachable);
-    ds_destroy(&ips_v4_match_unreachable);
-    ds_destroy(&ips_v6_match_unreachable);
 }
 
 static void
