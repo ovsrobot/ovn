@@ -644,7 +644,7 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
         .mac_lookup_ptable = OFTABLE_MAC_LOOKUP,
         .lb_hairpin_ptable = OFTABLE_CHK_LB_HAIRPIN,
         .lb_hairpin_reply_ptable = OFTABLE_CHK_LB_HAIRPIN_REPLY,
-        .ct_snat_vip_ptable = OFTABLE_CT_SNAT_FOR_VIP,
+        .ct_snat_vip_ptable = OFTABLE_CT_SNAT_HAIRPIN_DP,
         .fdb_ptable = OFTABLE_GET_FDB,
         .fdb_lookup_ptable = OFTABLE_LOOKUP_FDB,
         .ctrl_meter_id = ctrl_meter_id,
@@ -1420,17 +1420,37 @@ add_lb_vip_hairpin_flows(struct ovn_controller_lb *lb,
     ofpbuf_uninit(&ofpacts);
 }
 
-/* Adds flows to perform SNAT for hairpin sessions.
- *
- * For backwards compatibilty with older ovn-northd versions, uses
- * ct_nw_dst(), ct_ipv6_dst(), ct_tp_dst(), otherwise uses the
- * original destination tuple stored by ovn-northd.
- */
 static void
-add_lb_ct_snat_vip_flows(struct ovn_controller_lb *lb,
-                         struct ovn_lb_vip *lb_vip,
-                         uint8_t lb_proto,
-                         struct ovn_desired_flow_table *flow_table)
+add_lb_ct_snat_hairpin_dp_flows(struct ovn_controller_lb *lb,
+                                struct ovn_desired_flow_table *flow_table)
+{
+    uint64_t stub2[1024 / 8];
+    struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(stub2);
+
+    struct ofpact_resubmit *resubmit = ofpact_put_RESUBMIT(&ofpacts);
+    resubmit->in_port = OFPP_IN_PORT;
+    resubmit->table_id = OFTABLE_CT_SNAT_HAIRPIN_VIP;
+
+    struct match match = MATCH_CATCHALL_INITIALIZER;
+
+    for (size_t i = 0; i < lb->slb->n_datapaths; i++) {
+        match_set_metadata(&match,
+                           htonll(lb->slb->datapaths[i]->tunnel_key));
+
+        ofctrl_add_flow(flow_table, OFTABLE_CT_SNAT_HAIRPIN_DP, 100,
+                        lb->slb->header_.uuid.parts[0],
+                        &match, &ofpacts, &lb->slb->header_.uuid);
+    }
+
+    ofpbuf_uninit(&ofpacts);
+}
+
+
+static void
+add_lb_ct_snat_hairpin_vip_flows(struct ovn_controller_lb *lb,
+                                 struct ovn_lb_vip *lb_vip,
+                                 uint8_t lb_proto,
+                                struct ovn_desired_flow_table *flow_table)
 {
     uint64_t stub[1024 / 8];
     struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(stub);
@@ -1513,16 +1533,28 @@ add_lb_ct_snat_vip_flows(struct ovn_controller_lb *lb,
         }
     }
 
-    for (size_t i = 0; i < lb->slb->n_datapaths; i++) {
-        match_set_metadata(&match,
-                           htonll(lb->slb->datapaths[i]->tunnel_key));
-
-        ofctrl_add_flow(flow_table, OFTABLE_CT_SNAT_FOR_VIP, 100,
-                        lb->slb->header_.uuid.parts[0],
-                        &match, &ofpacts, &lb->slb->header_.uuid);
-    }
+    ofctrl_add_flow(flow_table, OFTABLE_CT_SNAT_HAIRPIN_VIP, 100,
+                lb->slb->header_.uuid.parts[0],
+                &match, &ofpacts, &lb->slb->header_.uuid);
 
     ofpbuf_uninit(&ofpacts);
+
+}
+
+/* Adds flows to perform SNAT for hairpin sessions.
+ *
+ * For backwards compatibilty with older ovn-northd versions, uses
+ * ct_nw_dst(), ct_ipv6_dst(), ct_tp_dst(), otherwise uses the
+ * original destination tuple stored by ovn-northd.
+ */
+static void
+add_lb_ct_snat_hairpin_flows(struct ovn_controller_lb *lb,
+                             struct ovn_lb_vip *lb_vip,
+                             uint8_t lb_proto,
+                             struct ovn_desired_flow_table *flow_table)
+{
+    add_lb_ct_snat_hairpin_dp_flows(lb, flow_table);
+    add_lb_ct_snat_hairpin_vip_flows(lb, lb_vip, lb_proto, flow_table);
 }
 
 static void
@@ -1565,7 +1597,7 @@ consider_lb_hairpin_flows(const struct sbrec_load_balancer *sbrec_lb,
                                      flow_table);
         }
 
-        add_lb_ct_snat_vip_flows(lb, lb_vip, lb_proto, flow_table);
+        add_lb_ct_snat_hairpin_flows(lb, lb_vip, lb_proto, flow_table);
     }
 
     ovn_controller_lb_destroy(lb);
