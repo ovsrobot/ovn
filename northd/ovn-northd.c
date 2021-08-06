@@ -10225,7 +10225,10 @@ build_ND_RA_flows_for_lrouter_port(
 
     if (smap_get_bool(&op->nbrp->ipv6_ra_configs, "send_periodic",
                       false)) {
-        copy_ra_to_sb(op, address_mode);
+        /* Don't leak RAs into datacenter networks. */
+        if (!op->peer->od->n_localnet_ports) {
+            copy_ra_to_sb(op, address_mode);
+        }
     }
 
     ds_clear(match);
