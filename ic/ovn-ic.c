@@ -1157,7 +1157,9 @@ sync_learned_route(struct ic_context *ctx,
     ovs_assert(ctx->ovnnb_txn);
     const struct icsbrec_route *isb_route;
     ICSBREC_ROUTE_FOR_EACH (isb_route, ctx->ovnisb_idl) {
-        if (isb_route->availability_zone == az) {
+        if (isb_route->availability_zone == az ||
+            strcmp(isb_route->transit_switch,
+                   ic_lr->isb_pb->transit_switch)) {
             continue;
         }
         struct in6_addr prefix, nexthop;

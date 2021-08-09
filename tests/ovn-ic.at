@@ -315,6 +315,41 @@ OVS_WAIT_WHILE([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 192
 # AZ1 shouldn't learn 10.11 any more.
 OVS_WAIT_WHILE([ovn_as az1 ovn-nbctl lr-route-list lr1 | grep learned | grep 10.11])
 
+# Test routes don't leak from lr1 (ts1) to lr2 (ts2)
+ovn-ic-nbctl ts-add ts2
+for i in 1 2; do
+    ovn_as az$i
+
+    # Ensure route learning at AZ level
+    ovn-nbctl set nb_global . options:ic-route-learn=true
+    # Ensure route advertising at AZ level
+    ovn-nbctl set nb_global . options:ic-route-adv=true
+    # Drop blacklist
+    ovn-nbctl remove nb_global . options ic-route-blacklist
+
+    # Create LRP and connect to TS
+    ovn-nbctl lr-add lr2$i
+    ovn-nbctl lrp-add lr2$i lrp-lr2$i-ts2 aa:aa:aa:aa:aa:0$i 169.254.100.$i/24
+    ovn-nbctl lsp-add ts2 lsp-ts2-lr2$i \
+            -- lsp-set-addresses lsp-ts2-lr2$i router \
+            -- lsp-set-type lsp-ts2-lr2$i router \
+            -- lsp-set-options lsp-ts2-lr2$i router-port=lrp-lr2$i-ts2
+done
+
+# Create directly-connected route
+ovn_as az2 ovn-nbctl lrp-add lr2 lrp-lr2-ls2 aa:aa:aa:aa:bb:01 "192.168.0.1/24"
+
+# Test learned routes from lr2 didn't leak to lr22
+AT_CHECK([ovn_as az1 ovn-nbctl lr-route-list lr1 |
+             grep learned | awk '{print $1, $2}' | sort], [0], [dnl
+10.11.2.0/24 169.254.100.2
+192.168.0.0/24 169.254.100.2
+])
+
+# Test there are no learned routes in lr21
+AT_CHECK([ovn_as az1 ovn-nbctl lr-route-list lr21 | grep learned |
+             awk '{print $1, $2}'], [0], [])
+
 OVN_CLEANUP_IC([az1], [az2])
 
 AT_CLEANUP
