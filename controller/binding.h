@@ -46,6 +46,7 @@ struct binding_ctx_in {
     struct ovsdb_idl_index *sbrec_datapath_binding_by_key;
     struct ovsdb_idl_index *sbrec_port_binding_by_datapath;
     struct ovsdb_idl_index *sbrec_port_binding_by_name;
+    struct ovsdb_idl_index *ovsrec_port_by_interfaces;
     const struct ovsrec_port_table *port_table;
     const struct ovsrec_qos_table *qos_table;
     const struct sbrec_port_binding_table *port_binding_table;
