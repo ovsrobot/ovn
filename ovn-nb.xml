@@ -1020,6 +1020,44 @@
             DHCP reply.
           </p>
         </column>
+
+        <group title="VIF Plugging Options">
+          <p>
+            These options apply to logical ports with
+            <ref column="options" key="requested-chassis"/> and
+            <ref column="options" key="plug-type"/> set.
+          </p>
+
+          <column name="options" key="plug-type">
+            If set, OVN will attempt to to perform plugging of this VIF.  In
+            order to get this port plugged by the OVN controller, OVN must be
+            built with support for VIF plugging.  The default behavior is for
+            the CMS to do the VIF plugging.
+            Supported values: representor
+          </column>
+
+          <column name="options" key="plug-pf-mac">
+            MAC address for identifying PF device.  When
+            <ref column="options" key="plug-vf-num"/> is also set, this
+            option is used to identify PF to use as base to locate the correct
+            VF representor port.  When
+            <ref column="options" key="plug-vf-num"/> is not set this
+            option is used to locate a PF representor port.
+          </column>
+
+          <column name="options" key="plug-vf-num">
+            Logical VF number relative to PF device specified in
+            <ref column="options" key="plug-pf-mac"/>.
+          </column>
+
+          <column name="options" key="plug-mtu-request">
+            Requested MTU for plugged interfaces.  When set the OVN controller
+            will fill the <ref table="Interface" column="mtu_request"/> column
+            of the Open vSwitch database's
+            <ref table="Interface" db="vswitch"/> table.  This in turn will
+            make OVS vswitchd update the MTU of the linked interface.
+          </column>
+        </group>
       </group>
 
       <group title="Virtual port Options">
