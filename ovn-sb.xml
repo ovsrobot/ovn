@@ -2983,6 +2983,21 @@ tcp.flags = RST;
           </dd>
         </dl>
       </column>
+      <column name="plugged_by">
+        Chassis that should plug this port, this column must be a
+        <ref table="Chassis"/> record.  This is populated by
+        <code>ovn-northd</code> when the <ref
+        table="Logical_Switch_Port"
+        column="options"
+        key="requested-chassis"
+        db="OVN_Northbound"/> and <ref
+        table="Logical_Switch_Port"
+        column="options"
+        key="plug-type"
+        db="OVN_Northbound"/> is defined.  In order to get this port plugged by
+        the OVN controller, OVN must be built with support for VIF plugging.
+        The default behavior is for the CMS to do the VIF plugging.
+      </column>
     </group>
 
     <group title="Patch Options">
