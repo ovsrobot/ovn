@@ -15,6 +15,8 @@ OVS_LIBDIR=@ovs_libdir@
 OVSDB_LIBDIR=@ovsdb_libdir@
 OVS_MANDIR=@ovs_mandir@
 
+PLUG_PROVIDER_OBJECT=@plug_provider_OBJECT@
+
 AM_CPPFLAGS = $(SSL_CFLAGS)
 AM_LDFLAGS = $(SSL_LDFLAGS)
 AM_LDFLAGS += $(OVS_LDFLAGS)

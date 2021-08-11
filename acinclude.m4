@@ -441,3 +441,28 @@ AC_DEFUN([OVN_CHECK_OVS], [
   AC_MSG_CHECKING([OVS version])
   AC_MSG_RESULT([$OVSVERSION])
 ])
+
+dnl OVN_CHECK_PLUG_PROVIDER
+dnl
+dnl Check for external plug provider
+AC_DEFUN([OVN_CHECK_PLUG_PROVIDER], [
+  AC_ARG_VAR([PLUG_PROVIDER])
+  AC_ARG_WITH(
+    [plug-provider],
+    [AC_HELP_STRING([--with-plug-provider=/path/to/provider.o],
+                    [Specify path to a built plug provider object])],
+    [if test "$withval" = yes; then
+       if test -z "$PLUG_PROVIDER"; then
+         AC_MSG_ERROR([To build with plug provider, specify the path to a built plug provider library object on --with-plug-provider or in \$PLUG_PROVIDER]),
+       fi
+     elif test ! -f "$withval"; then
+       AC_MSG_ERROR([$withval is not a built plug provider library object])
+     else
+       PLUG_PROVIDER="$(realpath $withval)"
+     fi],
+    [PLUG_PROVIDER=no])
+  AC_MSG_CHECKING([for plug provider])
+  AC_MSG_RESULT([$PLUG_PROVIDER])
+  AC_SUBST([PLUG_PROVIDER])
+  AM_CONDITIONAL([HAVE_PLUG_PROVIDER], [test "$PLUG_PROVIDER" != no])
+])

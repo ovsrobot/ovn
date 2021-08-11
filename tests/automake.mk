@@ -38,7 +38,8 @@ TESTSUITE_AT = \
 	tests/ovn-ipam.at \
 	tests/ovn-features.at \
 	tests/ovn-lflow-cache.at \
-	tests/ovn-ipsec.at
+	tests/ovn-ipsec.at \
+	tests/ovn-plug.at
 
 SYSTEM_KMOD_TESTSUITE_AT = \
 	tests/system-common-macros.at \
@@ -248,6 +249,7 @@ tests_ovstest_SOURCES = \
 	controller/ofctrl-seqno.c \
 	controller/ofctrl-seqno.h \
 	lib/test-ovn-features.c \
+	lib/test-plug.c \
 	northd/test-ipam.c \
 	northd/ipam.c \
 	northd/ipam.h

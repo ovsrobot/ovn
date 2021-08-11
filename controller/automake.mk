@@ -40,6 +40,9 @@ controller_ovn_controller_SOURCES = \
 	controller/ovsport.c
 
 controller_ovn_controller_LDADD = lib/libovn.la $(OVS_LIBDIR)/libopenvswitch.la
+if HAVE_PLUG_PROVIDER
+controller_ovn_controller_LDADD += $(PLUG_PROVIDER)
+endif
 man_MANS += controller/ovn-controller.8
 EXTRA_DIST += controller/ovn-controller.8.xml
 CLEANFILES += controller/ovn-controller.8
