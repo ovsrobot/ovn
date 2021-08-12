@@ -6013,6 +6013,59 @@ for (r in &Router(._uuid = lr_uuid,
                 }
             };
 
+            /* When router have SNAT enabled, and logical_ip is a network (router
+             * is doing masquerade), then we need to make sure that packets
+             * unrelated to any established connection that still have router's
+             * external IP as a next hop after going through lr_in_unsnat table
+             * are dropped properly. Otherwise such packets will loop around
+             * between tables until their ttl reaches zero - this additionally
+             * causes kernel module to drop such packages due to recirculation
+             * limit being exceeded.
+             *
+             * Install a logical flow in lr_in_ip_routing table that will
+             * drop packet with router's external IP as its destination unless
+             * they are part of an existing conntrack connection. Match on conntrack
+             * is needed to keep E/W NAT working properly where router gatewat IP
+             * becomes a source in SNAT->DNAT+SNAT scenario:
+             *
+             * foo1(192.168.1.2) ->
+             * router (snat 192.168.1.0/24 to 172.16.1.1) ->
+             * bar1(192.168.2.2 with dnat_and_snat to 172.16.1.4 on the router)
+             *
+             * In this scenario traffic from foo1 to 172.16.1.4 is first SNAT
+             * on router, it's source IP being replaced with 172.16.1.1 before
+             * being forwarded to bar1. The return traffic has 172.16.1.1 as
+             * destination IP (because of SNAT) and routing table is dropping
+             * packet.
+             *
+             * The priority for destination routes is calculated as
+             * (prefix length * 2) + 1, and there is an additional flow
+             * for when BFD is in play with priority + 1. Set priority that
+             * is higher than any other potential routing flow for that
+             * network, that is (prefix length * 2) + offset, where offset
+             * is 1 (dst) + 1 (bfd) + 1. */
+            Some{var plen} = mask.cidr_bits() in
+            var is_masq = match(nat.external_ip) {
+                IPv4{_} -> {if ((plen as integer) < 32) { true } else { false }},
+                IPv6{_} -> {if ((plen as integer) < 128) { true } else { false }},
+            } in
+            if (nat.nat.__type == "snat" and is_masq) {
+                var prefix_length = match (nat.external_ip) {
+                    IPv4{_} -> 32,
+                    IPv6{_} -> 128
+                } in
+                var offset = 3 in
+                var priority = (prefix_length * 2) + offset in
+                var __match = "ct.new"
+                " && ${ipX}.dst == ${nat.nat.external_ip}" in
+                Flow(.logical_datapath = lr_uuid,
+                     .stage            = s_ROUTER_IN_IP_ROUTING(),
+                     .priority         = priority,
+                     .__match          = __match,
+                     .actions          = "drop;",
+                     .external_ids     = stage_hint(nat.nat._uuid))
+            };
+
             /* Ingress DNAT table: Packets enter the pipeline with destination
              * IP address that needs to be DNATted from a external IP address
              * to a logical IP address. */

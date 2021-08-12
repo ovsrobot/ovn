@@ -12250,8 +12250,9 @@ build_lrouter_ingress_flow(struct hmap *lflows, struct ovn_datapath *od,
 
 static int
 lrouter_check_nat_entry(struct ovn_datapath *od, const struct nbrec_nat *nat,
-                        ovs_be32 *mask, bool *is_v6, int *cidr_bits,
-                        struct eth_addr *mac, bool *distributed)
+                        ovs_be32 *mask, bool *is_v6, bool *is_masq,
+                        int *cidr_bits, struct eth_addr *mac,
+                        bool *distributed)
 {
     struct in6_addr ipv6, mask_v6, v6_exact = IN6ADDR_EXACT_INIT;
     ovs_be32 ip;
@@ -12285,14 +12286,21 @@ lrouter_check_nat_entry(struct ovn_datapath *od, const struct nbrec_nat *nat,
         *is_v6 = true;
     }
 
+    *is_masq = false;
     /* Check the validity of nat->logical_ip. 'logical_ip' can
     * be a subnet when the type is "snat". */
     if (*is_v6) {
         error = ipv6_parse_masked(nat->logical_ip, &ipv6, &mask_v6);
         *cidr_bits = ipv6_count_cidr_bits(&mask_v6);
+        if (*cidr_bits < 128) {
+            *is_masq = true;
+        }
     } else {
         error = ip_parse_masked(nat->logical_ip, &ip, mask);
         *cidr_bits = ip_count_cidr_bits(*mask);
+        if (*cidr_bits < 32) {
+            *is_masq = true;
+        }
     }
     if (!strcmp(nat->type, "snat")) {
         if (error) {
@@ -12397,12 +12405,12 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
     for (int i = 0; i < od->nbr->n_nat; i++) {
         const struct nbrec_nat *nat = nat = od->nbr->nat[i];
         struct eth_addr mac = eth_addr_broadcast;
-        bool is_v6, distributed;
+        bool is_v6, is_masq, distributed;
         ovs_be32 mask;
         int cidr_bits;
 
-        if (lrouter_check_nat_entry(od, nat, &mask, &is_v6, &cidr_bits,
-                                    &mac, &distributed) < 0) {
+        if (lrouter_check_nat_entry(od, nat, &mask, &is_v6, &is_masq,
+                                    &cidr_bits, &mac, &distributed) < 0) {
             continue;
         }
 
@@ -12412,6 +12420,60 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
         /* S_ROUTER_IN_DNAT */
         build_lrouter_in_dnat_flow(lflows, od, nat, match, actions, distributed,
                                    mask, is_v6);
+
+        /* When router have SNAT enabled, and logical_ip is a network (router
+         * is doing masquerade), then we need to make sure that packets
+         * unrelated to any established connection that still have router's
+         * external IP as a next hop after going through lr_in_unsnat table
+         * are dropped properly. Otherwise such packets will loop around
+         * between tables until their ttl reaches zero - this additionally
+         * causes kernel module to drop such packages due to recirculation
+         * limit being exceeded.
+         *
+         * Install a logical flow in lr_in_ip_routing table that will
+         * drop packet with router's external IP as its destination unless
+         * they are part of an existing conntrack connection. Match on conntrack
+         * is needed to keep E/W NAT working properly where router gatewat IP
+         * becomes a source in SNAT->DNAT+SNAT scenario:
+         *
+         * foo1(192.168.1.2) ->
+         * router (snat 192.168.1.0/24 to 172.16.1.1) ->
+         * bar1(192.168.2.2 with dnat_and_snat to 172.16.1.4 on the router)
+         *
+         * In this scenario traffic from foo1 to 172.16.1.4 is first SNAT
+         * on router, it's source IP being replaced with 172.16.1.1 before
+         * being forwarded to bar1. The return traffic has 172.16.1.1 as
+         * destination IP (because of SNAT) and routing table is dropping
+         * packet.
+         *
+         * The priority for destination routes is calculated as
+         * (prefix length * 2) + 1, and there is an additional flow
+         * for when BFD is in play with priority + 1. Set priority that
+         * is higher than any other potential routing flow for that
+         * network, that is (prefix length * 2) + offset, where offset
+         * is 1 (dst) + 1 (bfd) + 1. */
+        if (!strcmp(nat->type, "snat") && is_masq) {
+            uint16_t priority, prefix_length, offset;
+            prefix_length = is_v6 ? 128 : 32;
+            offset = 3;
+            priority = (prefix_length * 2) + offset;
+
+            ds_clear(match);
+
+            /* FIXME(kklimonda): why isn't ip.dst (in E/W SNAT case) not
+             * replaced by the time returning packet lands in
+             * lr_in_ip_routing table?
+            /* match on ct.new to pass through E/W SNAT traffic */
+            ds_put_format(match,
+                          "ct.new && ip%s.dst == %s",
+                          is_v6 ? "6" : "4",
+                          nat->external_ip);
+
+            ovn_lflow_add_with_hint(lflows, od,
+                                    S_ROUTER_IN_IP_ROUTING, priority,
+                                    ds_cstr(match), "drop;",
+                                    &nat->header_);
+        }
 
         /* ARP resolve for NAT IPs. */
         if (od->is_gw_router) {
