@@ -12671,16 +12671,10 @@ build_lswitch_and_lrouter_iterate_by_op(struct ovn_port *op,
                                       &lsi->actions);
 }
 
-struct lflows_thread_pool {
-    struct worker_pool *pool;
-};
-
-
 static void *
 build_lflows_thread(void *arg)
 {
     struct worker_control *control = (struct worker_control *) arg;
-    struct lflows_thread_pool *workload;
     struct lswitch_flow_build_info *lsi;
 
     struct ovn_datapath *od;
@@ -12689,21 +12683,21 @@ build_lflows_thread(void *arg)
     struct ovn_igmp_group *igmp_group;
     int bnum;
 
-    while (!stop_parallel_processing()) {
+
+    while (!stop_parallel_processing(control->pool)) {
         wait_for_work(control);
-        workload = (struct lflows_thread_pool *) control->workload;
         lsi = (struct lswitch_flow_build_info *) control->data;
-        if (stop_parallel_processing()) {
+        if (stop_parallel_processing(control->pool)) {
             return NULL;
         }
-        if (lsi && workload) {
+        if (lsi) {
             /* Iterate over bucket ThreadID, ThreadID+size, ... */
             for (bnum = control->id;
                     bnum <= lsi->datapaths->mask;
-                    bnum += workload->pool->size)
+                    bnum += control->pool->size)
             {
                 HMAP_FOR_EACH_IN_PARALLEL (od, key_node, bnum, lsi->datapaths) {
-                    if (stop_parallel_processing()) {
+                    if (stop_parallel_processing(control->pool)) {
                         return NULL;
                     }
                     build_lswitch_and_lrouter_iterate_by_od(od, lsi);
@@ -12711,10 +12705,10 @@ build_lflows_thread(void *arg)
             }
             for (bnum = control->id;
                     bnum <= lsi->ports->mask;
-                    bnum += workload->pool->size)
+                    bnum += control->pool->size)
             {
                 HMAP_FOR_EACH_IN_PARALLEL (op, key_node, bnum, lsi->ports) {
-                    if (stop_parallel_processing()) {
+                    if (stop_parallel_processing(control->pool)) {
                         return NULL;
                     }
                     build_lswitch_and_lrouter_iterate_by_op(op, lsi);
@@ -12722,10 +12716,10 @@ build_lflows_thread(void *arg)
             }
             for (bnum = control->id;
                     bnum <= lsi->lbs->mask;
-                    bnum += workload->pool->size)
+                    bnum += control->pool->size)
             {
                 HMAP_FOR_EACH_IN_PARALLEL (lb, hmap_node, bnum, lsi->lbs) {
-                    if (stop_parallel_processing()) {
+                    if (stop_parallel_processing(control->pool)) {
                         return NULL;
                     }
                     build_lswitch_arp_nd_service_monitor(lb, lsi->lflows,
@@ -12743,11 +12737,11 @@ build_lflows_thread(void *arg)
             }
             for (bnum = control->id;
                     bnum <= lsi->igmp_groups->mask;
-                    bnum += workload->pool->size)
+                    bnum += control->pool->size)
             {
                 HMAP_FOR_EACH_IN_PARALLEL (
                         igmp_group, hmap_node, bnum, lsi->igmp_groups) {
-                    if (stop_parallel_processing()) {
+                    if (stop_parallel_processing(control->pool)) {
                         return NULL;
                     }
                     build_lswitch_ip_mcast_igmp_mld(igmp_group, lsi->lflows,
@@ -12762,24 +12756,14 @@ build_lflows_thread(void *arg)
 }
 
 static bool pool_init_done = false;
-static struct lflows_thread_pool *build_lflows_pool = NULL;
+static struct worker_pool *build_lflows_pool = NULL;
 
 static void
 init_lflows_thread_pool(void)
 {
-    int index;
-
     if (!pool_init_done) {
-        struct worker_pool *pool = add_worker_pool(build_lflows_thread);
+        build_lflows_pool = add_worker_pool(build_lflows_thread, 0);
         pool_init_done = true;
-        if (pool) {
-            build_lflows_pool = xmalloc(sizeof(*build_lflows_pool));
-            build_lflows_pool->pool = pool;
-            for (index = 0; index < build_lflows_pool->pool->size; index++) {
-                build_lflows_pool->pool->controls[index].workload =
-                    build_lflows_pool;
-            }
-        }
     }
 }
 
@@ -12822,16 +12806,16 @@ build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         struct lswitch_flow_build_info *lsiv;
         int index;
 
-        lsiv = xcalloc(sizeof(*lsiv), build_lflows_pool->pool->size);
+        lsiv = xcalloc(sizeof(*lsiv), build_lflows_pool->size);
         if (use_logical_dp_groups) {
             lflow_segs = NULL;
         } else {
-            lflow_segs = xcalloc(sizeof(*lflow_segs), build_lflows_pool->pool->size);
+            lflow_segs = xcalloc(sizeof(*lflow_segs), build_lflows_pool->size);
         }
 
         /* Set up "work chunks" for each thread to work on. */
 
-        for (index = 0; index < build_lflows_pool->pool->size; index++) {
+        for (index = 0; index < build_lflows_pool->size; index++) {
             if (use_logical_dp_groups) {
                 /* if dp_groups are in use we lock a shared lflows hash
                  * on a per-bucket level instead of merging hash frags */
@@ -12853,17 +12837,17 @@ build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             ds_init(&lsiv[index].match);
             ds_init(&lsiv[index].actions);
 
-            build_lflows_pool->pool->controls[index].data = &lsiv[index];
+            build_lflows_pool->controls[index].data = &lsiv[index];
         }
 
         /* Run thread pool. */
         if (use_logical_dp_groups) {
-            run_pool_callback(build_lflows_pool->pool, NULL, NULL, noop_callback);
+            run_pool_callback(build_lflows_pool, NULL, NULL, noop_callback);
         } else {
-            run_pool_hash(build_lflows_pool->pool, lflows, lflow_segs);
+            run_pool_hash(build_lflows_pool, lflows, lflow_segs);
         }
 
-        for (index = 0; index < build_lflows_pool->pool->size; index++) {
+        for (index = 0; index < build_lflows_pool->size; index++) {
             ds_destroy(&lsiv[index].match);
             ds_destroy(&lsiv[index].actions);
         }
