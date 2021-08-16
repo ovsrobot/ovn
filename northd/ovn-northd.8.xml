@@ -2868,7 +2868,7 @@ icmp6 {
 
     <p>
       If ECMP routes with symmetric reply are configured in the
-      <code>OVN_Northbound</code> database for a gateway router, a priority-300
+      <code>OVN_Northbound</code> database for a gateway router, a priority-400
       flow is added for each router port on which symmetric replies are
       configured. The matching logic for these ports essentially reverses the
       configured logic of the ECMP route. So for instance, a route with a
@@ -3213,7 +3213,35 @@ output;
       </li>
     </ul>
 
-    <h3>Ingress Table 10: IP Routing</h3>
+    <h3>Ingress Table 10: IP Routing Pre</h3>
+
+    <p>
+      If a packet arrived at this table from Logical Router Port <var>P</var>
+      which has <code>options:route_table</code> value set, a logical flow with
+      match <code>inport == "<var>P</var>"</code> with priority 100 and action,
+      setting unique-generated per-datapath 32-bit value (non-zero) in OVS
+      register 7.  This register is checked in next table.
+    </p>
+
+    <p>
+      This table contains the following logical flows:
+    </p>
+
+    <ul>
+      <li>
+        <p>
+          Priority-100 flow with match <code>inport == "LRP_NAME"</code> value
+          and action, which set route table identifier in reg7.
+        </p>
+
+        <p>
+          A priority-0 logical flow with match <code>1</code> has actions
+          <code>next;</code>.
+        </p>
+      </li>
+    </ul>
+
+    <h3>Ingress Table 11: IP Routing</h3>
 
     <p>
       A packet that arrives at this table is an IP packet that should be
@@ -3284,10 +3312,10 @@ output;
         <p>
           IPv4 routing table.  For each route to IPv4 network <var>N</var> with
           netmask <var>M</var>, on router port <var>P</var> with IP address
-          <var>A</var> and Ethernet
-          address <var>E</var>, a logical flow with match <code>ip4.dst ==
-          <var>N</var>/<var>M</var></code>, whose priority is the number of
-          1-bits in <var>M</var>, has the following actions:
+          <var>A</var> and Ethernet address <var>E</var>, a logical flow with
+          match <code>ip4.dst == <var>N</var>/<var>M</var></code>, whose
+          priority is 100 + the number of 1-bits in <var>M</var>, has the
+          following actions:
         </p>
 
         <pre>
@@ -3350,6 +3378,13 @@ next;
           If the address <var>A</var> is in the link-local scope, the
           route will be limited to sending on the ingress port.
         </p>
+
+        <p>
+          For routes with <code>route_table</code> value set
+          <code>reg7 == id</code> is prefixed in logical flow match portion.
+          Priority for routes with <code>route_table</code> value set is
+          the number of 1-bits in <var>M</var>.
+        </p>
       </li>
 
       <li>
@@ -3376,7 +3411,7 @@ select(reg8[16..31], <var>MID1</var>, <var>MID2</var>, ...);
       </li>
     </ul>
 
-    <h3>Ingress Table 11: IP_ROUTING_ECMP</h3>
+    <h3>Ingress Table 12: IP_ROUTING_ECMP</h3>
 
     <p>
       This table implements the second part of IP routing for ECMP routes
@@ -3428,7 +3463,7 @@ outport = <var>P</var>;
       </li>
     </ul>
 
-    <h3>Ingress Table 12: Router policies</h3>
+    <h3>Ingress Table 13: Router policies</h3>
     <p>
       This table adds flows for the logical router policies configured
       on the logical router. Please see the
@@ -3500,7 +3535,7 @@ next;
       </li>
     </ul>
 
-    <h3>Ingress Table 13: ECMP handling for router policies</h3>
+    <h3>Ingress Table 14: ECMP handling for router policies</h3>
     <p>
       This table handles the ECMP for the router policies configured
       with multiple nexthops.
@@ -3544,7 +3579,7 @@ outport = <var>P</var>
       </li>
     </ul>
 
-    <h3>Ingress Table 14: ARP/ND Resolution</h3>
+    <h3>Ingress Table 15: ARP/ND Resolution</h3>
 
     <p>
       Any packet that reaches this table is an IP packet whose next-hop
@@ -3735,7 +3770,7 @@ outport = <var>P</var>
 
     </ul>
 
-    <h3>Ingress Table 15: Check packet length</h3>
+    <h3>Ingress Table 16: Check packet length</h3>
 
     <p>
       For distributed logical routers or gateway routers with gateway
@@ -3765,7 +3800,7 @@ REGBIT_PKT_LARGER = check_pkt_larger(<var>L</var>); next;
       and advances to the next table.
     </p>
 
-    <h3>Ingress Table 16: Handle larger packets</h3>
+    <h3>Ingress Table 17: Handle larger packets</h3>
 
     <p>
       For distributed logical routers or gateway routers with gateway port
@@ -3828,7 +3863,7 @@ icmp6 {
       and advances to the next table.
     </p>
 
-    <h3>Ingress Table 17: Gateway Redirect</h3>
+    <h3>Ingress Table 18: Gateway Redirect</h3>
 
     <p>
       For distributed logical routers where one or more of the logical router
@@ -3875,7 +3910,7 @@ icmp6 {
       </li>
     </ul>
 
-    <h3>Ingress Table 18: ARP Request</h3>
+    <h3>Ingress Table 19: ARP Request</h3>
 
     <p>
       In the common case where the Ethernet destination has been resolved, this
