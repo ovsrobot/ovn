@@ -600,6 +600,9 @@ static struct binding_lport *binding_lport_check_and_cleanup(
     struct binding_lport *, struct shash *b_lports);
 
 static char *get_lport_type_str(enum en_lport_type lport_type);
+static bool is_ovs_iface_matches_lport_vif_id(
+    const struct ovsrec_interface *,
+    const struct sbrec_port_binding *);
 
 void
 related_lports_init(struct related_lports *rp)
@@ -1165,9 +1168,30 @@ consider_vif_lport(const struct sbrec_port_binding *pb,
 
     struct binding_lport *b_lport = NULL;
     if (lbinding) {
-        struct shash *binding_lports =
-            &b_ctx_out->lbinding_data->lports;
-        b_lport = local_binding_add_lport(binding_lports, lbinding, pb, LP_VIF);
+        bool add_b_lport = true;
+
+        /* Make sure that the pb's vif-id if set matches with the
+         * lbinding's vif-id. */
+        if (lbinding->iface &&
+                !is_ovs_iface_matches_lport_vif_id(lbinding->iface, pb)) {
+            /* We can't associate the b_lport for this local_binding
+             * because the vif-id doesn't match. */
+            add_b_lport = false;
+
+            b_lport = local_binding_get_primary_lport(lbinding);
+            if (b_lport) {
+                binding_lport_delete(&b_ctx_out->lbinding_data->lports,
+                                     b_lport);
+                b_lport = NULL;
+            }
+        }
+
+        if (add_b_lport) {
+            struct shash *binding_lports =
+                &b_ctx_out->lbinding_data->lports;
+            b_lport = local_binding_add_lport(binding_lports, lbinding, pb,
+                                              LP_VIF);
+        }
     }
 
     return consider_vif_lport_(pb, can_bind, vif_chassis, b_ctx_in,
@@ -2849,4 +2873,21 @@ cleanup:
     }
 
     return b_lport;
+}
+
+
+static bool
+is_ovs_iface_matches_lport_vif_id(const struct ovsrec_interface *iface,
+                                  const struct sbrec_port_binding *pb)
+{
+    const char *pb_vif_id = smap_get(&pb->options, "vif-id");
+    const char *vif_id = smap_get(&iface->external_ids, "vif-id");
+
+    if (pb_vif_id) {
+        if (!vif_id || strcmp(pb_vif_id, vif_id)) {
+            return false;
+        }
+    }
+
+    return true;
 }
