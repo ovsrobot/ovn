@@ -191,4 +191,7 @@ bool lflow_handle_changed_mc_groups(struct lflow_ctx_in *,
                                     struct lflow_ctx_out *);
 bool lflow_handle_changed_port_bindings(struct lflow_ctx_in *,
                                         struct lflow_ctx_out *);
+
+void lflow_meter_supported(bool val);
+
 #endif /* controller/lflow.h */

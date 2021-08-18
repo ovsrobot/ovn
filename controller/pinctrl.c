@@ -39,6 +39,7 @@
 #include "openvswitch/ofp-switch.h"
 #include "openvswitch/ofp-util.h"
 #include "openvswitch/vlog.h"
+#include "openvswitch/ofp-meter.h"
 #include "lib/random.h"
 #include "lib/crc32c.h"
 
@@ -549,6 +550,10 @@ queue_msg(struct rconn *swconn, struct ofpbuf *msg)
 static void
 pinctrl_setup(struct rconn *swconn)
 {
+    /* dump datapath meter capabilities. */
+    queue_msg(swconn, ofpraw_alloc(OFPRAW_OFPST13_METER_FEATURES_REQUEST,
+                                   rconn_get_version(swconn), 0));
+
     /* Fetch the switch configuration.  The response later will allow us to
      * change the miss_send_len to UINT16_MAX, so that we can enable
      * asynchronous messages. */
@@ -3258,6 +3263,11 @@ pinctrl_recv(struct rconn *swconn, const struct ofp_header *oh,
         set_switch_config(swconn, &config);
     } else if (type == OFPTYPE_PACKET_IN) {
         process_packet_in(swconn, oh);
+    } else if (type == OFPTYPE_METER_FEATURES_STATS_REPLY) {
+        struct ofputil_meter_features mf;
+
+        ofputil_decode_meter_features(oh, &mf);
+        lflow_meter_supported(mf.max_meters > 0);
     } else {
         if (VLOG_IS_DBG_ENABLED()) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(30, 300);
