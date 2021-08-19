@@ -3222,6 +3222,35 @@ ovn_port_update_sbrec(struct northd_context *ctx,
                  * ha_chassis_group cleared in the same transaction. */
                 sbrec_port_binding_set_ha_chassis_group(op->sb, NULL);
             }
+
+            const char *plug_type;         /* May be NULL. */
+            const char *requested_chassis; /* May be NULL. */
+            bool reset_plugged_by = false;
+            plug_type = smap_get(&op->nbsp->options, "plug-type");
+            requested_chassis = smap_get(&op->nbsp->options,
+                                         "requested-chassis");
+            if (plug_type && requested_chassis) {
+                const struct sbrec_chassis *chassis; /* May be NULL. */
+                chassis = chassis_lookup_by_name(sbrec_chassis_by_name,
+                                                 requested_chassis);
+                if (chassis) {
+                    sbrec_port_binding_set_plugged_by(op->sb, chassis);
+                } else {
+                    reset_plugged_by = true;
+                    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(
+                        1, 1);
+                    VLOG_WARN_RL(
+                        &rl,
+                        "Unknown chassis '%s' set as "
+                        "options:requested-chassis on LSP '%s'.",
+                        requested_chassis, op->nbsp->name);
+                }
+            } else if (op->sb->plugged_by) {
+                reset_plugged_by = true;
+            }
+            if (reset_plugged_by) {
+                sbrec_port_binding_set_plugged_by(op->sb, NULL);
+            }
         } else {
             const char *chassis = NULL;
             if (op->peer && op->peer->od && op->peer->od->nbr) {
@@ -15066,6 +15095,8 @@ main(int argc, char *argv[])
     add_column_noalert(ovnsb_idl_loop.idl,
                        &sbrec_port_binding_col_nat_addresses);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_port_binding_col_chassis);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                         &sbrec_port_binding_col_plugged_by);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl,
                          &sbrec_port_binding_col_gateway_chassis);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl,

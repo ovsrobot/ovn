@@ -5208,3 +5208,50 @@ AT_CHECK([grep lr_in_gw_redirect lrflows | grep cr-DR | sort], [0], [dnl
 
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([check requested-chassis and plug-type fills plugged_by col])
+AT_KEYWORDS([plugging])
+ovn_start NORTHD_TYPE
+
+# Add chassis ch1.
+check ovn-sbctl chassis-add ch1 geneve 127.0.0.2
+check ovn-sbctl chassis-add ch2 geneve 127.0.0.3
+check ovn-sbctl chassis-add ch3 geneve 127.0.0.4
+
+wait_row_count Chassis 3
+
+ch1_uuid=`ovn-sbctl --bare --columns _uuid find Chassis name="ch1"`
+ch2_uuid=`ovn-sbctl --bare --columns _uuid find Chassis name="ch2"`
+ch3_uuid=`ovn-sbctl --bare --columns _uuid find Chassis name="ch3"`
+
+ovn-nbctl ls-add S1
+ovn-nbctl --wait=sb lsp-add S1 S1-vm1
+
+ovn-nbctl --wait=sb set logical_switch_port S1-vm1 \
+    options:requested-chassis=ch1
+
+wait_row_count Port_Binding 1 logical_port=S1-vm1 plugged_by!=$ch1_uuid
+
+ovn-nbctl --wait=sb set logical_switch_port S1-vm1 \
+    options:plug-type=representor
+
+wait_row_count Port_Binding 1 logical_port=S1-vm1 plugged_by=$ch1_uuid
+
+ovn-nbctl --wait=sb set logical_switch_port S1-vm1 \
+    options:requested-chassis=ch2 options:plug-type=representor
+
+wait_row_count Port_binding 1 logical-port=S1-vm1 plugged_by=$ch2_uuid
+
+ovn-nbctl --wait=sb set logical_switch_port S1-vm1 \
+    options:requested-chassis=ch3 options:plug-type=representor
+
+wait_row_count Port_binding 1 logical-port=S1-vm1 plugged_by=$ch3_uuid
+
+ovn-nbctl --wait=sb remove logical_switch_port S1-vm1 \
+    options plug-type=representor
+
+wait_row_count Port_binding 1 logical-port=S1-vm1 plugged_by!=$ch3_uuid
+
+AT_CLEANUP
+])
