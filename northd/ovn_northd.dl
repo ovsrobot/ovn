@@ -105,7 +105,6 @@ sb::Out_Datapath_Binding(uuid, tunkey, load_balancers, external_ids) :-
      */
     var load_balancers = set_empty().
 
-
 /* Proxy table for Out_Datapath_Binding: contains all Datapath_Binding fields,
  * except tunnel id, which is allocated separately (see PortTunKeyAllocation). */
 relation OutProxy_Port_Binding (
@@ -120,10 +119,11 @@ relation OutProxy_Port_Binding (
     tag: Option<integer>,
     mac: Set<string>,
     nat_addresses: Set<string>,
-    external_ids: Map<string,string>
+    external_ids: Map<string,string>,
+    plugged_by: Option<uuid>
 )
 
-/* Case 1: Create a Port_Binding per logical switch port that is not of type "router" */
+/* Case 1a: Create a Port_Binding per logical switch port that is not of type "router" */
 OutProxy_Port_Binding(._uuid              = lsp._uuid,
                       .logical_port       = lsp.name,
                       .__type             = lsp.__type,
@@ -135,7 +135,8 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
                       .tag                = tag,
                       .mac                = lsp.addresses,
                       .nat_addresses      = set_empty(),
-                      .external_ids       = eids) :-
+                      .external_ids       = eids,
+                      .plugged_by         = None) :-
     sp in &SwitchPort(.lsp = lsp, .sw = sw),
     SwitchPortNewDynamicTag(lsp._uuid, opt_tag),
     var tag = match (opt_tag) {
@@ -160,6 +161,53 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
         options
     }.
 
+/* Case 1b: Create a Port_Binding per logical switch port that is not of type "router" and has options "plug-type" and "requested-chassis" */
+OutProxy_Port_Binding(._uuid              = lsp._uuid,
+                      .logical_port       = lsp.name,
+                      .__type             = lsp.__type,
+                      .gateway_chassis    = set_empty(),
+                      .ha_chassis_group   = sp.hac_group_uuid,
+                      .options            = options,
+                      .datapath           = sw._uuid,
+                      .parent_port        = lsp.parent_name,
+                      .tag                = tag,
+                      .mac                = lsp.addresses,
+                      .nat_addresses      = set_empty(),
+                      .external_ids       = eids,
+                      .plugged_by         = plugged_by) :-
+    sp in &SwitchPort(.lsp = lsp, .sw = sw),
+    SwitchPortNewDynamicTag(lsp._uuid, opt_tag),
+    var tag = match (opt_tag) {
+        None -> lsp.tag,
+        Some{t} -> Some{t}
+    },
+    lsp.__type != "router",
+    var eids = {
+        var eids = lsp.external_ids;
+        match (lsp.external_ids.get("neutron:port_name")) {
+            None -> (),
+            Some{name} -> eids.insert("name", name)
+        };
+        eids
+    },
+    var options = {
+        var options = lsp.options;
+        match (sw.other_config.get("vlan-passthru")) {
+            Some{"true"} -> options.insert("vlan-passthru", "true"),
+            _ -> ()
+        };
+        options
+    },
+    var chassis_name = match (options.get("plug-type")) {
+            Some{_} -> match(options.get("requested-chassis")) {
+                Some{chassis_name} -> chassis_name,
+                None -> "",
+            },
+            None -> "",
+    },
+    chassis_name != "",
+    chassis_rec in sb::Chassis(.name = chassis_name),
+    var plugged_by = Some{chassis_rec._uuid}.
 
 /* Case 2: Create a Port_Binding per logical switch port of type "router" */
 OutProxy_Port_Binding(._uuid              = lsp._uuid,
@@ -173,7 +221,8 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
                       .tag                = None,
                       .mac                = lsp.addresses,
                       .nat_addresses      = nat_addresses,
-                      .external_ids       = eids) :-
+                      .external_ids       = eids,
+                      .plugged_by         = None) :-
     &SwitchPort(.lsp = lsp, .sw = sw, .peer = peer),
     var eids = {
         var eids = lsp.external_ids;
@@ -263,7 +312,8 @@ OutProxy_Port_Binding(._uuid              = lrp._uuid,
                       .tag                = None, // always empty for router ports
                       .mac                = set_singleton("${lrp.mac} ${lrp.networks.join(\" \")}"),
                       .nat_addresses      = set_empty(),
-                      .external_ids       = lrp.external_ids) :-
+                      .external_ids       = lrp.external_ids,
+                      .plugged_by         = None) :-
     rp in &RouterPort(.lrp = lrp, .router = router, .peer = peer),
     RouterPortRAOptionsComplete(lrp._uuid, options0),
     (var __type, var options1) = match (router.options.get("chassis")) {
@@ -471,7 +521,8 @@ OutProxy_Port_Binding(// lrp._uuid is already in use; generate a new UUID by
                       .tag                = None,  //always empty for router ports
                       .mac                = set_singleton("${lrp.mac} ${lrp.networks.join(\" \")}"),
                       .nat_addresses      = set_empty(),
-                      .external_ids       = lrp.external_ids) :-
+                      .external_ids       = lrp.external_ids,
+                      .plugged_by         = None) :-
     DistributedGatewayPort(lrp, lr_uuid),
     DistributedGatewayPortHAChassisGroup(lrp, hacg_uuid),
     var redirect_type = match (lrp.options.get("redirect-type")) {
@@ -516,7 +567,8 @@ sb::Out_Port_Binding(._uuid              = pbinding._uuid,
                     .mac                = pbinding.mac,
                     .nat_addresses      = pbinding.nat_addresses,
                     .external_ids       = pbinding.external_ids,
-                    .up                 = Some{up}) :-
+                    .up                 = Some{up},
+                    .plugged_by         = pbinding.plugged_by) :-
     pbinding in OutProxy_Port_Binding(),
     PortTunKeyAllocation(pbinding._uuid, tunkey),
     QueueIDAllocation(pbinding._uuid, qid),
