@@ -4397,21 +4397,14 @@ do_ovn_lflow_add(struct hmap *lflow_map, struct ovn_datapath *od,
 
 /* Adds a row with the specified contents to the Logical_Flow table. */
 static void
-ovn_lflow_add_at(struct hmap *lflow_map, struct ovn_datapath *od,
-                 enum ovn_stage stage, uint16_t priority,
-                 const char *match, const char *actions, const char *io_port,
-                 const char *ctrl_meter,
-                 const struct ovsdb_idl_row *stage_hint, const char *where)
+ovn_lflow_add_at_with_hash(struct hmap *lflow_map, struct ovn_datapath *od,
+                           enum ovn_stage stage, uint16_t priority,
+                           const char *match, const char *actions,
+                           const char *io_port, const char *ctrl_meter,
+                           const struct ovsdb_idl_row *stage_hint,
+                           const char *where, uint32_t hash)
 {
     ovs_assert(ovn_stage_to_datapath_type(stage) == ovn_datapath_get_type(od));
-
-    uint32_t hash;
-
-    hash = ovn_logical_flow_hash(ovn_stage_get_table(stage),
-                                 ovn_stage_get_pipeline_name(stage),
-                                 priority, match,
-                                 actions);
-
     if (use_logical_dp_groups && use_parallel_build) {
         lock_hash_row(&lflow_locks, hash);
         do_ovn_lflow_add(lflow_map, od, hash, stage, priority, match,
@@ -4421,6 +4414,23 @@ ovn_lflow_add_at(struct hmap *lflow_map, struct ovn_datapath *od,
         do_ovn_lflow_add(lflow_map, od, hash, stage, priority, match,
                          actions, io_port, stage_hint, where, ctrl_meter);
     }
+}
+
+static void
+ovn_lflow_add_at(struct hmap *lflow_map, struct ovn_datapath *od,
+                 enum ovn_stage stage, uint16_t priority,
+                 const char *match, const char *actions, const char *io_port,
+                 const char *ctrl_meter,
+                 const struct ovsdb_idl_row *stage_hint, const char *where)
+{
+    uint32_t hash;
+
+    hash = ovn_logical_flow_hash(ovn_stage_get_table(stage),
+                                 ovn_stage_get_pipeline_name(stage),
+                                 priority, match,
+                                 actions);
+    ovn_lflow_add_at_with_hash(lflow_map,od, stage, priority, match, actions,
+                               io_port, ctrl_meter, stage_hint, where, hash);
 }
 
 /* Adds a row with the specified contents to the Logical_Flow table. */
@@ -6875,16 +6885,11 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
         /* Check if the ovn port has a network configured on which we could
          * expect ARP requests for the LB VIP.
          */
-        if (ip_parse(ip_addr, &ipv4_addr)) {
-            if (lrouter_port_ipv4_reachable(op, ipv4_addr)) {
-                build_lswitch_rport_arp_req_flow_for_reachable_ip(
-                    ip_addr, AF_INET, sw_op, sw_od, 80, lflows,
-                    stage_hint);
-            } else {
-                build_lswitch_rport_arp_req_flow_for_unreachable_ip(
-                        ip_addr, AF_INET, sw_od, 90, lflows,
-                        stage_hint);
-            }
+        if (ip_parse(ip_addr, &ipv4_addr) &&
+            lrouter_port_ipv4_reachable(op, ipv4_addr)) {
+            build_lswitch_rport_arp_req_flow_for_reachable_ip(
+                ip_addr, AF_INET, sw_op, sw_od, 80, lflows,
+                stage_hint);
         }
     }
     SSET_FOR_EACH (ip_addr, &op->od->lb_ips_v6) {
@@ -6893,16 +6898,11 @@ build_lswitch_rport_arp_req_flows(struct ovn_port *op,
         /* Check if the ovn port has a network configured on which we could
          * expect NS requests for the LB VIP.
          */
-        if (ipv6_parse(ip_addr, &ipv6_addr)) {
-            if (lrouter_port_ipv6_reachable(op, &ipv6_addr)) {
-                build_lswitch_rport_arp_req_flow_for_reachable_ip(
-                    ip_addr, AF_INET6, sw_op, sw_od, 80, lflows,
-                    stage_hint);
-            } else {
-                build_lswitch_rport_arp_req_flow_for_unreachable_ip(
-                    ip_addr, AF_INET6, sw_od, 90, lflows,
-                    stage_hint);
-            }
+        if (ipv6_parse(ip_addr, &ipv6_addr) &&
+            lrouter_port_ipv6_reachable(op, &ipv6_addr)) {
+            build_lswitch_rport_arp_req_flow_for_reachable_ip(
+                ip_addr, AF_INET6, sw_op, sw_od, 80, lflows,
+                stage_hint);
         }
     }
 
@@ -9437,8 +9437,69 @@ build_lrouter_defrag_flows_for_lb(struct ovn_northd_lb *lb,
 }
 
 static void
+build_lrouter_flows_for_unreachable_ips(struct ovn_northd_lb *lb,
+                                        struct ovn_lb_vip *lb_vip,
+                                        struct hmap *lflows,
+                                        struct hmap *ports,
+                                        struct ds *match,
+                                        struct ds *action)
+{
+    bool ipv4 = IN6_IS_ADDR_V4MAPPED(&lb_vip->vip);
+    ovs_be32 ipv4_addr;
+
+    ds_clear(match);
+    if (ipv4) {
+        if (!ip_parse(lb_vip->vip_str, &ipv4_addr)) {
+            return;
+        }
+        ds_put_format(match, "%s && arp.op == 1 && arp.tpa == %s",
+                      FLAGBIT_NOT_VXLAN, lb_vip->vip_str);
+    } else {
+        ds_put_format(match, "%s && nd_ns && nd.target == %s",
+                      FLAGBIT_NOT_VXLAN, lb_vip->vip_str);
+    }
+
+    ds_clear(action);
+    ds_put_cstr(action, "outport = \""MC_FLOOD"\"; output;");
+    uint32_t hash = ovn_logical_flow_hash(
+            ovn_stage_get_table(S_SWITCH_IN_L2_LKUP),
+            ovn_stage_get_pipeline_name(S_SWITCH_IN_L2_LKUP), 90,
+            ds_cstr(match), ds_cstr(action));
+
+    for (size_t i = 0; i < lb->n_nb_lr; i++) {
+            struct ovn_datapath *od = lb->nb_lr[i];
+            for (size_t j = 0; j < od->n_router_ports; j++) {
+                struct ovn_port *op = ovn_port_get_peer(ports,
+                                                        od->router_ports[j]);
+                if (!op) {
+                    continue;
+                }
+
+                struct ovn_port *peer = op->peer;
+                if (!peer || !peer->nbsp || lsp_is_external(peer->nbsp)) {
+                    continue;
+                }
+
+                if (!od->is_gw_router  && !is_l3dgw_port(op)) {
+                    continue;
+                }
+
+                if ((ipv4 && lrouter_port_ipv4_reachable(op, ipv4_addr)) ||
+                    (!ipv4 && lrouter_port_ipv6_reachable(op, &lb_vip->vip))) {
+                    continue;
+                }
+                ovn_lflow_add_at_with_hash(lflows, peer->od,
+                                           S_SWITCH_IN_L2_LKUP, 90,
+                                           ds_cstr(match), ds_cstr(action),
+                                           NULL, NULL, &peer->nbsp->header_,
+                                           OVS_SOURCE_LOCATOR, hash);
+            }
+    }
+}
+
+static void
 build_lrouter_flows_for_lb(struct ovn_northd_lb *lb, struct hmap *lflows,
-                           struct shash *meter_groups,
+                           struct hmap *ports, struct shash *meter_groups,
                            struct ds *match, struct ds *action)
 {
     if (!lb->n_nb_lr) {
@@ -9447,6 +9508,9 @@ build_lrouter_flows_for_lb(struct ovn_northd_lb *lb, struct hmap *lflows,
 
     for (size_t i = 0; i < lb->n_vips; i++) {
         struct ovn_lb_vip *lb_vip = &lb->vips[i];
+
+        build_lrouter_flows_for_unreachable_ips(lb, lb_vip, lflows, ports,
+                                                match, action);
 
         build_lrouter_nat_flows_for_lb(lb_vip, lb, &lb->vips_nb[i],
                                        lflows, match, action,
@@ -12773,7 +12837,7 @@ build_lflows_thread(void *arg)
                     build_lrouter_defrag_flows_for_lb(lb, lsi->lflows,
                                                       &lsi->match);
                     build_lrouter_flows_for_lb(lb, lsi->lflows,
-                                               lsi->meter_groups,
+                                               lsi->ports, lsi->meter_groups,
                                                &lsi->match, &lsi->actions);
                     build_lswitch_flows_for_lb(lb, lsi->lflows,
                                                lsi->meter_groups,
@@ -12942,8 +13006,9 @@ build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                                                  &lsi.actions,
                                                  &lsi.match);
             build_lrouter_defrag_flows_for_lb(lb, lsi.lflows, &lsi.match);
-            build_lrouter_flows_for_lb(lb, lsi.lflows, lsi.meter_groups,
-                                       &lsi.match, &lsi.actions);
+            build_lrouter_flows_for_lb(lb, lsi.lflows, lsi.ports,
+                                       lsi.meter_groups, &lsi.match,
+                                       &lsi.actions);
             build_lswitch_flows_for_lb(lb, lsi.lflows, lsi.meter_groups,
                                        &lsi.match, &lsi.actions);
         }
