@@ -66,6 +66,7 @@ struct ic_context {
     struct ovsdb_idl_index *nbrec_port_by_name;
     struct ovsdb_idl_index *sbrec_chassis_by_name;
     struct ovsdb_idl_index *sbrec_port_binding_by_name;
+    struct ovsdb_idl_index *icsbrec_port_binding_by_az;
     struct ovsdb_idl_index *icsbrec_port_binding_by_ts;
     struct ovsdb_idl_index *icsbrec_route_by_ts;
 };
@@ -174,7 +175,7 @@ allocate_ts_dp_key(struct hmap *dp_tnlids)
 }
 
 static void
-ts_run(struct ic_context *ctx)
+ts_run(struct ic_context *ctx, const struct icsbrec_availability_zone *az)
 {
     const struct icnbrec_transit_switch *ts;
 
@@ -239,8 +240,25 @@ ts_run(struct ic_context *ctx)
      * SB, to avoid uncommitted ISB datapath tunnel key to be synced back to
      * AZ. */
     if (ctx->ovnisb_txn) {
+        struct shash isb_pbs = SHASH_INITIALIZER(&isb_pbs);
+        const struct icsbrec_port_binding *isb_pb;
+        const struct icsbrec_port_binding *isb_pb_key =
+            icsbrec_port_binding_index_init_row(
+                ctx->icsbrec_port_binding_by_az);
+
+        icsbrec_port_binding_index_set_availability_zone(isb_pb_key, az);
+
+        ICSBREC_PORT_BINDING_FOR_EACH (isb_pb, ctx->ovnisb_idl) {
+            shash_add(&isb_pbs, isb_pb->transit_switch, isb_pb);
+        }
+
         /* Create ISB Datapath_Binding */
         ICNBREC_TRANSIT_SWITCH_FOR_EACH (ts, ctx->ovninb_idl) {
+            while (shash_find_and_delete(&isb_pbs, ts->name)) {
+                /* There may be multiple Port_Bindings */
+                continue;
+            }
+
             isb_dp = shash_find_and_delete(&isb_dps, ts->name);
             if (!isb_dp) {
                 /* Allocate tunnel key */
@@ -260,6 +278,13 @@ ts_run(struct ic_context *ctx)
         SHASH_FOR_EACH (node, &isb_dps) {
             icsbrec_datapath_binding_delete(node->data);
         }
+
+        SHASH_FOR_EACH (node, &isb_pbs) {
+            icsbrec_port_binding_delete(node->data);
+        }
+
+        icsbrec_port_binding_index_destroy_row(isb_pb_key);
+        shash_destroy(&isb_pbs);
     }
     ovn_destroy_tnlids(&dp_tnlids);
     shash_destroy(&isb_dps);
@@ -1493,7 +1518,7 @@ ovn_db_run(struct ic_context *ctx)
         return;
     }
 
-    ts_run(ctx);
+    ts_run(ctx, az);
     gateway_run(ctx, az);
     port_binding_run(ctx, az);
     route_run(ctx, az);
@@ -1684,6 +1709,11 @@ main(int argc, char *argv[])
     struct ovsdb_idl_index *sbrec_chassis_by_name
         = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
                                   &sbrec_chassis_col_name);
+
+    struct ovsdb_idl_index *icsbrec_port_binding_by_az
+        = ovsdb_idl_index_create1(ovnisb_idl_loop.idl,
+                                  &icsbrec_port_binding_col_availability_zone);
+
     struct ovsdb_idl_index *icsbrec_port_binding_by_ts
         = ovsdb_idl_index_create1(ovnisb_idl_loop.idl,
                                   &icsbrec_port_binding_col_transit_switch);
@@ -1731,6 +1761,7 @@ main(int argc, char *argv[])
                 .nbrec_port_by_name = nbrec_port_by_name,
                 .sbrec_port_binding_by_name = sbrec_port_binding_by_name,
                 .sbrec_chassis_by_name = sbrec_chassis_by_name,
+                .icsbrec_port_binding_by_az = icsbrec_port_binding_by_az,
                 .icsbrec_port_binding_by_ts = icsbrec_port_binding_by_ts,
                 .icsbrec_route_by_ts = icsbrec_route_by_ts,
             };
