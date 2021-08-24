@@ -120,12 +120,6 @@ static const char *ssl_ca_cert_file;
 
 /* Pipeline stages. */
 
-/* The two pipelines in an OVN logical flow table. */
-enum ovn_pipeline {
-    P_IN,                       /* Ingress pipeline. */
-    P_OUT                       /* Egress pipeline. */
-};
-
 /* The two purposes for which ovn-northd uses OVN logical datapaths. */
 enum ovn_datapath_type {
     DP_SWITCH,                  /* OVN logical switch. */
@@ -4412,7 +4406,7 @@ ovn_lflow_add_at(struct hmap *lflow_map, struct ovn_datapath *od,
     uint32_t hash;
 
     hash = ovn_logical_flow_hash(ovn_stage_get_table(stage),
-                                 ovn_stage_get_pipeline_name(stage),
+                                 ovn_stage_get_pipeline(stage),
                                  priority, match,
                                  actions);
 
