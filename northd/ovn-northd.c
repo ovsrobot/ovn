@@ -30,6 +30,7 @@
 #include "openvswitch/hmap.h"
 #include "openvswitch/json.h"
 #include "ovn/lex.h"
+#include "lib/mac-binding-index.h"
 #include "lib/chassis-index.h"
 #include "lib/ip-mcast-index.h"
 #include "lib/copp.h"
@@ -79,6 +80,7 @@ struct northd_context {
     struct ovsdb_idl_index *sbrec_ha_chassis_grp_by_name;
     struct ovsdb_idl_index *sbrec_mcast_group_by_name_dp;
     struct ovsdb_idl_index *sbrec_ip_mcast_by_dp;
+    struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip;
 };
 
 struct northd_state {
@@ -8197,6 +8199,41 @@ build_bfd_table(struct northd_context *ctx, struct hmap *bfd_connections,
     bitmap_free(bfd_src_ports);
 }
 
+static void
+build_mac_binding_table(struct northd_context *ctx, struct hmap *datapaths)
+{
+    const struct nbrec_logical_router *nbr;
+    NBREC_LOGICAL_ROUTER_FOR_EACH (nbr, ctx->ovnnb_idl) {
+        if (!lrouter_is_enabled(nbr)) {
+            continue;
+        }
+
+        struct ovn_datapath *od = ovn_datapath_find(datapaths,
+                                                    &nbr->header_.uuid);
+
+        if (od && od->sb) {
+            for (int i = 0; i < od->nbr->n_mac_bindings; i++) {
+                const struct nbrec_mac_binding *nb_mac_binding;
+                nb_mac_binding = od->nbr->mac_bindings[i];
+
+                const struct sbrec_mac_binding *mb =
+                    mac_binding_lookup(ctx->sbrec_mac_binding_by_lport_ip,
+                                       nb_mac_binding->logical_port,
+                                       nb_mac_binding->ip);
+                if (!mb) {
+                    mb = sbrec_mac_binding_insert(ctx->ovnsb_txn);
+                    sbrec_mac_binding_set_logical_port(mb, nb_mac_binding->logical_port);
+                    sbrec_mac_binding_set_ip(mb, nb_mac_binding->ip);
+                    sbrec_mac_binding_set_mac(mb, nb_mac_binding->mac);
+                    sbrec_mac_binding_set_datapath(mb, od->sb);
+                } else {
+                    sbrec_mac_binding_set_mac(mb, nb_mac_binding->mac);
+                }
+            }
+        }
+    }
+}
+
 /* Returns a string of the IP address of the router port 'op' that
  * overlaps with 'ip_s".  If one is not found, returns NULL.
  *
@@ -14121,6 +14158,7 @@ ovnnb_db_run(struct northd_context *ctx,
     build_mcast_groups(ctx, datapaths, ports, &mcast_groups, &igmp_groups);
     build_meter_groups(ctx, &meter_groups);
     build_bfd_table(ctx, &bfd_connections, ports);
+    build_mac_binding_table(ctx, datapaths);
     build_lflows(ctx, datapaths, ports, &port_groups, &mcast_groups,
                  &igmp_groups, &meter_groups, &lbs, &bfd_connections,
                  ovn_internal_version_changed);
@@ -15272,6 +15310,9 @@ main(int argc, char *argv[])
     struct ovsdb_idl_index *sbrec_ip_mcast_by_dp
         = ip_mcast_index_create(ovnsb_idl_loop.idl);
 
+    struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip
+        = mac_binding_index_create(ovnsb_idl_loop.idl);
+
     unixctl_command_register("sb-connection-status", "", 0, 0,
                              ovn_conn_show, ovnsb_idl_loop.idl);
 
@@ -15317,6 +15358,7 @@ main(int argc, char *argv[])
                 .sbrec_ha_chassis_grp_by_name = sbrec_ha_chassis_grp_by_name,
                 .sbrec_mcast_group_by_name_dp = sbrec_mcast_group_by_name_dp,
                 .sbrec_ip_mcast_by_dp = sbrec_ip_mcast_by_dp,
+                .sbrec_mac_binding_by_lport_ip = sbrec_mac_binding_by_lport_ip,
             };
 
             if (!state.had_lock && ovsdb_idl_has_lock(ovnsb_idl_loop.idl)) {
