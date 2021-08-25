@@ -13034,7 +13034,7 @@ ovn_sb_set_lflow_logical_dp_group(
     sbrec_logical_flow_set_logical_dp_group(sbflow, dpg->dp_group);
 }
 
-static ssize_t max_seen_lflow_size = 128;
+static ssize_t max_seen_lflow_size = 0;
 
 /* Updates the Logical_Flow and Multicast_Group tables in the OVN_SB database,
  * constructing their contents based on the OVN_NB database. */
@@ -13047,6 +13047,25 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
              bool ovn_internal_version_changed)
 {
     struct hmap lflows;
+
+    if (!max_seen_lflow_size) {
+        if (use_logical_dp_groups && use_parallel_build) {
+            /* We are running for the first time. The user has
+             * requested both dp_groups and parallelisation. We
+             * may encounter a very large amount of flows on first
+             * run and we have no way to guess the flow hash size.
+             * We allocate for worst a case scenario on the first
+             * run. This will be resized to a sane size later. */
+            max_seen_lflow_size = INT_MAX;
+        } else {
+            /* If the build is not parallel, this will be resized
+             * to a correct size. If it is parallel, but without
+             * dp_groups, the sizing is irrelevant as the hash is
+             * not used for lookups during build. We resize it to
+             * a correct size after that. */
+            max_seen_lflow_size = 128;
+        }
+    }
 
     fast_hmap_size_for(&lflows, max_seen_lflow_size);
     if (use_parallel_build) {
