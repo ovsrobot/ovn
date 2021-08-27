@@ -50,6 +50,8 @@ struct ovn_northd_lb {
     size_t n_nb_lr;
     size_t n_allocated_nb_lr;
     struct ovn_datapath **nb_lr;
+
+    bool skip_lflow_build;
 };
 
 struct ovn_lb_vip {
@@ -87,6 +89,8 @@ struct ovn_northd_lb_backend {
 
 struct ovn_northd_lb *ovn_northd_lb_create(const struct nbrec_load_balancer *);
 struct ovn_northd_lb * ovn_northd_lb_find(struct hmap *, const struct uuid *);
+bool ovn_northd_lb_equal_except_for_proto(const struct ovn_northd_lb *,
+                                          const struct ovn_northd_lb *);
 void ovn_northd_lb_destroy(struct ovn_northd_lb *);
 void
 ovn_northd_lb_add_lr(struct ovn_northd_lb *lb, struct ovn_datapath *od);

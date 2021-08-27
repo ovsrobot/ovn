@@ -168,6 +168,7 @@ ovn_northd_lb_create(const struct nbrec_load_balancer *nbrec_lb)
     bool is_sctp = nullable_string_is_equal(nbrec_lb->protocol, "sctp");
     struct ovn_northd_lb *lb = xzalloc(sizeof *lb);
 
+    lb->skip_lflow_build = false;
     lb->nlb = nbrec_lb;
     lb->proto = is_udp ? "udp" : is_sctp ? "sctp" : "tcp";
     lb->n_vips = smap_count(&nbrec_lb->vips);
@@ -236,6 +237,61 @@ ovn_northd_lb_find(struct hmap *lbs, const struct uuid *uuid)
         }
     }
     return NULL;
+}
+
+/* Compares two load balancers for equality ignoring the 'protocol'. */
+bool
+ovn_northd_lb_equal_except_for_proto(const struct ovn_northd_lb *lb1,
+                                     const struct ovn_northd_lb *lb2)
+{
+    /* It's much more convenient to compare Northbound DB configuration. */
+    const struct nbrec_load_balancer *lb_a = lb1->nlb;
+    const struct nbrec_load_balancer *lb_b = lb2->nlb;
+
+    if (!smap_equal(&lb_a->external_ids, &lb_b->external_ids)) {
+        return false;
+    }
+    if (lb_a->n_health_check != lb_b->n_health_check) {
+        return false;
+    }
+    if (lb_a->n_health_check
+        && !memcmp(lb_a->health_check, lb_b->health_check,
+                   lb_a->n_health_check * sizeof *lb_a->health_check)) {
+        return false;
+    }
+    if (!smap_equal(&lb_a->ip_port_mappings, &lb_b->ip_port_mappings)) {
+        return false;
+    }
+    if (!smap_equal(&lb_a->options, &lb_b->options)) {
+        return false;
+    }
+    if (lb_a->n_selection_fields != lb_b->n_selection_fields) {
+        return false;
+    }
+    if (lb_a->n_selection_fields &&
+        memcmp(lb_a->selection_fields, lb_b->selection_fields,
+               lb_a->n_selection_fields * sizeof *lb_a->selection_fields)) {
+        return false;
+    }
+    if (!smap_equal(&lb_a->vips, &lb_b->vips)) {
+        return false;
+    }
+
+    /* Below fields are not easily accessible from the Nb DB entry, so
+     * comparing parsed versions. */
+    if (lb1->n_nb_ls != lb2->n_nb_ls || lb1->n_nb_lr != lb2->n_nb_lr) {
+        return false;
+    }
+    if (lb1->n_nb_ls
+        && memcmp(lb1->nb_ls, lb1->nb_ls, lb1->n_nb_ls * sizeof *lb1->nb_ls)) {
+        return false;
+    }
+    if (lb1->n_nb_lr
+        && memcmp(lb1->nb_lr, lb1->nb_lr, lb1->n_nb_lr * sizeof *lb1->nb_lr)) {
+        return false;
+    }
+
+    return true;
 }
 
 void

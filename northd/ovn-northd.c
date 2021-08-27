@@ -3732,6 +3732,35 @@ build_ovn_lbs(struct northd_context *ctx, struct hmap *datapaths,
             sbrec_datapath_binding_set_load_balancers(od->sb, NULL, 0);
         }
     }
+
+    /* Northd doesn't use protocol in case vips has no ports specified.
+     * And it's also common that user configures several identical load
+     * balancers, one per protocol. We need to find them and use only one
+     * for logical flow construction.  Logical flows will be identical,
+     * so it's faster to just not build them. */
+    struct ovn_northd_lb *lb2;
+    HMAP_FOR_EACH (lb, hmap_node, lbs) {
+        if (lb->skip_lflow_build) {
+            continue;
+        }
+        for (size_t i = 0; i < lb->n_vips; i++) {
+            if (lb->vips[i].vip_port) {
+                goto next;
+            }
+        }
+        HMAP_FOR_EACH (lb2, hmap_node, lbs) {
+            if (lb2 == lb || lb2->skip_lflow_build) {
+                continue;
+            }
+            if (ovn_northd_lb_equal_except_for_proto(lb, lb2)) {
+                /* Load balancer still referenced from logical switch or
+                 * router, so we can't destroy it here. */
+                lb2->skip_lflow_build = true;
+            }
+        }
+next:;
+    }
+
 }
 
 static void
@@ -12772,6 +12801,9 @@ build_lflows_thread(void *arg)
                     if (stop_parallel_processing()) {
                         return NULL;
                     }
+                    if (lb->skip_lflow_build) {
+                        continue;
+                    }
                     build_lswitch_arp_nd_service_monitor(lb, lsi->lflows,
                                                          &lsi->match,
                                                          &lsi->actions);
@@ -12943,6 +12975,9 @@ build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             build_lswitch_and_lrouter_iterate_by_op(op, &lsi);
         }
         HMAP_FOR_EACH (lb, hmap_node, lbs) {
+            if (lb->skip_lflow_build) {
+                continue;
+            }
             build_lswitch_arp_nd_service_monitor(lb, lsi.lflows,
                                                  &lsi.actions,
                                                  &lsi.match);
