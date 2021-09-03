@@ -51,7 +51,6 @@ static bool can_parallelize = false;
  * accompanied by a fence. It does not need to be atomic or be
  * accessed under a lock.
  */
-static bool workers_must_exit = false;
 
 static struct ovs_list worker_pools = OVS_LIST_INITIALIZER(&worker_pools);
 
@@ -70,10 +69,20 @@ static void merge_hash_results(struct worker_pool *pool OVS_UNUSED,
                                void *fin_result, void *result_frags,
                                int index);
 
+
+static bool init_control(struct worker_control *control, int id,
+                         struct worker_pool *pool);
+
+static void cleanup_control(struct worker_pool *pool, int id);
+
+static void free_controls(struct worker_pool *pool);
+
+static struct worker_control *alloc_controls(int size);
+
 bool
-ovn_stop_parallel_processing(void)
+ovn_stop_parallel_processing(struct worker_pool *pool)
 {
-    return workers_must_exit;
+    return pool->workers_must_exit;
 }
 
 bool
@@ -92,11 +101,67 @@ ovn_can_parallelize_hashes(bool force_parallel)
     return can_parallelize;
 }
 
+
+void
+destroy_pool(struct worker_pool *pool) {
+    char sem_name[256];
+
+    free_controls(pool);
+    sem_close(pool->done);
+    sprintf(sem_name, MAIN_SEM_NAME, sembase, pool);
+    sem_unlink(sem_name);
+    free(pool);
+}
+
+bool
+ovn_resize_pool(struct worker_pool *pool, int size)
+{
+    int i;
+
+    ovs_assert(pool != NULL);
+
+    if (!size) {
+        size = pool_size;
+    }
+
+    ovs_mutex_lock(&init_mutex);
+
+    if (can_parallelize) {
+        free_controls(pool);
+        pool->size = size;
+
+        /* Allocate new control structures. */
+
+        pool->controls = alloc_controls(size);
+        pool->workers_must_exit = false;
+
+        for (i = 0; i < pool->size; i++) {
+            if (! init_control(&pool->controls[i], i, pool)) {
+                goto cleanup;
+            }
+        }
+    }
+    ovs_mutex_unlock(&init_mutex);
+    return true;
+cleanup:
+
+    /* Something went wrong when opening semaphores. In this case
+     * it is better to shut off parallel procesing altogether
+     */
+
+    VLOG_INFO("Failed to initialize parallel processing, error %d", errno);
+    can_parallelize = false;
+    free_controls(pool);
+
+    ovs_mutex_unlock(&init_mutex);
+    return false;
+}
+
+
 struct worker_pool *
-ovn_add_worker_pool(void *(*start)(void *))
+ovn_add_worker_pool(void *(*start)(void *), int size)
 {
     struct worker_pool *new_pool = NULL;
-    struct worker_control *new_control;
     bool test = false;
     int i;
     char sem_name[256];
@@ -113,37 +178,28 @@ ovn_add_worker_pool(void *(*start)(void *))
         ovs_mutex_unlock(&init_mutex);
     }
 
+    if (!size) {
+        size = pool_size;
+    }
+
     ovs_mutex_lock(&init_mutex);
     if (can_parallelize) {
         new_pool = xmalloc(sizeof(struct worker_pool));
-        new_pool->size = pool_size;
-        new_pool->controls = NULL;
+        new_pool->size = size;
+        new_pool->start = start;
         sprintf(sem_name, MAIN_SEM_NAME, sembase, new_pool);
         new_pool->done = sem_open(sem_name, O_CREAT, S_IRWXU, 0);
         if (new_pool->done == SEM_FAILED) {
             goto cleanup;
         }
 
-        new_pool->controls =
-            xmalloc(sizeof(struct worker_control) * new_pool->size);
+        new_pool->controls = alloc_controls(size);
+        new_pool->workers_must_exit = false;
 
         for (i = 0; i < new_pool->size; i++) {
-            new_control = &new_pool->controls[i];
-            new_control->id = i;
-            new_control->done = new_pool->done;
-            new_control->data = NULL;
-            ovs_mutex_init(&new_control->mutex);
-            new_control->finished = ATOMIC_VAR_INIT(false);
-            sprintf(sem_name, WORKER_SEM_NAME, sembase, new_pool, i);
-            new_control->fire = sem_open(sem_name, O_CREAT, S_IRWXU, 0);
-            if (new_control->fire == SEM_FAILED) {
+            if (!init_control(&new_pool->controls[i], i, new_pool)) {
                 goto cleanup;
             }
-        }
-
-        for (i = 0; i < pool_size; i++) {
-            new_pool->controls[i].worker =
-                ovs_thread_create("worker pool helper", start, &new_pool->controls[i]);
         }
         ovs_list_push_back(&worker_pools, &new_pool->list_node);
     }
@@ -157,16 +213,7 @@ cleanup:
 
     VLOG_INFO("Failed to initialize parallel processing, error %d", errno);
     can_parallelize = false;
-    if (new_pool->controls) {
-        for (i = 0; i < new_pool->size; i++) {
-            if (new_pool->controls[i].fire != SEM_FAILED) {
-                sem_close(new_pool->controls[i].fire);
-                sprintf(sem_name, WORKER_SEM_NAME, sembase, new_pool, i);
-                sem_unlink(sem_name);
-                break; /* semaphores past this one are uninitialized */
-            }
-        }
-    }
+    free_controls(new_pool);
     if (new_pool->done != SEM_FAILED) {
         sem_close(new_pool->done);
         sprintf(sem_name, MAIN_SEM_NAME, sembase, new_pool);
@@ -175,7 +222,6 @@ cleanup:
     ovs_mutex_unlock(&init_mutex);
     return NULL;
 }
-
 
 /* Initializes 'hmap' as an empty hash table with mask N. */
 void
@@ -365,13 +411,83 @@ ovn_update_hashrow_locks(struct hmap *lflows, struct hashrow_locks *hrl)
     }
 }
 
+static bool
+init_control(struct worker_control *control, int id,
+             struct worker_pool *pool)
+{
+    char sem_name[256];
+    control->id = id;
+    control->done = pool->done;
+    control->data = NULL;
+    ovs_mutex_init(&control->mutex);
+    control->finished = ATOMIC_VAR_INIT(false);
+    sprintf(sem_name, WORKER_SEM_NAME, sembase, pool, id);
+    control->fire = sem_open(sem_name, O_CREAT, S_IRWXU, 0);
+    control->pool = pool;
+    control->worker = 0;
+    if (control->fire == SEM_FAILED) {
+        return false;
+    }
+    control->worker =
+        ovs_thread_create("worker pool helper", pool->start, control);
+    return true;
+}
+
+static void
+cleanup_control(struct worker_pool *pool, int id)
+{
+    char sem_name[256];
+    struct worker_control *control = &pool->controls[id];
+
+    if (control->fire != SEM_FAILED) {
+        sem_close(control->fire);
+        sprintf(sem_name, WORKER_SEM_NAME, sembase, pool, id);
+        sem_unlink(sem_name);
+    }
+}
+
+static void
+free_controls(struct worker_pool *pool)
+{
+    int i;
+    if (pool->controls) {
+        pool->workers_must_exit = true;
+        for (i = 0; i < pool->size ; i++) {
+            if (pool->controls[i].fire != SEM_FAILED) {
+                sem_post(pool->controls[i].fire);
+            }
+        }
+        for (i = 0; i < pool->size ; i++) {
+            if (pool->controls[i].worker) {
+                pthread_join(pool->controls[i].worker, NULL);
+                pool->controls[i].worker = 0;
+            }
+        }
+        for (i = 0; i < pool->size; i++) {
+                cleanup_control(pool, i);
+            }
+        free(pool->controls);
+        pool->controls = NULL;
+        pool->workers_must_exit = false;
+    }
+}
+
+static struct worker_control *alloc_controls(int size)
+{
+    int i;
+    struct worker_control *controls =
+        xcalloc(sizeof(struct worker_control), size);
+
+    for (i = 0; i < size ; i++) {
+        controls[i].fire = SEM_FAILED;
+    }
+    return controls;
+}
+
 static void
 worker_pool_hook(void *aux OVS_UNUSED) {
-    int i;
     static struct worker_pool *pool;
     char sem_name[256];
-
-    workers_must_exit = true;
 
     /* All workers must honour the must_exit flag and check for it regularly.
      * We can make it atomic and check it via atomics in workers, but that
@@ -383,17 +499,7 @@ worker_pool_hook(void *aux OVS_UNUSED) {
     /* Wake up the workers after the must_exit flag has been set */
 
     LIST_FOR_EACH (pool, list_node, &worker_pools) {
-        for (i = 0; i < pool->size ; i++) {
-            sem_post(pool->controls[i].fire);
-        }
-        for (i = 0; i < pool->size ; i++) {
-            pthread_join(pool->controls[i].worker, NULL);
-        }
-        for (i = 0; i < pool->size ; i++) {
-            sem_close(pool->controls[i].fire);
-            sprintf(sem_name, WORKER_SEM_NAME, sembase, pool, i);
-            sem_unlink(sem_name);
-        }
+        free_controls(pool);
         sem_close(pool->done);
         sprintf(sem_name, MAIN_SEM_NAME, sembase, pool);
         sem_unlink(sem_name);
