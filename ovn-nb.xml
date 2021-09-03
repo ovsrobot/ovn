@@ -995,11 +995,16 @@
 
         <column name="options" key="requested-chassis">
           If set, identifies a specific chassis (by name or hostname) that
-          is allowed to bind this port. Using this option will prevent
+          is allowed to bind or plug this port.  Using this option will prevent
           thrashing between two chassis trying to bind the same port during
-          a live migration. It can also prevent similar thrashing due to a
+          a live migration.  It can also prevent similar thrashing due to a
           mis-configuration, if a port is accidentally created on more than
-          one chassis.
+          one chassis.  This is also used to allow the controller consider
+          unbound ports for plugging without having to process ports not
+          destined for its chassis.
+
+          Setting this option is a prerequisite for using the
+          <ref column="options" key="plug-type"/> option (see below).
         </column>
 
         <column name="options" key="iface-id-ver">
@@ -1028,6 +1033,28 @@
             DHCP reply.
           </p>
         </column>
+
+        <group title="VIF Plugging Options">
+          <column name="options" key="plug-type">
+            If set, OVN will attempt to to perform plugging of this VIF.  In
+            order to get this port plugged by the OVN controller, OVN must be
+            built with support for VIF plugging.  The default behavior is for
+            the CMS to do the VIF plugging.  Each plug provider have their own
+            options namespaced by name, for example "plug:representor:key".
+            Please refer to the plug provider documentation for more
+            information.
+
+            Supported values: representor
+          </column>
+
+          <column name="options" key="plug-mtu-request">
+            Requested MTU for plugged interfaces.  When set the OVN controller
+            will fill the <ref table="Interface" column="mtu_request"/> column
+            of the Open vSwitch database's
+            <ref table="Interface" db="vswitch"/> table.  This in turn will
+            make OVS vswitchd update the MTU of the linked interface.
+          </column>
+        </group>
       </group>
 
       <group title="Virtual port Options">

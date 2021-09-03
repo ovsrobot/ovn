@@ -2983,6 +2983,26 @@ tcp.flags = RST;
           </dd>
         </dl>
       </column>
+      <column name="requested_chassis">
+        If set, identifies a specific chassis that is allowed to bind or plug
+        this port.  Having a value in this column will prevent thrashing
+        between two chassis trying to bind the same port during a live
+        migration.
+        It can also prevent similar thrashing due to a mis-configuration, if a
+        port is accidentally created on more than one chassis.  This is also
+        used to allow the controller consider unbound ports for plugging
+        without having to process ports not destined for its chassis.
+
+        This column must be a
+        <ref table="Chassis"/> record.  This is populated by
+        <code>ovn-northd</code> when the <ref
+        table="Logical_Switch_Port"
+        column="options"
+        key="requested-chassis"
+        db="OVN_Northbound"/>
+        is defined and contains a string matching the name or hostname of an
+        existing chassis.
+      </column>
     </group>
 
     <group title="Patch Options">
@@ -3141,12 +3161,17 @@ tcp.flags = RST;
       </p>
 
       <column name="options" key="requested-chassis">
-        If set, identifies a specific chassis (by name or hostname) that
-        is allowed to bind this port. Using this option will prevent
-        thrashing between two chassis trying to bind the same port during
-        a live migration. It can also prevent similar thrashing due to a
-        mis-configuration, if a port is accidentally created on more than
-        one chassis.
+        Deprecated.  This option has been replaced by a separate column
+        <ref
+        table="Port_Binding"
+        column="requested_chassis"
+        db="OVN_Southbound"/>
+        and may at some point in the future no longer be copied over from
+        <ref
+        table="Logical_Switch_Port"
+        column="options"
+        key="requested-chassis"
+        db="OVN_Northbound"/>.
       </column>
 
       <column name="options" key="iface-id-ver">
