@@ -4358,7 +4358,6 @@ ovn_lflow_init(struct ovn_lflow *lflow, struct ovn_datapath *od,
 /* If this option is 'true' northd will combine logical flows that differ by
  * logical datapath only by creating a datapath group. */
 static bool use_logical_dp_groups = false;
-static bool use_parallel_build = true;
 
 static struct hashrow_locks lflow_locks;
 
@@ -4395,7 +4394,7 @@ do_ovn_lflow_add(struct hmap *lflow_map, struct ovn_datapath *od,
                    nullable_xstrdup(ctrl_meter),
                    ovn_lflow_hint(stage_hint), where);
     hmapx_add(&lflow->od_group, od);
-    if (!use_parallel_build) {
+    if (!get_parallel_processing()) {
         hmap_insert(lflow_map, &lflow->hmap_node, hash);
     } else {
         hmap_insert_fast(lflow_map, &lflow->hmap_node, hash);
@@ -4414,7 +4413,7 @@ ovn_lflow_add_at_with_hash(struct hmap *lflow_map, struct ovn_datapath *od,
     struct ovn_lflow *lflow;
 
     ovs_assert(ovn_stage_to_datapath_type(stage) == ovn_datapath_get_type(od));
-    if (use_logical_dp_groups && use_parallel_build) {
+    if (use_logical_dp_groups && get_parallel_processing()) {
         lock_hash_row(&lflow_locks, hash);
         lflow = do_ovn_lflow_add(lflow_map, od, hash, stage, priority, match,
                                  actions, io_port, stage_hint, where,
@@ -4454,7 +4453,7 @@ ovn_dp_group_add_with_reference(struct ovn_lflow *lflow_ref,
         return false;
     }
 
-    if (use_parallel_build) {
+    if (get_parallel_processing()) {
         lock_hash_row(&lflow_locks, hash);
         hmapx_add(&lflow_ref->od_group, od);
         unlock_hash_row(&lflow_locks, hash);
@@ -12919,7 +12918,8 @@ static void
 init_lflows_thread_pool(void)
 {
     if (!pool_init_done) {
-        build_lflows_pool = add_worker_pool(build_lflows_thread, 0);
+        build_lflows_pool = add_worker_pool(build_lflows_thread, 0,
+                                            "lflows", true);
         pool_init_done = true;
     }
 }
@@ -12951,14 +12951,11 @@ build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
 
     char *svc_check_match = xasprintf("eth.dst == %s", svc_monitor_mac);
 
-    if (use_parallel_build) {
+    if (get_parallel_processing()) {
         init_lflows_thread_pool();
-        if (!can_parallelize_hashes(false)) {
-            use_parallel_build = false;
-        }
     }
 
-    if (use_parallel_build) {
+    if (get_parallel_processing()) {
         struct hmap *lflow_segs;
         struct lswitch_flow_build_info *lsiv;
         int index;
@@ -13154,7 +13151,7 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
     struct hmap lflows;
 
     fast_hmap_size_for(&lflows, max_seen_lflow_size);
-    if (use_parallel_build) {
+    if (get_parallel_processing()) {
         update_hashrow_locks(&lflows, &lflow_locks);
     }
     build_lswitch_and_lrouter_flows(datapaths, ports,
@@ -14226,10 +14223,6 @@ ovnnb_db_run(struct northd_context *ctx,
     northd_probe_interval_nb = get_probe_interval(ovnnb_db, nb);
     northd_probe_interval_sb = get_probe_interval(ovnsb_db, nb);
 
-    use_parallel_build =
-        (smap_get_bool(&nb->options, "use_parallel_build", false) &&
-         can_parallelize_hashes(false));
-
     use_logical_dp_groups = smap_get_bool(&nb->options,
                                           "use_logical_dp_groups", true);
     use_ct_inv_match = smap_get_bool(&nb->options,
@@ -15144,8 +15137,9 @@ main(int argc, char *argv[])
 
     daemonize_complete();
 
+    ovn_parallel_thread_pools_init();
+
     init_hash_row_locks(&lflow_locks);
-    use_parallel_build = can_parallelize_hashes(false);
 
     /* We want to detect (almost) all changes to the ovn-nb db. */
     struct ovsdb_idl_loop ovnnb_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(

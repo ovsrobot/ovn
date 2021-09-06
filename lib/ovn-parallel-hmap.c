@@ -33,6 +33,7 @@
 #include "ovs-thread.h"
 #include "ovs-numa.h"
 #include "random.h"
+#include "unixctl.h"
 
 VLOG_DEFINE_THIS_MODULE(ovn_parallel_hmap);
 
@@ -46,6 +47,7 @@ VLOG_DEFINE_THIS_MODULE(ovn_parallel_hmap);
  */
 static atomic_bool initial_pool_setup = ATOMIC_VAR_INIT(false);
 static bool can_parallelize = false;
+static bool should_parallelize = false;
 
 /* This is set only in the process of exit and the set is
  * accompanied by a fence. It does not need to be atomic or be
@@ -86,6 +88,19 @@ ovn_stop_parallel_processing(struct worker_pool *pool)
 }
 
 bool
+ovn_set_parallel_processing(bool enable)
+{
+    should_parallelize = enable;
+    return can_parallelize;
+}
+
+bool
+ovn_get_parallel_processing(void)
+{
+    return can_parallelize && should_parallelize;
+}
+
+bool
 ovn_can_parallelize_hashes(bool force_parallel)
 {
     bool test = false;
@@ -110,6 +125,7 @@ destroy_pool(struct worker_pool *pool) {
     sem_close(pool->done);
     sprintf(sem_name, MAIN_SEM_NAME, sembase, pool);
     sem_unlink(sem_name);
+    free(pool->name);
     free(pool);
 }
 
@@ -119,6 +135,10 @@ ovn_resize_pool(struct worker_pool *pool, int size)
     int i;
 
     ovs_assert(pool != NULL);
+
+    if (!pool->is_mutable) {
+        return false;
+    }
 
     if (!size) {
         size = pool_size;
@@ -159,7 +179,8 @@ cleanup:
 
 
 struct worker_pool *
-ovn_add_worker_pool(void *(*start)(void *), int size)
+ovn_add_worker_pool(void *(*start)(void *), int size, char *name,
+                    bool is_mutable)
 {
     struct worker_pool *new_pool = NULL;
     bool test = false;
@@ -187,6 +208,8 @@ ovn_add_worker_pool(void *(*start)(void *), int size)
         new_pool = xmalloc(sizeof(struct worker_pool));
         new_pool->size = size;
         new_pool->start = start;
+        new_pool->is_mutable = is_mutable;
+        new_pool->name = xstrdup(name);
         sprintf(sem_name, MAIN_SEM_NAME, sembase, new_pool);
         new_pool->done = sem_open(sem_name, O_CREAT, S_IRWXU, 0);
         if (new_pool->done == SEM_FAILED) {
@@ -219,6 +242,7 @@ cleanup:
         sprintf(sem_name, MAIN_SEM_NAME, sembase, new_pool);
         sem_unlink(sem_name);
     }
+    free(new_pool->name);
     ovs_mutex_unlock(&init_mutex);
     return NULL;
 }
@@ -267,13 +291,9 @@ ovn_fast_hmap_size_for(struct hmap *hmap, int size)
 /* Run a thread pool which uses a callback function to process results
  */
 void
-ovn_run_pool_callback(struct worker_pool *pool,
-                      void *fin_result, void *result_frags,
-                      void (*helper_func)(struct worker_pool *pool,
-                                          void *fin_result,
-                                          void *result_frags, int index))
+ovn_start_pool(struct worker_pool *pool)
 {
-    int index, completed;
+    int index;
 
     /* Ensure that all worker threads see the same data as the
      * main thread.
@@ -284,8 +304,19 @@ ovn_run_pool_callback(struct worker_pool *pool,
     for (index = 0; index < pool->size; index++) {
         sem_post(pool->controls[index].fire);
     }
+}
 
-    completed = 0;
+
+/* Run a thread pool which uses a callback function to process results
+ */
+void
+ovn_complete_pool_callback(struct worker_pool *pool,
+                      void *fin_result, void *result_frags,
+                      void (*helper_func)(struct worker_pool *pool,
+                                          void *fin_result,
+                                          void *result_frags, int index))
+{
+    int index, completed = 0;
 
     do {
         bool test;
@@ -326,6 +357,18 @@ ovn_run_pool_callback(struct worker_pool *pool,
             }
         }
     } while (completed < pool->size);
+}
+/* Run a thread pool which uses a callback function to process results
+ */
+void
+ovn_run_pool_callback(struct worker_pool *pool,
+                      void *fin_result, void *result_frags,
+                      void (*helper_func)(struct worker_pool *pool,
+                                          void *fin_result,
+                                          void *result_frags, int index))
+{
+    start_pool(pool);
+    complete_pool_callback(pool, fin_result, result_frags, helper_func);
 }
 
 /* Run a thread pool - basic, does not do results processing.
@@ -371,6 +414,28 @@ ovn_fast_hmap_merge(struct hmap *dest, struct hmap *inc)
     }
     dest->n += inc->n;
     inc->n = 0;
+}
+
+/* Run a thread pool which gathers results in an array
+ * of hashes. Merge results.
+ */
+void
+ovn_complete_pool_hash(struct worker_pool *pool,
+                  struct hmap *result,
+                  struct hmap *result_frags)
+{
+    complete_pool_callback(pool, result, result_frags, merge_hash_results);
+}
+
+/* Run a thread pool which gathers results in an array of lists.
+ * Merge results.
+ */
+void
+ovn_complete_pool_list(struct worker_pool *pool,
+                  struct ovs_list *result,
+                  struct ovs_list *result_frags)
+{
+    complete_pool_callback(pool, result, result_frags, merge_list_results);
 }
 
 /* Run a thread pool which gathers results in an array
@@ -486,7 +551,7 @@ static struct worker_control *alloc_controls(int size)
 
 static void
 worker_pool_hook(void *aux OVS_UNUSED) {
-    static struct worker_pool *pool;
+    struct worker_pool *pool;
     char sem_name[256];
 
     /* All workers must honour the must_exit flag and check for it regularly.
@@ -562,6 +627,132 @@ merge_hash_results(struct worker_pool *pool OVS_UNUSED,
 
     fast_hmap_merge(result, &res_frags[index]);
     hmap_destroy(&res_frags[index]);
+}
+
+static void
+ovn_thread_pool_resize_pool(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                            const char *argv[], void *unused OVS_UNUSED)
+{
+
+    struct worker_pool *pool;
+    int value;
+
+    if (!str_to_int(argv[2], 10, &value)) {
+        unixctl_command_reply_error(conn, "invalid argument");
+        return;
+    }
+
+    if (value > 0) {
+        pool_size = value;
+    }
+    LIST_FOR_EACH (pool, list_node, &worker_pools) {
+        if (strcmp(pool->name, argv[1]) == 0) {
+            resize_pool(pool, value);
+            unixctl_command_reply_error(conn, NULL);
+        }
+    }
+    unixctl_command_reply_error(conn, "pool not found");
+}
+
+static void
+ovn_thread_pool_list_pools(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                           const char *argv[] OVS_UNUSED,
+                           void *unused OVS_UNUSED)
+{
+
+    char *reply = NULL;
+    char *new_reply;
+    char buf[256];
+    struct worker_pool *pool;
+
+    LIST_FOR_EACH (pool, list_node, &worker_pools) {
+        snprintf(buf, 255, "%s : %d\n", pool->name, pool->size);
+        if (reply) {
+            new_reply = xmalloc(strlen(reply) + strlen(buf) + 1);
+            ovs_strlcpy(new_reply, reply, strlen(reply));
+            strcat(new_reply, buf);
+            free(reply);
+        }
+        reply = new_reply;
+    }
+    unixctl_command_reply(conn, reply);
+}
+
+static void
+ovn_thread_pool_set_parallel_on(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                                const char *argv[], void *unused OVS_UNUSED)
+{
+    int value;
+    bool result;
+    if (!str_to_int(argv[1], 10, &value)) {
+        unixctl_command_reply_error(conn, "invalid argument");
+        return;
+    }
+
+    if (!ovn_can_parallelize_hashes(true)) {
+        unixctl_command_reply_error(conn, "cannot enable parallel processing");
+        return;
+    }
+
+    if (value > 0) {
+        /* Change default pool size */
+        ovs_mutex_lock(&init_mutex);
+        pool_size = value;
+        ovs_mutex_unlock(&init_mutex);
+    }
+
+    result = ovn_set_parallel_processing(true);
+    unixctl_command_reply(conn, result ? "enabled" : "disabled");
+}
+
+static void
+ovn_thread_pool_set_parallel_off(struct unixctl_conn *conn,
+                                 int argc OVS_UNUSED,
+                                 const char *argv[] OVS_UNUSED,
+                                 void *unused OVS_UNUSED)
+{
+    ovn_set_parallel_processing(false);
+    unixctl_command_reply(conn, NULL);
+}
+
+static void
+ovn_thread_pool_parallel_status(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                                const char *argv[] OVS_UNUSED,
+                                void *unused OVS_UNUSED)
+{
+    char status[256];
+
+    sprintf(status, "%s, default pool size %d",
+            get_parallel_processing() ? "active" : "inactive",
+            pool_size);
+
+    unixctl_command_reply(conn, status);
+}
+
+void
+ovn_parallel_thread_pools_init(void)
+{
+    bool test = false;
+
+    if (atomic_compare_exchange_strong(
+            &initial_pool_setup,
+            &test,
+            true)) {
+        ovs_mutex_lock(&init_mutex);
+        setup_worker_pools(false);
+        ovs_mutex_unlock(&init_mutex);
+    }
+
+    unixctl_command_register("thread-pool/set-parallel-on", "N", 1, 1,
+                             ovn_thread_pool_set_parallel_on, NULL);
+    unixctl_command_register("thread-pool/set-parallel-off", "", 0, 0,
+                             ovn_thread_pool_set_parallel_off, NULL);
+    unixctl_command_register("thread-pool/status", "", 0, 0,
+                             ovn_thread_pool_parallel_status, NULL);
+    unixctl_command_register("thread-pool/list", "", 0, 0,
+                             ovn_thread_pool_list_pools, NULL);
+    unixctl_command_register("thread-pool/reload-pool", "Pool Threads", 2, 2,
+                             ovn_thread_pool_resize_pool, NULL);
 }
 
 #endif

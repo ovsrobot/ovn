@@ -179,6 +179,18 @@ ovn_start_northd() {
     test -d "$ovs_base/$name" || mkdir "$ovs_base/$name"
     as $name start_daemon $NORTHD_TYPE $northd_args -vjsonrpc \
                --ovnnb-db=$OVN_NB_DB --ovnsb-db=$OVN_SB_DB
+    if test -z "$USE_PARALLEL_THREADS" ; then
+        USE_PARALLEL_THREADS=0
+    fi
+
+    if test X$NORTHD_USE_PARALLELIZATION = Xyes; then
+        case ${NORTHD_TYPE:=ovn-northd} in
+            ovn-northd) ovs-appctl --timeout=10 --target northd$suffix/ovn-northd \
+                            thread-pool/set-parallel-on $USE_PARALLEL_THREADS
+            ;;
+        esac
+    fi
+
 }
 
 # ovn_start [--backup-northd=none|paused] [AZ]
@@ -251,10 +263,6 @@ ovn_start () {
         ovn-nbctl set NB_Global . options:use_logical_dp_groups=true
     else
         ovn-nbctl set NB_Global . options:use_logical_dp_groups=false
-    fi
-
-    if test X$NORTHD_USE_PARALLELIZATION = Xyes; then
-        ovn-nbctl set NB_Global . options:use_parallel_build=true
     fi
 }
 

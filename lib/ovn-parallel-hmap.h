@@ -33,6 +33,7 @@ extern "C" {
 #include "openvswitch/hmap.h"
 #include "openvswitch/thread.h"
 #include "ovs-atomic.h"
+#include "unixctl.h"
 
 /* Process this include only if OVS does not supply parallel definitions
  */
@@ -93,6 +94,8 @@ struct worker_pool {
     sem_t *done; /* Work completion semaphorew. */
     void *(*start)(void *); /* Work function. */
     bool workers_must_exit; /* Pool to be destroyed flag. */
+    char *name; /* Name to be used in cli commands */
+    bool is_mutable; /* Can the pool be reloaded with different params */
 };
 
 /* Add a worker pool for thread function start() which expects a pointer to
@@ -101,7 +104,9 @@ struct worker_pool {
  * size uses system defaults.
  */
 
-struct worker_pool *ovn_add_worker_pool(void *(*start)(void *), int size);
+struct worker_pool *ovn_add_worker_pool(void *(*start)(void *),
+                                        int size, char *name,
+                                        bool is_mutable);
 
 /* Setting this to true will make all processing threads exit */
 
@@ -148,6 +153,35 @@ void ovn_run_pool_callback(struct worker_pool *pool, void *fin_result,
                            void (*helper_func)(struct worker_pool *pool,
                            void *fin_result, void *result_frags, int index));
 
+
+/* Start a pool. Do not wait for any results. They will be collected
+ * using the _complete_ functions.
+ */
+void ovn_start_pool(struct worker_pool *pool);
+
+/* Complete a pool run started using start_pool();
+ * Merge results from hash frags into a final hash result.
+ * The hash frags must be pre-sized to the same size.
+ */
+
+void ovn_complete_pool_hash(struct worker_pool *pool,
+                       struct hmap *result, struct hmap *result_frags);
+
+/* Complete a pool run started using start_pool();
+ * Merge results from list frags into a final list result.
+ */
+
+void ovn_complete_pool_list(struct worker_pool *pool,
+                       struct ovs_list *result, struct ovs_list *result_frags);
+
+/* Complete a pool run started using start_pool();
+ * Call a callback function to perform processing of results.
+ */
+
+void ovn_complete_pool_callback(struct worker_pool *pool, void *fin_result,
+                           void *result_frags,
+                           void (*helper_func)(struct worker_pool *pool,
+                           void *fin_result, void *result_frags, int index));
 
 /* Returns the first node in 'hmap' in the bucket in which the given 'hash'
  * would land, or a null pointer if that bucket is empty. */
@@ -259,9 +293,15 @@ static inline void init_hash_row_locks(struct hashrow_locks *hrl)
 
 bool ovn_can_parallelize_hashes(bool force_parallel);
 
+bool ovn_set_parallel_processing(bool enable);
+
+bool ovn_get_parallel_processing(void);
+
 void ovn_destroy_pool(struct worker_pool *pool);
 
 bool ovn_resize_pool(struct worker_pool *pool, int size);
+
+void ovn_parallel_thread_pools_init(void);
 
 /* Use the OVN library functions for stuff which OVS has not defined
  * If OVS has defined these, they will still compile using the OVN
@@ -273,9 +313,16 @@ bool ovn_resize_pool(struct worker_pool *pool, int size);
 
 #define can_parallelize_hashes(force) ovn_can_parallelize_hashes(force)
 
+#define set_parallel_processing(enable) ovn_set_parallel_processing(enable)
+
+#define get_parallel_processing() ovn_get_parallel_processing()
+
+#define enable_parallel_processing() ovn_enable_parallel_processing()
+
 #define stop_parallel_processing(pool) ovn_stop_parallel_processing(pool)
 
-#define add_worker_pool(start, size) ovn_add_worker_pool(start, size)
+#define add_worker_pool(start, size, name, is_mutable) \
+        ovn_add_worker_pool(start, size, name, is_mutable)
 
 #define fast_hmap_size_for(hmap, size) ovn_fast_hmap_size_for(hmap, size)
 
@@ -296,10 +343,22 @@ bool ovn_resize_pool(struct worker_pool *pool, int size);
 #define run_pool_callback(pool, fin_result, result_frags, helper_func) \
     ovn_run_pool_callback(pool, fin_result, result_frags, helper_func)
 
+#define start_pool(pool) ovn_start_pool(pool)
+
+#define complete_pool_hash(pool, result, result_frags) \
+    ovn_complete_pool_hash(pool, result, result_frags)
+
+#define complete_pool_list(pool, result, result_frags) \
+    ovn_complete_pool_list(pool, result, result_frags)
+
+#define complete_pool_callback(pool, fin_result, result_frags, helper_func) \
+    ovn_complete_pool_callback(pool, fin_result, result_frags, helper_func)
+
 #define destroy_pool(pool) ovn_destroy_pool(pool)
 
 #define resize_pool(pool, size) ovn_resize_pool(pool, size)
 
+#define parallel_thread_pools_init() ovn_parallel_thread_pools_init()
 
 #ifdef __clang__
 #pragma clang diagnostic pop
