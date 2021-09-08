@@ -73,6 +73,9 @@
 #include "stopwatch.h"
 #include "lib/inc-proc-eng.h"
 #include "hmapx.h"
+#include "openvswitch/rconn.h"
+#include "openvswitch/ofp-msgs.h"
+#include "openvswitch/ofp-meter.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
 
@@ -116,6 +119,9 @@ OVS_NO_RETURN static void usage(void);
 static const char *ssl_private_key_file;
 static const char *ssl_certificate_file;
 static const char *ssl_ca_cert_file;
+
+/* datapath meter capabilities. */
+int dp_meter_capa = -1;
 
 /* By default don't set an upper bound for the lflow cache and enable auto
  * trimming above 10K logical flows when reducing cache size by 50%.
@@ -3065,6 +3071,58 @@ check_northd_version(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
     return true;
 }
 
+static void
+ovn_controller_connect_vswitch(struct rconn *swconn,
+                               const struct ovsrec_bridge *br_int)
+{
+    if (!rconn_is_connected(swconn)) {
+        char *target = xasprintf("unix:%s/%s.mgmt", ovs_rundir(),
+                                 br_int->name);
+        if (strcmp(target, rconn_get_target(swconn))) {
+            VLOG_INFO("%s: connecting to switch", target);
+            rconn_connect(swconn, target, target);
+        }
+        free(target);
+    }
+}
+
+static void
+ovn_controller_get_meter_capa(struct rconn *swconn)
+{
+    if (dp_meter_capa >= 0) {
+        return;
+    }
+
+    rconn_run(swconn);
+    if (!rconn_is_connected(swconn)) {
+        return;
+    }
+
+    /* dump datapath meter capabilities. */
+    struct ofpbuf *msg = ofpraw_alloc(OFPRAW_OFPST13_METER_FEATURES_REQUEST,
+                                      rconn_get_version(swconn), 0);
+    rconn_send(swconn, msg, NULL);
+    for (int i = 0; i < 10; i++) {
+        msg = rconn_recv(swconn);
+        if (!msg) {
+            break;
+        }
+
+        const struct ofp_header *oh = msg->data;
+        enum ofptype type;
+        ofptype_decode(&type, oh);
+
+        if (type == OFPTYPE_METER_FEATURES_STATS_REPLY) {
+            struct ofputil_meter_features mf;
+
+            ofputil_decode_meter_features(oh, &mf);
+            dp_meter_capa = mf.max_meters > 0;
+            engine_set_force_recompute(true);
+        }
+        ofpbuf_delete(msg);
+    }
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -3445,6 +3503,8 @@ main(int argc, char *argv[])
     char *ovn_version = ovn_get_internal_version();
     VLOG_INFO("OVN internal version is : [%s]", ovn_version);
 
+    struct rconn *swconn = rconn_create(5, 0, DSCP_DEFAULT,
+                                        1 << OFP15_VERSION);
     /* Main loop. */
     exiting = false;
     restart = false;
@@ -3523,6 +3583,10 @@ main(int argc, char *argv[])
                        ovsrec_server_has_datapath_table(ovs_idl_loop.idl)
                        ? &br_int_dp
                        : NULL);
+        if (br_int) {
+            ovn_controller_connect_vswitch(swconn, br_int);
+        }
+        ovn_controller_get_meter_capa(swconn);
 
         /* Enable ACL matching for double tagged traffic. */
         if (ovs_idl_txn) {
@@ -3898,6 +3962,7 @@ loop_done:
     ovsdb_idl_loop_destroy(&ovs_idl_loop);
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
 
+    rconn_destroy(swconn);
     free(ovs_remote);
     service_stop();
 

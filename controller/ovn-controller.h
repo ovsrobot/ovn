@@ -22,6 +22,8 @@
 
 struct ovsrec_bridge_table;
 
+extern int dp_meter_capa;
+
 /* Linux supports a maximum of 64K zones, which seems like a fine default. */
 #define MAX_CT_ZONES 65535
 
