@@ -3523,6 +3523,9 @@ main(int argc, char *argv[])
                        ovsrec_server_has_datapath_table(ovs_idl_loop.idl)
                        ? &br_int_dp
                        : NULL);
+        if (br_int) {
+            ovs_feature_support_init(br_int);
+        }
 
         /* Enable ACL matching for double tagged traffic. */
         if (ovs_idl_txn) {
@@ -3898,6 +3901,7 @@ loop_done:
     ovsdb_idl_loop_destroy(&ovs_idl_loop);
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
 
+    ovs_feature_support_deinit();
     free(ovs_remote);
     service_stop();
 
