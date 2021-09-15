@@ -59,6 +59,7 @@
 #include "unixctl.h"
 #include "util.h"
 #include "uuid.h"
+#include "ovs-thread.h"
 #include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(ovn_northd);
@@ -4294,6 +4295,7 @@ struct ovn_lflow {
     struct hmap_node hmap_node;
 
     struct ovn_datapath *od;     /* 'logical_datapath' in SB schema.  */
+    struct ovs_mutex odg_lock;   /* Lock guarding access to od_group */
     struct hmapx od_group;       /* Hash map of 'struct ovn_datapath *'. */
     enum ovn_stage stage;
     uint16_t priority;
@@ -4335,6 +4337,11 @@ ovn_lflow_equal(const struct ovn_lflow *a, const struct ovn_datapath *od,
             && !strcmp(a->actions, actions)
             && nullable_string_is_equal(a->ctrl_meter, ctrl_meter));
 }
+/* If this option is 'true' northd will combine logical flows that differ by
+ * logical datapath only by creating a datapath group. */
+static bool use_logical_dp_groups = false;
+static bool use_parallel_build = true;
+
 
 static void
 ovn_lflow_init(struct ovn_lflow *lflow, struct ovn_datapath *od,
@@ -4353,24 +4360,56 @@ ovn_lflow_init(struct ovn_lflow *lflow, struct ovn_datapath *od,
     lflow->ctrl_meter = ctrl_meter;
     lflow->dpg = NULL;
     lflow->where = where;
+    if (use_parallel_build && use_logical_dp_groups) {
+        ovs_mutex_init(&lflow->odg_lock);
+    }
 }
 
-/* If this option is 'true' northd will combine logical flows that differ by
- * logical datapath only by creating a datapath group. */
-static bool use_logical_dp_groups = false;
-static bool use_parallel_build = true;
+ /* Adds a row with the specified contents to the Logical_Flow table.
+  * Version to use with dp_groups + parallel - when locking is required.
+ *
+ * Assumptions:
+ *
+ * 1. A large proportion of the operations are lookups (reads).
+ * 2. RW operations are a small proportion of overall adds.
+ * 3. Most RW ops are not flow adds, but changes to the
+ * od groups.
+ *
+ * Principles of operation:
+ * 1. All accesses to the flow table are protected by a rwlock.
+ * 2. By default, everyone grabs a rd lock so that multiple threads
+ * can do lookups simultaneously.
+ * 3. If a change to the lflow is needed, the rd lock is released and
+ * a wr lock is acquired instead (the fact that POSIX does not have an
+ * "upgrade" on locks is a major pain, but there is nothing we can do
+ * - it's not available).
+ * 4. WR lock operations in rd/wr locking have LOWER priority than RD.
+ * That is by design and spec. So the code after a request for WR lock
+ * may wait for a considerable amount of time until it is given a
+ * change to run. That means that another thread may get there in the
+ * meantime and change the data. Hence all wr operations MUST be coded
+ * to ensure that they are not vulnerable to "someone pulled this from
+ * under my feet". Re- reads, checks for presense, etc.
+ * 5. Operations on the actual od_group hash map are protected by
+ * per-flow locks. There is no need for these to be rd, mutex is more
+ * appropriate. They are low contention as each protects only its flow
+ * and only during modification which happen while holding a rd lock on
+ * the flow table.
+ */
 
-static struct hashrow_locks lflow_locks;
+static struct ovs_rwlock flowtable_lock;
 
 /* Adds a row with the specified contents to the Logical_Flow table.
- * Version to use when locking is required.
+ * Version to use when locking is NOT required.
  */
+
 static struct ovn_lflow *
 do_ovn_lflow_add(struct hmap *lflow_map, struct ovn_datapath *od,
                  uint32_t hash, enum ovn_stage stage, uint16_t priority,
                  const char *match, const char *actions, const char *io_port,
                  const struct ovsdb_idl_row *stage_hint,
                  const char *where, const char *ctrl_meter)
+                 OVS_NO_THREAD_SAFETY_ANALYSIS
 {
 
     struct ovn_lflow *old_lflow;
@@ -4403,6 +4442,59 @@ do_ovn_lflow_add(struct hmap *lflow_map, struct ovn_datapath *od,
     return lflow;
 }
 
+/* Adds a row with the specified contents to the Logical_Flow table.
+ * Version to use when locking is IS required.
+ */
+
+static struct ovn_lflow *
+do_ovn_lflow_add_pd(struct hmap *lflow_map, struct ovn_datapath *od,
+                    uint32_t hash, enum ovn_stage stage, uint16_t priority,
+                    const char *match, const char *actions,
+                    const char *io_port,
+                    const struct ovsdb_idl_row *stage_hint,
+                    const char *where, const char *ctrl_meter)
+                    OVS_NO_THREAD_SAFETY_ANALYSIS
+{
+
+    struct ovn_lflow *old_lflow;
+    struct ovn_lflow *lflow;
+
+    /* Fast Path - try to amend an existing flow without asking
+     * for WR access to the whole flow table. Locking the actual
+     * hmapx for the particular flow's odg is low overhead as its
+     * contention is much lower.
+     */
+
+    ovs_rwlock_rdlock(&flowtable_lock);
+    old_lflow = ovn_lflow_find(lflow_map, NULL, stage, priority, match,
+                               actions, ctrl_meter, hash);
+    if (old_lflow) {
+        ovs_mutex_lock(&old_lflow->odg_lock);
+        hmapx_add(&old_lflow->od_group, od);
+        ovs_mutex_unlock(&old_lflow->odg_lock);
+    }
+    ovs_rwlock_unlock(&flowtable_lock);
+
+    if (old_lflow) {
+        return old_lflow;
+    }
+
+    ovs_rwlock_wrlock(&flowtable_lock);
+
+    /* We need to rerun the "if in flowtable" steps, because someone
+     * could have inserted it while we were waiting to acquire an
+     * wr lock. As we are now holding a wr lock on it nobody else is
+     * in the * "fast" portion of the code which is protected by the
+     * rwlock.
+     */
+    lflow = do_ovn_lflow_add(lflow_map, od, hash, stage, priority, match,
+                                 actions, io_port, stage_hint, where,
+                                 ctrl_meter);
+    ovs_rwlock_unlock(&flowtable_lock);
+    return lflow;
+}
+
+
 static struct ovn_lflow *
 ovn_lflow_add_at_with_hash(struct hmap *lflow_map, struct ovn_datapath *od,
                            enum ovn_stage stage, uint16_t priority,
@@ -4415,11 +4507,9 @@ ovn_lflow_add_at_with_hash(struct hmap *lflow_map, struct ovn_datapath *od,
 
     ovs_assert(ovn_stage_to_datapath_type(stage) == ovn_datapath_get_type(od));
     if (use_logical_dp_groups && use_parallel_build) {
-        lock_hash_row(&lflow_locks, hash);
-        lflow = do_ovn_lflow_add(lflow_map, od, hash, stage, priority, match,
-                                 actions, io_port, stage_hint, where,
-                                 ctrl_meter);
-        unlock_hash_row(&lflow_locks, hash);
+        lflow = do_ovn_lflow_add_pd(lflow_map, od, hash, stage, priority,
+                                    match, actions, io_port, stage_hint, where,
+                                    ctrl_meter);
     } else {
         lflow = do_ovn_lflow_add(lflow_map, od, hash, stage, priority, match,
                          actions, io_port, stage_hint, where, ctrl_meter);
@@ -4447,17 +4537,17 @@ ovn_lflow_add_at(struct hmap *lflow_map, struct ovn_datapath *od,
 
 static bool
 ovn_dp_group_add_with_reference(struct ovn_lflow *lflow_ref,
-                                struct ovn_datapath *od,
-                                uint32_t hash)
+                                struct ovn_datapath *od)
+                                OVS_NO_THREAD_SAFETY_ANALYSIS
 {
     if (!use_logical_dp_groups || !lflow_ref) {
         return false;
     }
 
-    if (use_parallel_build) {
-        lock_hash_row(&lflow_locks, hash);
+    if (use_parallel_build & use_logical_dp_groups) {
+        ovs_mutex_lock(&lflow_ref->odg_lock);
         hmapx_add(&lflow_ref->od_group, od);
-        unlock_hash_row(&lflow_locks, hash);
+        ovs_mutex_unlock(&lflow_ref->odg_lock);
     } else {
         hmapx_add(&lflow_ref->od_group, od);
     }
@@ -6423,7 +6513,7 @@ build_lb_rules(struct hmap *lflows, struct ovn_northd_lb *lb,
             if (reject) {
                 meter = copp_meter_get(COPP_REJECT, od->nbs->copp,
                                        meter_groups);
-            } else if (ovn_dp_group_add_with_reference(lflow_ref, od, hash)) {
+            } else if (ovn_dp_group_add_with_reference(lflow_ref, od)) {
                 continue;
             }
             lflow_ref = ovn_lflow_add_at_with_hash(lflows, od,
@@ -9476,7 +9566,7 @@ build_lrouter_defrag_flows_for_lb(struct ovn_northd_lb *lb,
                 ds_cstr(match), ds_cstr(&defrag_actions));
         for (size_t j = 0; j < lb->n_nb_lr; j++) {
             struct ovn_datapath *od = lb->nb_lr[j];
-            if (ovn_dp_group_add_with_reference(lflow_ref, od, hash)) {
+            if (ovn_dp_group_add_with_reference(lflow_ref, od)) {
                 continue;
             }
             lflow_ref = ovn_lflow_add_at_with_hash(lflows, od,
@@ -9540,7 +9630,7 @@ build_lflows_for_unreachable_vips(struct ovn_northd_lb *lb,
                 continue;
             }
 
-            if (ovn_dp_group_add_with_reference(lflow_ref, peer->od, hash)) {
+            if (ovn_dp_group_add_with_reference(lflow_ref, peer->od)) {
                 continue;
             }
             lflow_ref = ovn_lflow_add_at_with_hash(lflows, peer->od,
@@ -12979,7 +13069,7 @@ build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    if (use_parallel_build && (!use_logical_dp_groups)) {
+    if (use_parallel_build) {
         struct hmap *lflow_segs;
         struct lswitch_flow_build_info *lsiv;
         int index;
@@ -13161,6 +13251,8 @@ ovn_sb_set_lflow_logical_dp_group(
 }
 
 static ssize_t max_seen_lflow_size = 128;
+static bool needs_parallel_init = true;
+static bool reset_parallel = false;
 
 /* Updates the Logical_Flow and Multicast_Group tables in the OVN_SB database,
  * constructing their contents based on the OVN_NB database. */
@@ -13174,9 +13266,22 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
 {
     struct hmap lflows;
 
+    if (reset_parallel) {
+        /* Parallel build was disabled before, we need to
+         * re-enable it. */
+        use_parallel_build = true;
+        reset_parallel = false;
+    }
+
     fast_hmap_size_for(&lflows, max_seen_lflow_size);
-    if (use_parallel_build) {
-        update_hashrow_locks(&lflows, &lflow_locks);
+    if (use_parallel_build && use_logical_dp_groups &&
+        needs_parallel_init) {
+        ovs_rwlock_init(&flowtable_lock);
+        needs_parallel_init = false;
+        /* Disable parallel build on first run with dp_groups
+         * to determine the correct sizing of hashes. */
+        use_parallel_build = false;
+        reset_parallel = true;
     }
     build_lswitch_and_lrouter_flows(datapaths, ports,
                                     port_groups, &lflows, mcgroups,
@@ -15172,7 +15277,6 @@ main(int argc, char *argv[])
 
     daemonize_complete();
 
-    init_hash_row_locks(&lflow_locks);
     use_parallel_build = can_parallelize_hashes(false);
 
     /* We want to detect (almost) all changes to the ovn-nb db. */
