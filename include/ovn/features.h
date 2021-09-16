@@ -28,12 +28,16 @@
  */
 enum ovs_feature_support_bits {
     OVS_CT_ZERO_SNAT_SUPPORT_BIT,
+    OVS_DP_METER_SUPPORT_BIT,
 };
 
 enum ovs_feature_value {
     OVS_CT_ZERO_SNAT_SUPPORT = (1 << OVS_CT_ZERO_SNAT_SUPPORT_BIT),
+    OVS_DP_METER_SUPPORT = (1 << OVS_DP_METER_SUPPORT_BIT),
 };
 
+void ovs_feature_support_init(const char *br_name);
+void ovs_feature_support_deinit(void);
 bool ovs_feature_is_supported(enum ovs_feature_value feature);
 bool ovs_feature_support_update(const struct smap *ovs_capabilities);
 
