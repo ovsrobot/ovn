@@ -18,6 +18,7 @@
 #include "binding.h"
 #include "if-status.h"
 #include "ofctrl-seqno.h"
+#include "simap.h"
 
 #include "lib/hmapx.h"
 #include "lib/util.h"
@@ -84,6 +85,8 @@ struct ovs_iface {
                              * OIF_INSTALL_FLOWS.
                              */
 };
+
+static uint64_t ifaces_usage;
 
 /* State machine manager for all local OVS interfaces. */
 struct if_status_mgr {
@@ -345,6 +348,8 @@ ovs_iface_create(struct if_status_mgr *mgr, const char *iface_id,
     iface->id = xstrdup(iface_id);
     shash_add(&mgr->ifaces, iface_id, iface);
     ovs_iface_set_state(mgr, iface, state);
+    ifaces_usage += (strlen(iface_id) + sizeof *iface +
+                     sizeof(struct shash_node));
     return iface;
 }
 
@@ -355,6 +360,8 @@ ovs_iface_destroy(struct if_status_mgr *mgr, struct ovs_iface *iface)
              if_state_names[iface->state]);
     hmapx_find_and_delete(&mgr->ifaces_per_state[iface->state], iface);
     shash_find_and_delete(&mgr->ifaces, iface->id);
+    ifaces_usage -= (strlen(iface->id) + sizeof *iface +
+                     sizeof(struct shash_node));
     free(iface->id);
     free(iface);
 }
@@ -412,4 +419,20 @@ if_status_mgr_update_bindings(struct if_status_mgr *mgr,
 
         local_binding_set_down(bindings, iface->id, sb_readonly, ovs_readonly);
     }
+}
+
+void
+if_status_mgr_get_memory_usage(struct if_status_mgr *mgr,
+                               struct simap *usage)
+{
+    uint64_t ifaces_state_usage = 0;
+    for (size_t i = 0; i < ARRAY_SIZE(mgr->ifaces_per_state); i++) {
+        ifaces_state_usage += sizeof(struct hmapx_node) *
+                              hmapx_count(&mgr->ifaces_per_state[i]);
+    }
+
+    simap_increase(usage, "if_status_mgr_ifaces_usage-KB",
+                   ROUND_UP(ifaces_usage, 1024) / 1024);
+    simap_increase(usage, "if_status_mgr_ifaces_state_usage-KB",
+                   ROUND_UP(ifaces_state_usage, 1024) / 1024);
 }
