@@ -74,8 +74,8 @@ static bool use_ct_inv_match = true;
 
 /* Default probe interval for NB and SB DB connections. */
 #define DEFAULT_PROBE_INTERVAL_MSEC 5000
-static int northd_probe_interval_nb = 0;
-static int northd_probe_interval_sb = 0;
+static int northd_probe_interval_nb = DEFAULT_PROBE_INTERVAL_MSEC;
+static int northd_probe_interval_sb = DEFAULT_PROBE_INTERVAL_MSEC;
 #define MAX_OVN_TAGS 4096
 
 /* Pipeline stages. */
