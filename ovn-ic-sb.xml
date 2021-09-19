@@ -306,6 +306,24 @@
         The availability zone that has advertised the route.
       </column>
 
+      <column name="route_table">
+        Route table within which this route was created.
+        Empty value means "global" routing table.
+        <p>
+        Routes for directly-connected networks will be
+        learned to global routing table and if Logical Routers
+        have more than one Transit Switch, which interconnects
+        them, directly-connected routes will be added via each
+        transit switch port and configured as ECMP routes.
+        </p>
+        <p>
+        Static routes within route tables will be advertised
+        and learned only if interconnecting transit switch's LRPs
+        will have <code>options:route_table</code> same value as
+        route's <code>route_table</code> value.
+        </p>
+      </column>
+
       <column name="ip_prefix">
         IP prefix of this route (e.g. 192.168.100.0/24).
       </column>
