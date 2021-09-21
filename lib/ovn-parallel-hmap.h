@@ -83,6 +83,7 @@ struct worker_control {
     void *data; /* Pointer to data to be processed. */
     void *workload; /* back-pointer to the worker pool structure. */
     pthread_t worker;
+    struct worker_pool *pool;
 };
 
 struct worker_pool {
@@ -90,16 +91,31 @@ struct worker_pool {
     struct ovs_list list_node; /* List of pools - used in cleanup/exit. */
     struct worker_control *controls; /* "Handles" in this pool. */
     sem_t *done; /* Work completion semaphorew. */
+    void *(*start)(void *); /* Work function. */
+    bool workers_must_exit; /* Pool to be destroyed flag. */
+};
+
+
+struct helper_data {
+    struct hmap *target;
+    void (*element_func)(struct hmap_node *element, struct hmap *target,
+                    void *data);
+    void *data;
 };
 
 /* Add a worker pool for thread function start() which expects a pointer to
- * a worker_control structure as an argument. */
+ * a worker_control structure as an argument.
+ * If size is non-zero, it is used for pool sizing. If size is zero, pool
+ * size uses system defaults.
+ */
 
-struct worker_pool *ovn_add_worker_pool(void *(*start)(void *));
+struct worker_pool *ovn_add_worker_pool(void *(*start)(void *), int size);
+
+struct worker_pool *ovn_add_standard_pool(int size);
 
 /* Setting this to true will make all processing threads exit */
 
-bool ovn_stop_parallel_processing(void);
+bool ovn_stop_parallel_processing(struct worker_pool *pool);
 
 /* Build a hmap pre-sized for size elements */
 
@@ -138,6 +154,35 @@ void ovn_run_pool_list(struct worker_pool *pool,
  */
 
 void ovn_run_pool_callback(struct worker_pool *pool, void *fin_result,
+                           void *result_frags,
+                           void (*helper_func)(struct worker_pool *pool,
+                           void *fin_result, void *result_frags, int index));
+
+
+/* Start a pool in background
+ */
+
+void ovn_start_pool(struct worker_pool *pool);
+
+/* Complete a background pool run, merge results from hash frags into a final
+ * hash result.
+ * The hash frags must be pre-sized to the same size.
+ */
+
+void ovn_complete_pool_hash(struct worker_pool *pool,
+                       struct hmap *result, struct hmap *result_frags);
+/* Complete a background pool run, merge results from list frags into a final
+ * list result.
+ */
+
+void ovn_complete_pool_list(struct worker_pool *pool,
+                       struct ovs_list *result, struct ovs_list *result_frags);
+
+/* Complete a background pool run, call a callback function to perform
+ * processing of results.
+ */
+
+void ovn_complete_pool_callback(struct worker_pool *pool, void *fin_result,
                            void *result_frags,
                            void (*helper_func)(struct worker_pool *pool,
                            void *fin_result, void *result_frags, int index));
@@ -230,7 +275,7 @@ struct hashrow_locks {
 
 /* Update an hash row locks structure to match the current hash size */
 
-void ovn_update_hashrow_locks(struct hmap *lflows, struct hashrow_locks *hrl);
+void ovn_update_hashrow_locks(struct hmap *, struct hashrow_locks *);
 
 /* Lock a hash row */
 static inline void lock_hash_row(struct hashrow_locks *hrl, uint32_t hash)
@@ -253,6 +298,10 @@ static inline void init_hash_row_locks(struct hashrow_locks *hrl)
 
 bool ovn_can_parallelize_hashes(bool force_parallel);
 
+void ovn_destroy_pool(struct worker_pool *pool);
+
+bool ovn_resize_pool(struct worker_pool *pool, int size);
+
 /* Use the OVN library functions for stuff which OVS has not defined
  * If OVS has defined these, they will still compile using the OVN
  * local names, but will be dropped by the linker in favour of the OVS
@@ -263,9 +312,11 @@ bool ovn_can_parallelize_hashes(bool force_parallel);
 
 #define can_parallelize_hashes(force) ovn_can_parallelize_hashes(force)
 
-#define stop_parallel_processing() ovn_stop_parallel_processing()
+#define stop_parallel_processing(pool) ovn_stop_parallel_processing(pool)
 
-#define add_worker_pool(start) ovn_add_worker_pool(start)
+#define add_worker_pool(start, size) ovn_add_worker_pool(start, size)
+
+#define add_standard_pool(start, size) ovn_add_standard_pool(start, size)
 
 #define fast_hmap_size_for(hmap, size) ovn_fast_hmap_size_for(hmap, size)
 
@@ -286,6 +337,20 @@ bool ovn_can_parallelize_hashes(bool force_parallel);
 #define run_pool_callback(pool, fin_result, result_frags, helper_func) \
     ovn_run_pool_callback(pool, fin_result, result_frags, helper_func)
 
+#define start_pool(pool) ovn_start_pool(pool)
+
+#define complete_pool_hash(pool, result, result_frags) \
+    ovn_complete_pool_hash(pool, result, result_frags)
+
+#define complete_pool_list(pool, result, result_frags) \
+    ovn_complete_pool_list(pool, result, result_frags)
+
+#define complete_pool_callback(pool, fin_result, result_frags, helper_func) \
+    ovn_complete_pool_callback(pool, fin_result, result_frags, helper_func)
+
+#define destroy_pool(pool) ovn_destroy_pool(pool)
+
+#define resize_pool(pool, size) ovn_resize_pool(pool, size)
 
 
 #ifdef __clang__
