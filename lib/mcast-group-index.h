@@ -35,6 +35,21 @@ enum ovn_mcast_tunnel_keys {
     OVN_MAX_IP_MULTICAST = OVN_MAX_MULTICAST,
 };
 
+#define OVN_VXLAN_MIN_MULTICAST 2048
+#define OVN_VXLAN_MAX_MULTICAST 4095
+
+enum ovn_vxlan_mcast_tunnel_keys {
+
+    OVN_VXLAN_MCAST_FLOOD_TUNNEL_KEY = OVN_VXLAN_MIN_MULTICAST,
+    OVN_VXLAN_MCAST_UNKNOWN_TUNNEL_KEY,
+    OVN_VXLAN_MCAST_MROUTER_FLOOD_TUNNEL_KEY,
+    OVN_VXLAN_MCAST_MROUTER_STATIC_TUNNEL_KEY,
+    OVN_VXLAN_MCAST_STATIC_TUNNEL_KEY,
+    OVN_VXLAN_MCAST_FLOOD_L2_TUNNEL_KEY,
+    OVN_VXLAN_MIN_IP_MULTICAST,
+    OVN_VXLAN_MAX_IP_MULTICAST = OVN_VXLAN_MAX_MULTICAST,
+};
+
 struct ovsdb_idl_index *mcast_group_index_create(struct ovsdb_idl *);
 const struct sbrec_multicast_group *
 mcast_group_lookup(struct ovsdb_idl_index *mcgroup_index,
