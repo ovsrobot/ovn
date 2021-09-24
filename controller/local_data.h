@@ -154,5 +154,8 @@ bool get_chassis_tunnel_ofport(const struct hmap *chassis_tunnels,
                                ofp_port_t *ofport);
 
 void chassis_tunnels_destroy(struct hmap *chassis_tunnels);
+void local_datapath_memory_usage(struct simap *usage);
+void local_datapath_ext_port_mem_update(struct local_datapath *ld,
+                                        const char *name, bool erase);
 
 #endif /* controller/local_data.h */

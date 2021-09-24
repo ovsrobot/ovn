@@ -374,6 +374,8 @@ update_ld_external_ports(const struct sbrec_port_binding *binding_rec,
     struct local_datapath *ld = get_local_datapath(
         local_datapaths, binding_rec->datapath->tunnel_key);
     if (ld) {
+        local_datapath_ext_port_mem_update(ld, binding_rec->logical_port,
+                                           false);
         shash_replace(&ld->external_ports, binding_rec->logical_port,
                       binding_rec);
     }
@@ -1756,6 +1758,7 @@ remove_pb_from_local_datapath(const struct sbrec_port_binding *pb,
             ld->localnet_port = NULL;
         }
     } else if (!strcmp(pb->type, "external")) {
+        local_datapath_ext_port_mem_update(ld, pb->logical_port, true);
         shash_find_and_delete(&ld->external_ports, pb->logical_port);
     }
 }
