@@ -39,6 +39,7 @@ struct sset;
 struct sbrec_port_binding;
 struct ds;
 struct if_status_mgr;
+struct simap;
 
 struct binding_ctx_in {
     struct ovsdb_idl_txn *ovnsb_idl_txn;
@@ -69,6 +70,8 @@ struct related_lports {
 
 void related_lports_init(struct related_lports *);
 void related_lports_destroy(struct related_lports *);
+
+void destroy_local_lports(struct sset *set);
 
 struct binding_ctx_out {
     struct hmap *local_datapaths;
@@ -138,6 +141,8 @@ bool binding_handle_port_binding_changes(struct binding_ctx_in *,
 void binding_tracked_dp_destroy(struct hmap *tracked_datapaths);
 
 void binding_dump_local_bindings(struct local_binding_data *, struct ds *);
+
+void binding_memory_usage(struct simap *usage);
 
 /* Corresponds to each Port_Binding.type. */
 enum en_lport_type {

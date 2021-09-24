@@ -1171,7 +1171,7 @@ en_runtime_data_cleanup(void *data)
 {
     struct ed_type_runtime_data *rt_data = data;
 
-    sset_destroy(&rt_data->local_lports);
+    destroy_local_lports(&rt_data->local_lports);
     related_lports_destroy(&rt_data->related_lports);
     sset_destroy(&rt_data->active_tunnels);
     sset_destroy(&rt_data->egress_ifaces);
@@ -1292,7 +1292,7 @@ en_runtime_data_run(struct engine_node *node, void *data)
         shash_clear_free_data(local_active_ipv6_pd);
         shash_clear_free_data(local_active_ras);
         local_binding_data_destroy(&rt_data->lbinding_data);
-        sset_destroy(local_lports);
+        destroy_local_lports(local_lports);
         related_lports_destroy(&rt_data->related_lports);
         sset_destroy(active_tunnels);
         sset_destroy(&rt_data->egress_ifaces);
@@ -3464,6 +3464,7 @@ main(int argc, char *argv[])
             ofctrl_get_memory_usage(&usage);
             if_status_mgr_get_memory_usage(if_mgr, &usage);
             local_datapath_memory_usage(&usage);
+            binding_memory_usage(&usage);
             memory_report(&usage);
             simap_destroy(&usage);
         }

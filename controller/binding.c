@@ -39,6 +39,31 @@
 
 VLOG_DEFINE_THIS_MODULE(binding);
 
+static uint64_t local_lports_usage;
+static uint64_t related_lports_usage;
+
+static void
+sset_mem_update(uint64_t *usage, struct sset *set,
+                const char *name, bool erase)
+{
+    struct sset_node *node = sset_find(set, name);
+
+    if (!node && !erase) { /* add new element */
+        *usage += (sizeof *node + strlen(name));
+    } else if (node && erase) { /* remove an element */
+        *usage -= (sizeof *node + strlen(name));
+    }
+}
+
+static void
+sset_mem_clear(struct sset *set, uint64_t *usage)
+{
+    const char *name;
+    SSET_FOR_EACH (name, set) {
+        sset_mem_update(usage, set, name, true);
+    }
+}
+
 /* External ID to be set in the OVS.Interface record when the OVS interface
  * is ready for use, i.e., is bound to an OVN port and its corresponding
  * flows have been installed.
@@ -422,6 +447,8 @@ update_ld_localnet_port(const struct sbrec_port_binding *binding_rec,
 static void
 update_local_lports(const char *iface_id, struct binding_ctx_out *b_ctx)
 {
+    sset_mem_update(&local_lports_usage, b_ctx->local_lports,
+                    iface_id, false);
     if (sset_add(b_ctx->local_lports, iface_id) != NULL) {
         b_ctx->local_lports_changed = true;
     }
@@ -433,9 +460,18 @@ update_local_lports(const char *iface_id, struct binding_ctx_out *b_ctx)
 static void
 remove_local_lports(const char *iface_id, struct binding_ctx_out *b_ctx)
 {
+    sset_mem_update(&local_lports_usage, b_ctx->local_lports,
+                    iface_id, true);
     if (sset_find_and_delete(b_ctx->local_lports, iface_id)) {
         b_ctx->local_lports_changed = true;
     }
+}
+
+void
+destroy_local_lports(struct sset *set)
+{
+    sset_mem_clear(set, &local_lports_usage);
+    sset_destroy(set);
 }
 
 /* Add a port binding to the set of locally relevant lports.
@@ -448,6 +484,8 @@ update_related_lport(const struct sbrec_port_binding *pb,
     char buf[16];
     get_unique_lport_key(pb->datapath->tunnel_key, pb->tunnel_key,
                          buf, sizeof(buf));
+    sset_mem_update(&related_lports_usage,
+                    &b_ctx->related_lports->lport_ids, buf, false);
     if (sset_add(&b_ctx->related_lports->lport_ids, buf) != NULL) {
         b_ctx->related_lports_changed = true;
 
@@ -457,6 +495,9 @@ update_related_lport(const struct sbrec_port_binding *pb,
                                        b_ctx->tracked_dp_bindings);
         }
     }
+    sset_mem_update(&related_lports_usage,
+                    &b_ctx->related_lports->lport_names,
+                    pb->logical_port, false);
     sset_add(&b_ctx->related_lports->lport_names, pb->logical_port);
 }
 
@@ -470,8 +511,14 @@ remove_related_lport(const struct sbrec_port_binding *pb,
     char buf[16];
     get_unique_lport_key(pb->datapath->tunnel_key, pb->tunnel_key,
                          buf, sizeof(buf));
+    sset_mem_update(&related_lports_usage,
+                    &b_ctx->related_lports->lport_names,
+                    pb->logical_port, true);
     sset_find_and_delete(&b_ctx->related_lports->lport_names,
                          pb->logical_port);
+
+    sset_mem_update(&related_lports_usage,
+                    &b_ctx->related_lports->lport_ids, buf, true);
     if (sset_find_and_delete(&b_ctx->related_lports->lport_ids, buf)) {
         b_ctx->related_lports_changed = true;
 
@@ -617,6 +664,9 @@ related_lports_init(struct related_lports *rp)
 void
 related_lports_destroy(struct related_lports *rp)
 {
+    sset_mem_clear(&rp->lport_names, &related_lports_usage);
+    sset_mem_clear(&rp->lport_ids, &related_lports_usage);
+
     sset_destroy(&rp->lport_names);
     sset_destroy(&rp->lport_ids);
 }
@@ -2894,4 +2944,13 @@ ovs_iface_matches_lport_iface_id_ver(const struct ovsrec_interface *iface,
     }
 
     return true;
+}
+
+void
+binding_memory_usage(struct simap *usage)
+{
+    simap_increase(usage, "local_lports_usage-KB",
+                   ROUND_UP(local_lports_usage, 1024) / 1024);
+    simap_increase(usage, "related_lports_usage-KB",
+                   ROUND_UP(related_lports_usage, 1024) / 1024);
 }
