@@ -795,6 +795,91 @@ OVN_CLEANUP_SBOX([hv])
 OVN_CLEANUP_VSWITCH([main])
 as ovn-sb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller - plugging])
+AT_KEYWORDS([plugging])
+
+ovn_start
+
+net_add n1
+sim_add hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovn-appctl -t ovn-controller vlog/set
+
+sim_add hv2
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.2
+ovn-appctl -t ovn-controller vlog/set
+
+check ovn-nbctl ls-add lsw0
+
+check ovn-nbctl lsp-add lsw0 lsp1
+check ovn-nbctl lsp-set-addresses lsp1 "f0:00:00:00:00:01 172.16.0.101"
+check ovn-nbctl --wait=sb set Logical_Switch_Port lsp1 \
+    options:requested-chassis=hv1 \
+    options:plug-type=dummy \
+    options:plug-mtu-request=42
+
+check ovn-nbctl lsp-add lsw0 lsp2
+check ovn-nbctl lsp-set-addresses lsp2 "f0:00:00:00:00:02 172.16.0.102"
+check ovn-nbctl --wait=sb set Logical_Switch_Port lsp2 \
+    options:requested-chassis=hv2 \
+    options:plug-type=dummy \
+    options:plug-mtu-request=42
+
+wait_column "true" Port_Binding up logical_port=lsp1
+wait_column "true" Port_Binding up logical_port=lsp2
+
+as hv1
+
+# Check that the lport was plugged
+AT_CHECK([as hv1 ovs-vsctl find interface name=lsp1 options:plug-dummy-option=value | grep -q "options.*value"])
+AT_CHECK([as hv1 ovs-vsctl find interface name=lsp1 mtu_request=42 | grep -q "mtu_request.*42"])
+
+# Check that updating the lport updates the local iface
+check ovn-nbctl --wait=sb set Logical_Switch_Port lsp1 \
+    options:requested-chassis=hv1 \
+    options:plug-type=dummy \
+    options:plug-mtu-request=43
+OVS_WAIT_UNTIL([
+    as hv1 ovs-vsctl find interface mtu_request=43 | grep -q "mtu_request.*43"
+])
+
+# Check that local modification of iface will trigger ovn-controller to update
+# the iface record
+iface_uuid=$(as hv1 ovs-vsctl --bare --columns _uuid find interface name=lsp1)
+as hv1 ovs-vsctl set interface ${iface_uuid} mtu_request=44
+OVS_WAIT_UNTIL([
+    as hv1 ovs-vsctl find interface mtu_request=43 | grep -q "mtu_request.*43"
+])
+
+lsp_uuid=$(ovn-nbctl --bare --columns _uuid find Logical_Switch_Port name=lsp1)
+iface_uuid=$(as hv1 ovs-vsctl --bare --columns _uuid find Interface name=lsp1)
+# Check that pointing requested-chassis somewhere else will unplug the port
+check ovn-nbctl --wait=sb set Logical_Switch_Port lsp1 \
+    options:requested-chassis=non-existent-chassis
+OVS_WAIT_UNTIL([
+    grep -q "Releasing lport lsp1" hv1/ovn-controller.log
+])
+OVS_WAIT_UNTIL([
+    grep -q "Unplugging port lsp1" hv1/ovn-controller.log
+])
+as hv1 ovs-vsctl find interface name=lsp1
+OVS_WAIT_UNTIL([
+    ! as hv1 ovs-vsctl get Interface ${iface_uuid} _uuid
+])
+
+# Check that removing an lport will unplug it
+lsp_uuid=$(ovn-nbctl --bare --columns _uuid find Logical_Switch_Port name=lsp2)
+iface_uuid=$(as hv2 ovs-vsctl --bare --columns _uuid find Interface name=lsp1)
+check ovn-nbctl --wait=sb lsp-del ${lsp_uuid}
+OVS_WAIT_UNTIL([
+    ! as hv2 ovs-vsctl get Interface ${iface_uuid} _uuid
+])
+OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 ])
