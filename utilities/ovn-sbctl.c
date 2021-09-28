@@ -333,6 +333,7 @@ pre_get_info(struct ctl_context *ctx)
     ovsdb_idl_add_column(ctx->idl, &sbrec_mac_binding_col_logical_port);
     ovsdb_idl_add_column(ctx->idl, &sbrec_mac_binding_col_ip);
     ovsdb_idl_add_column(ctx->idl, &sbrec_mac_binding_col_mac);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_mac_binding_col_static_);
 
     ovsdb_idl_add_column(ctx->idl, &sbrec_load_balancer_col_datapaths);
     ovsdb_idl_add_column(ctx->idl, &sbrec_load_balancer_col_vips);
@@ -1177,6 +1178,67 @@ sbctl_ip_mcast_flush(struct ctl_context *ctx)
 }
 
 static void
+sbctl_list_mac_binding(struct ctl_context *ctx)
+{
+    const struct sbrec_mac_binding *iter;
+    SBREC_MAC_BINDING_FOR_EACH (iter, ctx->idl) {
+        ds_put_format(&ctx->output, "[ %s %s %s ]\n",
+                      iter->ip, iter->mac,
+                      iter->static_ ? "S" : "R");
+    }
+}
+
+static void
+sbctl_set_mac_binding(struct ctl_context *ctx)
+{
+    if (ctx->argc != 4) {
+        return;
+    }
+
+    /* sanity checks. */
+    struct in6_addr ipv6;
+    ovs_be32 ip;
+    if (!ip_parse(ctx->argv[1], &ip) && !ipv6_parse(ctx->argv[1], &ipv6)) {
+        return;
+    }
+
+    struct eth_addr ea;
+    int index = 0;
+    if (!ovs_scan_len(ctx->argv[2], &index, ETH_ADDR_SCAN_FMT,
+                      ETH_ADDR_SCAN_ARGS(ea)) ||
+        index != strlen(ctx->argv[2])) {
+        return;
+    }
+
+    const struct sbrec_port_binding *pb_iter, *pb = NULL;
+    SBREC_PORT_BINDING_FOR_EACH (pb_iter, ctx->idl) {
+        if (!strcmp(pb_iter->logical_port, ctx->argv[3])) {
+            pb = pb_iter;
+            break;
+        }
+    }
+    if (!pb) {
+        return;
+    }
+
+    const struct sbrec_mac_binding *mb_iter, *mb = NULL;
+    SBREC_MAC_BINDING_FOR_EACH (mb_iter, ctx->idl) {
+        if (!strcmp(mb_iter->ip, ctx->argv[1])) {
+            mb = mb_iter;
+            break;
+        }
+    }
+    if (!mb) {
+        mb = sbrec_mac_binding_insert(ctx->txn);
+        sbrec_mac_binding_set_ip(mb, ctx->argv[1]);
+    }
+    sbrec_mac_binding_set_mac(mb, ctx->argv[2]);
+    sbrec_mac_binding_set_logical_port(mb, ctx->argv[3]);
+    sbrec_mac_binding_set_datapath(mb, pb->datapath);
+    sbrec_mac_binding_set_static_(mb, true);
+}
+
+static void
 verify_connections(struct ctl_context *ctx)
 {
     const struct sbrec_sb_global *sb_global = sbrec_sb_global_first(ctx->idl);
@@ -1481,6 +1543,12 @@ static const struct ctl_command_syntax sbctl_commands[] = {
     /* IP multicast commands. */
     {"ip-multicast-flush", 0, 1, "SWITCH",
      pre_get_info, sbctl_ip_mcast_flush, NULL, "", RW },
+
+    /* Mac bindings commands. */
+    {"list-mac-binding", 0, 0, "", pre_get_info, sbctl_list_mac_binding,
+     NULL, "", RO},
+    {"set-mac-binding", 3, 3, "IP MAC PORT", pre_get_info,
+     sbctl_set_mac_binding, NULL, "", RW},
 
     /* Connection commands. */
     {"get-connection", 0, 0, "", pre_connection, cmd_get_connection, NULL, "", RO},

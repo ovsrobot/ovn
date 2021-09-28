@@ -3378,6 +3378,9 @@ tcp.flags = RST;
     <column name="datapath">
       The logical datapath to which the logical port belongs.
     </column>
+    <column name="static">
+      The entry has been manually created by the CMS and not discovered by OVN.
+    </column>
   </table>
 
   <table name="DHCP_Options" title="DHCP Options supported by native OVN DHCP">

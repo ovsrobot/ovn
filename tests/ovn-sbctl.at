@@ -243,3 +243,42 @@ Total number of logical flows = 0
 ])
 ])
 
+dnl ---------------------------------------------------------------------
+
+OVN_SBCTL_TEST([ovn_sbctl_mac_bindings], [ovn-sbctl - mac-bindings], [
+AT_CHECK([ovn-nbctl ls-add sw0])
+AT_CHECK([ovn-nbctl lsp-add sw0 vif0])
+AT_CHECK([ovn-nbctl lsp-set-addresses vif0 "f0:ab:cd:ef:01:02 192.168.1.2"])
+AT_CHECK([ovn-nbctl --wait=sb sync])
+
+AT_CHECK([ovn-sbctl set-mac-binding 192.168.1.100 00:11:22:33:44:55 vif0])
+AT_CHECK([ovn-sbctl list-mac-binding], [0], [dnl
+[[ 192.168.1.100 00:11:22:33:44:55 S ]]
+])
+
+AT_CHECK([ovn-sbctl set-mac-binding 192.168.1.101 00:11:22:33:44:66 vif0])
+AT_CHECK([ovn-sbctl list-mac-binding |sort], [0], [dnl
+[[ 192.168.1.100 00:11:22:33:44:55 S ]]
+[[ 192.168.1.101 00:11:22:33:44:66 S ]]
+])
+
+# sanity checks
+AT_CHECK([ovn-sbctl set-mac-binding 192.168.1.101 00:11:22:33:44:66 vif1])
+AT_CHECK([ovn-sbctl list-mac-binding |sort], [0], [dnl
+[[ 192.168.1.100 00:11:22:33:44:55 S ]]
+[[ 192.168.1.101 00:11:22:33:44:66 S ]]
+])
+
+AT_CHECK([ovn-sbctl set-mac-binding 192.168.1.101.2 00:11:22:33:44:66 vif0])
+AT_CHECK([ovn-sbctl list-mac-binding |sort], [0], [dnl
+[[ 192.168.1.100 00:11:22:33:44:55 S ]]
+[[ 192.168.1.101 00:11:22:33:44:66 S ]]
+])
+
+AT_CHECK([ovn-sbctl set-mac-binding 192.168.1.102 00:11:22:33:44:66:77 vif0])
+AT_CHECK([ovn-sbctl list-mac-binding |sort], [0], [dnl
+[[ 192.168.1.100 00:11:22:33:44:55 S ]]
+[[ 192.168.1.101 00:11:22:33:44:66 S ]]
+])
+])
+
