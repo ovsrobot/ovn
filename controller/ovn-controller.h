@@ -40,12 +40,7 @@ struct ct_zone_pending_entry {
     enum ct_zone_pending_state state;
 };
 
-const struct ovsrec_bridge *get_bridge(const struct ovsrec_bridge_table *,
-                                       const char *br_name);
-
 struct sbrec_encap *preferred_encap(const struct sbrec_chassis *);
-
-uint32_t get_tunnel_type(const char *name);
 
 struct pb_ld_binding {
     const struct sbrec_port_binding *pb;
