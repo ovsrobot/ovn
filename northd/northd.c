@@ -4300,39 +4300,6 @@ ovn_lflow_init(struct ovn_lflow *lflow, struct ovn_datapath *od,
 }
 
 /* Adds a row with the specified contents to the Logical_Flow table.
- * Version to use with dp_groups + parallel - when locking is required.
- *
- * Assumptions:
- *
- * 1. A large proportion of the operations are lookups (reads).
- * 2. RW operations are a small proportion of overall adds.
- * 3. Most RW ops are not flow adds, but changes to the
- * od groups.
- *
- * Principles of operation:
- * 1. All accesses to the flow table are protected by a rwlock.
- * 2. By default, everyone grabs a rd lock so that multiple threads
- * can do lookups simultaneously.
- * 3. If a change to the lflow is needed, the rd lock is released and
- * a wr lock is acquired instead (the fact that POSIX does not have an
- * "upgrade" on locks is a major pain, but there is nothing we can do
- * - it's not available).
- * 4. WR lock operations in rd/wr locking have LOWER priority than RD.
- * That is by design and spec. So the code after a request for WR lock
- * may wait for a considerable amount of time until it is given a
- * change to run. That means that another thread may get there in the
- * meantime and change the data. Hence all wr operations MUST be coded
- * to ensure that they are not vulnerable to "someone pulled this from
- * under my feet". Re- reads, checks for presense, etc.
- * 5. Operations on the actual od_group hash map are protected by
- * per-flow locks. There is no need for these to be rd, mutex is more
- * appropriate. They are low contention as each protects only its flow
- * and only during modification which happen while holding a rd lock on
- * the flow table.
- */
-static struct ovs_rwlock flowtable_lock;
-
-/* Adds a row with the specified contents to the Logical_Flow table.
  * Version to use when locking is NOT required.
  */
 static struct ovn_lflow *
@@ -4374,10 +4341,47 @@ do_ovn_lflow_add(struct hmap *lflow_map, struct ovn_datapath *od,
     return lflow;
 }
 
+/* The lflow_hash_lock is a mutex array that protects updates to the shared
+ * lflow table across threads when parallel lflow build and dp-group are both
+ * enabled. To avoid high contention between threads, a big array of mutexes
+ * are used instead of just one. This is possible because when parallel build
+ * is used we only use hmap_insert_fast() to update the hmap, which would not
+ * touch the bucket array but only the list in a single bucket. We only need to
+ * make sure that when adding lflows to the same hash bucket, the same lock is
+ * used, so that no two threads can add to the bucket at the same time.  It is
+ * ok that the same lock is used to protect multiple buckets, so a fixed sized
+ * mutex array is used instead of 1-1 mapping to the hash buckets. This
+ * simplies the implementation while effectively reduces lock contention
+ * because the chance that different threads contending the same lock amongst
+ * the big number of locks is very low. */
+#define LFLOW_HASH_LOCK_MASK 0xFFFF
+static struct ovs_mutex lflow_hash_locks[LFLOW_HASH_LOCK_MASK + 1];
+
+static void
+lflow_hash_lock_init(void)
+{
+    for (size_t i = 0; i < LFLOW_HASH_LOCK_MASK + 1; i++) {
+        ovs_mutex_init(&lflow_hash_locks[i]);
+    }
+}
+
+static void
+lflow_hash_lock(uint32_t hash, struct hmap *lflow_map)
+{
+    size_t index = hash & lflow_map->mask & LFLOW_HASH_LOCK_MASK;
+    ovs_mutex_lock(&lflow_hash_locks[index]);
+}
+
+static void
+lflow_hash_unlock(uint32_t hash, struct hmap *lflow_map)
+{
+    size_t index = hash & lflow_map->mask & LFLOW_HASH_LOCK_MASK;
+    ovs_mutex_unlock(&lflow_hash_locks[index]);
+}
+
 /* Adds a row with the specified contents to the Logical_Flow table.
  * Version to use when locking IS required.
  */
-
 static struct ovn_lflow *
 do_ovn_lflow_add_pd(struct hmap *lflow_map, struct ovn_datapath *od,
                     uint32_t hash, enum ovn_stage stage, uint16_t priority,
@@ -4388,41 +4392,11 @@ do_ovn_lflow_add_pd(struct hmap *lflow_map, struct ovn_datapath *od,
                     OVS_NO_THREAD_SAFETY_ANALYSIS
 {
 
-    struct ovn_lflow *old_lflow;
     struct ovn_lflow *lflow;
-
-    /* Fast Path - try to amend an existing flow without asking
-     * for WR access to the whole flow table. Locking the actual
-     * hmapx for the particular flow's odg is low overhead as its
-     * contention is much lower.
-     */
-
-    ovs_rwlock_rdlock(&flowtable_lock);
-    old_lflow = ovn_lflow_find(lflow_map, NULL, stage, priority, match,
-                               actions, ctrl_meter, hash);
-    if (old_lflow) {
-        ovs_mutex_lock(&old_lflow->odg_lock);
-        hmapx_add(&old_lflow->od_group, od);
-        ovs_mutex_unlock(&old_lflow->odg_lock);
-    }
-    ovs_rwlock_unlock(&flowtable_lock);
-
-    if (old_lflow) {
-        return old_lflow;
-    }
-
-    ovs_rwlock_wrlock(&flowtable_lock);
-
-    /* We need to rerun the "if in flowtable" steps, because someone
-     * could have inserted it while we were waiting to acquire an
-     * wr lock. As we are now holding a wr lock on it nobody else is
-     * in the * "fast" portion of the code which is protected by the
-     * rwlock.
-     */
+    lflow_hash_lock(hash, lflow_map);
     lflow = do_ovn_lflow_add(lflow_map, od, hash, stage, priority, match,
-                                 actions, io_port, stage_hint, where,
-                                 ctrl_meter);
-    ovs_rwlock_unlock(&flowtable_lock);
+                             actions, io_port, stage_hint, where, ctrl_meter);
+    lflow_hash_unlock(hash, lflow_map);
     return lflow;
 }
 
@@ -13221,7 +13195,7 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
 
     if (use_parallel_build && use_logical_dp_groups &&
         needs_parallel_init) {
-        ovs_rwlock_init(&flowtable_lock);
+        lflow_hash_lock_init();
         needs_parallel_init = false;
         /* Disable parallel build on first run with dp_groups
          * to determine the correct sizing of hashes. */
