@@ -3413,6 +3413,14 @@ for i in 1 2; do
                                   options:rxq_pcap=vif$i-rx.pcap \
                                   ofport-request=$i
     OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up lsp$i` = xup])
+    # Waiting for both ports to be up is not enough to guarantee that all flows are installed.
+    # Wait for flows implementing switching to localnet port.
+    OVS_WAIT_UNTIL([
+        test $(as hv-$i ovs-ofctl dump-flows br-int | \
+        grep "table=38" | \
+        grep "resubmit(,38)" -c) -eq 1
+    ])
+
 done
 
 test_packet() {
@@ -3478,8 +3486,13 @@ for i in 1 2; do
                                   options:rxq_pcap=vif$i-rx.pcap \
                                   ofport-request=$i
     wait_for_ports_up lsp$i
-done
+    OVS_WAIT_UNTIL([
+        test $(ovs-ofctl dump-flows br-int | \
+        grep "table=38" | \
+        grep "resubmit(,38)" -c) -eq 1
+    ])
 
+done
 # create taps on fabric to check vlan encapsulation there
 for i in 1 2; do
     as hv-$i
@@ -3561,6 +3574,12 @@ for i in 1 2; do
                                   options:rxq_pcap=vif$i-rx.pcap \
                                   ofport-request=$i
     OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up lsp$i` = xup])
+    OVS_WAIT_UNTIL([
+        test $(ovs-ofctl dump-flows br-int | \
+        grep "table=38" | \
+        grep "resubmit(,38)" -c) -eq 1
+    ])
+
 done
 
 for i in 1 2; do
