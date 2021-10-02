@@ -12,6 +12,10 @@ OVN v21.09.0 - xx xxx xxxx
   - Allow static routes without nexthops.
   - Enabled logical dp groups as a default.  CMS should disable it if not
     desired.
+  - Set ignore_lsp_down to true as default, so that ARP responder flows are
+    installed together with other flows when a logical switch port is created,
+    without having to wait for the port to be UP.  CMS should set it to false
+    if not desired.
 
 OVN v21.06.0 - 18 Jun 2021
 -------------------------
