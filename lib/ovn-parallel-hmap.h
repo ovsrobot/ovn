@@ -79,7 +79,6 @@ struct worker_control {
     atomic_bool finished; /* Set to true after achunk of work is complete. */
     sem_t *fire; /* Work start semaphore - sem_post starts the worker. */
     sem_t *done; /* Work completion semaphore - sem_post on completion. */
-    struct ovs_mutex mutex; /* Guards the data. */
     void *data; /* Pointer to data to be processed. */
     void *workload; /* back-pointer to the worker pool structure. */
     pthread_t worker;

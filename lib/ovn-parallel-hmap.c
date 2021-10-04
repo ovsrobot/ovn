@@ -132,7 +132,6 @@ ovn_add_worker_pool(void *(*start)(void *))
             new_control->id = i;
             new_control->done = new_pool->done;
             new_control->data = NULL;
-            ovs_mutex_init(&new_control->mutex);
             new_control->finished = ATOMIC_VAR_INIT(false);
             sprintf(sem_name, WORKER_SEM_NAME, sembase, new_pool, i);
             new_control->fire = sem_open(sem_name, O_CREAT, S_IRWXU, 0);
