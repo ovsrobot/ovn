@@ -148,15 +148,16 @@ enum ovn_stage {
     PIPELINE_STAGE(ROUTER, IN,  ECMP_STATEFUL,   7, "lr_in_ecmp_stateful") \
     PIPELINE_STAGE(ROUTER, IN,  ND_RA_OPTIONS,   8, "lr_in_nd_ra_options") \
     PIPELINE_STAGE(ROUTER, IN,  ND_RA_RESPONSE,  9, "lr_in_nd_ra_response") \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      10, "lr_in_ip_routing")   \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 11, "lr_in_ip_routing_ecmp") \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY,          12, "lr_in_policy")       \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     13, "lr_in_policy_ecmp")  \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     14, "lr_in_arp_resolve")  \
-    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN   ,  15, "lr_in_chk_pkt_len")  \
-    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     16, "lr_in_larger_pkts")  \
-    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     17, "lr_in_gw_redirect")  \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     18, "lr_in_arp_request")  \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_PRE,  10, "lr_in_ip_routing_pre")  \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      11, "lr_in_ip_routing")      \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 12, "lr_in_ip_routing_ecmp") \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY,          13, "lr_in_policy")          \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     14, "lr_in_policy_ecmp")     \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     15, "lr_in_arp_resolve")     \
+    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     16, "lr_in_chk_pkt_len")     \
+    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     17, "lr_in_larger_pkts")     \
+    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     18, "lr_in_gw_redirect")     \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     19, "lr_in_arp_request")     \
                                                                       \
     /* Logical router egress stages. */                               \
     PIPELINE_STAGE(ROUTER, OUT, UNDNAT,      0, "lr_out_undnat")        \
@@ -225,6 +226,7 @@ enum ovn_stage {
 #define REG_NEXT_HOP_IPV6 "xxreg0"
 #define REG_SRC_IPV4 "reg1"
 #define REG_SRC_IPV6 "xxreg1"
+#define REG_ROUTE_TABLE_ID "reg7"
 
 #define REG_ORIG_TP_DPORT_ROUTER   "reg9[16..31]"
 
@@ -287,8 +289,9 @@ enum ovn_stage {
  * | R6  |        UNUSED            | X |                 | G | IN_IP_ROUTING)|
  * |     |                          | R |                 | 1 |               |
  * +-----+--------------------------+ E |     UNUSED      |   |               |
- * | R7  |        UNUSED            | G |                 |   |               |
- * |     |                          | 3 |                 |   |               |
+ * | R7  |      ROUTE_TABLE_ID      | G |                 |   |               |
+ * |     | (>= IN_IP_ROUTING_PRE && | 3 |                 |   |               |
+ * |     |  <= IN_IP_ROUTING)       |   |                 |   |               |
  * +-----+--------------------------+---+-----------------+---+---------------+
  * | R8  |     ECMP_GROUP_ID        |   |                 |
  * |     |     ECMP_MEMBER_ID       | X |                 |
@@ -8537,11 +8540,72 @@ cleanup:
     ds_destroy(&actions);
 }
 
+static uint32_t
+route_table_add(struct simap *route_tables, const char *route_table_name)
+{
+    /* route table ids start from 1 */
+    uint32_t rtb_id = simap_count(route_tables) + 1;
+
+    if (rtb_id == UINT16_MAX) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "too many route tables for Logical Router.");
+        return 0;
+    }
+
+    if (!simap_put(route_tables, route_table_name, rtb_id)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "Route table id unexpectedly appeared");
+    }
+
+    return rtb_id;
+}
+
+static uint32_t
+get_route_table_id(struct simap *route_tables, const char *route_table_name)
+{
+    if (!route_table_name || !strlen(route_table_name)) {
+        return 0;
+    }
+
+    uint32_t rtb_id = simap_get(route_tables, route_table_name);
+    if (!rtb_id) {
+        rtb_id = route_table_add(route_tables, route_table_name);
+    }
+
+    return rtb_id;
+}
+
+static void
+build_route_table_lflow(struct ovn_datapath *od, struct hmap *lflows,
+                        struct nbrec_logical_router_port *lrp,
+                        struct simap *route_tables)
+{
+    struct ds match = DS_EMPTY_INITIALIZER;
+    struct ds actions = DS_EMPTY_INITIALIZER;
+
+    const char *route_table_name = smap_get(&lrp->options, "route_table");
+    uint32_t rtb_id = get_route_table_id(route_tables, route_table_name);
+    if (!rtb_id) {
+        return;
+    }
+
+    ds_put_format(&match, "inport == \"%s\"", lrp->name);
+    ds_put_format(&actions, "%s = %d; next;",
+                  REG_ROUTE_TABLE_ID, rtb_id);
+
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING_PRE, 100,
+                  ds_cstr(&match), ds_cstr(&actions));
+
+    ds_destroy(&match);
+    ds_destroy(&actions);
+}
+
 struct parsed_route {
     struct ovs_list list_node;
     struct in6_addr prefix;
     unsigned int plen;
     bool is_src_route;
+    uint32_t route_table_id;
     uint32_t hash;
     const struct nbrec_logical_router_static_route *route;
     bool ecmp_symmetric_reply;
@@ -8566,7 +8630,7 @@ find_static_route_outport(struct ovn_datapath *od, struct hmap *ports,
  * Otherwise return NULL. */
 static struct parsed_route *
 parsed_routes_add(struct ovn_datapath *od, struct hmap *ports,
-                  struct ovs_list *routes,
+                  struct ovs_list *routes, struct simap *route_tables,
                   const struct nbrec_logical_router_static_route *route,
                   struct hmap *bfd_connections)
 {
@@ -8648,6 +8712,7 @@ parsed_routes_add(struct ovn_datapath *od, struct hmap *ports,
     struct parsed_route *pr = xzalloc(sizeof *pr);
     pr->prefix = prefix;
     pr->plen = plen;
+    pr->route_table_id = get_route_table_id(route_tables, route->route_table);
     pr->is_src_route = (route->policy && !strcmp(route->policy,
                                                  "src-ip"));
     pr->hash = route_hash(pr);
@@ -8681,6 +8746,7 @@ struct ecmp_groups_node {
     struct in6_addr prefix;
     unsigned int plen;
     bool is_src_route;
+    uint32_t route_table_id;
     uint16_t route_count;
     struct ovs_list route_list; /* Contains ecmp_route_list_node */
 };
@@ -8689,7 +8755,7 @@ static void
 ecmp_groups_add_route(struct ecmp_groups_node *group,
                       const struct parsed_route *route)
 {
-   if (group->route_count == UINT16_MAX) {
+    if (group->route_count == UINT16_MAX) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
         VLOG_WARN_RL(&rl, "too many routes in a single ecmp group.");
         return;
@@ -8718,6 +8784,7 @@ ecmp_groups_add(struct hmap *ecmp_groups,
     eg->prefix = route->prefix;
     eg->plen = route->plen;
     eg->is_src_route = route->is_src_route;
+    eg->route_table_id = route->route_table_id;
     ovs_list_init(&eg->route_list);
     ecmp_groups_add_route(eg, route);
 
@@ -8731,7 +8798,8 @@ ecmp_groups_find(struct hmap *ecmp_groups, struct parsed_route *route)
     HMAP_FOR_EACH_WITH_HASH (eg, hmap_node, route->hash, ecmp_groups) {
         if (ipv6_addr_equals(&eg->prefix, &route->prefix) &&
             eg->plen == route->plen &&
-            eg->is_src_route == route->is_src_route) {
+            eg->is_src_route == route->is_src_route &&
+            eg->route_table_id == route->route_table_id) {
             return eg;
         }
     }
@@ -8778,7 +8846,8 @@ unique_routes_remove(struct hmap *unique_routes,
     HMAP_FOR_EACH_WITH_HASH (ur, hmap_node, route->hash, unique_routes) {
         if (ipv6_addr_equals(&route->prefix, &ur->route->prefix) &&
             route->plen == ur->route->plen &&
-            route->is_src_route == ur->route->is_src_route) {
+            route->is_src_route == ur->route->is_src_route &&
+            route->route_table_id == ur->route->route_table_id) {
             hmap_remove(unique_routes, &ur->hmap_node);
             const struct parsed_route *existed_route = ur->route;
             free(ur);
@@ -8816,9 +8885,9 @@ build_route_prefix_s(const struct in6_addr *prefix, unsigned int plen)
 }
 
 static void
-build_route_match(const struct ovn_port *op_inport, const char *network_s,
-                  int plen, bool is_src_route, bool is_ipv4, struct ds *match,
-                  uint16_t *priority)
+build_route_match(const struct ovn_port *op_inport, uint32_t rtb_id,
+                  const char *network_s, int plen, bool is_src_route,
+                  bool is_ipv4, struct ds *match, uint16_t *priority)
 {
     const char *dir;
     /* The priority here is calculated to implement longest-prefix-match
@@ -8833,6 +8902,15 @@ build_route_match(const struct ovn_port *op_inport, const char *network_s,
 
     if (op_inport) {
         ds_put_format(match, "inport == %s && ", op_inport->json_key);
+    }
+    if (rtb_id) {
+        ds_put_format(match, "%s == %d && ", REG_ROUTE_TABLE_ID, rtb_id);
+    } else {
+        /* Route-table assigned LRPs' routes should have lower priority
+         * in order not to affect directly-connected global routes.
+         * So, enlarge non-route-table routes priority by 100.
+         */
+        *priority += 100;
     }
     ds_put_format(match, "ip%s.%s == %s/%d", is_ipv4 ? "4" : "6", dir,
                   network_s, plen);
@@ -8968,7 +9046,7 @@ add_ecmp_symmetric_reply_flows(struct hmap *lflows,
                   out_port->lrp_networks.ea_s,
                   IN6_IS_ADDR_V4MAPPED(&route->prefix) ? "" : "xx",
                   port_ip, out_port->json_key);
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_IP_ROUTING, 300,
+    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_IP_ROUTING, 400,
                            ds_cstr(&match), ds_cstr(&actions),
                            &st_route->header_);
 
@@ -8998,8 +9076,8 @@ build_ecmp_route_flow(struct hmap *lflows, struct ovn_datapath *od,
     struct ds route_match = DS_EMPTY_INITIALIZER;
 
     char *prefix_s = build_route_prefix_s(&eg->prefix, eg->plen);
-    build_route_match(NULL, prefix_s, eg->plen, eg->is_src_route, is_ipv4,
-                      &route_match, &priority);
+    build_route_match(NULL, eg->route_table_id, prefix_s, eg->plen,
+                      eg->is_src_route, is_ipv4, &route_match, &priority);
     free(prefix_s);
 
     struct ds actions = DS_EMPTY_INITIALIZER;
@@ -9074,8 +9152,8 @@ static void
 add_route(struct hmap *lflows, struct ovn_datapath *od,
           const struct ovn_port *op, const char *lrp_addr_s,
           const char *network_s, int plen, const char *gateway,
-          bool is_src_route, const struct ovsdb_idl_row *stage_hint,
-          bool is_discard_route)
+          bool is_src_route, const uint32_t rtb_id,
+          const struct ovsdb_idl_row *stage_hint, bool is_discard_route)
 {
     bool is_ipv4 = strchr(network_s, '.') ? true : false;
     struct ds match = DS_EMPTY_INITIALIZER;
@@ -9090,8 +9168,8 @@ add_route(struct hmap *lflows, struct ovn_datapath *od,
             op_inport = op;
         }
     }
-    build_route_match(op_inport, network_s, plen, is_src_route, is_ipv4,
-                      &match, &priority);
+    build_route_match(op_inport, rtb_id, network_s, plen, is_src_route,
+                      is_ipv4, &match, &priority);
 
     struct ds common_actions = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
@@ -9154,7 +9232,8 @@ build_static_route_flow(struct hmap *lflows, struct ovn_datapath *od,
     char *prefix_s = build_route_prefix_s(&route_->prefix, route_->plen);
     add_route(lflows, route_->is_discard_route ? od : out_port->od, out_port,
               lrp_addr_s, prefix_s, route_->plen, route->nexthop,
-              route_->is_src_route, &route->header_, route_->is_discard_route);
+              route_->is_src_route, route_->route_table_id, &route->header_,
+              route_->is_discard_route);
 
     free(prefix_s);
 }
@@ -10606,6 +10685,17 @@ build_ND_RA_flows_for_lrouter(struct ovn_datapath *od, struct hmap *lflows)
     }
 }
 
+/* Logical router ingress table IP_ROUTING_PRE:
+ * by default goto next. (priority 0). */
+static void
+build_ip_routing_pre_flows_for_lrouter(struct ovn_datapath *od,
+                                       struct hmap *lflows)
+{
+    if (od->nbr) {
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING_PRE, 0, "1", "next;");
+    }
+}
+
 /* Logical router ingress table IP_ROUTING : IP Routing.
  *
  * A packet that arrives at this table is an IP packet that should be
@@ -10631,14 +10721,14 @@ build_ip_routing_flows_for_lrouter_port(
         for (int i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
             add_route(lflows, op->od, op, op->lrp_networks.ipv4_addrs[i].addr_s,
                       op->lrp_networks.ipv4_addrs[i].network_s,
-                      op->lrp_networks.ipv4_addrs[i].plen, NULL, false,
+                      op->lrp_networks.ipv4_addrs[i].plen, NULL, false, 0,
                       &op->nbrp->header_, false);
         }
 
         for (int i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
             add_route(lflows, op->od, op, op->lrp_networks.ipv6_addrs[i].addr_s,
                       op->lrp_networks.ipv6_addrs[i].network_s,
-                      op->lrp_networks.ipv6_addrs[i].plen, NULL, false,
+                      op->lrp_networks.ipv6_addrs[i].plen, NULL, false, 0,
                       &op->nbrp->header_, false);
         }
     } else if (lsp_is_router(op->nbsp)) {
@@ -10661,7 +10751,7 @@ build_ip_routing_flows_for_lrouter_port(
                     add_route(lflows, peer->od, peer,
                               peer->lrp_networks.ipv4_addrs[0].addr_s,
                               laddrs->ipv4_addrs[k].network_s,
-                              laddrs->ipv4_addrs[k].plen, NULL, false,
+                              laddrs->ipv4_addrs[k].plen, NULL, false, 0,
                               &peer->nbrp->header_, false);
                 }
             }
@@ -10681,10 +10771,17 @@ build_static_route_flows_for_lrouter(
         struct hmap ecmp_groups = HMAP_INITIALIZER(&ecmp_groups);
         struct hmap unique_routes = HMAP_INITIALIZER(&unique_routes);
         struct ovs_list parsed_routes = OVS_LIST_INITIALIZER(&parsed_routes);
+        struct simap route_tables = SIMAP_INITIALIZER(&route_tables);
         struct ecmp_groups_node *group;
+
+        for (int i = 0; i < od->nbr->n_ports; i++) {
+            build_route_table_lflow(od, lflows, od->nbr->ports[i],
+                                    &route_tables);
+        }
+
         for (int i = 0; i < od->nbr->n_static_routes; i++) {
             struct parsed_route *route =
-                parsed_routes_add(od, ports, &parsed_routes,
+                parsed_routes_add(od, ports, &parsed_routes, &route_tables,
                                   od->nbr->static_routes[i], bfd_connections);
             if (!route) {
                 continue;
@@ -10717,6 +10814,7 @@ build_static_route_flows_for_lrouter(
         ecmp_groups_destroy(&ecmp_groups);
         unique_routes_destroy(&unique_routes);
         parsed_routes_destroy(&parsed_routes);
+        simap_destroy(&route_tables);
     }
 }
 
@@ -12821,6 +12919,7 @@ build_lswitch_and_lrouter_iterate_by_od(struct ovn_datapath *od,
     build_neigh_learning_flows_for_lrouter(od, lsi->lflows, &lsi->match,
                                            &lsi->actions, lsi->meter_groups);
     build_ND_RA_flows_for_lrouter(od, lsi->lflows);
+    build_ip_routing_pre_flows_for_lrouter(od, lsi->lflows);
     build_static_route_flows_for_lrouter(od, lsi->lflows, lsi->ports,
                                          lsi->bfd_connections);
     build_mcast_lookup_flows_for_lrouter(od, lsi->lflows, &lsi->match,
