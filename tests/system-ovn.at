@@ -6730,6 +6730,27 @@ OVS_WAIT_UNTIL([
     test "${n_arp}" = "2"
 ])
 
+check ovn-nbctl meter-add icmp-meter drop 1 pktps 0
+check ovn-nbctl --wait=hv lr-copp-add R1 icmp4-error icmp-meter
+AT_CHECK([ovn-nbctl lr-copp-list R1 |grep icmp4-error], [0], [dnl
+icmp4-error: icmp-meter
+])
+
+NS_EXEC([sw01], [tcpdump -n -i sw01 icmp > icmp.pcap &])
+ip netns exec sw01 scapy -H <<-EOF
+p = IP(src="192.168.1.2", dst="172.16.1.100", ttl=1)/ TCP(dport = 8080, flags="S") / Raw(b"X"*64)
+send (p, iface='sw01', loop = 0, verbose = 0, count = 100)
+EOF
+
+sleep 2
+kill $(pidof tcpdump)
+
+# 1pps + 1 burst size
+OVS_WAIT_UNTIL([
+    n_icmp=$(grep ICMP icmp.pcap | wc -l)
+    test "${n_icmp}" = "2"
+])
+
 kill $(pidof ovn-controller)
 
 as ovn-sb
