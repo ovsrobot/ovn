@@ -16,24 +16,40 @@
 
 #include "ovsdb-idl.h"
 
+#include "openvswitch/hmap.h"
+
 struct northd_idl_context {
-    const char *ovnnb_db;
-    const char *ovnsb_db;
     struct ovsdb_idl *ovnnb_idl;
     struct ovsdb_idl *ovnsb_idl;
     struct ovsdb_idl_loop *ovnnb_idl_loop;
     struct ovsdb_idl_loop *ovnsb_idl_loop;
     struct ovsdb_idl_txn *ovnnb_txn;
     struct ovsdb_idl_txn *ovnsb_txn;
+};
+
+struct northd_data {
+    struct hmap datapaths;
+    struct hmap ports;
+    struct hmap port_groups;
+    struct hmap mcast_groups;
+    struct hmap igmp_groups;
+    struct shash meter_groups;
+    struct hmap lbs;
+    struct hmap bfd_connections;
+    struct ovs_list lr_list;
+    bool ovn_internal_version_changed;
+    bool use_parallel_build;
+
     struct ovsdb_idl_index *sbrec_chassis_by_name;
     struct ovsdb_idl_index *sbrec_ha_chassis_grp_by_name;
     struct ovsdb_idl_index *sbrec_mcast_group_by_name_dp;
     struct ovsdb_idl_index *sbrec_ip_mcast_by_dp;
-
-    const char *ovn_internal_version;
-    bool use_parallel_build;
 };
 
-void ovn_db_run(struct northd_idl_context *ctx);
+void northd_run(struct northd_idl_context *ctx, struct northd_data *data);
+void northd_destroy(struct northd_data *data);
+void northd_init(struct northd_data *data);
+void northd_indices_create(struct northd_data *data,
+                           struct ovsdb_idl *ovnsb_idl);
 
 #endif /* NORTHD_H */

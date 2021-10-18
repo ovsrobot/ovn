@@ -9,6 +9,10 @@
 
 #include "lib/inc-proc-eng.h"
 
+struct ed_type_northd {
+    struct northd_data *data;
+};
+
 void en_northd_run(struct engine_node *node OVS_UNUSED, void *data OVS_UNUSED);
 void *en_northd_init(struct engine_node *node OVS_UNUSED,
                      struct engine_arg *arg);

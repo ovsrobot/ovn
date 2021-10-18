@@ -31,7 +31,6 @@
 #include "ovsdb-idl.h"
 #include "lib/ovn-l7.h"
 #include "lib/ovn-nb-idl.h"
-#include "lib/ovn-parallel-hmap.h"
 #include "lib/ovn-sb-idl.h"
 #include "openvswitch/poll-loop.h"
 #include "simap.h"
@@ -70,7 +69,6 @@ static const char *ssl_ca_cert_file;
 #define DEFAULT_PROBE_INTERVAL_MSEC 5000
 static int northd_probe_interval_nb = 0;
 static int northd_probe_interval_sb = 0;
-static bool use_parallel_build = true;
 
 static const char *rbac_chassis_auth[] =
     {"name"};
@@ -641,8 +639,6 @@ main(int argc, char *argv[])
 
     daemonize_complete();
 
-    use_parallel_build = can_parallelize_hashes(false);
-
     /* We want to detect (almost) all changes to the ovn-nb db. */
     struct ovsdb_idl_loop ovnnb_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(
         ovsdb_idl_create(ovnnb_db, &nbrec_idl_class, true, true));
@@ -905,23 +901,10 @@ main(int argc, char *argv[])
     ovsdb_idl_track_add_column(ovnsb_idl_loop.idl, &sbrec_fdb_col_dp_key);
     ovsdb_idl_track_add_column(ovnsb_idl_loop.idl, &sbrec_fdb_col_port_key);
 
-    struct ovsdb_idl_index *sbrec_chassis_by_name
-        = chassis_index_create(ovnsb_idl_loop.idl);
-
-    struct ovsdb_idl_index *sbrec_ha_chassis_grp_by_name
-        = ha_chassis_group_index_create(ovnsb_idl_loop.idl);
-
-    struct ovsdb_idl_index *sbrec_mcast_group_by_name_dp
-        = mcast_group_index_create(ovnsb_idl_loop.idl);
-
-    struct ovsdb_idl_index *sbrec_ip_mcast_by_dp
-        = ip_mcast_index_create(ovnsb_idl_loop.idl);
-
     unixctl_command_register("sb-connection-status", "", 0, 0,
                              ovn_conn_show, ovnsb_idl_loop.idl);
 
-    char *ovn_internal_version = ovn_get_internal_version();
-    VLOG_INFO("OVN internal version is : [%s]", ovn_internal_version);
+    VLOG_INFO("OVN internal version is : [%s]", ovn_get_internal_version());
 
     stopwatch_create(NORTHD_LOOP_STOPWATCH_NAME, SW_MS);
     stopwatch_create(OVNNB_DB_RUN_STOPWATCH_NAME, SW_MS);
@@ -994,20 +977,12 @@ main(int argc, char *argv[])
             }
 
             struct northd_idl_context ctx = {
-                .ovnnb_db = ovnnb_db,
-                .ovnsb_db = ovnsb_db,
                 .ovnnb_idl = ovnnb_idl_loop.idl,
                 .ovnnb_idl_loop = &ovnnb_idl_loop,
                 .ovnnb_txn = ovnnb_txn,
                 .ovnsb_idl = ovnsb_idl_loop.idl,
                 .ovnsb_idl_loop = &ovnsb_idl_loop,
                 .ovnsb_txn = ovnsb_txn,
-                .sbrec_chassis_by_name = sbrec_chassis_by_name,
-                .sbrec_ha_chassis_grp_by_name = sbrec_ha_chassis_grp_by_name,
-                .sbrec_mcast_group_by_name_dp = sbrec_mcast_group_by_name_dp,
-                .sbrec_ip_mcast_by_dp = sbrec_ip_mcast_by_dp,
-                .use_parallel_build = use_parallel_build,
-                .ovn_internal_version = ovn_internal_version,
             };
 
             if (!state.had_lock && ovsdb_idl_has_lock(ovnsb_idl_loop.idl)) {
@@ -1107,7 +1082,6 @@ main(int argc, char *argv[])
     }
     inc_proc_northd_cleanup();
 
-    free(ovn_internal_version);
     unixctl_server_destroy(unixctl);
     ovsdb_idl_loop_destroy(&ovnnb_idl_loop);
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
