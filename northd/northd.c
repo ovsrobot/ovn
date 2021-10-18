@@ -12974,7 +12974,6 @@ struct lflows_thread_pool {
     struct worker_pool *pool;
 };
 
-
 static void *
 build_lflows_thread(void *arg)
 {
@@ -14556,7 +14555,6 @@ ovnnb_db_run(struct northd_data *data,
     cleanup_stale_fdp_entries(ctx, &data->datapaths);
     bfd_cleanup_connections(ctx, &data->bfd_connections);
     stopwatch_stop(CLEAR_LFLOWS_CTX_STOPWATCH_NAME, time_msec());
-
 }
 
 /* Stores the list of chassis which references an ha_chassis_group.

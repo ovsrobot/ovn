@@ -25,6 +25,7 @@
 #include "openvswitch/vlog.h"
 #include "inc-proc-northd.h"
 #include "en-northd.h"
+#include "en-lflow.h"
 #include "util.h"
 
 VLOG_DEFINE_THIS_MODULE(inc_proc_northd);
@@ -140,6 +141,7 @@ enum sb_engine_node {
 /* Define engine nodes for other nodes. They should be defined as static to
  * avoid sparse errors. */
 static ENGINE_NODE(northd, "northd");
+static ENGINE_NODE(lflow, "lflow");
 
 void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
                           struct ovsdb_idl_loop *sb)
@@ -204,13 +206,14 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_northd, &en_sb_load_balancer, NULL);
     engine_add_input(&en_northd, &en_sb_bfd, NULL);
     engine_add_input(&en_northd, &en_sb_fdb, NULL);
+    engine_add_input(&en_lflow, &en_northd, NULL);
 
     struct engine_arg engine_arg = {
         .nb_idl = nb->idl,
         .sb_idl = sb->idl,
     };
 
-    engine_init(&en_northd, &engine_arg);
+    engine_init(&en_lflow, &engine_arg);
 }
 
 void inc_proc_northd_run(struct northd_idl_context *ctx,
