@@ -16,7 +16,7 @@
 
 #include "ovsdb-idl.h"
 
-struct northd_context {
+struct northd_idl_context {
     const char *ovnnb_db;
     const char *ovnsb_db;
     struct ovsdb_idl *ovnnb_idl;
@@ -34,6 +34,6 @@ struct northd_context {
     bool use_parallel_build;
 };
 
-void ovn_db_run(struct northd_context *ctx);
+void ovn_db_run(struct northd_idl_context *ctx);
 
 #endif /* NORTHD_H */

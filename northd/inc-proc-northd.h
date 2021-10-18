@@ -8,7 +8,7 @@
 
 void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
                           struct ovsdb_idl_loop *sb);
-void inc_proc_northd_run(struct northd_context *ctx,
+void inc_proc_northd_run(struct northd_idl_context *ctx,
                          bool recompute);
 void inc_proc_northd_cleanup(void);
 

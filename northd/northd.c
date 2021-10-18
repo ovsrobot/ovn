@@ -1256,7 +1256,7 @@ ovn_datapath_update_external_ids(struct ovn_datapath *od)
 }
 
 static void
-join_datapaths(struct northd_context *ctx, struct hmap *datapaths,
+join_datapaths(struct northd_idl_context *ctx, struct hmap *datapaths,
                struct ovs_list *sb_only, struct ovs_list *nb_only,
                struct ovs_list *both, struct ovs_list *lr_list)
 {
@@ -1367,7 +1367,7 @@ is_vxlan_mode(struct ovsdb_idl *ovnsb_idl)
 }
 
 static uint32_t
-get_ovn_max_dp_key_local(struct northd_context *ctx)
+get_ovn_max_dp_key_local(struct northd_idl_context *ctx)
 {
     if (is_vxlan_mode(ctx->ovnsb_idl)) {
         /* OVN_MAX_DP_GLOBAL_NUM doesn't apply for vxlan mode. */
@@ -1377,7 +1377,7 @@ get_ovn_max_dp_key_local(struct northd_context *ctx)
 }
 
 static void
-ovn_datapath_allocate_key(struct northd_context *ctx,
+ovn_datapath_allocate_key(struct northd_idl_context *ctx,
                           struct hmap *datapaths, struct hmap *dp_tnlids,
                           struct ovn_datapath *od, uint32_t *hint)
 {
@@ -1397,7 +1397,7 @@ ovn_datapath_allocate_key(struct northd_context *ctx,
 }
 
 static void
-ovn_datapath_assign_requested_tnl_id(struct northd_context *ctx,
+ovn_datapath_assign_requested_tnl_id(struct northd_idl_context *ctx,
                                      struct hmap *dp_tnlids,
                                      struct ovn_datapath *od)
 {
@@ -1431,7 +1431,7 @@ ovn_datapath_assign_requested_tnl_id(struct northd_context *ctx,
  * Initializes 'datapaths' to contain a "struct ovn_datapath" for every logical
  * switch and router. */
 static void
-build_datapaths(struct northd_context *ctx, struct hmap *datapaths,
+build_datapaths(struct northd_idl_context *ctx, struct hmap *datapaths,
                 struct ovs_list *lr_list)
 {
     struct ovs_list sb_only, nb_only, both;
@@ -2402,7 +2402,7 @@ tag_alloc_create_new_tag(struct hmap *tag_alloc_table,
 
 
 static void
-join_logical_ports(struct northd_context *ctx,
+join_logical_ports(struct northd_idl_context *ctx,
                    struct hmap *datapaths, struct hmap *ports,
                    struct hmap *chassis_qdisc_queues,
                    struct hmap *tag_alloc_table, struct ovs_list *sb_only,
@@ -2864,7 +2864,7 @@ sbpb_gw_chassis_needs_update(
 }
 
 static struct sbrec_ha_chassis *
-create_sb_ha_chassis(struct northd_context *ctx,
+create_sb_ha_chassis(struct northd_idl_context *ctx,
                      const struct sbrec_chassis *chassis,
                      const char *chassis_name, int priority)
 {
@@ -2949,7 +2949,7 @@ chassis_group_list_changed(
 }
 
 static void
-sync_ha_chassis_group_for_sbpb(struct northd_context *ctx,
+sync_ha_chassis_group_for_sbpb(struct northd_idl_context *ctx,
                                const struct nbrec_ha_chassis_group *nb_ha_grp,
                                struct ovsdb_idl_index *sbrec_chassis_by_name,
                                const struct sbrec_port_binding *pb)
@@ -3002,7 +3002,7 @@ sync_ha_chassis_group_for_sbpb(struct northd_context *ctx,
  */
 static void
 copy_gw_chassis_from_nbrp_to_sbpb(
-        struct northd_context *ctx,
+        struct northd_idl_context *ctx,
         struct ovsdb_idl_index *sbrec_chassis_by_name,
         const struct nbrec_logical_router_port *lrp,
         const struct sbrec_port_binding *port_binding)
@@ -3080,7 +3080,7 @@ ovn_update_ipv6_prefix(struct hmap *ports)
 }
 
 static void
-ovn_port_update_sbrec(struct northd_context *ctx,
+ovn_port_update_sbrec(struct northd_idl_context *ctx,
                       struct ovsdb_idl_index *sbrec_chassis_by_name,
                       const struct ovn_port *op,
                       struct hmap *chassis_qdisc_queues,
@@ -3418,7 +3418,7 @@ ovn_port_update_sbrec(struct northd_context *ctx,
 /* Remove mac_binding entries that refer to logical_ports which are
  * deleted. */
 static void
-cleanup_mac_bindings(struct northd_context *ctx, struct hmap *datapaths,
+cleanup_mac_bindings(struct northd_idl_context *ctx, struct hmap *datapaths,
                      struct hmap *ports)
 {
     const struct sbrec_mac_binding *b, *n;
@@ -3434,7 +3434,7 @@ cleanup_mac_bindings(struct northd_context *ctx, struct hmap *datapaths,
 }
 
 static void
-cleanup_sb_ha_chassis_groups(struct northd_context *ctx,
+cleanup_sb_ha_chassis_groups(struct northd_idl_context *ctx,
                              struct sset *active_ha_chassis_groups)
 {
     const struct sbrec_ha_chassis_group *b, *n;
@@ -3446,7 +3446,8 @@ cleanup_sb_ha_chassis_groups(struct northd_context *ctx,
 }
 
 static void
-cleanup_stale_fdp_entries(struct northd_context *ctx, struct hmap *datapaths)
+cleanup_stale_fdp_entries(struct northd_idl_context *ctx,
+                          struct hmap *datapaths)
 {
     const struct sbrec_fdb *fdb_e, *next;
     SBREC_FDB_FOR_EACH_SAFE (fdb_e, next, ctx->ovnsb_idl) {
@@ -3473,7 +3474,7 @@ struct service_monitor_info {
 
 
 static struct service_monitor_info *
-create_or_get_service_mon(struct northd_context *ctx,
+create_or_get_service_mon(struct northd_idl_context *ctx,
                           struct hmap *monitor_map,
                           const char *ip, const char *logical_port,
                           uint16_t service_port, const char *protocol)
@@ -3505,7 +3506,7 @@ create_or_get_service_mon(struct northd_context *ctx,
 }
 
 static void
-ovn_lb_svc_create(struct northd_context *ctx, struct ovn_northd_lb *lb,
+ovn_lb_svc_create(struct northd_idl_context *ctx, struct ovn_northd_lb *lb,
                   struct hmap *monitor_map, struct hmap *ports)
 {
     for (size_t i = 0; i < lb->n_vips; i++) {
@@ -3680,7 +3681,7 @@ build_ovn_lr_lbs(struct hmap *datapaths, struct hmap *lbs)
 }
 
 static void
-build_ovn_lbs(struct northd_context *ctx, struct hmap *datapaths,
+build_ovn_lbs(struct northd_idl_context *ctx, struct hmap *datapaths,
               struct hmap *lbs)
 {
     struct ovn_northd_lb *lb;
@@ -3793,7 +3794,7 @@ build_ovn_lbs(struct northd_context *ctx, struct hmap *datapaths,
 }
 
 static void
-build_ovn_lb_svcs(struct northd_context *ctx, struct hmap *ports,
+build_ovn_lb_svcs(struct northd_idl_context *ctx, struct hmap *ports,
                   struct hmap *lbs)
 {
     struct hmap monitor_map = HMAP_INITIALIZER(&monitor_map);
@@ -3889,7 +3890,7 @@ ovn_port_add_tnlid(struct ovn_port *op, uint32_t tunnel_key)
 }
 
 static void
-ovn_port_assign_requested_tnl_id(struct northd_context *ctx,
+ovn_port_assign_requested_tnl_id(struct northd_idl_context *ctx,
                                  struct ovn_port *op)
 {
     const struct smap *options = (op->nbsp
@@ -3916,7 +3917,7 @@ ovn_port_assign_requested_tnl_id(struct northd_context *ctx,
 }
 
 static void
-ovn_port_allocate_key(struct northd_context *ctx, struct hmap *ports,
+ovn_port_allocate_key(struct northd_idl_context *ctx, struct hmap *ports,
                       struct ovn_port *op)
 {
     if (!op->tunnel_key) {
@@ -3941,7 +3942,7 @@ ovn_port_allocate_key(struct northd_context *ctx, struct hmap *ports,
  * using the "struct ovn_datapath"s in 'datapaths' to look up logical
  * datapaths. */
 static void
-build_ports(struct northd_context *ctx,
+build_ports(struct northd_idl_context *ctx,
             struct ovsdb_idl_index *sbrec_chassis_by_name,
             struct hmap *datapaths, struct hmap *ports)
 {
@@ -4208,7 +4209,7 @@ ovn_igmp_group_find(struct hmap *igmp_groups,
 }
 
 static struct ovn_igmp_group *
-ovn_igmp_group_add(struct northd_context *ctx, struct hmap *igmp_groups,
+ovn_igmp_group_add(struct northd_idl_context *ctx, struct hmap *igmp_groups,
                    struct ovn_datapath *datapath,
                    const struct in6_addr *address,
                    const char *address_s)
@@ -6180,7 +6181,7 @@ ovn_port_group_destroy(struct hmap *pgs, struct ovn_port_group *pg)
 }
 
 static void
-build_port_group_lswitches(struct northd_context *ctx, struct hmap *pgs,
+build_port_group_lswitches(struct northd_idl_context *ctx, struct hmap *pgs,
                            struct hmap *ports)
 {
     hmap_init(pgs);
@@ -8203,7 +8204,7 @@ bfd_port_lookup(struct hmap *bfd_map, const char *logical_port,
 }
 
 static void
-bfd_cleanup_connections(struct northd_context *ctx, struct hmap *bfd_map)
+bfd_cleanup_connections(struct northd_idl_context *ctx, struct hmap *bfd_map)
 {
     const struct nbrec_bfd *nb_bt;
     struct bfd_entry *bfd_e;
@@ -8286,7 +8287,7 @@ static int bfd_get_unused_port(unsigned long *bfd_src_ports)
 }
 
 static void
-build_bfd_table(struct northd_context *ctx, struct hmap *bfd_connections,
+build_bfd_table(struct northd_idl_context *ctx, struct hmap *bfd_connections,
                 struct hmap *ports)
 {
     struct hmap sb_only = HMAP_INITIALIZER(&sb_only);
@@ -13269,7 +13270,7 @@ ovn_dp_group_find(const struct hmap *dp_groups,
 }
 
 static struct sbrec_logical_dp_group *
-ovn_sb_insert_logical_dp_group(struct northd_context *ctx,
+ovn_sb_insert_logical_dp_group(struct northd_idl_context *ctx,
                                      const struct hmapx *od)
 {
     struct sbrec_logical_dp_group *dp_group;
@@ -13291,7 +13292,7 @@ ovn_sb_insert_logical_dp_group(struct northd_context *ctx,
 
 static void
 ovn_sb_set_lflow_logical_dp_group(
-    struct northd_context *ctx,
+    struct northd_idl_context *ctx,
     struct hmap *dp_groups,
     const struct sbrec_logical_flow *sbflow,
     const struct hmapx *od_group)
@@ -13322,7 +13323,7 @@ static bool reset_parallel = false;
 /* Updates the Logical_Flow and Multicast_Group tables in the OVN_SB database,
  * constructing their contents based on the OVN_NB database. */
 static void
-build_lflows(struct northd_context *ctx, struct hmap *datapaths,
+build_lflows(struct northd_idl_context *ctx, struct hmap *datapaths,
              struct hmap *ports, struct hmap *port_groups,
              struct hmap *mcgroups, struct hmap *igmp_groups,
              struct shash *meter_groups,
@@ -13635,7 +13636,7 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
 }
 
 static void
-sync_address_set(struct northd_context *ctx, const char *name,
+sync_address_set(struct northd_idl_context *ctx, const char *name,
                  const char **addrs, size_t n_addrs,
                  struct shash *sb_address_sets)
 {
@@ -13662,7 +13663,7 @@ sync_address_set(struct northd_context *ctx, const char *name,
  * in OVN_Northbound, so that the address sets used in Logical_Flows in
  * OVN_Southbound is checked against the proper set.*/
 static void
-sync_address_sets(struct northd_context *ctx, struct hmap *datapaths)
+sync_address_sets(struct northd_idl_context *ctx, struct hmap *datapaths)
 {
     struct shash sb_address_sets = SHASH_INITIALIZER(&sb_address_sets);
 
@@ -13760,7 +13761,7 @@ sync_address_sets(struct northd_context *ctx, struct hmap *datapaths)
  * contains lport uuids, while in OVN_Southbound we store the lport names.
  */
 static void
-sync_port_groups(struct northd_context *ctx, struct hmap *pgs)
+sync_port_groups(struct northd_idl_context *ctx, struct hmap *pgs)
 {
     struct shash sb_port_groups = SHASH_INITIALIZER(&sb_port_groups);
 
@@ -13888,7 +13889,7 @@ done:
 }
 
 static void
-sync_meters_iterate_nb_meter(struct northd_context *ctx,
+sync_meters_iterate_nb_meter(struct northd_idl_context *ctx,
                              const char *meter_name,
                              const struct nbrec_meter *nb_meter,
                              struct shash *sb_meters,
@@ -13927,7 +13928,7 @@ sync_meters_iterate_nb_meter(struct northd_context *ctx,
 }
 
 static void
-sync_acl_fair_meter(struct northd_context *ctx, struct shash *meter_groups,
+sync_acl_fair_meter(struct northd_idl_context *ctx, struct shash *meter_groups,
                     const struct nbrec_acl *acl, struct shash *sb_meters,
                     struct sset *used_sb_meters)
 {
@@ -13950,7 +13951,7 @@ sync_acl_fair_meter(struct northd_context *ctx, struct shash *meter_groups,
  * a private copy of its meter in the SB table.
  */
 static void
-sync_meters(struct northd_context *ctx, struct shash *meter_groups)
+sync_meters(struct northd_idl_context *ctx, struct shash *meter_groups)
 {
     struct shash sb_meters = SHASH_INITIALIZER(&sb_meters);
     struct sset used_sb_meters = SSET_INITIALIZER(&used_sb_meters);
@@ -14022,7 +14023,7 @@ get_dns_info_from_hmap(struct hmap *dns_map, struct uuid *uuid)
 }
 
 static void
-sync_dns_entries(struct northd_context *ctx, struct hmap *datapaths)
+sync_dns_entries(struct northd_idl_context *ctx, struct hmap *datapaths)
 {
     struct hmap dns_map = HMAP_INITIALIZER(&dns_map);
     struct ovn_datapath *od;
@@ -14140,7 +14141,7 @@ destroy_datapaths_and_ports(struct hmap *datapaths, struct hmap *ports,
 }
 
 static void
-build_ip_mcast(struct northd_context *ctx, struct hmap *datapaths)
+build_ip_mcast(struct northd_idl_context *ctx, struct hmap *datapaths)
 {
     struct ovn_datapath *od;
 
@@ -14170,7 +14171,7 @@ build_ip_mcast(struct northd_context *ctx, struct hmap *datapaths)
 }
 
 static void
-build_mcast_groups(struct northd_context *ctx,
+build_mcast_groups(struct northd_idl_context *ctx,
                    struct hmap *datapaths, struct hmap *ports,
                    struct hmap *mcast_groups,
                    struct hmap *igmp_groups)
@@ -14345,7 +14346,7 @@ build_mcast_groups(struct northd_context *ctx,
 }
 
 static void
-build_meter_groups(struct northd_context *ctx,
+build_meter_groups(struct northd_idl_context *ctx,
                    struct shash *meter_groups)
 {
     const struct nbrec_meter *nb_meter;
@@ -14355,7 +14356,7 @@ build_meter_groups(struct northd_context *ctx,
 }
 
 static void
-ovnnb_db_run(struct northd_context *ctx,
+ovnnb_db_run(struct northd_idl_context *ctx,
              struct ovsdb_idl_index *sbrec_chassis_by_name,
              struct ovsdb_idl_loop *sb_loop,
              struct hmap *datapaths, struct hmap *ports,
@@ -14565,7 +14566,7 @@ struct ha_chassis_group_node {
 };
 
 static void
-update_sb_ha_group_ref_chassis(struct northd_context *ctx,
+update_sb_ha_group_ref_chassis(struct northd_idl_context *ctx,
                                struct shash *ha_ref_chassis_map)
 {
     struct hmap ha_ch_grps = HMAP_INITIALIZER(&ha_ch_grps);
@@ -14637,7 +14638,7 @@ update_sb_ha_group_ref_chassis(struct northd_context *ctx,
  *  - 'ref_chassis' of hagrp1.
  */
 static void
-build_ha_chassis_group_ref_chassis(struct northd_context *ctx,
+build_ha_chassis_group_ref_chassis(struct northd_idl_context *ctx,
                                    const struct sbrec_port_binding *sb,
                                    struct ovn_port *op,
                                    struct shash *ha_ref_chassis_map)
@@ -14678,7 +14679,7 @@ build_ha_chassis_group_ref_chassis(struct northd_context *ctx,
  * this column is not empty, it means we need to set the corresponding logical
  * port as 'up' in the northbound DB. */
 static void
-handle_port_binding_changes(struct northd_context *ctx, struct hmap *ports,
+handle_port_binding_changes(struct northd_idl_context *ctx, struct hmap *ports,
                             struct shash *ha_ref_chassis_map)
 {
     const struct sbrec_port_binding *sb;
@@ -14732,7 +14733,7 @@ handle_port_binding_changes(struct northd_context *ctx, struct hmap *ports,
 
 /* Updates the sb_cfg and hv_cfg columns in the northbound NB_Global table. */
 static void
-update_northbound_cfg(struct northd_context *ctx,
+update_northbound_cfg(struct northd_idl_context *ctx,
                       struct ovsdb_idl_loop *sb_loop,
                       int64_t loop_start_time)
 {
@@ -14784,7 +14785,7 @@ update_northbound_cfg(struct northd_context *ctx,
 
 /* Handle a fairly small set of changes in the southbound database. */
 static void
-ovnsb_db_run(struct northd_context *ctx,
+ovnsb_db_run(struct northd_idl_context *ctx,
              struct ovsdb_idl_loop *sb_loop,
              struct hmap *ports,
              int64_t loop_start_time)
@@ -14803,7 +14804,7 @@ ovnsb_db_run(struct northd_context *ctx,
 }
 
 void
-ovn_db_run(struct northd_context *ctx)
+ovn_db_run(struct northd_idl_context *ctx)
 {
     struct hmap datapaths, ports;
     struct ovs_list lr_list;

@@ -313,7 +313,7 @@ ovn_rbac_validate_perm(const struct sbrec_rbac_permission *perm)
 
 static void
 ovn_rbac_create_perm(struct rbac_perm_cfg *pcfg,
-                     struct northd_context *ctx,
+                     struct northd_idl_context *ctx,
                      const struct sbrec_rbac_role *rbac_role)
 {
     struct sbrec_rbac_permission *rbac_perm;
@@ -332,7 +332,7 @@ ovn_rbac_create_perm(struct rbac_perm_cfg *pcfg,
 }
 
 static void
-check_and_update_rbac(struct northd_context *ctx)
+check_and_update_rbac(struct northd_idl_context *ctx)
 {
     const struct sbrec_rbac_role *rbac_role = NULL;
     const struct sbrec_rbac_permission *perm_row, *perm_next;
@@ -369,7 +369,7 @@ check_and_update_rbac(struct northd_context *ctx)
 }
 
 static void
-check_and_add_supported_dhcp_opts_to_sb_db(struct northd_context *ctx)
+check_and_add_supported_dhcp_opts_to_sb_db(struct northd_idl_context *ctx)
 {
     struct hmap dhcp_opts_to_add = HMAP_INITIALIZER(&dhcp_opts_to_add);
     for (size_t i = 0; (i < sizeof(supported_dhcp_opts) /
@@ -407,7 +407,7 @@ check_and_add_supported_dhcp_opts_to_sb_db(struct northd_context *ctx)
 }
 
 static void
-check_and_add_supported_dhcpv6_opts_to_sb_db(struct northd_context *ctx)
+check_and_add_supported_dhcpv6_opts_to_sb_db(struct northd_idl_context *ctx)
 {
     struct hmap dhcpv6_opts_to_add = HMAP_INITIALIZER(&dhcpv6_opts_to_add);
     for (size_t i = 0; (i < sizeof(supported_dhcpv6_opts) /
@@ -993,7 +993,7 @@ main(int argc, char *argv[])
                 ovnsb_cond_seqno = new_ovnsb_cond_seqno;
             }
 
-            struct northd_context ctx = {
+            struct northd_idl_context ctx = {
                 .ovnnb_db = ovnnb_db,
                 .ovnsb_db = ovnsb_db,
                 .ovnnb_idl = ovnnb_idl_loop.idl,

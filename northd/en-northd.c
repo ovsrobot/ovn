@@ -28,7 +28,7 @@ VLOG_DEFINE_THIS_MODULE(en_northd);
 void en_northd_run(struct engine_node *node, void *data OVS_UNUSED)
 {
     const struct engine_context *eng_ctx = engine_get_context();
-    struct northd_context *ctx = eng_ctx->client_ctx;
+    struct northd_idl_context *ctx = eng_ctx->client_ctx;
     ovn_db_run(ctx);
 
     engine_set_node_state(node, EN_UPDATED);

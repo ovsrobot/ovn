@@ -213,7 +213,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_init(&en_northd, &engine_arg);
 }
 
-void inc_proc_northd_run(struct northd_context *ctx,
+void inc_proc_northd_run(struct northd_idl_context *ctx,
                          bool recompute) {
     engine_set_force_recompute(recompute);
     engine_init_run();
