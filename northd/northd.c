@@ -13327,8 +13327,7 @@ static bool reset_parallel = false;
 
 /* Updates the Logical_Flow and Multicast_Group tables in the OVN_SB database,
  * constructing their contents based on the OVN_NB database. */
-static void
-build_lflows(struct northd_idl_context *ctx, struct northd_data *data)
+void build_lflows(struct northd_idl_context *ctx, struct northd_data *data)
 {
     struct hmap lflows;
 
@@ -14542,9 +14541,6 @@ ovnnb_db_run(struct northd_data *data,
     build_meter_groups(ctx, &data->meter_groups);
     build_bfd_table(ctx, &data->bfd_connections, &data->ports);
     stopwatch_stop(BUILD_LFLOWS_CTX_STOPWATCH_NAME, time_msec());
-    stopwatch_start(BUILD_LFLOWS_STOPWATCH_NAME, time_msec());
-    build_lflows(ctx, data);
-    stopwatch_stop(BUILD_LFLOWS_STOPWATCH_NAME, time_msec());
     stopwatch_start(CLEAR_LFLOWS_CTX_STOPWATCH_NAME, time_msec());
     ovn_update_ipv6_prefix(&data->ports);
 

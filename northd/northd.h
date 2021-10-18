@@ -51,5 +51,6 @@ void northd_destroy(struct northd_data *data);
 void northd_init(struct northd_data *data);
 void northd_indices_create(struct northd_data *data,
                            struct ovsdb_idl *ovnsb_idl);
+void build_lflows(struct northd_idl_context *ctx, struct northd_data *data);
 
 #endif /* NORTHD_H */

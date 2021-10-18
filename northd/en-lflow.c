@@ -23,12 +23,24 @@
 
 #include "lib/inc-proc-eng.h"
 #include "northd.h"
+#include "stopwatch.h"
+#include "lib/stopwatch-names.h"
+#include "timeval.h"
 #include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(en_lflow);
 
 void en_lflow_run(struct engine_node *node, void *data OVS_UNUSED)
 {
+    const struct engine_context *eng_ctx = engine_get_context();
+    struct northd_idl_context *ctx = eng_ctx->client_ctx;
+
+    struct ed_type_northd *northd_data = engine_get_input_data("northd", node);
+
+    stopwatch_start(BUILD_LFLOWS_STOPWATCH_NAME, time_msec());
+    build_lflows(ctx, northd_data->data);
+    stopwatch_stop(BUILD_LFLOWS_STOPWATCH_NAME, time_msec());
+
     engine_set_node_state(node, EN_UPDATED);
 }
 void *en_lflow_init(struct engine_node *node OVS_UNUSED,
