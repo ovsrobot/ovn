@@ -27,6 +27,7 @@ struct northd_context {
     struct ovsdb_idl_index *sbrec_ha_chassis_grp_by_name;
     struct ovsdb_idl_index *sbrec_mcast_group_by_name_dp;
     struct ovsdb_idl_index *sbrec_ip_mcast_by_dp;
+    struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip;
 
     bool use_parallel_build;
 };

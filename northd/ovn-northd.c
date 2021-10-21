@@ -23,6 +23,7 @@
 #include "daemon.h"
 #include "fatal-signal.h"
 #include "lib/ip-mcast-index.h"
+#include "lib/mac-binding-index.h"
 #include "lib/mcast-group-index.h"
 #include "memory.h"
 #include "northd.h"
@@ -910,6 +911,9 @@ main(int argc, char *argv[])
     struct ovsdb_idl_index *sbrec_ip_mcast_by_dp
         = ip_mcast_index_create(ovnsb_idl_loop.idl);
 
+    struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip
+        = mac_binding_index_create(ovnsb_idl_loop.idl);
+
     unixctl_command_register("sb-connection-status", "", 0, 0,
                              ovn_conn_show, ovnsb_idl_loop.idl);
 
@@ -965,6 +969,7 @@ main(int argc, char *argv[])
                 .sbrec_ha_chassis_grp_by_name = sbrec_ha_chassis_grp_by_name,
                 .sbrec_mcast_group_by_name_dp = sbrec_mcast_group_by_name_dp,
                 .sbrec_ip_mcast_by_dp = sbrec_ip_mcast_by_dp,
+                .sbrec_mac_binding_by_lport_ip = sbrec_mac_binding_by_lport_ip,
                 .use_parallel_build = use_parallel_build,
             };
 

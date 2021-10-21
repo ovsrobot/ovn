@@ -1127,6 +1127,15 @@ sb::Out_MAC_Binding (._uuid        = mb._uuid,
     sb::Out_Port_Binding(.logical_port = mb.logical_port),
     sb::Out_Datapath_Binding(._uuid = mb.datapath).
 
+sb::Out_MAC_Binding (._uuid        = hash,
+                    .logical_port = nb.logical_port,
+                    .ip           = nb.ip,
+                    .mac          = nb.mac,
+                    .datapath     = router._uuid) :-
+    nb in nb::MAC_Binding(),
+    rp in &RouterPort(.router = router, .json_name = json_escape(nb.logical_port)),
+    var hash = hash128((nb.logical_port, nb.ip)).
+
 /*
  * DHCP options: fixed table
  */

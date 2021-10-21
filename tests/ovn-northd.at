@@ -5446,3 +5446,29 @@ wait_row_count Port_binding 1 logical-port=S1-vm2 requested_chassis=$ch2_uuid
 
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([LR NB MAC_Binding table])
+ovn_start
+
+# Create logical routers
+ovn-nbctl lr-add lr0
+ovn-nbctl lrp-add lr0 lr0-p0 00:00:01:01:02:03 192.168.10.1/24
+ovn-nbctl lrp-add lr0 lr0-p1 00:00:02:02:03:04 192.168.11.1/24
+
+ovn-nbctl mac-binding-add lr0-p0 192.168.10.10 00:00:11:22:33:44
+ovn-nbctl mac-binding-add lr0-p0 192.168.10.100 00:00:22:33:44:55
+
+wait_row_count nb:MAC_Binding 2 logical_port=lr0-p0
+wait_row_count MAC_Binding 1 logical_port=lr0-p0 ip=192.168.10.10 mac="00\:00\:11\:22\:33\:44"
+wait_row_count MAC_Binding 1 logical_port=lr0-p0 ip=192.168.10.100 mac="00\:00\:22\:33\:44\:55"
+
+ovn-nbctl mac-binding-add lr0-p1 10.0.0.10 00:00:33:44:55:66
+wait_row_count nb:MAC_Binding 1 logical_port=lr0-p1
+wait_row_count MAC_Binding 1 logical_port=lr0-p1 ip=10.0.0.10 mac="00\:00\:33\:44\:55\:66"
+
+ovn-nbctl --may-exist mac-binding-add lr0-p0 192.168.10.100 00:00:22:33:55:66
+wait_row_count MAC_Binding 1 logical_port=lr0-p0 ip=192.168.10.100 mac="00\:00\:22\:33\:55\:66"
+
+AT_CLEANUP
+])

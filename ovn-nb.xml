@@ -4130,4 +4130,29 @@
       </column>
     </group>
   </table>
+
+  <table name="MAC_Binding">
+    <p>
+      Each record represents a MAC Binding entry.
+    </p>
+
+    <group title="Configuration">
+      <p>
+        <code>ovn-northd</code> reads configuration from these columns
+        and propagates the value to SBDB.
+      </p>
+
+      <column name="logical_port">
+        The logical port on which the binding was discovered.
+      </column>
+
+      <column name="ip">
+        The bound IP address.
+      </column>
+
+      <column name="mac">
+        The Ethernet address to which the IP is bound.
+      </column>
+    </group>
+  </table>
 </database>

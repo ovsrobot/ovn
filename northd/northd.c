@@ -29,6 +29,7 @@
 #include "lib/chassis-index.h"
 #include "lib/ip-mcast-index.h"
 #include "lib/copp.h"
+#include "lib/mac-binding-index.h"
 #include "lib/mcast-group-index.h"
 #include "lib/ovn-l7.h"
 #include "lib/ovn-nb-idl.h"
@@ -8402,6 +8403,35 @@ build_bfd_table(struct northd_context *ctx, struct hmap *bfd_connections,
     bitmap_free(bfd_src_ports);
 }
 
+static void
+build_mac_binding_table(struct northd_context *ctx, struct hmap *ports)
+{
+    const struct nbrec_mac_binding *nb_mac_binding;
+    NBREC_MAC_BINDING_FOR_EACH (nb_mac_binding, ctx->ovnnb_idl) {
+        struct ovn_port *op = ovn_port_find(
+            ports, nb_mac_binding->logical_port);
+        if (op && op->nbrp) {
+            struct ovn_datapath *od = op->od;
+            if (od && od->sb) {
+                const struct sbrec_mac_binding *mb =
+                    mac_binding_lookup(ctx->sbrec_mac_binding_by_lport_ip,
+                                       nb_mac_binding->logical_port,
+                                       nb_mac_binding->ip);
+                if (!mb) {
+                    mb = sbrec_mac_binding_insert(ctx->ovnsb_txn);
+                    sbrec_mac_binding_set_logical_port(
+                        mb, nb_mac_binding->logical_port);
+                    sbrec_mac_binding_set_ip(mb, nb_mac_binding->ip);
+                    sbrec_mac_binding_set_mac(mb, nb_mac_binding->mac);
+                    sbrec_mac_binding_set_datapath(mb, od->sb);
+                } else {
+                    sbrec_mac_binding_set_mac(mb, nb_mac_binding->mac);
+                }
+            }
+        }
+    }
+}
+
 /* Returns a string of the IP address of the router port 'op' that
  * overlaps with 'ip_s".  If one is not found, returns NULL.
  *
@@ -14509,6 +14539,7 @@ ovnnb_db_run(struct northd_context *ctx,
     build_mcast_groups(ctx, datapaths, ports, &mcast_groups, &igmp_groups);
     build_meter_groups(ctx, &meter_groups);
     build_bfd_table(ctx, &bfd_connections, ports);
+    build_mac_binding_table(ctx, ports);
     stopwatch_stop(BUILD_LFLOWS_CTX_STOPWATCH_NAME, time_msec());
     stopwatch_start(BUILD_LFLOWS_STOPWATCH_NAME, time_msec());
     build_lflows(ctx, datapaths, ports, &port_groups, &mcast_groups,
