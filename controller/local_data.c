@@ -47,6 +47,8 @@ static struct tracked_datapath *tracked_datapath_create(
     enum en_tracked_resource_type tracked_type,
     struct hmap *tracked_datapaths);
 
+static uint64_t local_datapath_usage;
+
 struct local_datapath *
 get_local_datapath(const struct hmap *local_datapaths, uint32_t tunnel_key)
 {
@@ -63,6 +65,9 @@ local_datapath_alloc(const struct sbrec_datapath_binding *dp)
     ld->datapath = dp;
     ld->is_switch = datapath_is_switch(dp);
     shash_init(&ld->external_ports);
+    /* memory accounting - common part. */
+    local_datapath_usage += sizeof *ld;
+
     return ld;
 }
 
@@ -80,6 +85,16 @@ local_datapaths_destroy(struct hmap *local_datapaths)
 void
 local_datapath_destroy(struct local_datapath *ld)
 {
+    /* memory accounting. */
+    struct shash_node *node;
+    SHASH_FOR_EACH (node, &ld->external_ports) {
+        local_datapath_usage -= strlen(node->name);
+    }
+    local_datapath_usage -= shash_count(&ld->external_ports) * sizeof *node;
+    local_datapath_usage -= sizeof *ld;
+    local_datapath_usage -=
+        ld->n_allocated_peer_ports * sizeof *ld->peer_ports;
+
     free(ld->peer_ports);
     shash_destroy(&ld->external_ports);
     free(ld);
@@ -146,6 +161,26 @@ add_local_datapath(struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                          tracked_datapaths);
 }
 
+static void
+local_datapath_peer_port_add(struct local_datapath *ld,
+                             const struct sbrec_port_binding *local,
+                             const struct sbrec_port_binding *remote)
+{
+    ld->n_peer_ports++;
+    if (ld->n_peer_ports > ld->n_allocated_peer_ports) {
+        size_t old_n_ports = ld->n_allocated_peer_ports;
+        ld->peer_ports =
+            x2nrealloc(ld->peer_ports,
+                       &ld->n_allocated_peer_ports,
+                       sizeof *ld->peer_ports);
+        local_datapath_usage +=
+            (ld->n_allocated_peer_ports - old_n_ports) *
+            sizeof *ld->peer_ports;
+    }
+    ld->peer_ports[ld->n_peer_ports - 1].local = local;
+    ld->peer_ports[ld->n_peer_ports - 1].remote = remote;
+}
+
 void
 add_local_datapath_peer_port(
     const struct sbrec_port_binding *pb,
@@ -173,15 +208,7 @@ add_local_datapath_peer_port(
     }
 
     if (!present) {
-        ld->n_peer_ports++;
-        if (ld->n_peer_ports > ld->n_allocated_peer_ports) {
-            ld->peer_ports =
-                x2nrealloc(ld->peer_ports,
-                           &ld->n_allocated_peer_ports,
-                           sizeof *ld->peer_ports);
-        }
-        ld->peer_ports[ld->n_peer_ports - 1].local = pb;
-        ld->peer_ports[ld->n_peer_ports - 1].remote = peer;
+        local_datapath_peer_port_add(ld, pb, peer);
     }
 
     struct local_datapath *peer_ld =
@@ -202,15 +229,7 @@ add_local_datapath_peer_port(
         }
     }
 
-    peer_ld->n_peer_ports++;
-    if (peer_ld->n_peer_ports > peer_ld->n_allocated_peer_ports) {
-        peer_ld->peer_ports =
-            x2nrealloc(peer_ld->peer_ports,
-                        &peer_ld->n_allocated_peer_ports,
-                        sizeof *peer_ld->peer_ports);
-    }
-    peer_ld->peer_ports[peer_ld->n_peer_ports - 1].local = peer;
-    peer_ld->peer_ports[peer_ld->n_peer_ports - 1].remote = pb;
+    local_datapath_peer_port_add(peer_ld, peer, pb);
 }
 
 void
@@ -245,6 +264,26 @@ remove_local_datapath_peer_port(const struct sbrec_port_binding *pb,
          * datapath also tries to remove its peer lport, but that would
          * be no-op. */
         remove_local_datapath_peer_port(peer, peer_ld, local_datapaths);
+    }
+}
+
+void
+add_local_datapath_external_port(struct local_datapath *ld,
+                                 char *logical_port, const void *data)
+{
+    if (!shash_replace(&ld->external_ports, logical_port, data)) {
+        local_datapath_usage += sizeof(struct shash_node) +
+                                strlen(logical_port);
+    }
+}
+
+void
+remove_local_datapath_external_port(struct local_datapath *ld,
+                                    char *logical_port)
+{
+    if (shash_find_and_delete(&ld->external_ports, logical_port)) {
+        local_datapath_usage -= sizeof(struct shash_node) +
+                                strlen(logical_port);
     }
 }
 
@@ -535,15 +574,7 @@ add_local_datapath__(struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                                              chassis, local_datapaths,
                                              tracked_datapaths);
                     }
-                    ld->n_peer_ports++;
-                    if (ld->n_peer_ports > ld->n_allocated_peer_ports) {
-                        ld->peer_ports =
-                            x2nrealloc(ld->peer_ports,
-                                       &ld->n_allocated_peer_ports,
-                                       sizeof *ld->peer_ports);
-                    }
-                    ld->peer_ports[ld->n_peer_ports - 1].local = pb;
-                    ld->peer_ports[ld->n_peer_ports - 1].remote = peer;
+                    local_datapath_peer_port_add(ld, pb, peer);
                 }
             }
         }
@@ -562,4 +593,11 @@ tracked_datapath_create(const struct sbrec_datapath_binding *dp,
     shash_init(&t_dp->lports);
     hmap_insert(tracked_datapaths, &t_dp->node, uuid_hash(&dp->header_.uuid));
     return t_dp;
+}
+
+void
+local_datapath_memory_usage(struct simap *usage)
+{
+    simap_increase(usage, "local_datapath_usage-KB",
+                   ROUND_UP(local_datapath_usage, 1024) / 1024);
 }
