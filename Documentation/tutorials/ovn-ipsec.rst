@@ -82,7 +82,7 @@ database to false::
 
 .. note::
 
-   On Fedora, you may need to install firewall rules to allow ESP and IKE
+   On Fedora, RHEL and CentOS, you may need to install firewall rules to allow ESP and IKE
    traffic::
 
        # systemctl start firewalld
