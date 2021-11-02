@@ -56,6 +56,8 @@
 #include "lib/ovn-sb-idl.h"
 #include "lib/ovn-util.h"
 #include "patch.h"
+#include "vif-plug.h"
+#include "vif-plug-provider.h"
 #include "physical.h"
 #include "pinctrl.h"
 #include "openvswitch/poll-loop.h"
@@ -3082,11 +3084,17 @@ main(int argc, char *argv[])
     patch_init();
     pinctrl_init();
     lflow_init();
+    vif_plug_provider_initialize();
 
     /* Connect to OVS OVSDB instance. */
     struct ovsdb_idl_loop ovs_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(
         ovsdb_idl_create(ovs_remote, &ovsrec_idl_class, false, true));
     ctrl_register_ovs_idl(ovs_idl_loop.idl);
+
+    struct ovsdb_idl_index *ovsrec_port_by_interfaces
+        = ovsdb_idl_index_create1(ovs_idl_loop.idl,
+                                  &ovsrec_port_col_interfaces);
+
     ovsdb_idl_get_initial_snapshot(ovs_idl_loop.idl);
 
     /* Configure OVN SB database. */
@@ -3122,6 +3130,9 @@ main(int argc, char *argv[])
     struct ovsdb_idl_index *sbrec_port_binding_by_type
         = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
                                   &sbrec_port_binding_col_type);
+    struct ovsdb_idl_index *sbrec_port_binding_by_requested_chassis
+        = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
+                                  &sbrec_port_binding_col_requested_chassis);
     struct ovsdb_idl_index *sbrec_datapath_binding_by_key
         = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
                                   &sbrec_datapath_binding_col_tunnel_key);
@@ -3348,8 +3359,12 @@ main(int argc, char *argv[])
                                 sbrec_port_binding_by_key);
     engine_ovsdb_node_add_index(&en_sb_port_binding, "datapath",
                                 sbrec_port_binding_by_datapath);
+    engine_ovsdb_node_add_index(&en_sb_port_binding, "requested_chassis",
+                                sbrec_port_binding_by_requested_chassis);
     engine_ovsdb_node_add_index(&en_sb_datapath_binding, "key",
                                 sbrec_datapath_binding_by_key);
+    engine_ovsdb_node_add_index(&en_ovs_port, "interfaces",
+                                ovsrec_port_by_interfaces);
 
     struct ed_type_lflow_output *lflow_output_data =
         engine_get_internal_data(&en_lflow_output);
@@ -3879,6 +3894,7 @@ loop_done:
     pinctrl_destroy();
     patch_destroy();
     if_status_mgr_destroy(if_mgr);
+    vif_plug_provider_destroy_all();
 
     ovsdb_idl_loop_destroy(&ovs_idl_loop);
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
@@ -3899,6 +3915,7 @@ parse_options(int argc, char *argv[])
         VLOG_OPTION_ENUMS,
         OVN_DAEMON_OPTION_ENUMS,
         SSL_OPTION_ENUMS,
+        OPT_ENABLE_DUMMY_VIF_PLUG,
     };
 
     static struct option long_options[] = {
@@ -3909,6 +3926,8 @@ parse_options(int argc, char *argv[])
         STREAM_SSL_LONG_OPTIONS,
         {"peer-ca-cert", required_argument, NULL, OPT_PEER_CA_CERT},
         {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
+        {"enable-dummy-vif-plug", no_argument, NULL,
+         OPT_ENABLE_DUMMY_VIF_PLUG},
         {NULL, 0, NULL, 0}
     };
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
@@ -3952,6 +3971,10 @@ parse_options(int argc, char *argv[])
 
         case OPT_BOOTSTRAP_CA_CERT:
             stream_ssl_set_ca_cert_file(optarg, true);
+            break;
+
+        case OPT_ENABLE_DUMMY_VIF_PLUG:
+            vif_plug_dummy_enable();
             break;
 
         case '?':
