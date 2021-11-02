@@ -106,6 +106,7 @@ static unixctl_cb_func debug_delay_nb_cfg_report;
 #define IF_STATUS_MGR_UPDATE_STOPWATCH_NAME "if-status-mgr-update"
 #define OFCTRL_SEQNO_RUN_STOPWATCH_NAME "ofctrl-seqno-run"
 #define BFD_RUN_STOPWATCH_NAME "bfd-run"
+#define VIF_PLUG_RUN_STOPWATCH_NAME "vif-plug-run"
 
 #define OVS_NB_CFG_NAME "ovn-nb-cfg"
 #define OVS_NB_CFG_TS_NAME "ovn-nb-cfg-ts"
@@ -937,6 +938,7 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     binding_register_ovs_idl(ovs_idl);
     bfd_register_ovs_idl(ovs_idl);
     physical_register_ovs_idl(ovs_idl);
+    vif_plug_register_ovs_idl(ovs_idl);
 }
 
 #define SB_NODES \
@@ -3205,6 +3207,7 @@ main(int argc, char *argv[])
     stopwatch_create(IF_STATUS_MGR_UPDATE_STOPWATCH_NAME, SW_MS);
     stopwatch_create(OFCTRL_SEQNO_RUN_STOPWATCH_NAME, SW_MS);
     stopwatch_create(BFD_RUN_STOPWATCH_NAME, SW_MS);
+    stopwatch_create(VIF_PLUG_RUN_STOPWATCH_NAME, SW_MS);
 
     /* Define inc-proc-engine nodes. */
     ENGINE_NODE_CUSTOM_WITH_CLEAR_TRACK_DATA(ct_zones, "ct_zones");
@@ -3440,6 +3443,11 @@ main(int argc, char *argv[])
     };
     struct if_status_mgr *if_mgr = ctrl_engine_ctx.if_mgr;
 
+    struct shash vif_plug_deleted_iface_ids =
+        SHASH_INITIALIZER(&vif_plug_deleted_iface_ids);
+    struct shash vif_plug_changed_iface_ids =
+        SHASH_INITIALIZER(&vif_plug_changed_iface_ids);
+
     char *ovn_version = ovn_get_internal_version();
     VLOG_INFO("OVN internal version is : [%s]", ovn_version);
 
@@ -3650,6 +3658,37 @@ main(int argc, char *argv[])
                             ovsrec_port_table_get(ovs_idl_loop.idl),
                             br_int, chassis, &runtime_data->local_datapaths);
                         stopwatch_stop(PATCH_RUN_STOPWATCH_NAME, time_msec());
+                        if (vif_plug_provider_has_providers() && ovs_idl_txn) {
+                            struct vif_plug_ctx_in vif_plug_ctx_in = {
+                                .ovs_idl_txn = ovs_idl_txn,
+                                .sbrec_port_binding_by_name =
+                                    sbrec_port_binding_by_name,
+                                .sbrec_port_binding_by_requested_chassis =
+                                    sbrec_port_binding_by_requested_chassis,
+                                .ovsrec_port_by_interfaces =
+                                    ovsrec_port_by_interfaces,
+                                .ovs_table = ovs_table,
+                                .br_int = br_int,
+                                .iface_table =
+                                    ovsrec_interface_table_get(
+                                                    ovs_idl_loop.idl),
+                                .chassis_rec = chassis,
+                                .local_bindings =
+                                        &runtime_data->lbinding_data.bindings,
+                            };
+                            struct vif_plug_ctx_out vif_plug_ctx_out = {
+                                .deleted_iface_ids =
+                                    &vif_plug_deleted_iface_ids,
+                                .changed_iface_ids =
+                                    &vif_plug_changed_iface_ids,
+                            };
+                            stopwatch_start(VIF_PLUG_RUN_STOPWATCH_NAME,
+                                            time_msec());
+                            vif_plug_run(&vif_plug_ctx_in,
+                                         &vif_plug_ctx_out);
+                            stopwatch_stop(VIF_PLUG_RUN_STOPWATCH_NAME,
+                                           time_msec());
+                        }
                         stopwatch_start(PINCTRL_RUN_STOPWATCH_NAME,
                                         time_msec());
                         pinctrl_run(ovnsb_idl_txn,
@@ -3806,7 +3845,16 @@ main(int argc, char *argv[])
             engine_set_force_recompute(true);
         }
 
-        if (ovsdb_idl_loop_commit_and_wait(&ovs_idl_loop) == 1) {
+        int ovs_txn_status = ovsdb_idl_loop_commit_and_wait(&ovs_idl_loop);
+        if (!ovs_txn_status) {
+            /* The transaction failed. */
+            vif_plug_clear_deleted(
+                    &vif_plug_deleted_iface_ids);
+            vif_plug_clear_changed(
+                    &vif_plug_changed_iface_ids);
+        } else if (ovs_txn_status == 1) {
+            /* The transaction committed successfully
+             * (or it did not change anything in the database). */
             ct_zones_data = engine_get_data(&en_ct_zones);
             if (ct_zones_data) {
                 struct shash_node *iter, *iter_next;
@@ -3819,6 +3867,15 @@ main(int argc, char *argv[])
                     }
                 }
             }
+
+            vif_plug_finish_deleted(
+                    &vif_plug_deleted_iface_ids);
+            vif_plug_finish_changed(
+                    &vif_plug_changed_iface_ids);
+        } else if (ovs_txn_status == -1) {
+            /* The commit is still in progress */
+        } else {
+            OVS_NOT_REACHED();
         }
 
         ovsdb_idl_track_clear(ovnsb_idl_loop.idl);
@@ -3894,6 +3951,8 @@ loop_done:
     pinctrl_destroy();
     patch_destroy();
     if_status_mgr_destroy(if_mgr);
+    shash_destroy(&vif_plug_deleted_iface_ids);
+    shash_destroy(&vif_plug_changed_iface_ids);
     vif_plug_provider_destroy_all();
 
     ovsdb_idl_loop_destroy(&ovs_idl_loop);
