@@ -6,6 +6,7 @@ Post v21.09.0
     if not desired.
   - Added Load_Balancer_Group support, which simplifies large scale
     configurations of load balancers.
+  - Added Logical_Router_Port "gateway_mtu_bypass" option.
 
 OVN v21.09.0 - 01 Oct 2021
 --------------------------
