@@ -138,5 +138,4 @@ void *en_northd_init(struct engine_node *node OVS_UNUSED,
 void en_northd_cleanup(void *data)
 {
     northd_destroy(data);
-    free(data);
 }
