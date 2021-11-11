@@ -313,6 +313,11 @@
       <column name="nexthop">
         Nexthop IP address for this route.
       </column>
+
+      <column name="origin">
+        The method with which this route was inserted to OVN. Can be one of
+        <code>connected</code> or <code>static</code>.
+      </column>
     </group>
 
     <group title="Common Columns">
