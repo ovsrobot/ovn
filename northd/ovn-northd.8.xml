@@ -2945,12 +2945,12 @@ icmp6 {
 
     <p>
       If ECMP routes with symmetric reply are configured in the
-      <code>OVN_Northbound</code> database for a gateway router, a priority-300
-      flow is added for each router port on which symmetric replies are
-      configured. The matching logic for these ports essentially reverses the
-      configured logic of the ECMP route. So for instance, a route with a
-      destination routing policy will instead match if the source IP address
-      matches the static route's prefix. The flow uses the action
+      <code>OVN_Northbound</code> database for a gateway router, a
+      priority-10300 flow is added for each router port on which symmetric
+      replies are configured. The matching logic for these ports essentially
+      reverses the configured logic of the ECMP route. So for instance, a route
+      with a destination routing policy will instead match if the source IP
+      address matches the static route's prefix. The flow uses the action
       <code>ct_next</code> to send IP packets to the connection tracker for
       packet de-fragmentation and tracking before sending it to the next table.
     </p>
