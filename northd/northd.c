@@ -620,8 +620,10 @@ struct ovn_datapath {
      */
     struct sset lb_ips_v4;
     struct sset lb_ips_v4_routable;
+    struct sset lb_ips_v4_reachable;
     struct sset lb_ips_v6;
     struct sset lb_ips_v6_routable;
+    struct sset lb_ips_v6_reachable;
 
     struct ovn_port **localnet_ports;
     size_t n_localnet_ports;
@@ -915,8 +917,10 @@ init_lb_for_datapath(struct ovn_datapath *od)
 {
     sset_init(&od->lb_ips_v4);
     sset_init(&od->lb_ips_v4_routable);
+    sset_init(&od->lb_ips_v4_reachable);
     sset_init(&od->lb_ips_v6);
     sset_init(&od->lb_ips_v6_routable);
+    sset_init(&od->lb_ips_v6_reachable);
 
     if (od->nbs) {
         od->has_lb_vip = ls_has_lb_vip(od);
@@ -934,8 +938,10 @@ destroy_lb_for_datapath(struct ovn_datapath *od)
 
     sset_destroy(&od->lb_ips_v4);
     sset_destroy(&od->lb_ips_v4_routable);
+    sset_destroy(&od->lb_ips_v4_reachable);
     sset_destroy(&od->lb_ips_v6);
     sset_destroy(&od->lb_ips_v6_routable);
+    sset_destroy(&od->lb_ips_v6_reachable);
 }
 
 /* A group of logical router datapaths which are connected - either
@@ -3878,6 +3884,38 @@ build_lrouter_lb_ips(struct ovn_datapath *od, const struct ovn_northd_lb *lb)
     }
 }
 
+static bool lrouter_port_ipv4_reachable(const struct ovn_port *op,
+                                        ovs_be32 addr);
+static bool lrouter_port_ipv6_reachable(const struct ovn_port *op,
+                                        const struct in6_addr *addr);
+static void
+build_lrouter_lb_reachable_ips(struct ovn_datapath *od,
+                               const struct ovn_northd_lb *lb)
+{
+    for (size_t i = 0; i < lb->n_vips; i++) {
+        if (IN6_IS_ADDR_V4MAPPED(&lb->vips[i].vip)) {
+            ovs_be32 vip_ip4 = in6_addr_get_mapped_ipv4(&lb->vips[i].vip);
+            struct ovn_port *op;
+
+            LIST_FOR_EACH (op, dp_node, &od->port_list) {
+                if (lrouter_port_ipv4_reachable(op, vip_ip4)) {
+                    sset_add(&od->lb_ips_v4_reachable, lb->vips[i].vip_str);
+                    break;
+                }
+            }
+        } else {
+            struct ovn_port *op;
+
+            LIST_FOR_EACH (op, dp_node, &od->port_list) {
+                if (lrouter_port_ipv6_reachable(op, &lb->vips[i].vip)) {
+                    sset_add(&od->lb_ips_v6_reachable, lb->vips[i].vip_str);
+                    break;
+                }
+            }
+        }
+    }
+}
+
 static void
 build_lrouter_lbs(struct hmap *datapaths, struct hmap *lbs)
 {
@@ -3903,6 +3941,36 @@ build_lrouter_lbs(struct hmap *datapaths, struct hmap *lbs)
                     ovn_northd_lb_find(lbs,
                                        &lbg->load_balancer[j]->header_.uuid);
                 build_lrouter_lb_ips(od, lb);
+            }
+        }
+    }
+}
+
+static void
+build_lrouter_lbs_reachable_ips(struct hmap *datapaths, struct hmap *lbs)
+{
+    struct ovn_datapath *od;
+
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        if (!od->nbr) {
+            continue;
+        }
+
+        for (size_t i = 0; i < od->nbr->n_load_balancer; i++) {
+            struct ovn_northd_lb *lb =
+                ovn_northd_lb_find(lbs,
+                                   &od->nbr->load_balancer[i]->header_.uuid);
+            build_lrouter_lb_reachable_ips(od, lb);
+        }
+
+        for (size_t i = 0; i < od->nbr->n_load_balancer_group; i++) {
+            const struct nbrec_load_balancer_group *lbg =
+                od->nbr->load_balancer_group[i];
+            for (size_t j = 0; j < lbg->n_load_balancer; j++) {
+                struct ovn_northd_lb *lb =
+                    ovn_northd_lb_find(lbs,
+                                       &lbg->load_balancer[j]->header_.uuid);
+                build_lrouter_lb_reachable_ips(od, lb);
             }
         }
     }
@@ -12003,7 +12071,7 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
                                    &op->nbrp->header_, lflows);
         }
 
-        if (sset_count(&op->od->lb_ips_v4)) {
+        if (sset_count(&op->od->lb_ips_v4_reachable)) {
             ds_clear(match);
             if (is_l3dgw_port(op)) {
                 ds_put_format(match, "is_chassis_resident(%s)",
@@ -12018,7 +12086,7 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
             free(lb_ips_v4_as);
         }
 
-        if (sset_count(&op->od->lb_ips_v6)) {
+        if (sset_count(&op->od->lb_ips_v6_reachable)) {
             ds_clear(match);
 
             if (is_l3dgw_port(op)) {
@@ -13768,22 +13836,24 @@ sync_address_sets(struct northd_context *ctx, struct hmap *datapaths)
             continue;
         }
 
-        if (sset_count(&od->lb_ips_v4)) {
+        if (sset_count(&od->lb_ips_v4_reachable)) {
             char *ipv4_addrs_name = lr_lb_address_set_name(od, AF_INET);
-            const char **ipv4_addrs = sset_array(&od->lb_ips_v4);
+            const char **ipv4_addrs = sset_array(&od->lb_ips_v4_reachable);
 
             sync_address_set(ctx, ipv4_addrs_name, ipv4_addrs,
-                             sset_count(&od->lb_ips_v4), &sb_address_sets);
+                             sset_count(&od->lb_ips_v4_reachable),
+                             &sb_address_sets);
             free(ipv4_addrs_name);
             free(ipv4_addrs);
         }
 
-        if (sset_count(&od->lb_ips_v6)) {
+        if (sset_count(&od->lb_ips_v6_reachable)) {
             char *ipv6_addrs_name = lr_lb_address_set_name(od, AF_INET6);
-            const char **ipv6_addrs = sset_array(&od->lb_ips_v6);
+            const char **ipv6_addrs = sset_array(&od->lb_ips_v6_reachable);
 
             sync_address_set(ctx, ipv6_addrs_name, ipv6_addrs,
-                             sset_count(&od->lb_ips_v6), &sb_address_sets);
+                             sset_count(&od->lb_ips_v6_reachable),
+                             &sb_address_sets);
             free(ipv6_addrs_name);
             free(ipv6_addrs);
         }
@@ -14513,6 +14583,7 @@ ovnnb_db_run(struct northd_context *ctx,
     build_lrouter_lbs(datapaths, &lbs);
     build_ports(ctx, sbrec_chassis_by_name, sbrec_chassis_by_hostname,
                 datapaths, ports);
+    build_lrouter_lbs_reachable_ips(datapaths, &lbs);
     build_ovn_lr_lbs(datapaths, &lbs);
     build_ovn_lb_svcs(ctx, ports, &lbs);
     build_ipam(datapaths, ports);
