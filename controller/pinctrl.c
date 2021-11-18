@@ -364,6 +364,8 @@ COVERAGE_DEFINE(pinctrl_drop_put_mac_binding);
 COVERAGE_DEFINE(pinctrl_drop_buffered_packets_map);
 COVERAGE_DEFINE(pinctrl_drop_controller_event);
 COVERAGE_DEFINE(pinctrl_drop_put_vport_binding);
+COVERAGE_DEFINE(pinctrl_notify_main_thread);
+COVERAGE_DEFINE(pinctrl_total_pin_pkts);
 
 struct empty_lb_backends_event {
     struct hmap_node hmap_node;
@@ -3073,6 +3075,7 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
+    struct ds pin_str = DS_EMPTY_INITIALIZER;
     struct ofputil_packet_in pin;
     struct ofpbuf continuation;
     enum ofperr error = ofputil_decode_packet_in(msg, true, NULL, NULL, &pin,
@@ -3099,18 +3102,22 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
     dp_packet_use_const(&packet, pin.packet, pin.packet_len);
     struct flow headers;
     flow_extract(&packet, &headers);
+    ds_put_cstr(&pin_str, "pinctrl received  packet-in | opcode=");
 
     switch (ntohl(ah->opcode)) {
     case ACTION_OPCODE_ARP:
+        ds_put_cstr(&pin_str, "ARP");
         pinctrl_handle_arp(swconn, &headers, &packet, &pin.flow_metadata,
                            &userdata);
         break;
     case ACTION_OPCODE_IGMP:
+        ds_put_cstr(&pin_str, "IGMP");
         pinctrl_ip_mcast_handle(swconn, &headers, &packet, &pin.flow_metadata,
                                 &userdata);
         break;
 
     case ACTION_OPCODE_PUT_ARP:
+        ds_put_cstr(&pin_str, "PUT_ARP");
         ovs_mutex_lock(&pinctrl_mutex);
         pinctrl_handle_put_mac_binding(&pin.flow_metadata.flow, &headers,
                                        true);
@@ -3118,21 +3125,25 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
         break;
 
     case ACTION_OPCODE_PUT_DHCP_OPTS:
+        ds_put_cstr(&pin_str, "PUT_DHCP_OPTS");
         pinctrl_handle_put_dhcp_opts(swconn, &packet, &pin, &headers,
                                      &userdata, &continuation);
         break;
 
     case ACTION_OPCODE_ND_NA:
+        ds_put_cstr(&pin_str, "ND_NA");
         pinctrl_handle_nd_na(swconn, &headers, &pin.flow_metadata, &userdata,
                              false);
         break;
 
     case ACTION_OPCODE_ND_NA_ROUTER:
+        ds_put_cstr(&pin_str, "ND_NA_ROUTER");
         pinctrl_handle_nd_na(swconn, &headers, &pin.flow_metadata, &userdata,
                              true);
         break;
 
     case ACTION_OPCODE_PUT_ND:
+        ds_put_cstr(&pin_str, "PUT_ND");
         ovs_mutex_lock(&pinctrl_mutex);
         pinctrl_handle_put_mac_binding(&pin.flow_metadata.flow, &headers,
                                        false);
@@ -3140,17 +3151,20 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
         break;
 
     case ACTION_OPCODE_PUT_FDB:
+        ds_put_cstr(&pin_str, "PUT_FDB");
         ovs_mutex_lock(&pinctrl_mutex);
         pinctrl_handle_put_fdb(&pin.flow_metadata.flow, &headers);
         ovs_mutex_unlock(&pinctrl_mutex);
         break;
 
     case ACTION_OPCODE_PUT_DHCPV6_OPTS:
+        ds_put_cstr(&pin_str, "PUT_DHCPV6_OPTS");
         pinctrl_handle_put_dhcpv6_opts(swconn, &packet, &pin, &userdata,
                                        &continuation);
         break;
 
     case ACTION_OPCODE_DNS_LOOKUP:
+        ds_put_cstr(&pin_str, "DNS_LOOKUP");
         ovs_mutex_lock(&pinctrl_mutex);
         pinctrl_handle_dns_lookup(swconn, &packet, &pin, &userdata,
                                   &continuation);
@@ -3158,63 +3172,83 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
         break;
 
     case ACTION_OPCODE_LOG:
+        ds_put_cstr(&pin_str, "LOG");
         handle_acl_log(&headers, &userdata);
         break;
 
     case ACTION_OPCODE_PUT_ND_RA_OPTS:
+        ds_put_cstr(&pin_str, "PUT_ND_RA_OPTS");
         pinctrl_handle_put_nd_ra_opts(swconn, &headers, &packet, &pin,
                                       &userdata, &continuation);
         break;
 
     case ACTION_OPCODE_ND_NS:
+        ds_put_cstr(&pin_str, "ND_NS");
         pinctrl_handle_nd_ns(swconn, &headers, &packet, &pin.flow_metadata,
                              &userdata);
         break;
 
     case ACTION_OPCODE_ICMP:
+        ds_put_cstr(&pin_str, "ICMP");
         pinctrl_handle_icmp(swconn, &headers, &packet, &pin.flow_metadata,
                             &userdata, true, false);
         break;
 
     case ACTION_OPCODE_ICMP4_ERROR:
     case ACTION_OPCODE_ICMP6_ERROR:
+        if (ntohl(ah->opcode) == ACTION_OPCODE_ICMP4_ERROR) {
+            ds_put_cstr(&pin_str, "ICMP4_ERROR");
+        } else {
+            ds_put_cstr(&pin_str, "ICMP6_ERROR");
+        }
         pinctrl_handle_icmp(swconn, &headers, &packet, &pin.flow_metadata,
                             &userdata, false, false);
         break;
 
     case ACTION_OPCODE_TCP_RESET:
+        ds_put_cstr(&pin_str, "TCP_RESET");
         pinctrl_handle_tcp_reset(swconn, &headers, &packet, &pin.flow_metadata,
                                  &userdata, false);
         break;
 
     case ACTION_OPCODE_SCTP_ABORT:
+        ds_put_cstr(&pin_str, "SCTP_ABORT");
         pinctrl_handle_sctp_abort(swconn, &headers, &packet,
                                   &pin.flow_metadata, &userdata, false);
         break;
 
     case ACTION_OPCODE_REJECT:
+        ds_put_cstr(&pin_str, "REJECT");
         pinctrl_handle_reject(swconn, &headers, &packet, &pin.flow_metadata,
                               &userdata);
         break;
 
     case ACTION_OPCODE_PUT_ICMP4_FRAG_MTU:
     case ACTION_OPCODE_PUT_ICMP6_FRAG_MTU:
+        if (ntohl(ah->opcode) == ACTION_OPCODE_PUT_ICMP4_FRAG_MTU) {
+            ds_put_cstr(&pin_str, "PUT_ICMP4_FRAG_MTU");
+        } else {
+            ds_put_cstr(&pin_str, "PUT_ICMP6_FRAG_MTU");
+        }
         pinctrl_handle_put_icmp_frag_mtu(swconn, &headers, &packet, &pin,
                                          &userdata, &continuation);
         break;
 
     case ACTION_OPCODE_EVENT:
+        ds_put_cstr(&pin_str, "EVENT");
         ovs_mutex_lock(&pinctrl_mutex);
         pinctrl_handle_event(&userdata);
         ovs_mutex_unlock(&pinctrl_mutex);
         break;
 
     case ACTION_OPCODE_BIND_VPORT:
+        ds_put_cstr(&pin_str, "BIND_VPORT");
         ovs_mutex_lock(&pinctrl_mutex);
         pinctrl_handle_bind_vport(&pin.flow_metadata.flow, &userdata);
         ovs_mutex_unlock(&pinctrl_mutex);
         break;
     case ACTION_OPCODE_DHCP6_SERVER:
+        ds_put_cstr(&pin_str, "DHCP6_SERVER");
         ovs_mutex_lock(&pinctrl_mutex);
         pinctrl_handle_dhcp6_server(swconn, &headers, &packet,
                                     &pin.flow_metadata);
@@ -3222,6 +3256,7 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
         break;
 
     case ACTION_OPCODE_HANDLE_SVC_CHECK:
+        ds_put_cstr(&pin_str, "HANDLE_SVC_CHECK");
         ovs_mutex_lock(&pinctrl_mutex);
         pinctrl_handle_svc_check(swconn, &headers, &packet,
                                  &pin.flow_metadata);
@@ -3229,16 +3264,45 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
         break;
 
     case ACTION_OPCODE_BFD_MSG:
+        ds_put_cstr(&pin_str, "BFD_MSG");
         ovs_mutex_lock(&pinctrl_mutex);
         pinctrl_handle_bfd_msg(swconn, &headers, &packet);
         ovs_mutex_unlock(&pinctrl_mutex);
         break;
 
     default:
+        ds_put_format(&pin_str, "unrecognized(%"PRIu32")",
+                      ntohl(ah->opcode));
         VLOG_WARN_RL(&rl, "unrecognized packet-in opcode %"PRIu32,
                      ntohl(ah->opcode));
         break;
     }
+
+
+    if (VLOG_IS_DBG_ENABLED()) {
+        ds_put_format(&pin_str, "| OF_Table_ID=%u", pin.table_id);
+        ds_put_format(&pin_str, "| OF_Cookie_ID=0x%"PRIx64,
+                        ntohll(pin.cookie));
+
+        if (pin.flow_metadata.flow.in_port.ofp_port) {
+            ds_put_format(&pin_str, "| in-port=%u",
+                            pin.flow_metadata.flow.in_port.ofp_port);
+        }
+
+        ds_put_format(&pin_str, "| src-mac="ETH_ADDR_FMT",",
+                        ETH_ADDR_ARGS(headers.dl_src));
+        ds_put_format(&pin_str, " dst-mac="ETH_ADDR_FMT,
+                        ETH_ADDR_ARGS(headers.dl_dst));
+        if (headers.dl_type != htons(ETH_TYPE_IPV6)) {
+            ds_put_format(&pin_str, "| src-ip="IP_FMT",",
+                            IP_ARGS(headers.nw_src));
+            ds_put_format(&pin_str, " dst-ip="IP_FMT,
+                            IP_ARGS(headers.nw_dst));
+        }
+        VLOG_DBG("%s \n", ds_cstr(&pin_str));
+    }
+
+    ds_destroy(&pin_str);
 }
 
 /* Called with in the pinctrl_handler thread context. */
@@ -3256,6 +3320,7 @@ pinctrl_recv(struct rconn *swconn, const struct ofp_header *oh,
         config.miss_send_len = UINT16_MAX;
         set_switch_config(swconn, &config);
     } else if (type == OFPTYPE_PACKET_IN) {
+        COVERAGE_INC(pinctrl_total_pin_pkts);
         process_packet_in(swconn, oh);
     } else {
         if (VLOG_IS_DBG_ENABLED()) {
@@ -3280,6 +3345,7 @@ notify_pinctrl_handler(void)
 static void
 notify_pinctrl_main(void)
 {
+    COVERAGE_INC(pinctrl_notify_main_thread);
     seq_change(pinctrl_main_seq);
 }
 
