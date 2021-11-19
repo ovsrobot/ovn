@@ -12,6 +12,8 @@ Post v21.09.0
     running on SmartNIC control plane CPUs.  Please refer to
     Documentation/topics/vif-plug-providers/vif-plug-providers.rst for more
     information.
+  - Added new "inc-engine/recompute" command to all incremental processing
+    engine clients (ovn-northd and ovn-controller).
 
 OVN v21.09.0 - 01 Oct 2021
 --------------------------
