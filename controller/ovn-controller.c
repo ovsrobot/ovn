@@ -76,6 +76,7 @@
 #include "stopwatch.h"
 #include "lib/inc-proc-eng.h"
 #include "hmapx.h"
+#include "openvswitch/ofp-util.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
 
@@ -957,7 +958,8 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     SB_NODE(dhcpv6_options, "dhcpv6_options") \
     SB_NODE(dns, "dns") \
     SB_NODE(load_balancer, "load_balancer") \
-    SB_NODE(fdb, "fdb")
+    SB_NODE(fdb, "fdb") \
+    SB_NODE(meter, "meter")
 
 enum sb_engine_node {
 #define SB_NODE(NAME, NAME_STR) SB_##NAME,
@@ -1497,6 +1499,55 @@ addr_sets_sb_address_set_handler(struct engine_node *node, void *data)
     }
 
     as->change_tracked = true;
+    return true;
+}
+
+struct ed_type_meter {
+    bool change_tracked;
+};
+
+static void *
+en_meter_init(struct engine_node *node OVS_UNUSED,
+              struct engine_arg *arg OVS_UNUSED)
+{
+    struct ed_type_meter *m = xzalloc(sizeof *m);
+
+    m->change_tracked = false;
+    return m;
+}
+
+static void
+en_meter_cleanup(void *data OVS_UNUSED)
+{
+}
+
+static void
+en_meter_run(struct engine_node *node, void *data)
+{
+    struct ed_type_meter *m = data;
+
+    engine_set_node_state(node, EN_UPDATED);
+    m->change_tracked = false;
+}
+
+static bool
+meter_sb_meter_handler(struct engine_node *node, void *data)
+{
+    struct ovs_list msgs = OVS_LIST_INITIALIZER(&msgs);
+    struct ed_type_meter *m = data;
+
+    struct sbrec_meter_table *m_table =
+        (struct sbrec_meter_table *)EN_OVSDB_GET(
+            engine_get_input("SB_meter", node));
+
+    const struct sbrec_meter *iter;
+    SBREC_METER_TABLE_FOR_EACH_TRACKED (iter, m_table) {
+        if (!sbrec_meter_is_deleted(iter) && !sbrec_meter_is_new(iter)) {
+            update_meter(iter);
+        }
+    }
+    m->change_tracked = true;
+
     return true;
 }
 
@@ -3202,6 +3253,7 @@ main(int argc, char *argv[])
     ENGINE_NODE(lflow_output, "logical_flow_output");
     ENGINE_NODE(flow_output, "flow_output");
     ENGINE_NODE(addr_sets, "addr_sets");
+    ENGINE_NODE(meter, "meter");
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA(port_groups, "port_groups");
 
 #define SB_NODE(NAME, NAME_STR) ENGINE_NODE_SB(NAME, NAME_STR);
@@ -3216,6 +3268,7 @@ main(int argc, char *argv[])
 
     engine_add_input(&en_addr_sets, &en_sb_address_set,
                      addr_sets_sb_address_set_handler);
+    engine_add_input(&en_meter, &en_sb_meter, meter_sb_meter_handler);
     engine_add_input(&en_port_groups, &en_sb_port_group,
                      port_groups_sb_port_group_handler);
     /* port_groups computation requires runtime_data's lbinding_data for the
@@ -3289,6 +3342,7 @@ main(int argc, char *argv[])
                      lflow_output_sb_load_balancer_handler);
     engine_add_input(&en_lflow_output, &en_sb_fdb,
                      lflow_output_sb_fdb_handler);
+    engine_add_input(&en_lflow_output, &en_meter, NULL);
 
     engine_add_input(&en_ct_zones, &en_ovs_open_vswitch, NULL);
     engine_add_input(&en_ct_zones, &en_ovs_bridge, NULL);

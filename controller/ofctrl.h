@@ -29,6 +29,7 @@ struct match;
 struct ofpbuf;
 struct ovsrec_bridge;
 struct sbrec_meter_table;
+struct sbrec_meter;
 struct shash;
 
 struct ovn_desired_flow_table {
@@ -129,5 +130,6 @@ void ofctrl_check_and_add_flow_metered(struct ovn_desired_flow_table *,
 bool ofctrl_is_connected(void);
 void ofctrl_set_probe_interval(int probe_interval);
 void ofctrl_get_memory_usage(struct simap *usage);
+void update_meter(const struct sbrec_meter *meter);
 
 #endif /* controller/ofctrl.h */

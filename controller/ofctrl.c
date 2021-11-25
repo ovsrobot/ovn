@@ -1802,26 +1802,13 @@ add_meter_string(struct ovn_extend_table_info *m_desired,
 }
 
 static void
-add_meter(struct ovn_extend_table_info *m_desired,
-          const struct sbrec_meter_table *meter_table,
-          struct ovs_list *msgs)
+alloc_meter_mod(struct ovn_extend_table_info *m,
+                const struct sbrec_meter *sb_meter,
+                struct ovs_list *msgs, bool update)
 {
-    const struct sbrec_meter *sb_meter;
-    SBREC_METER_TABLE_FOR_EACH (sb_meter, meter_table) {
-        if (!strcmp(m_desired->name, sb_meter->name)) {
-            break;
-        }
-    }
-
-    if (!sb_meter) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-        VLOG_ERR_RL(&rl, "could not find meter named \"%s\"", m_desired->name);
-        return;
-    }
-
     struct ofputil_meter_mod mm;
-    mm.command = OFPMC13_ADD;
-    mm.meter.meter_id = m_desired->table_id;
+    mm.command = update ? OFPMC13_MODIFY : OFPMC13_ADD;
+    mm.meter.meter_id = m->table_id;
     mm.meter.flags = OFPMF13_STATS;
 
     if (!strcmp(sb_meter->unit, "pktps")) {
@@ -1852,6 +1839,53 @@ add_meter(struct ovn_extend_table_info *m_desired,
 
     add_meter_mod(&mm, msgs);
     free(mm.meter.bands);
+}
+
+void
+update_meter(const struct sbrec_meter *meter)
+{
+    struct ovs_list msgs = OVS_LIST_INITIALIZER(&msgs);
+    struct ovn_extend_table_info *m_iter;
+
+    HMAP_FOR_EACH (m_iter, hmap_node, &meters->desired) {
+        if (!strcmp(meter->name, m_iter->name) &&
+            ovn_extend_table_lookup(&meters->existing, m_iter)) {
+            alloc_meter_mod(m_iter, meter, &msgs, true);
+        }
+    }
+
+    if (!ovs_list_is_empty(&msgs)) {
+        /* Add a barrier to the list of messages. */
+        struct ofpbuf *barrier = ofputil_encode_barrier_request(OFP15_VERSION);
+
+        ovs_list_push_back(&msgs, &barrier->list_node);
+        /* Queue the messages. */
+        struct ofpbuf *msg;
+        LIST_FOR_EACH_POP (msg, list_node, &msgs) {
+            queue_msg(msg);
+        }
+    }
+}
+
+static void
+add_meter(struct ovn_extend_table_info *m_desired,
+          const struct sbrec_meter_table *meter_table,
+          struct ovs_list *msgs)
+{
+    const struct sbrec_meter *sb_meter;
+    SBREC_METER_TABLE_FOR_EACH (sb_meter, meter_table) {
+        if (!strcmp(m_desired->name, sb_meter->name)) {
+            break;
+        }
+    }
+
+    if (!sb_meter) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_ERR_RL(&rl, "could not find meter named \"%s\"", m_desired->name);
+        return;
+    }
+
+    alloc_meter_mod(m_desired, sb_meter, msgs, false);
 }
 
 static void
