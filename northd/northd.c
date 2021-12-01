@@ -592,6 +592,7 @@ struct ovn_datapath {
     uint32_t port_key_hint;
 
     bool has_stateful_acl;
+    bool has_stateless_acl;
     bool has_lb_vip;
     bool has_unknown;
     bool has_acls;
@@ -5416,15 +5417,26 @@ ls_get_acl_flags(struct ovn_datapath *od)
 {
     od->has_acls = false;
     od->has_stateful_acl = false;
+    od->has_stateless_acl = false;
 
     if (od->nbs->n_acls) {
         od->has_acls = true;
 
         for (size_t i = 0; i < od->nbs->n_acls; i++) {
             struct nbrec_acl *acl = od->nbs->acls[i];
-            if (!strcmp(acl->action, "allow-related")) {
+            if (!od->has_stateful_acl &&
+                !strcmp(acl->action, "allow-related")) {
                 od->has_stateful_acl = true;
-                return;
+                if (od->has_stateless_acl) {
+                    return;
+                }
+            }
+            if (!od->has_stateless_acl &&
+                !strcmp(acl->action, "allow-stateless")) {
+                od->has_stateless_acl = true;
+                if (od->has_stateful_acl) {
+                    return;
+                }
             }
         }
     }
@@ -5436,9 +5448,19 @@ ls_get_acl_flags(struct ovn_datapath *od)
 
             for (size_t i = 0; i < ls_pg->nb_pg->n_acls; i++) {
                 struct nbrec_acl *acl = ls_pg->nb_pg->acls[i];
-                if (!strcmp(acl->action, "allow-related")) {
+                if (!od->has_stateful_acl &&
+                    !strcmp(acl->action, "allow-related")) {
                     od->has_stateful_acl = true;
-                    return;
+                    if (od->has_stateless_acl) {
+                        return;
+                    }
+                }
+                if (!od->has_stateless_acl &&
+                    !strcmp(acl->action, "allow-stateless")) {
+                    od->has_stateless_acl = true;
+                    if (od->has_stateful_acl) {
+                        return;
+                    }
                 }
             }
         }
@@ -5647,45 +5669,42 @@ skip_port_from_conntrack(struct ovn_datapath *od, struct ovn_port *op,
 }
 
 static void
-build_stateless_filter(struct ovn_datapath *od,
-                       const struct nbrec_acl *acl,
-                       struct hmap *lflows)
+build_acl_filter(struct ovn_datapath *od, const struct nbrec_acl *acl,
+                 struct hmap *lflows)
 {
+    int direction;
+    char *actions;
+
     if (!strcmp(acl->direction, "from-lport")) {
-        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_PRE_ACL,
-                                acl->priority + OVN_ACL_PRI_OFFSET,
-                                acl->match,
-                                "next;",
-                                &acl->header_);
+        direction = S_SWITCH_IN_PRE_ACL;
     } else {
-        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
-                                acl->priority + OVN_ACL_PRI_OFFSET,
-                                acl->match,
-                                "next;",
-                                &acl->header_);
+        direction = S_SWITCH_OUT_PRE_ACL;
     }
+
+    if (!strcmp(acl->action, "allow-stateless")) {
+        actions = "next;";
+    } else {
+        actions = REGBIT_CONNTRACK_DEFRAG" = 1; next;";
+    }
+
+    ovn_lflow_add_with_hint(lflows, od, direction,
+                            acl->priority + OVN_ACL_PRI_OFFSET, acl->match,
+                            actions, &acl->header_);
 }
 
 static void
-build_stateless_filters(struct ovn_datapath *od,
-                        const struct hmap *port_groups,
-                        struct hmap *lflows)
+build_acl_filters(struct ovn_datapath *od, const struct hmap *port_groups,
+                  struct hmap *lflows)
 {
     for (size_t i = 0; i < od->nbs->n_acls; i++) {
-        const struct nbrec_acl *acl = od->nbs->acls[i];
-        if (!strcmp(acl->action, "allow-stateless")) {
-            build_stateless_filter(od, acl, lflows);
-        }
+        build_acl_filter(od, od->nbs->acls[i], lflows);
     }
 
     struct ovn_port_group *pg;
     HMAP_FOR_EACH (pg, key_node, port_groups) {
         if (ovn_port_group_ls_find(pg, &od->nbs->header_.uuid)) {
             for (size_t i = 0; i < pg->nb_pg->n_acls; i++) {
-                const struct nbrec_acl *acl = pg->nb_pg->acls[i];
-                if (!strcmp(acl->action, "allow-stateless")) {
-                    build_stateless_filter(od, acl, lflows);
-                }
+                build_acl_filter(od, pg->nb_pg->acls[i], lflows);
             }
         }
     }
@@ -5700,10 +5719,10 @@ build_pre_acls(struct ovn_datapath *od, const struct hmap *port_groups,
     ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 0, "1", "next;");
 
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 110,
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 65535,
                   "eth.dst == $svc_monitor_mac", "next;");
 
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110,
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 65535,
                   "eth.src == $svc_monitor_mac", "next;");
 
     /* If there are any stateful ACL rules in this datapath, we may
@@ -5713,25 +5732,26 @@ build_pre_acls(struct ovn_datapath *od, const struct hmap *port_groups,
         for (size_t i = 0; i < od->n_router_ports; i++) {
             skip_port_from_conntrack(od, od->router_ports[i],
                                      S_SWITCH_IN_PRE_ACL, S_SWITCH_OUT_PRE_ACL,
-                                     110, lflows);
+                                     65535, lflows);
         }
         for (size_t i = 0; i < od->n_localnet_ports; i++) {
             skip_port_from_conntrack(od, od->localnet_ports[i],
                                      S_SWITCH_IN_PRE_ACL, S_SWITCH_OUT_PRE_ACL,
-                                     110, lflows);
+                                     65535, lflows);
         }
 
-        /* stateless filters always take precedence over stateful ACLs. */
-        build_stateless_filters(od, port_groups, lflows);
+        if (od->has_stateless_acl) {
+            build_acl_filters(od, port_groups, lflows);
+        }
 
         /* Ingress and Egress Pre-ACL Table (Priority 110).
          *
          * Not to do conntrack on ND and ICMP destination
          * unreachable packets. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 110,
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 65535,
                       "nd || nd_rs || nd_ra || mldv1 || mldv2 || "
                       "(udp && udp.src == 546 && udp.dst == 547)", "next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110,
+        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 65535,
                       "nd || nd_rs || nd_ra || mldv1 || mldv2 || "
                       "(udp && udp.src == 546 && udp.dst == 547)", "next;");
 
