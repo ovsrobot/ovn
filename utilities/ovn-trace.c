@@ -2404,6 +2404,9 @@ execute_ct_lb(const struct ovnact_ct_lb *ct_lb,
             }
             ct_lb_flow.ct_state |= CS_DST_NAT;
         }
+        if (ct_state_idx < n_ct_states) {
+            ct_lb_flow.ct_state |= ct_states[ct_state_idx];
+        }
     }
 
     struct ovntrace_node *node = ovntrace_node_append(
