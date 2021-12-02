@@ -4315,3 +4315,122 @@ ovnacts_free(struct ovnact *ovnacts, size_t ovnacts_len)
         }
     }
 }
+
+/* Return ovn action opcode string representation.*/
+char *
+ovnact_op_to_string(const ovs_be32 ovnact_opc)
+{
+    struct ds opc_str = DS_EMPTY_INITIALIZER;
+
+    switch (ovnact_opc) {
+    case ACTION_OPCODE_ARP:
+        ds_put_cstr(&opc_str, "ARP");
+        break;
+    case ACTION_OPCODE_IGMP:
+        ds_put_cstr(&opc_str, "IGMP");
+        break;
+
+    case ACTION_OPCODE_PUT_ARP:
+        ds_put_cstr(&opc_str, "PUT_ARP");
+        break;
+
+    case ACTION_OPCODE_PUT_DHCP_OPTS:
+        ds_put_cstr(&opc_str, "PUT_DHCP_OPTS");
+        break;
+
+    case ACTION_OPCODE_ND_NA:
+        ds_put_cstr(&opc_str, "ND_NA");
+        break;
+
+    case ACTION_OPCODE_ND_NA_ROUTER:
+        ds_put_cstr(&opc_str, "ND_NA_ROUTER");
+        break;
+
+    case ACTION_OPCODE_PUT_ND:
+        ds_put_cstr(&opc_str, "PUT_ND");
+        break;
+
+    case ACTION_OPCODE_PUT_FDB:
+        ds_put_cstr(&opc_str, "PUT_FDB");
+        break;
+
+    case ACTION_OPCODE_PUT_DHCPV6_OPTS:
+        ds_put_cstr(&opc_str, "PUT_DHCPV6_OPTS");
+        break;
+
+    case ACTION_OPCODE_DNS_LOOKUP:
+        ds_put_cstr(&opc_str, "DNS_LOOKUP");
+        break;
+
+    case ACTION_OPCODE_LOG:
+        ds_put_cstr(&opc_str, "LOG");
+        break;
+
+    case ACTION_OPCODE_PUT_ND_RA_OPTS:
+        ds_put_cstr(&opc_str, "PUT_ND_RA_OPTS");
+        break;
+
+    case ACTION_OPCODE_ND_NS:
+        ds_put_cstr(&opc_str, "ND_NS");
+        break;
+
+    case ACTION_OPCODE_ICMP:
+        ds_put_cstr(&opc_str, "ICMP");
+        break;
+
+    case ACTION_OPCODE_ICMP4_ERROR:
+    case ACTION_OPCODE_ICMP6_ERROR:
+        if (ovnact_opc == ACTION_OPCODE_ICMP4_ERROR) {
+            ds_put_cstr(&opc_str, "ICMP4_ERROR");
+        } else {
+            ds_put_cstr(&opc_str, "ICMP6_ERROR");
+        }
+        break;
+
+    case ACTION_OPCODE_TCP_RESET:
+        ds_put_cstr(&opc_str, "TCP_RESET");
+        break;
+
+    case ACTION_OPCODE_SCTP_ABORT:
+        ds_put_cstr(&opc_str, "SCTP_ABORT");
+        break;
+
+    case ACTION_OPCODE_REJECT:
+        ds_put_cstr(&opc_str, "REJECT");
+        break;
+
+    case ACTION_OPCODE_PUT_ICMP4_FRAG_MTU:
+    case ACTION_OPCODE_PUT_ICMP6_FRAG_MTU:
+        if (ovnact_opc == ACTION_OPCODE_PUT_ICMP4_FRAG_MTU) {
+            ds_put_cstr(&opc_str, "PUT_ICMP4_FRAG_MTU");
+        } else {
+            ds_put_cstr(&opc_str, "PUT_ICMP6_FRAG_MTU");
+        }
+        break;
+
+    case ACTION_OPCODE_EVENT:
+        ds_put_cstr(&opc_str, "EVENT");
+        break;
+
+    case ACTION_OPCODE_BIND_VPORT:
+        ds_put_cstr(&opc_str, "BIND_VPORT");
+        break;
+    case ACTION_OPCODE_DHCP6_SERVER:
+        ds_put_cstr(&opc_str, "DHCP6_SERVER");
+        break;
+
+    case ACTION_OPCODE_HANDLE_SVC_CHECK:
+        ds_put_cstr(&opc_str, "HANDLE_SVC_CHECK");
+        break;
+
+    case ACTION_OPCODE_BFD_MSG:
+        ds_put_cstr(&opc_str, "BFD_MSG");
+        break;
+
+    default:
+        ds_put_format(&opc_str, "unrecognized(%"PRIu32")",
+                      ovnact_opc);
+        break;
+    }
+    return ds_cstr(&opc_str);
+}
