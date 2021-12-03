@@ -33,13 +33,6 @@
 
 VLOG_DEFINE_THIS_MODULE(inc_proc_eng);
 
-static bool engine_force_recompute = false;
-static bool engine_run_aborted = false;
-static const struct engine_context *engine_context;
-
-static struct engine_node **engine_nodes;
-static size_t engine_n_nodes;
-
 static const char *engine_node_state_name[EN_STATE_MAX] = {
     [EN_STALE]     = "Stale",
     [EN_UPDATED]   = "Updated",
@@ -52,21 +45,21 @@ engine_recompute(struct engine_node *node, bool allowed,
                  const char *reason_fmt, ...) OVS_PRINTF_FORMAT(3, 4);
 
 void
-engine_set_force_recompute(bool val)
+engine_set_force_recompute(struct engine *e, bool val)
 {
-    engine_force_recompute = val;
+    e->engine_force_recompute = val;
 }
 
 const struct engine_context *
-engine_get_context(void)
+engine_get_context(struct engine *e)
 {
-    return engine_context;
+    return e->engine_context;
 }
 
 void
-engine_set_context(const struct engine_context *ctx)
+engine_set_context(struct engine *e, const struct engine_context *ctx)
 {
-    engine_context = ctx;
+    e->engine_context = ctx;
 }
 
 /* Builds the topologically sorted 'sorted_nodes' array starting from
@@ -111,10 +104,12 @@ engine_get_nodes(struct engine_node *node, size_t *n_count)
 
 static void
 engine_clear_stats(struct unixctl_conn *conn, int argc OVS_UNUSED,
-                   const char *argv[] OVS_UNUSED, void *arg OVS_UNUSED)
+                   const char *argv[] OVS_UNUSED, void *arg)
 {
-    for (size_t i = 0; i < engine_n_nodes; i++) {
-        struct engine_node *node = engine_nodes[i];
+    struct engine *e = arg;
+
+    for (size_t i = 0; i < e->engine_n_nodes; i++) {
+        struct engine_node *node = e->engine_nodes[i];
 
         memset(&node->stats, 0, sizeof node->stats);
     }
@@ -123,12 +118,13 @@ engine_clear_stats(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
 static void
 engine_dump_stats(struct unixctl_conn *conn, int argc OVS_UNUSED,
-                  const char *argv[] OVS_UNUSED, void *arg OVS_UNUSED)
+                  const char *argv[] OVS_UNUSED, void *arg)
 {
     struct ds dump = DS_EMPTY_INITIALIZER;
+    struct engine *e = arg;
 
-    for (size_t i = 0; i < engine_n_nodes; i++) {
-        struct engine_node *node = engine_nodes[i];
+    for (size_t i = 0; i < e->engine_n_nodes; i++) {
+        struct engine_node *node = e->engine_nodes[i];
 
         ds_put_format(&dump,
                       "Node: %s\n"
@@ -145,51 +141,58 @@ engine_dump_stats(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
 static void
 engine_trigger_recompute_cmd(struct unixctl_conn *conn, int argc OVS_UNUSED,
-                             const char *argv[] OVS_UNUSED,
-                             void *arg OVS_UNUSED)
+                             const char *argv[] OVS_UNUSED, void *arg)
 {
-    engine_trigger_recompute();
+    struct engine *e = arg;
+
+    engine_trigger_recompute(e);
     unixctl_command_reply(conn, NULL);
 }
 
-void
-engine_init(struct engine_node *node, struct engine_arg *arg)
+void engine_init(struct engine **pe, struct engine_node *node,
+                 struct engine_arg *arg)
 {
-    engine_nodes = engine_get_nodes(node, &engine_n_nodes);
+    struct engine *e = xzalloc(sizeof *e);
 
-    for (size_t i = 0; i < engine_n_nodes; i++) {
-        if (engine_nodes[i]->init) {
-            engine_nodes[i]->data =
-                engine_nodes[i]->init(engine_nodes[i], arg);
+    e->engine_nodes = engine_get_nodes(node, &e->engine_n_nodes);
+
+    for (size_t i = 0; i < e->engine_n_nodes; i++) {
+        if (e->engine_nodes[i]->init) {
+            e->engine_nodes[i]->data =
+                e->engine_nodes[i]->init(e->engine_nodes[i], arg);
         } else {
-            engine_nodes[i]->data = NULL;
+            e->engine_nodes[i]->data = NULL;
         }
+        e->engine_nodes[i]->e = e;
     }
 
     unixctl_command_register("inc-engine/show-stats", "", 0, 0,
-                             engine_dump_stats, NULL);
+                             engine_dump_stats, e);
     unixctl_command_register("inc-engine/clear-stats", "", 0, 0,
-                             engine_clear_stats, NULL);
+                             engine_clear_stats, e);
     unixctl_command_register("inc-engine/recompute", "", 0, 0,
-                             engine_trigger_recompute_cmd, NULL);
+                             engine_trigger_recompute_cmd, e);
+    *pe = e;
 }
 
 void
-engine_cleanup(void)
+engine_cleanup(struct engine **pe)
 {
-    for (size_t i = 0; i < engine_n_nodes; i++) {
-        if (engine_nodes[i]->clear_tracked_data) {
-            engine_nodes[i]->clear_tracked_data(engine_nodes[i]->data);
+    struct engine *e = *pe;
+    for (size_t i = 0; i < e->engine_n_nodes; i++) {
+        if (e->engine_nodes[i]->clear_tracked_data) {
+            e->engine_nodes[i]->clear_tracked_data(
+                    e->engine_nodes[i]->data);
         }
 
-        if (engine_nodes[i]->cleanup) {
-            engine_nodes[i]->cleanup(engine_nodes[i]->data);
+        if (e->engine_nodes[i]->cleanup) {
+            e->engine_nodes[i]->cleanup(e->engine_nodes[i]->data);
         }
-        free(engine_nodes[i]->data);
+        free(e->engine_nodes[i]->data);
     }
-    free(engine_nodes);
-    engine_nodes = NULL;
-    engine_n_nodes = 0;
+    e->engine_n_nodes = 0;
+    free(e->engine_nodes);
+    *pe = NULL;
 }
 
 struct engine_node *
@@ -284,10 +287,10 @@ engine_node_changed(struct engine_node *node)
 }
 
 bool
-engine_has_run(void)
+engine_has_run(struct engine *e)
 {
-    for (size_t i = 0; i < engine_n_nodes; i++) {
-        if (engine_nodes[i]->state != EN_STALE) {
+    for (size_t i = 0; i < e->engine_n_nodes; i++) {
+        if (e->engine_nodes[i]->state != EN_STALE) {
             return true;
         }
     }
@@ -295,9 +298,9 @@ engine_has_run(void)
 }
 
 bool
-engine_aborted(void)
+engine_aborted(struct engine *e)
 {
-    return engine_run_aborted;
+    return e->engine_run_aborted;
 }
 
 void *
@@ -316,14 +319,15 @@ engine_get_internal_data(struct engine_node *node)
 }
 
 void
-engine_init_run(void)
+engine_init_run(struct engine *e)
 {
     VLOG_DBG("Initializing new run");
-    for (size_t i = 0; i < engine_n_nodes; i++) {
-        engine_set_node_state(engine_nodes[i], EN_STALE);
+    for (size_t i = 0; i < e->engine_n_nodes; i++) {
+        engine_set_node_state(e->engine_nodes[i], EN_STALE);
 
-        if (engine_nodes[i]->clear_tracked_data) {
-            engine_nodes[i]->clear_tracked_data(engine_nodes[i]->data);
+        if (e->engine_nodes[i]->clear_tracked_data) {
+            e->engine_nodes[i]->clear_tracked_data(
+                    e->engine_nodes[i]->data);
         }
     }
 }
@@ -397,7 +401,8 @@ engine_compute(struct engine_node *node, bool recompute_allowed)
 }
 
 static void
-engine_run_node(struct engine_node *node, bool recompute_allowed)
+engine_run_node(struct engine *e, struct engine_node *node,
+                bool recompute_allowed)
 {
     if (!node->n_inputs) {
         /* Run the node handler which might change state. */
@@ -406,7 +411,7 @@ engine_run_node(struct engine_node *node, bool recompute_allowed)
         return;
     }
 
-    if (engine_force_recompute) {
+    if (e->engine_force_recompute) {
         engine_recompute(node, recompute_allowed, "forced");
         return;
     }
@@ -447,41 +452,41 @@ engine_run_node(struct engine_node *node, bool recompute_allowed)
 }
 
 void
-engine_run(bool recompute_allowed)
+engine_run(struct engine *e, bool recompute_allowed)
 {
     /* If the last run was aborted skip the incremental run because a
      * recompute is needed first.
      */
-    if (!recompute_allowed && engine_run_aborted) {
+    if (!recompute_allowed && e->engine_run_aborted) {
         return;
     }
 
-    engine_run_aborted = false;
-    for (size_t i = 0; i < engine_n_nodes; i++) {
-        engine_run_node(engine_nodes[i], recompute_allowed);
+    e->engine_run_aborted = false;
+    for (size_t i = 0; i < e->engine_n_nodes; i++) {
+        engine_run_node(e, e->engine_nodes[i], recompute_allowed);
 
-        if (engine_nodes[i]->state == EN_ABORTED) {
-            engine_nodes[i]->stats.abort++;
-            engine_run_aborted = true;
+        if (e->engine_nodes[i]->state == EN_ABORTED) {
+            e->engine_nodes[i]->stats.abort++;
+            e->engine_run_aborted = true;
             return;
         }
     }
 }
 
 bool
-engine_need_run(void)
+engine_need_run(struct engine *e)
 {
-    for (size_t i = 0; i < engine_n_nodes; i++) {
+    for (size_t i = 0; i < e->engine_n_nodes; i++) {
         /* Check only leaf nodes for updates. */
-        if (engine_nodes[i]->n_inputs) {
+        if (e->engine_nodes[i]->n_inputs) {
             continue;
         }
 
-        engine_nodes[i]->run(engine_nodes[i], engine_nodes[i]->data);
-        engine_nodes[i]->stats.recompute++;
-        VLOG_DBG("input node: %s, state: %s", engine_nodes[i]->name,
-                 engine_node_state_name[engine_nodes[i]->state]);
-        if (engine_nodes[i]->state == EN_UPDATED) {
+        e->engine_nodes[i]->run(e->engine_nodes[i], e->engine_nodes[i]->data);
+        e->engine_nodes[i]->stats.recompute++;
+        VLOG_DBG("input node: %s, state: %s", e->engine_nodes[i]->name,
+                 engine_node_state_name[e->engine_nodes[i]->state]);
+        if (e->engine_nodes[i]->state == EN_UPDATED) {
             return true;
         }
     }
@@ -489,9 +494,9 @@ engine_need_run(void)
 }
 
 void
-engine_trigger_recompute(void)
+engine_trigger_recompute(struct engine *e)
 {
     VLOG_INFO("User triggered force recompute.");
-    engine_set_force_recompute(true);
+    engine_set_force_recompute(e, true);
     poll_immediate_wake();
 }
