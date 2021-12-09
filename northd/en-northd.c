@@ -32,7 +32,7 @@ VLOG_DEFINE_THIS_MODULE(en_northd);
 
 void en_northd_run(struct engine_node *node, void *data)
 {
-    const struct engine_context *eng_ctx = engine_get_context();
+    const struct engine_context *eng_ctx = engine_get_context(node->e);
 
     struct northd_input input_data;
 
