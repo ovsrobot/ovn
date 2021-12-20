@@ -32,7 +32,7 @@ VLOG_DEFINE_THIS_MODULE(en_lflow);
 
 void en_lflow_run(struct engine_node *node, void *data OVS_UNUSED)
 {
-    const struct engine_context *eng_ctx = engine_get_context();
+    const struct engine_context *eng_ctx = engine_get_context(node->e);
 
     struct lflow_input lflow_input;
 

@@ -114,6 +114,8 @@ static unixctl_cb_func debug_delay_nb_cfg_report;
 #define OVS_NB_CFG_TS_NAME "ovn-nb-cfg-ts"
 #define OVS_STARTUP_TS_NAME "ovn-startup-ts"
 
+static struct engine *flow_engine;
+
 static char *parse_options(int argc, char *argv[]);
 OVS_NO_RETURN static void usage(void);
 
@@ -557,7 +559,7 @@ update_sb_db(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
     }
     if (reset_ovnsb_idl_min_index && *reset_ovnsb_idl_min_index) {
         VLOG_INFO("Resetting southbound database cluster state");
-        engine_set_force_recompute(true);
+        engine_set_force_recompute(flow_engine, true);
         ovsdb_idl_reset_min_index(ovnsb_idl);
         *reset_ovnsb_idl_min_index = false;
     }
@@ -1011,7 +1013,8 @@ en_ofctrl_is_connected_cleanup(void *data OVS_UNUSED)
 static void
 en_ofctrl_is_connected_run(struct engine_node *node, void *data)
 {
-    struct controller_engine_ctx *ctrl_ctx = engine_get_context()->client_ctx;
+    struct controller_engine_ctx *ctrl_ctx =
+        engine_get_context(flow_engine)->client_ctx;
     struct ed_type_ofctrl_is_connected *of_data = data;
     if (of_data->connected != ofctrl_is_connected()) {
         of_data->connected = !of_data->connected;
@@ -1226,10 +1229,11 @@ init_binding_ctx(struct engine_node *node,
                 engine_get_input("SB_port_binding", node),
                 "datapath");
 
-    struct controller_engine_ctx *ctrl_ctx = engine_get_context()->client_ctx;
+    struct controller_engine_ctx *ctrl_ctx =
+        engine_get_context(flow_engine)->client_ctx;
 
-    b_ctx_in->ovnsb_idl_txn = engine_get_context()->ovnsb_idl_txn;
-    b_ctx_in->ovs_idl_txn = engine_get_context()->ovs_idl_txn;
+    b_ctx_in->ovnsb_idl_txn = engine_get_context(flow_engine)->ovnsb_idl_txn;
+    b_ctx_in->ovs_idl_txn = engine_get_context(flow_engine)->ovs_idl_txn;
     b_ctx_in->sbrec_datapath_binding_by_key = sbrec_datapath_binding_by_key;
     b_ctx_in->sbrec_port_binding_by_datapath = sbrec_port_binding_by_datapath;
     b_ctx_in->sbrec_port_binding_by_name = sbrec_port_binding_by_name;
@@ -2387,7 +2391,8 @@ en_lflow_output_run(struct engine_node *node, void *data)
         lflow_conj_ids_clear(&fo->conj_ids);
     }
 
-    struct controller_engine_ctx *ctrl_ctx = engine_get_context()->client_ctx;
+    struct controller_engine_ctx *ctrl_ctx =
+        engine_get_context(flow_engine)->client_ctx;
 
     fo->pd.lflow_cache = ctrl_ctx->lflow_cache;
 
@@ -3040,7 +3045,7 @@ check_northd_version(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
      * full recompute.
      */
     if (version_mismatch) {
-        engine_set_force_recompute(true);
+        engine_set_force_recompute(flow_engine, true);
     }
     version_mismatch = false;
     return true;
@@ -3206,6 +3211,8 @@ main(int argc, char *argv[])
     stopwatch_create(BFD_RUN_STOPWATCH_NAME, SW_MS);
     stopwatch_create(VIF_PLUG_RUN_STOPWATCH_NAME, SW_MS);
 
+    engine_init_global();
+
     /* Define inc-proc-engine nodes. */
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA_IS_VALID(ct_zones, "ct_zones");
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA(runtime_data, "runtime_data");
@@ -3344,7 +3351,7 @@ main(int argc, char *argv[])
         .sb_idl = ovnsb_idl_loop.idl,
         .ovs_idl = ovs_idl_loop.idl,
     };
-    engine_init(&en_flow_output, &engine_arg);
+    flow_engine = engine_new(&en_flow_output, &engine_arg, "flow_engine");
 
     engine_ovsdb_node_add_index(&en_sb_chassis, "name", sbrec_chassis_by_name);
     engine_ovsdb_node_add_index(&en_sb_multicast_group, "name_datapath",
@@ -3396,7 +3403,7 @@ main(int argc, char *argv[])
 
     unixctl_command_register("recompute", "[deprecated]", 0, 0,
                              engine_recompute_cmd,
-                             NULL);
+                             flow_engine);
     unixctl_command_register("lflow-cache/flush", "", 0, 0,
                              lflow_cache_flush_cmd,
                              &lflow_output_data->pd);
@@ -3480,7 +3487,7 @@ main(int argc, char *argv[])
             goto loop_done;
         }
 
-        engine_init_run();
+        engine_init_run(flow_engine);
 
         struct ovsdb_idl_txn *ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop);
         unsigned int new_ovs_cond_seqno
@@ -3488,7 +3495,7 @@ main(int argc, char *argv[])
         if (new_ovs_cond_seqno != ovs_cond_seqno) {
             if (!new_ovs_cond_seqno) {
                 VLOG_INFO("OVS IDL reconnected, force recompute.");
-                engine_set_force_recompute(true);
+                engine_set_force_recompute(flow_engine, true);
             }
             ovs_cond_seqno = new_ovs_cond_seqno;
         }
@@ -3506,7 +3513,7 @@ main(int argc, char *argv[])
         if (new_ovnsb_cond_seqno != ovnsb_cond_seqno) {
             if (!new_ovnsb_cond_seqno) {
                 VLOG_INFO("OVNSB IDL reconnected, force recompute.");
-                engine_set_force_recompute(true);
+                engine_set_force_recompute(flow_engine, true);
                 vif_plug_reset_idl_prime_counter();
             }
             ovnsb_cond_seqno = new_ovnsb_cond_seqno;
@@ -3518,7 +3525,7 @@ main(int argc, char *argv[])
             .client_ctx = &ctrl_engine_ctx
         };
 
-        engine_set_context(&eng_ctx);
+        engine_set_context(flow_engine, &eng_ctx);
 
         bool northd_version_match =
             check_northd_version(ovs_idl_loop.idl, ovnsb_idl_loop.idl,
@@ -3584,7 +3591,7 @@ main(int argc, char *argv[])
                                            &br_int_dp->capabilities : NULL,
                                            br_int ? br_int->name : NULL)) {
                 VLOG_INFO("OVS feature set changed, force recompute.");
-                engine_set_force_recompute(true);
+                engine_set_force_recompute(flow_engine, true);
             }
 
             if (br_int) {
@@ -3619,9 +3626,9 @@ main(int argc, char *argv[])
                              * this round of engine_run and continue processing
                              * acculated changes incrementally later when
                              * ofctrl_can_put() returns true. */
-                            engine_run(false);
+                            engine_run(flow_engine, false);
                         } else {
-                            engine_run(true);
+                            engine_run(flow_engine, true);
                         }
                     } else {
                         /* Even if there's no SB DB transaction available,
@@ -3630,7 +3637,7 @@ main(int argc, char *argv[])
                          * If a recompute is required, the engine will abort,
                          * triggerring a full run in the next iteration.
                          */
-                        engine_run(false);
+                        engine_run(flow_engine, false);
                     }
                     stopwatch_stop(CONTROLLER_LOOP_STOPWATCH_NAME,
                                    time_msec());
@@ -3775,24 +3782,24 @@ main(int argc, char *argv[])
 
             }
 
-            if (!engine_has_run()) {
-                if (engine_need_run()) {
+            if (!engine_has_run(flow_engine)) {
+                if (engine_need_run(flow_engine)) {
                     VLOG_DBG("engine did not run, force recompute next time: "
                              "br_int %p, chassis %p", br_int, chassis);
-                    engine_set_force_recompute(true);
+                    engine_set_force_recompute(flow_engine, true);
                     poll_immediate_wake();
                 } else {
                     VLOG_DBG("engine did not run, and it was not needed"
                              " either: br_int %p, chassis %p",
                              br_int, chassis);
                 }
-            } else if (engine_aborted()) {
+            } else if (engine_aborted(flow_engine)) {
                 VLOG_DBG("engine was aborted, force recompute next time: "
                          "br_int %p, chassis %p", br_int, chassis);
-                engine_set_force_recompute(true);
+                engine_set_force_recompute(flow_engine, true);
                 poll_immediate_wake();
             } else {
-                engine_set_force_recompute(false);
+                engine_set_force_recompute(flow_engine, false);
             }
 
             store_nb_cfg(ovnsb_idl_txn, ovs_idl_txn, chassis_private,
@@ -3846,7 +3853,7 @@ main(int argc, char *argv[])
 
         if (!ovsdb_idl_loop_commit_and_wait(&ovnsb_idl_loop)) {
             VLOG_INFO("OVNSB commit failed, force recompute next time.");
-            engine_set_force_recompute(true);
+            engine_set_force_recompute(flow_engine, true);
         }
 
         int ovs_txn_status = ovsdb_idl_loop_commit_and_wait(&ovs_idl_loop);
@@ -3896,8 +3903,8 @@ loop_done:
         }
     }
 
-    engine_set_context(NULL);
-    engine_cleanup();
+    engine_set_context(flow_engine, NULL);
+    engine_cleanup(flow_engine);
 
     /* It's time to exit.  Clean up the databases if we are not restarting */
     if (!restart) {
@@ -4152,9 +4159,9 @@ inject_pkt(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
 static void
 engine_recompute_cmd(struct unixctl_conn *conn OVS_UNUSED, int argc OVS_UNUSED,
-                     const char *argv[] OVS_UNUSED, void *arg OVS_UNUSED)
+                     const char *argv[] OVS_UNUSED, void *arg)
 {
-    engine_trigger_recompute();
+    engine_trigger_recompute(arg);
     unixctl_command_reply(conn, NULL);
 }
 
@@ -4166,7 +4173,7 @@ lflow_cache_flush_cmd(struct unixctl_conn *conn OVS_UNUSED,
     VLOG_INFO("User triggered lflow cache flush.");
     struct lflow_output_persistent_data *fo_pd = arg_;
     lflow_cache_flush(fo_pd->lflow_cache);
-    engine_set_force_recompute(true);
+    engine_set_force_recompute(flow_engine, true);
     poll_immediate_wake();
     unixctl_command_reply(conn, NULL);
 }

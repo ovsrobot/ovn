@@ -67,6 +67,7 @@
 #include <stdint.h>
 
 #include "compiler.h"
+#include "openvswitch/list.h"
 
 struct engine_context {
     struct ovsdb_idl_txn *ovs_idl_txn;
@@ -122,6 +123,8 @@ struct engine_stats {
 };
 
 struct engine_node {
+    struct engine *e;
+
     /* A unique name for each node. */
     char *name;
 
@@ -173,30 +176,47 @@ struct engine_node {
     struct engine_stats stats;
 };
 
+struct engine {
+    struct ovs_list node;
+
+    const char *name;
+
+    struct engine_node **engine_nodes;
+    size_t engine_n_nodes;
+
+    bool engine_force_recompute;
+    bool engine_run_aborted;
+
+    const struct engine_context *engine_context;
+};
+
+void engine_init_global(void);
+
 /* Initialize the data for the engine nodes. It calls each node's
  * init() method if not NULL passing the user supplied 'arg'.
  * It should be called before the main loop. */
-void engine_init(struct engine_node *node, struct engine_arg *arg);
+struct engine *engine_new(struct engine_node *node, struct engine_arg *arg,
+                          const char *name);
 
 /* Initialize the engine nodes for a new run. It should be called in the
  * main processing loop before every potential engine_run().
  */
-void engine_init_run(void);
+void engine_init_run(struct engine *e);
 
 /* Execute the processing, which should be called in the main loop.
  * Updates the engine node's states accordingly. If 'recompute_allowed' is
  * false and a recompute is required by the current engine run then the engine
  * aborts.
  */
-void engine_run(bool recompute_allowed);
+void engine_run(struct engine *e, bool recompute_allowed);
 
 /* Clean up the data for the engine nodes. It calls each node's
  * cleanup() method if not NULL. It should be called before the program
  * terminates. */
-void engine_cleanup(void);
+void engine_cleanup(struct engine *e);
 
 /* Check if engine needs to run but didn't. */
-bool engine_need_run(void);
+bool engine_need_run(struct engine *e);
 
 /* Get the input node with <name> for <node> */
 struct engine_node * engine_get_input(const char *input_name,
@@ -216,7 +236,7 @@ void engine_add_input(struct engine_node *node, struct engine_node *input,
  * in circumstances when we are not sure there is change or not, or
  * when there is change but the engine couldn't be executed in that
  * iteration, and the change can't be tracked across iterations */
-void engine_set_force_recompute(bool val);
+void engine_set_force_recompute(struct engine *e, bool val);
 
 /* Return the current engine_context. The values in the context can be NULL
  * if the engine is run with allow_recompute == false in the current
@@ -224,9 +244,9 @@ void engine_set_force_recompute(bool val);
  * Therefore, it is the responsibility of the caller to check the context
  * values when called from change handlers.
  */
-const struct engine_context *engine_get_context(void);
+const struct engine_context *engine_get_context(struct engine *e);
 
-void engine_set_context(const struct engine_context *);
+void engine_set_context(struct engine *e, const struct engine_context *);
 
 void engine_set_node_state_at(struct engine_node *node,
                               enum engine_node_state state,
@@ -236,10 +256,10 @@ void engine_set_node_state_at(struct engine_node *node,
 bool engine_node_changed(struct engine_node *node);
 
 /* Return true if the engine has run in the last iteration. */
-bool engine_has_run(void);
+bool engine_has_run(struct engine *e);
 
 /* Returns true if during the last engine run we had to abort processing. */
-bool engine_aborted(void);
+bool engine_aborted(struct engine *e);
 
 /* Return a pointer to node data accessible for users outside the processing
  * engine. If the node data is not valid (e.g., last engine_run() failed or
@@ -265,7 +285,7 @@ void *engine_get_internal_data(struct engine_node *node);
     engine_set_node_state_at(node, state, OVS_SOURCE_LOCATOR)
 
 /* Trigger a full recompute. */
-void engine_trigger_recompute(void);
+void engine_trigger_recompute(struct engine *e);
 
 struct ed_ovsdb_index {
     const char *name;
