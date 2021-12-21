@@ -328,6 +328,7 @@ engine_init_run(void)
     }
 }
 
+#define ENGINE_COMPUTE_LOG_TO   500 /* ms */
 /* Do a full recompute (or at least try). If we're not allowed then
  * mark the node as "aborted".
  */
@@ -361,8 +362,15 @@ engine_recompute(struct engine_node *node, bool allowed,
     long long int now = time_msec();
     node->run(node, node->data);
     node->stats.recompute++;
-    VLOG_DBG("node: %s, recompute (%s) took %lldms", node->name, reason,
-             time_msec() - now);
+    long long int delta_time = time_msec() - now;
+    if (delta_time > ENGINE_COMPUTE_LOG_TO) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(20, 10);
+        VLOG_INFO_RL(&rl, "node: %s, recompute (%s) took %lldms", node->name,
+                     reason, delta_time);
+    } else {
+        VLOG_DBG("node: %s, recompute (%s) took %lldms", node->name, reason,
+                 delta_time);
+    }
 done:
     free(reason);
 }
@@ -379,10 +387,17 @@ engine_compute(struct engine_node *node, bool recompute_allowed)
              */
             long long int now = time_msec();
             bool handled = node->inputs[i].change_handler(node, node->data);
-
-            VLOG_DBG("node: %s, handler for input %s took %lldms",
-                     node->name, node->inputs[i].node->name,
-                     time_msec() - now);
+            long long int delta_time = time_msec() - now;
+            if (delta_time > ENGINE_COMPUTE_LOG_TO) {
+                static struct vlog_rate_limit rl =
+                    VLOG_RATE_LIMIT_INIT(20, 10);
+                VLOG_INFO_RL(&rl, "node: %s, handler for input %s took %lldms",
+                             node->name, node->inputs[i].node->name,
+                             delta_time);
+            } else {
+                VLOG_DBG("node: %s, handler for input %s took %lldms",
+                         node->name, node->inputs[i].node->name, delta_time);
+            }
             if (!handled) {
                 engine_recompute(node, recompute_allowed,
                                  "failed handler for input %s",
