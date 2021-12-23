@@ -1494,6 +1494,12 @@ nbctl_pre_lsp_get_addresses(struct ctl_context *ctx)
 {
     ovsdb_idl_add_column(ctx->idl, &nbrec_logical_switch_port_col_name);
     ovsdb_idl_add_column(ctx->idl, &nbrec_logical_switch_port_col_addresses);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_logical_switch_port_col_options);
+
+    ovsdb_idl_add_column(ctx->idl, &nbrec_logical_router_col_ports);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_logical_router_port_col_name);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_logical_router_port_col_mac);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_logical_router_port_col_networks);
 }
 
 static void
@@ -1509,6 +1515,26 @@ nbctl_lsp_get_addresses(struct ctl_context *ctx)
     if (error) {
         ctx->error = error;
         return;
+    }
+
+    const char *router_port = smap_get(&lsp->options, "router-port");
+    if (lsp->n_addresses == 1 && !strcmp(lsp->addresses[0], "router") &&
+        router_port) {
+        const struct nbrec_logical_router *lr;
+        NBREC_LOGICAL_ROUTER_FOR_EACH (lr, ctx->idl) {
+            for (i = 0; i < lr->n_ports; i++) {
+                const struct nbrec_logical_router_port *lrp = lr->ports[i];
+                if (strcmp(lrp->name, router_port)) {
+                    continue;
+                }
+                ds_put_format(&ctx->output, "%s", lrp->mac);
+                for (size_t j = 0; j < lrp->n_networks; j++) {
+                    ds_put_format(&ctx->output, " %s", lrp->networks[j]);
+                }
+                ds_put_cstr(&ctx->output, "\n");
+                return;
+            }
+        }
     }
 
     svec_init(&addresses);
