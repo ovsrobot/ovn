@@ -90,6 +90,7 @@ ic_nb_servers=3
 ic_sb_model=clustered
 ic_sb_servers=3
 dummy=override
+system_id=chassis-1
 
 for option; do
     # This option-parsing mechanism borrowed from a Autoconf-generated
@@ -160,6 +161,7 @@ OVN options:
   --ic-nb-servers=N     number of servers in IC NB cluster (default: 3)
   --ic-sb-model=standalone|backup|clustered   ic-southbound database model
   --ic-sb-servers=N     number of servers in IC SB cluster (default: 3)
+  --system-id=ID        local system id (default: chassis-1)
 
 Other options:
   -h, --help           Print this usage message.
@@ -334,6 +336,12 @@ EOF
             ;;
         --ic-sb-m*)
             prev=ic_sb_model
+            ;;
+        --system-i*=*)
+            system_id=$optarg
+            ;;
+        --system-i*)
+            prev=system_id
             ;;
         -R|--gdb-run)
             gdb_vswitchd_ex=true
@@ -618,7 +626,7 @@ run ovn-ic-nbctl init
 run ovn-ic-sbctl init
 run ovn-nbctl set NB_Global . name=az-1
 
-run ovs-vsctl set open . external-ids:system-id=chassis-1
+run ovs-vsctl set open . external-ids:system-id=${system_id}
 run ovs-vsctl set open . external-ids:hostname=sandbox
 run ovs-vsctl set open . external-ids:ovn-encap-type=geneve
 run ovs-vsctl set open . external-ids:ovn-encap-ip=127.0.0.1
