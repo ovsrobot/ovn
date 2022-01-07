@@ -109,6 +109,9 @@ static void server_loop(const struct ovn_dbctl_options *dbctl_options,
                         struct ovsdb_idl *idl, int argc, char *argv[]);
 static void ovn_dbctl_exit(int status);
 
+/* Default probe interval for NB and SB DB connections. */
+#define DEFAULT_PROBE_INTERVAL_MSEC 5000
+
 int
 ovn_dbctl_main(int argc, char *argv[],
                const struct ovn_dbctl_options *dbctl_options)
@@ -191,6 +194,7 @@ ovn_dbctl_main(int argc, char *argv[],
     /* "retry" is true iff in daemon mode. */
     ovsdb_idl_set_remote(idl, db, daemon_mode);
     ovsdb_idl_set_leader_only(idl, leader_only);
+    ovsdb_idl_set_probe_interval(idl, DEFAULT_PROBE_INTERVAL_MSEC);
 
     if (daemon_mode) {
         server_loop(dbctl_options, idl, argc, argv_);
