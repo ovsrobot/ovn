@@ -33,6 +33,8 @@
 
 VLOG_DEFINE_THIS_MODULE(inc_proc_northd);
 
+static struct engine *flow_engine;
+
 #define NB_NODES \
     NB_NODE(nb_global, "nb_global") \
     NB_NODE(copp, "copp") \
@@ -150,6 +152,8 @@ static ENGINE_NODE(lflow, "lflow");
 void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
                           struct ovsdb_idl_loop *sb)
 {
+    engine_init_global();
+
     /* Define relationships between nodes where first argument is dependent
      * on the second argument */
     engine_add_input(&en_northd, &en_nb_nb_global, NULL);
@@ -229,7 +233,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     struct ovsdb_idl_index *sbrec_chassis_by_hostname =
         chassis_hostname_index_create(sb->idl);
 
-    engine_init(&en_lflow, &engine_arg);
+    flow_engine = engine_new(&en_lflow, &engine_arg, "flow_engine");
 
     engine_ovsdb_node_add_index(&en_sb_chassis,
                                 "sbrec_chassis_by_name",
@@ -251,14 +255,14 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
 void inc_proc_northd_run(struct ovsdb_idl_txn *ovnnb_txn,
                          struct ovsdb_idl_txn *ovnsb_txn,
                          bool recompute) {
-    engine_init_run();
+    engine_init_run(flow_engine);
 
     /* Force a full recompute if instructed to, for example, after a NB/SB
      * reconnect event.  However, make sure we don't overwrite an existing
      * force-recompute request if 'recompute' is false.
      */
     if (recompute) {
-        engine_set_force_recompute(recompute);
+        engine_set_force_recompute(flow_engine, recompute);
     }
 
     struct engine_context eng_ctx = {
@@ -266,31 +270,31 @@ void inc_proc_northd_run(struct ovsdb_idl_txn *ovnnb_txn,
         .ovnsb_idl_txn = ovnsb_txn,
     };
 
-    engine_set_context(&eng_ctx);
+    engine_set_context(flow_engine, &eng_ctx);
 
     if (ovnnb_txn && ovnsb_txn) {
-        engine_run(true);
+        engine_run(flow_engine, true);
     }
 
-    if (!engine_has_run()) {
-        if (engine_need_run()) {
+    if (!engine_has_run(flow_engine)) {
+        if (engine_need_run(flow_engine)) {
             VLOG_DBG("engine did not run, force recompute next time.");
-            engine_set_force_recompute(true);
+            engine_set_force_recompute(flow_engine, true);
             poll_immediate_wake();
         } else {
             VLOG_DBG("engine did not run, and it was not needed");
         }
-    } else if (engine_aborted()) {
+    } else if (engine_aborted(flow_engine)) {
         VLOG_DBG("engine was aborted, force recompute next time.");
-        engine_set_force_recompute(true);
+        engine_set_force_recompute(flow_engine, true);
         poll_immediate_wake();
     } else {
-        engine_set_force_recompute(false);
+        engine_set_force_recompute(flow_engine, false);
     }
 }
 
 void inc_proc_northd_cleanup(void)
 {
-    engine_cleanup();
-    engine_set_context(NULL);
+    engine_set_context(flow_engine, NULL);
+    engine_cleanup(flow_engine);
 }
