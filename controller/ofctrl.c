@@ -1801,6 +1801,15 @@ add_meter_string(struct ovn_extend_table_info *m_desired,
     free(meter_string);
 }
 
+uint32_t ofctrl_get_meter_id(const char *name, bool new_id)
+{
+    uint32_t id;
+    bool val;
+
+    ovn_extend_table_get_id(meters, name, &id, NULL, &val, new_id);
+    return id;
+}
+
 static void
 add_meter(struct ovn_extend_table_info *m_desired,
           const struct sbrec_meter_table *meter_table,

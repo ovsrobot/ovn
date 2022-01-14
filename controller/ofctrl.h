@@ -129,5 +129,6 @@ void ofctrl_check_and_add_flow_metered(struct ovn_desired_flow_table *,
 bool ofctrl_is_connected(void);
 void ofctrl_set_probe_interval(int probe_interval);
 void ofctrl_get_memory_usage(struct simap *usage);
+uint32_t ofctrl_get_meter_id(const char *name, bool new_id);
 
 #endif /* controller/ofctrl.h */

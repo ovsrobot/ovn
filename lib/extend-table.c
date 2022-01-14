@@ -37,6 +37,7 @@ ovn_extend_table_init(struct ovn_extend_table *table)
     hmap_init(&table->desired);
     hmap_init(&table->lflow_to_desired);
     hmap_init(&table->existing);
+    shash_init(&table->pending_ids);
 }
 
 static struct ovn_extend_table_info *
@@ -191,6 +192,14 @@ ovn_extend_table_clear(struct ovn_extend_table *table, bool existing)
         }
         ovn_extend_table_info_destroy(g);
     }
+
+    struct shash_node *node, *tmp;
+    SHASH_FOR_EACH_SAFE (node, tmp, &table->pending_ids) {
+        uint32_t *id = node->data;
+        shash_delete(&table->pending_ids, node);
+        free(id);
+    }
+    shash_destroy(&table->pending_ids);
 }
 
 void
@@ -282,54 +291,85 @@ ovn_extend_table_sync(struct ovn_extend_table *table)
     }
 }
 
+bool
+ovn_extend_table_get_id(struct ovn_extend_table *table, const char *name,
+                        uint32_t *meter_id, struct uuid *lflow_uuid,
+                        bool *new_id, bool pending)
+{
+    struct ovn_extend_table_info *table_info;
+    uint32_t hash = hash_string(name, 0);
+
+    /* Check whether we have non installed but allocated group_id. */
+    HMAP_FOR_EACH_WITH_HASH (table_info, hmap_node, hash, &table->desired) {
+        if (!strcmp(table_info->name, name)) {
+            VLOG_DBG("ovn_externd_table_assign_id: reuse old id %"PRIu32
+                     " for %s", table_info->table_id, table_info->name);
+            if (lflow_uuid) {
+                ovn_extend_info_add_lflow_ref(table, table_info, lflow_uuid);
+            }
+            *meter_id = table_info->table_id;
+            return false;
+        }
+    }
+
+    *new_id = false;
+    /* Check whether we already have an installed entry for this
+     * combination. */
+    HMAP_FOR_EACH_WITH_HASH (table_info, hmap_node, hash, &table->existing) {
+        if (!strcmp(table_info->name, name)) {
+            *meter_id = table_info->table_id;
+            return true;
+        }
+    }
+
+    /* Check if a ids has been already allocated for this flow. */
+    uint32_t *id = shash_find_and_delete(&table->pending_ids, name);
+    if (id) {
+        *meter_id = *id;
+        free(id);
+        return true;
+    }
+
+    /* Reserve a new group_id. */
+    uint32_t table_id = bitmap_scan(table->table_ids, 0, 1,
+                                    MAX_EXT_TABLE_ID + 1);
+    if (table_id == MAX_EXT_TABLE_ID + 1) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_ERR_RL(&rl, "%"PRIu32" out of table ids.", table_id);
+        *meter_id = EXT_TABLE_ID_INVALID;
+        return false;
+    }
+    bitmap_set1(table->table_ids, table_id);
+    *meter_id = table_id;
+
+    *new_id = true;
+    if (pending) {
+        /* Add the id to pedning map. */
+        id = xmalloc(sizeof *id);
+        *id = table_id;
+        shash_add(&table->pending_ids, name, id);
+    }
+
+    return true;
+}
+
 /* Assign a new table ID for the table information from the bitmap.
  * If it already exists, return the old ID. */
 uint32_t
 ovn_extend_table_assign_id(struct ovn_extend_table *table, const char *name,
                            struct uuid lflow_uuid)
 {
-    uint32_t table_id = 0, hash;
+    uint32_t table_id, hash = hash_string(name, 0);
     struct ovn_extend_table_info *table_info;
+    bool new_table_id;
 
-    hash = hash_string(name, 0);
-
-    /* Check whether we have non installed but allocated group_id. */
-    HMAP_FOR_EACH_WITH_HASH (table_info, hmap_node, hash, &table->desired) {
-        if (!strcmp(table_info->name, name)) {
-            VLOG_DBG("ovn_externd_table_assign_id: reuse old id %"PRIu32
-                     " for %s, used by lflow "UUID_FMT,
-                     table_info->table_id, table_info->name,
-                     UUID_ARGS(&lflow_uuid));
-            ovn_extend_info_add_lflow_ref(table, table_info, &lflow_uuid);
-            return table_info->table_id;
-        }
+    if (!ovn_extend_table_get_id(table, name, &table_id,
+                                 &lflow_uuid, &new_table_id, false)) {
+        return table_id;
     }
-
-    /* Check whether we already have an installed entry for this
-     * combination. */
-    HMAP_FOR_EACH_WITH_HASH (table_info, hmap_node, hash, &table->existing) {
-        if (!strcmp(table_info->name, name)) {
-            table_id = table_info->table_id;
-        }
-    }
-
-    bool new_table_id = false;
-    if (!table_id) {
-        /* Reserve a new group_id. */
-        table_id = bitmap_scan(table->table_ids, 0, 1, MAX_EXT_TABLE_ID + 1);
-        new_table_id = true;
-    }
-
-    if (table_id == MAX_EXT_TABLE_ID + 1) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
-        VLOG_ERR_RL(&rl, "%"PRIu32" out of table ids.", table_id);
-        return EXT_TABLE_ID_INVALID;
-    }
-    bitmap_set1(table->table_ids, table_id);
 
     table_info = ovn_extend_table_info_alloc(name, table_id, new_table_id,
                                              hash);
-
     hmap_insert(&table->desired,
                 &table_info->hmap_node, table_info->hmap_node.hash);
 

@@ -21,6 +21,7 @@
 #define EXT_TABLE_ID_INVALID 0
 
 #include "openvswitch/hmap.h"
+#include "openvswitch/shash.h"
 #include "openvswitch/list.h"
 #include "openvswitch/uuid.h"
 
@@ -30,6 +31,8 @@ struct ovn_extend_table {
     unsigned long *table_ids;  /* Used as a bitmap with value set
                                 * for allocated group ids in either
                                 * desired or existing. */
+    struct shash pending_ids;
+
     struct hmap desired;
     struct hmap lflow_to_desired; /* Index for looking up desired table
                                    * items from given lflow uuid, with
@@ -93,6 +96,10 @@ void ovn_extend_table_sync(struct ovn_extend_table *);
 uint32_t ovn_extend_table_assign_id(struct ovn_extend_table *,
                                     const char *name,
                                     struct uuid lflow_uuid);
+bool
+ovn_extend_table_get_id(struct ovn_extend_table *table, const char *name,
+                        uint32_t *meter_id, struct uuid *lflow_uuid,
+                        bool *new_id, bool pending);
 
 /* Iterates 'DESIRED' through all of the 'ovn_extend_table_info's in
  * 'TABLE'->desired that are not in 'TABLE'->existing.  (The loop body
