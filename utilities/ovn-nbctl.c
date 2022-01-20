@@ -437,7 +437,7 @@ chassis with mandatory PRIORITY to the HA chassis group GRP\n\
 CHASSIS from the HA chassis group GRP\n\
 \n\
 Control Plane Protection Policy commands:\n\
-  ls-copp-add SWITCH PROTO METER\n\
+  ls-copp-add [UUID|NAME] SWITCH PROTO METER\n\
                             Add a copp policy for PROTO packets on SWITCH\n\
                             based on an existing METER.\n\
   ls-copp-del SWITCH [PROTO]\n\
@@ -447,7 +447,7 @@ Control Plane Protection Policy commands:\n\
   ls-copp-list SWITCH\n\
                             List all copp policies defined for control\n\
                             protocols on SWITCH.\n\
-  lr-copp-add ROUTER PROTO METER\n\
+  lr-copp-add [UUID|NAME] ROUTER PROTO METER\n\
                             Add a copp policy for PROTO packets on ROUTER\n\
                             based on an existing METER.\n\
   lr-copp-del ROUTER [PROTO]\n\
@@ -6252,6 +6252,9 @@ nbctl_pre_copp(struct ctl_context *ctx)
 {
     nbctl_pre_context(ctx);
     ovsdb_idl_add_column(ctx->idl, &nbrec_copp_col_meters);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_copp_col_logical_switch);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_copp_col_logical_router);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_copp_col_name);
     ovsdb_idl_add_column(ctx->idl, &nbrec_logical_switch_col_copp);
     ovsdb_idl_add_column(ctx->idl, &nbrec_logical_router_col_copp);
 }
@@ -6259,9 +6262,31 @@ nbctl_pre_copp(struct ctl_context *ctx)
 static void
 nbctl_ls_copp_add(struct ctl_context *ctx)
 {
-    const char *ls_name = ctx->argv[1];
-    const char *proto_name = ctx->argv[2];
-    const char *meter = ctx->argv[3];
+    const struct nbrec_copp *copp = NULL;
+    const char *copp_name = NULL;
+    const char *proto_name;
+    const char *ls_name;
+    const char *meter;
+
+    if (ctx->argc == 5) {
+        struct uuid uuid;
+        if (uuid_from_string(&uuid, ctx->argv[1])) {
+            copp = nbrec_copp_get_for_uuid(ctx->idl, &uuid);
+            if (!copp) {
+                ctx->error = xasprintf("copp %s not found.", ctx->argv[1]);
+                return;
+            }
+        } else {
+            copp_name = ctx->argv[1];
+        }
+        ls_name = ctx->argv[2];
+        proto_name = ctx->argv[3];
+        meter = ctx->argv[4];
+    } else {
+        ls_name = ctx->argv[1];
+        proto_name = ctx->argv[2];
+        meter = ctx->argv[3];
+    }
 
     char *error = copp_proto_validate(proto_name);
     if (error) {
@@ -6276,9 +6301,23 @@ nbctl_ls_copp_add(struct ctl_context *ctx)
         return;
     }
 
-    const struct nbrec_copp *copp =
-        copp_meter_add(ctx, ls->copp, proto_name, meter);
+    if (!copp) {
+        copp = copp_meter_add(ctx, ls->copp, proto_name, meter);
+    }
+    if (copp_name) {
+        nbrec_copp_set_name(copp, copp_name);
+    }
     nbrec_logical_switch_set_copp(ls, copp);
+
+    size_t n_logical_switch = copp->n_logical_switch + 1;
+    struct nbrec_logical_switch **ls_list =
+        xmalloc(n_logical_switch * sizeof *ls_list);
+    for (int i = 0; i < copp->n_logical_switch; i++) {
+        ls_list[i] = copp->logical_switch[i];
+    }
+    ls_list[copp->n_logical_switch] = (struct nbrec_logical_switch *)ls;
+    nbrec_copp_set_logical_switch(copp, ls_list, n_logical_switch);
+    free(ls_list);
 }
 
 static void
@@ -6325,9 +6364,31 @@ nbctl_ls_copp_list(struct ctl_context *ctx)
 static void
 nbctl_lr_copp_add(struct ctl_context *ctx)
 {
-    const char *lr_name = ctx->argv[1];
-    const char *proto_name = ctx->argv[2];
-    const char *meter = ctx->argv[3];
+    const struct nbrec_copp *copp = NULL;
+    const char *copp_name = NULL;
+    const char *proto_name;
+    const char *lr_name;
+    const char *meter;
+
+    if (ctx->argc == 5) {
+        struct uuid uuid;
+        if (uuid_from_string(&uuid, ctx->argv[1])) {
+            copp = nbrec_copp_get_for_uuid(ctx->idl, &uuid);
+            if (!copp) {
+                ctx->error = xasprintf("copp %s not found.", ctx->argv[1]);
+                return;
+            }
+        } else {
+            copp_name = ctx->argv[1];
+        }
+        lr_name = ctx->argv[2];
+        proto_name = ctx->argv[3];
+        meter = ctx->argv[4];
+    } else {
+        lr_name = ctx->argv[1];
+        proto_name = ctx->argv[2];
+        meter = ctx->argv[3];
+    }
 
     char *error = copp_proto_validate(proto_name);
     if (error) {
@@ -6342,9 +6403,23 @@ nbctl_lr_copp_add(struct ctl_context *ctx)
         return;
     }
 
-    const struct nbrec_copp *copp =
-        copp_meter_add(ctx, lr->copp, proto_name, meter);
+    if (!copp) {
+        copp = copp_meter_add(ctx, lr->copp, proto_name, meter);
+    }
+    if (copp_name) {
+        nbrec_copp_set_name(copp, copp_name);
+    }
     nbrec_logical_router_set_copp(lr, copp);
+
+    size_t n_logical_router = copp->n_logical_router + 1;
+    struct nbrec_logical_router **lr_list =
+        xmalloc(n_logical_router * sizeof *lr_list);
+    for (int i = 0; i < copp->n_logical_router; i++) {
+        lr_list[i] = copp->logical_router[i];
+    }
+    lr_list[copp->n_logical_router] = (struct nbrec_logical_router *)lr;
+    nbrec_copp_set_logical_router(copp, lr_list, n_logical_router);
+    free(lr_list);
 }
 
 static void
@@ -7151,13 +7226,13 @@ static const struct ctl_command_syntax nbctl_commands[] = {
      NULL, "", RO },
 
     /* Control plane protection commands */
-    {"ls-copp-add", 3, 3, "SWITCH PROTO METER", nbctl_pre_copp,
+    {"ls-copp-add", 3, 4, "SWITCH PROTO METER", nbctl_pre_copp,
       nbctl_ls_copp_add, NULL, "", RW},
     {"ls-copp-del", 1, 2, "SWITCH [PROTO]", nbctl_pre_copp,
       nbctl_ls_copp_del, NULL, "", RW},
     {"ls-copp-list", 1, 1, "SWITCH", nbctl_pre_copp, nbctl_ls_copp_list,
       NULL, "", RO},
-    {"lr-copp-add", 3, 3, "ROUTER PROTO METER", nbctl_pre_copp,
+    {"lr-copp-add", 3, 4, "ROUTER PROTO METER", nbctl_pre_copp,
      nbctl_lr_copp_add, NULL, "", RW},
     {"lr-copp-del", 1, 2, "ROUTER [PROTO]", nbctl_pre_copp,
      nbctl_lr_copp_del, NULL, "", RW},

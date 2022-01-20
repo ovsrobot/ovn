@@ -1474,13 +1474,17 @@
     </p>
 
     <dl>
-      <dt><code>ls-copp-add</code> <var>switch</var> <var>proto</var>
-      <var>meter</var></dt>
+      <dt><code>ls-copp-add</code> [<var>UUID</var>|<var>name</var>]
+      <var>switch</var> <var>proto</var> <var>meter</var></dt>
       <dd>
         Adds the control <code>proto</code> to <code>meter</code> mapping
         to the <code>switch</code> control plane protection policy. If no
         policy exists yet, it creates one. If a mapping already existed for
         <code>proto</code>, this will overwrite it.
+        If <var>UUID</var> is provided, the already installed will be reused
+        (if not found and error will be reported).
+        If <var>name</var> is provided, CoPP name can be used for CoPP
+        table lookup.
       </dd>
 
       <dt><code>ls-copp-del</code> <var>switch</var> [<var>proto</var>]</dt>
@@ -1497,13 +1501,17 @@
         <code>switch</code>.
       </dd>
 
-      <dt><code>lr-copp-add</code> <var>router</var> <var>proto</var>
-      <var>meter</var></dt>
+      <dt><code>lr-copp-add</code> [<var>UUID</var>|<var>name</var>]
+      <var>router</var> <var>proto</var> <var>meter</var></dt>
       <dd>
         Adds the control <code>proto</code> to <code>meter</code> mapping
         to the <code>router</code> control plane protection policy. If no
         policy exists yet, it creates one. If a mapping already existed for
         <code>proto</code>, this will overwrite it.
+        If <var>UUID</var> is provided, the already installed will be reused
+        (if not found and error will be reported).
+        If <var>name</var> is provided, CoPP name can be used for CoPP
+        table lookup.
       </dd>
 
       <dt><code>lr-copp-del</code> <var>router</var> [<var>proto</var>]</dt>

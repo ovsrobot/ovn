@@ -3403,6 +3403,33 @@ check ovn-nbctl lr-copp-del r0
 AT_CHECK([ovn-nbctl lr-copp-list r0], [0], [dnl
 ])
 
+check ovn-nbctl ls-copp-del sw1
+AT_CHECK([ovn-nbctl ls-copp-list sw1], [0], [dnl
+])
+
+check ovn-nbctl --wait=hv lr-copp-add copp0 r0 arp meter0
+AT_CHECK([ovn-nbctl lr-copp-list r0], [0], [dnl
+arp: meter0
+])
+
+AT_CHECK([fetch_column nb:CoPP name], [0], [dnl
+copp0
+])
+
+lr_uuid=$(fetch_column nb:Logical_Router _uuid)
+copp_lr_uuid=$(fetch_column nb:CoPP logical_router)
+AT_CHECK([test "$lr_uuid" = "$copp_lr_uuid"])
+
+copp_uuid=$(fetch_column nb:CoPP _uuid)
+check ovn-nbctl --wait=hv ls-copp-add $copp_uuid sw1 arp meter0
+
+ls_uuid=$(fetch_column nb:Logical_Switch _uuid)
+copp_ls_uuid=$(fetch_column nb:CoPP logical_switch)
+AT_CHECK([test "$ls_uuid" = "$copp_ls_uuid"])
+
+ls_copp_uuid=$(fetch_column nb:Logical_Switch copp)
+AT_CHECK([test "$ls_copp_uuid" = "$copp_uuid"])
+
 AT_CLEANUP
 ])
 

@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
-    "version": "5.34.1",
-    "cksum": "2177334725 30782",
+    "version": "5.35.0",
+    "cksum": "2039436985 31434",
     "tables": {
         "NB_Global": {
             "columns": {
@@ -32,6 +32,17 @@
             "isRoot": true},
         "Copp": {
             "columns": {
+                "name": {"type": "string"},
+                "logical_switch": {"type": {"key": {"type": "uuid",
+                                          "refTable": "Logical_Switch",
+                                          "refType": "strong"},
+                                  "min": 0,
+                                  "max": "unlimited"}},
+                "logical_router": {"type": {"key": {"type": "uuid",
+                                          "refTable": "Logical_Router",
+                                          "refType": "strong"},
+                                  "min": 0,
+                                  "max": "unlimited"}},
                 "meters": {
                     "type": {"key": "string",
                              "value": "string",
