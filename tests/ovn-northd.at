@@ -3287,7 +3287,7 @@ check ovn-nbctl --wait=sb lsp-set-addresses sw1-r0 00:00:00:00:00:01
 check ovn-nbctl --event lb-add lb0 192.168.1.100:80 ""
 check ovn-nbctl ls-lb-add sw1 lb0
 check ovn-nbctl --wait=hv meter-add meter0 drop 100 pktps 10
-check ovn-nbctl --wait=hv ls-copp-add sw1 event-elb meter0
+check ovn-nbctl --wait=hv ls-copp-add copp0 sw1 event-elb meter0
 AT_CHECK([ovn-nbctl ls-copp-list sw1], [0], [dnl
 event-elb: meter0
 ])
@@ -3304,7 +3304,7 @@ AT_CHECK([ovn-nbctl meter-list |grep meter1 -A 1], [0], [dnl
 meter1: bands:
   drop: 200 pktps, 10 packet burst
 ])
-check ovn-nbctl --wait=hv lr-copp-add r0 arp meter1
+check ovn-nbctl --wait=hv lr-copp-add copp1 r0 arp meter1
 AT_CHECK([ovn-nbctl lr-copp-list r0], [0], [dnl
 arp: meter1
 ])
@@ -3318,7 +3318,7 @@ AT_CHECK([ovn-nbctl lr-copp-list r0], [0], [dnl
 AT_CHECK([ovn-sbctl list logical_flow | grep arp -A 2 | grep -q meter1],[1])
 
 check ovn-nbctl --wait=hv meter-add meter2 drop 400 pktps 10
-check ovn-nbctl --wait=hv lr-copp-add r0 icmp4-error meter2
+check ovn-nbctl --wait=hv lr-copp-add copp2 r0 icmp4-error meter2
 AT_CHECK([ovn-nbctl lr-copp-list r0], [0], [dnl
 icmp4-error: meter2
 ])
@@ -3329,7 +3329,7 @@ check ovn-nbctl --wait=hv lr-copp-del r0 icmp4-error
 AT_CHECK([ovn-nbctl lr-copp-list r0], [0], [dnl
 ])
 
-check ovn-nbctl --wait=hv lr-copp-add r0 icmp6-error meter2
+check ovn-nbctl --wait=hv lr-copp-add copp3 r0 icmp6-error meter2
 AT_CHECK([ovn-nbctl lr-copp-list r0], [0], [dnl
 icmp6-error: meter2
 ])
@@ -3340,7 +3340,7 @@ check ovn-nbctl --wait=hv lr-copp-del r0 icmp6-error
 AT_CHECK([ovn-nbctl lr-copp-list r0], [0], [dnl
 ])
 
-check ovn-nbctl --wait=hv lr-copp-add r0 tcp-reset meter2
+check ovn-nbctl --wait=hv lr-copp-add copp4 r0 tcp-reset meter2
 AT_CHECK([ovn-nbctl lr-copp-list r0], [0], [dnl
 tcp-reset: meter2
 ])
@@ -3358,21 +3358,21 @@ AT_CHECK([ovn-nbctl ls-copp-list sw1], [0], [dnl
 AT_CHECK([ovn-sbctl list logical_flow | grep trigger_event -A 2 | grep -q meter0],[1])
 
 # let's try to add an usupported protocol "dhcp"
-AT_CHECK([ovn-nbctl --wait=hv ls-copp-add sw1 dhcp meter1],[1],[],[dnl
+AT_CHECK([ovn-nbctl --wait=hv ls-copp-add copp5 sw1 dhcp meter1],[1],[],[dnl
 ovn-nbctl: Invalid control protocol. Allowed values: arp, arp-resolve, dhcpv4-opts, dhcpv6-opts, dns, event-elb, icmp4-error, icmp6-error, igmp, nd-na, nd-ns, nd-ns-resolve, nd-ra-opts, tcp-reset, bfd, reject.
 ])
 AT_CHECK([ovn-nbctl ls-copp-list sw1], [0], [dnl
 ])
 
 #Let's try to add a valid protocol to an unknown datapath
-AT_CHECK([ovn-nbctl --wait=hv ls-copp-add sw10 arp meter1],[1],[],[dnl
+AT_CHECK([ovn-nbctl --wait=hv ls-copp-add copp6 sw10 arp meter1],[1],[],[dnl
 ovn-nbctl: sw10: switch name not found
 ])
 AT_CHECK([ovn-nbctl ls-copp-list sw1], [0], [dnl
 ])
 
 check ovn-nbctl --bfd lr-route-add r0 240.0.0.0/8 192.168.50.2 r0-sw1
-check ovn-nbctl --wait=hv lr-copp-add r0 bfd meter0
+check ovn-nbctl --wait=hv lr-copp-add copp7 r0 bfd meter0
 AT_CHECK([ovn-nbctl lr-copp-list r0], [0], [dnl
 bfd: meter0
 ])
@@ -3381,14 +3381,14 @@ AT_CHECK([ovn-sbctl list logical_flow | grep bfd -A 2 | grep -q meter0])
 check ovn-nbctl --wait=hv set Logical_Switch sw1 \
     other_config:mcast_querier="false" \
     other_config:mcast_snoop="true"
-check ovn-nbctl --wait=hv ls-copp-add sw1 igmp meter1
+check ovn-nbctl --wait=hv ls-copp-add copp8 sw1 igmp meter1
 AT_CHECK([ovn-nbctl ls-copp-list sw1], [0], [dnl
 igmp: meter1
 ])
 AT_CHECK([ovn-sbctl list logical_flow | grep igmp -A 2 | grep -q meter1])
 
 # let's add igmp meter1 twice
-AT_CHECK([ovn-nbctl --wait=hv ls-copp-add sw1 igmp meter1])
+AT_CHECK([ovn-nbctl --wait=hv ls-copp-add copp9 sw1 igmp meter1])
 AT_CHECK([ovn-nbctl ls-copp-list sw1], [0], [dnl
 igmp: meter1
 ])
@@ -3402,6 +3402,44 @@ bfd: meter0
 check ovn-nbctl lr-copp-del r0
 AT_CHECK([ovn-nbctl lr-copp-list r0], [0], [dnl
 ])
+
+check ovn-nbctl ls-copp-del sw1
+AT_CHECK([ovn-nbctl ls-copp-list sw1], [0], [dnl
+])
+
+check ovn-nbctl --wait=hv lr-copp-add copp0 r0 arp meter0
+AT_CHECK([ovn-nbctl lr-copp-list r0], [0], [dnl
+arp: meter0
+])
+
+AT_CHECK([fetch_column nb:CoPP name], [0], [dnl
+copp0
+])
+
+lr_uuid=$(fetch_column nb:Logical_Router _uuid)
+copp_lr_uuid=$(fetch_column nb:CoPP logical_router)
+AT_CHECK([test "$lr_uuid" = "$copp_lr_uuid"])
+
+copp_uuid=$(fetch_column nb:CoPP _uuid)
+check ovn-nbctl --wait=hv ls-copp-add $copp_uuid sw1 arp meter0
+
+ls_uuid=$(fetch_column nb:Logical_Switch _uuid)
+copp_ls_uuid=$(fetch_column nb:CoPP logical_switch)
+AT_CHECK([test "$ls_uuid" = "$copp_ls_uuid"])
+
+ls_copp_uuid=$(fetch_column nb:Logical_Switch copp)
+AT_CHECK([test "$ls_copp_uuid" = "$copp_uuid"])
+
+check ovn-nbctl --wait=sb lrp-add r0 r0-sw2 00:00:00:00:00:03 192.168.2.1/24
+check ovn-nbctl --wait=sb ls-add sw2
+check ovn-nbctl --wait=sb lsp-add sw2 sw2-r0
+check ovn-nbctl --wait=sb lsp-set-type sw2-r0 router
+check ovn-nbctl --wait=sb lsp-set-options sw2-r0 router-port=r0-sw2
+check ovn-nbctl --wait=sb lsp-set-addresses sw2-r0 00:00:00:00:00:02
+
+check ovn-nbctl --wait=hv ls-copp-add copp0 sw2 event-elb meter0
+ls2_copp_uuid=$(ovn-nbctl get Logical_Switch sw2 copp)
+AT_CHECK([test "$ls2_copp_uuid" = "$copp_uuid"])
 
 AT_CLEANUP
 ])
