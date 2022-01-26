@@ -29,10 +29,12 @@
 #include "lport.h"
 #include "mac-learn.h"
 #include "nx-match.h"
+#include "ofctrl.h"
 #include "latch.h"
 #include "lib/packets.h"
 #include "lib/sset.h"
 #include "openvswitch/ofp-actions.h"
+#include "openvswitch/ofp-flow.h"
 #include "openvswitch/ofp-msgs.h"
 #include "openvswitch/ofp-packet.h"
 #include "openvswitch/ofp-print.h"
@@ -152,8 +154,8 @@ VLOG_DEFINE_THIS_MODULE(pinctrl);
  *  and pinctrl_run().
  *  'pinctrl_handler_seq' is used by pinctrl_run() to
  *  wake up pinctrl_handler thread from poll_block() if any changes happened
- *  in 'send_garp_rarp_data', 'ipv6_ras' and 'buffered_mac_bindings'
- *  structures.
+ *  in 'send_garp_rarp_data', 'ipv6_ras', 'buffered_mac_bindings' and
+ *  'unblocked_migration_ports' structures.
  *
  *  'pinctrl_main_seq' is used by pinctrl_handler() thread to wake up
  *  the main thread from poll_block() when mac bindings/igmp groups need to
@@ -294,6 +296,18 @@ static void pinctrl_handle_svc_check(struct rconn *swconn,
                                      const struct flow *ip_flow,
                                      struct dp_packet *pkt_in,
                                      const struct match *md);
+
+static void pinctrl_unblock_migration(struct rconn *swconn,
+                                      const struct match *md);
+static void init_unblocked_migration_ports(void);
+static void destroy_unblocked_migration_ports(void);
+static void wait_unblocked_migration_ports(
+      struct ovsdb_idl_txn *ovnsb_idl_txn);
+static void run_unblocked_migration_ports(struct ovsdb_idl_txn *ovnsb_idl_txn,
+                        struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
+                        struct ovsdb_idl_index *sbrec_port_binding_by_name)
+                        OVS_REQUIRES(pinctrl_mutex);
+
 static void init_svc_monitors(void);
 static void destroy_svc_monitors(void);
 static void sync_svc_monitors(
@@ -522,6 +536,7 @@ pinctrl_init(void)
     init_ipv6_ras();
     init_ipv6_prefixd();
     init_buffered_packets_map();
+    init_unblocked_migration_ports();
     init_event_table();
     ip_mcast_snoop_init();
     init_put_vport_bindings();
@@ -3234,6 +3249,12 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
         ovs_mutex_unlock(&pinctrl_mutex);
         break;
 
+    case ACTION_OPCODE_UNBLOCK_MIGRATION:
+        ovs_mutex_lock(&pinctrl_mutex);
+        pinctrl_unblock_migration(swconn, &pin.flow_metadata);
+        ovs_mutex_unlock(&pinctrl_mutex);
+        break;
+
     default:
         VLOG_WARN_RL(&rl, "unrecognized packet-in opcode %"PRIu32,
                      ntohl(ah->opcode));
@@ -3498,6 +3519,9 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
     bfd_monitor_run(ovnsb_idl_txn, bfd_table, sbrec_port_binding_by_name,
                     chassis, active_tunnels);
     run_put_fdbs(ovnsb_idl_txn, sbrec_fdb_by_dp_key_mac);
+    run_unblocked_migration_ports(
+        ovnsb_idl_txn, sbrec_datapath_binding_by_key,
+        sbrec_port_binding_by_key);
     ovs_mutex_unlock(&pinctrl_mutex);
 }
 
@@ -4026,6 +4050,7 @@ pinctrl_wait(struct ovsdb_idl_txn *ovnsb_idl_txn)
     int64_t new_seq = seq_read(pinctrl_main_seq);
     seq_wait(pinctrl_main_seq, new_seq);
     wait_put_fdbs(ovnsb_idl_txn);
+    wait_unblocked_migration_ports(ovnsb_idl_txn);
 }
 
 /* Called by ovn-controller. */
@@ -4040,6 +4065,7 @@ pinctrl_destroy(void)
     destroy_ipv6_ras();
     destroy_ipv6_prefixd();
     destroy_buffered_packets_map();
+    destroy_unblocked_migration_ports();
     event_table_destroy();
     destroy_put_mac_bindings();
     destroy_put_vport_bindings();
@@ -7717,6 +7743,129 @@ pinctrl_handle_svc_check(struct rconn *swconn, const struct flow *ip_flow,
         /* Calculate next_send_time. */
         svc_mon->next_send_time = time_msec() + svc_mon->interval;
     }
+}
+
+static struct ofpbuf *
+encode_flow_mod(struct ofputil_flow_mod *fm)
+{
+    fm->buffer_id = UINT32_MAX;
+    fm->out_port = OFPP_ANY;
+    fm->out_group = OFPG_ANY;
+    return ofputil_encode_flow_mod(fm, OFPUTIL_P_OF15_OXM);
+}
+
+struct port_pair {
+    uint32_t dp_key;
+    uint32_t port_key;
+    struct ovs_list list;
+};
+
+static struct ovs_list unblocked_migration_ports;
+
+static void
+init_unblocked_migration_ports(void)
+{
+    ovs_list_init(&unblocked_migration_ports);
+}
+
+static void
+destroy_unblocked_migration_ports(void)
+{
+    struct port_pair *pp;
+    LIST_FOR_EACH_POP (pp, list, &unblocked_migration_ports) {
+        free(pp);
+    }
+}
+
+static void
+wait_unblocked_migration_ports(struct ovsdb_idl_txn *ovnsb_idl_txn)
+{
+    if (ovnsb_idl_txn && !ovs_list_is_empty(&unblocked_migration_ports)) {
+        poll_immediate_wake();
+    }
+}
+
+static void
+run_unblocked_migration_ports(
+      struct ovsdb_idl_txn *ovnsb_idl_txn,
+      struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
+      struct ovsdb_idl_index *sbrec_port_binding_by_key)
+             OVS_REQUIRES(pinctrl_mutex)
+{
+    if (!ovnsb_idl_txn) {
+        return;
+    }
+
+    const struct port_pair *pp;
+    LIST_FOR_EACH (pp, list, &unblocked_migration_ports) {
+        const struct sbrec_port_binding *pb = lport_lookup_by_key(
+            sbrec_datapath_binding_by_key, sbrec_port_binding_by_key,
+            pp->dp_key, pp->port_key);
+        if (pb) {
+            sbrec_port_binding_update_options_setkey(
+                pb, "migration-unblocked", "true");
+        }
+    }
+    destroy_unblocked_migration_ports();
+}
+
+
+static void
+pinctrl_unblock_migration(struct rconn *swconn, const struct match *md)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    struct match match;
+    struct minimatch mmatch;
+
+    /* Delete inport controller flow (the one that got us here */
+    match_init_catchall(&match);
+    match_set_metadata(&match, md->flow.metadata);
+    match_set_reg(&match, MFF_LOG_INPORT - MFF_REG0,
+                  md->flow.regs[MFF_LOG_INPORT - MFF_REG0]);
+    match_set_dl_type(&match, ETH_TYPE_RARP);
+    minimatch_init(&mmatch, &match);
+
+    /* Remove the flow that got us here. */
+    struct ofputil_flow_mod fm = {
+        .match = mmatch,
+        .priority = 1010,
+        .table_id = OFTABLE_LOG_INGRESS_PIPELINE,
+        .command = OFPFC_DELETE_STRICT,
+    };
+    queue_msg(swconn, encode_flow_mod(&fm));
+    minimatch_destroy(&mmatch);
+
+    /* Delete [in|e]gress drop-all flows to unblock the port. */
+    match_init_catchall(&match);
+    match_set_metadata(&match, md->flow.metadata);
+    match_set_reg(&match, MFF_LOG_INPORT - MFF_REG0,
+                  md->flow.regs[MFF_LOG_INPORT - MFF_REG0]);
+    minimatch_init(&mmatch, &match);
+
+    fm.match = mmatch;
+    fm.priority = 1000;
+    queue_msg(swconn, encode_flow_mod(&fm));
+    minimatch_destroy(&mmatch);
+
+    match_init_catchall(&match);
+    match_set_metadata(&match, md->flow.metadata);
+    match_set_reg(&match, MFF_LOG_OUTPORT - MFF_REG0,
+                  md->flow.regs[MFF_LOG_INPORT - MFF_REG0]);
+    minimatch_init(&mmatch, &match);
+
+    fm.match = mmatch;
+    fm.table_id = OFTABLE_LOG_EGRESS_PIPELINE;
+    queue_msg(swconn, encode_flow_mod(&fm));
+    minimatch_destroy(&mmatch);
+
+    /* Tag the port as migration-unblocked. */
+    struct port_pair *pp = xmalloc(sizeof *pp);
+    pp->port_key = md->flow.regs[MFF_LOG_INPORT - MFF_REG0];
+    pp->dp_key = ntohll(md->flow.metadata);
+    ovs_list_push_front(&unblocked_migration_ports, &pp->list);
+
+    /* Notify the main thread about pending migration-unblocked updates. */
+    notify_pinctrl_main();
 }
 
 static struct hmap put_fdbs;

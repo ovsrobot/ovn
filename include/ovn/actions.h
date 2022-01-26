@@ -113,6 +113,7 @@ struct ovn_extend_table;
     OVNACT(PUT_FDB,           ovnact_put_fdb)         \
     OVNACT(GET_FDB,           ovnact_get_fdb)         \
     OVNACT(LOOKUP_FDB,        ovnact_lookup_fdb)      \
+    OVNACT(UNBLOCK_MIGRATION, ovnact_unblock_migration) \
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -411,6 +412,11 @@ struct ovnact_handle_svc_check {
     struct expr_field port;     /* Logical port name. */
 };
 
+/* OVNACT_UNBLOCK_MIGRATION. */
+struct ovnact_unblock_migration {
+    struct ovnact ovnact;
+};
+
 /* OVNACT_FWD_GROUP. */
 struct ovnact_fwd_group {
     struct ovnact ovnact;
@@ -635,6 +641,14 @@ enum action_opcode {
      *     MFF_LOG_INPORT = port
      */
     ACTION_OPCODE_HANDLE_SVC_CHECK,
+
+    /* "unblock_migration()"."
+     *
+     * Remove flows that block ingress and egress for the port.
+     * Used in live migration scenarios.
+     */
+    ACTION_OPCODE_UNBLOCK_MIGRATION,
+
     /* handle_dhcpv6_reply { ...actions ...}."
      *
      *  The actions, in OpenFlow 1.3 format, follow the action_header.

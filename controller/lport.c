@@ -113,12 +113,13 @@ lport_can_bind_on_this_chassis(const struct sbrec_chassis *chassis_rec,
                                const struct sbrec_port_binding *pb)
 {
     /* We need to check for presence of the requested-chassis option in
-     * addittion to checking the pb->requested_chassis column because this
+     * addition to checking the pb->requested_chassis column because this
      * column will be set to NULL whenever the option points to a non-existent
      * chassis.  As the controller routinely clears its own chassis record this
      * might occur more often than one might think. */
     const char *requested_chassis_option = smap_get(&pb->options,
                                                     "requested-chassis");
+    bool requested = false;
     if (requested_chassis_option && requested_chassis_option[0]
         && !pb->requested_chassis) {
         /* The requested-chassis option is set, but the requested_chassis
@@ -126,11 +127,28 @@ lport_can_bind_on_this_chassis(const struct sbrec_chassis *chassis_rec,
          * points to is currently not running, or is in the process of starting
          * up.  In this case we must fall back to comparing the strings to
          * avoid release/claim thrashing. */
-        return !strcmp(requested_chassis_option, chassis_rec->name)
+        requested = !strcmp(requested_chassis_option, chassis_rec->name)
                || !strcmp(requested_chassis_option, chassis_rec->hostname);
+    } else {
+        requested = !requested_chassis_option || !requested_chassis_option[0]
+               || chassis_rec == pb->requested_chassis;
     }
-    return !requested_chassis_option || !requested_chassis_option[0]
-           || chassis_rec == pb->requested_chassis;
+
+    /* Alternatively, the upcoming migration destination chassis may also bind
+     * the port. */
+    if (!requested) {
+        const char *migration_destination_option = smap_get(
+            &pb->options, "migration-destination");
+        if (migration_destination_option && migration_destination_option[0]) {
+            requested = (
+                !strcmp(migration_destination_option, chassis_rec->name) ||
+                !strcmp(migration_destination_option, chassis_rec->hostname)
+            );
+        } else {
+            requested = chassis_rec == pb->migration_destination;
+        }
+    }
+    return requested;
 }
 
 const struct sbrec_datapath_binding *

@@ -3278,6 +3278,45 @@ ovn_port_update_sbrec(struct northd_input *input_data,
                 smap_add(&options, "vlan-passthru", "true");
             }
 
+            const char *migration_destination;
+            bool reset_migration_destination = false;
+            migration_destination = smap_get(&op->nbsp->options,
+                                             "migration-destination");
+            if (migration_destination) {
+                const struct sbrec_chassis *chassis; /* May be NULL. */
+                chassis = chassis_lookup_by_name(sbrec_chassis_by_name,
+                                                 migration_destination);
+                chassis = chassis ? chassis : chassis_lookup_by_hostname(
+                                sbrec_chassis_by_hostname,
+                                migration_destination);
+
+                if (chassis) {
+                    sbrec_port_binding_set_migration_destination(op->sb,
+                                                                 chassis);
+                } else {
+                    reset_migration_destination = true;
+                    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(
+                        1, 1);
+                    VLOG_WARN_RL(
+                        &rl,
+                        "Unknown chassis '%s' set as "
+                        "options:migration-destination on LSP '%s'.",
+                        migration_destination, op->nbsp->name);
+                }
+            } else if (op->sb->migration_destination) {
+                reset_migration_destination = true;
+            }
+            if (reset_migration_destination) {
+                sbrec_port_binding_set_migration_destination(op->sb, NULL);
+            }
+            if (!reset_migration_destination) {
+                /* Retain migration-unblocked. */
+                if (smap_get_bool(&op->sb->options,
+                                  "migration-unblocked", false)) {
+                    smap_add(&options, "migration-unblocked", "true");
+                }
+            }
+
             sbrec_port_binding_set_options(op->sb, &options);
             smap_destroy(&options);
             if (ovn_is_known_nb_lsp_type(op->nbsp->type)) {
@@ -3339,6 +3378,7 @@ ovn_port_update_sbrec(struct northd_input *input_data,
             if (reset_requested_chassis) {
                 sbrec_port_binding_set_requested_chassis(op->sb, NULL);
             }
+
         } else {
             const char *chassis = NULL;
             if (op->peer && op->peer->od && op->peer->od->nbr) {

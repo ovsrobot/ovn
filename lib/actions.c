@@ -3566,6 +3566,40 @@ ovnact_handle_svc_check_free(struct ovnact_handle_svc_check *sc OVS_UNUSED)
 }
 
 static void
+parse_unblock_migration(struct action_context *ctx OVS_UNUSED)
+{
+     if (!lexer_force_match(ctx->lexer, LEX_T_LPAREN)) {
+        return;
+    }
+
+    ovnact_put_UNBLOCK_MIGRATION(ctx->ovnacts);
+    lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+}
+
+static void
+format_UNBLOCK_MIGRATION(
+        const struct ovnact_unblock_migration *unblock_dm OVS_UNUSED,
+        struct ds *s)
+{
+    ds_put_cstr(s, "unblock_migration();");
+}
+
+static void
+encode_UNBLOCK_MIGRATION(
+        const struct ovnact_unblock_migration *unblock_dm OVS_UNUSED,
+        const struct ovnact_encode_params *ep,
+        struct ofpbuf *ofpacts)
+{
+    encode_controller_op(ACTION_OPCODE_UNBLOCK_MIGRATION,
+                         ep->ctrl_meter_id, ofpacts);
+}
+
+static void
+ovnact_unblock_migration_free(struct ovnact_unblock_migration *sc OVS_UNUSED)
+{
+}
+
+static void
 parse_fwd_group_action(struct action_context *ctx)
 {
     char *child_port, **child_port_list = NULL;
@@ -4113,6 +4147,8 @@ parse_action(struct action_context *ctx)
         parse_bind_vport(ctx);
     } else if (lexer_match_id(ctx->lexer, "handle_svc_check")) {
         parse_handle_svc_check(ctx);
+    } else if (lexer_match_id(ctx->lexer, "unblock_migration")) {
+        parse_unblock_migration(ctx);
     } else if (lexer_match_id(ctx->lexer, "fwd_group")) {
         parse_fwd_group_action(ctx);
     } else if (lexer_match_id(ctx->lexer, "handle_dhcpv6_reply")) {
@@ -4356,6 +4392,7 @@ ovnact_op_to_string(uint32_t ovnact_opc)
         ACTION_OPCODE(BIND_VPORT)                   \
         ACTION_OPCODE(DHCP6_SERVER)                 \
         ACTION_OPCODE(HANDLE_SVC_CHECK)             \
+        ACTION_OPCODE(UNBLOCK_MIGRATION) \
         ACTION_OPCODE(BFD_MSG)
 #define ACTION_OPCODE(ENUM) \
     case ACTION_OPCODE_##ENUM: return xstrdup(#ENUM);

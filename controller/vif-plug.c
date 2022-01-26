@@ -407,7 +407,8 @@ consider_plug_lport(const struct sbrec_port_binding *pb,
 {
     bool ret = true;
     if (lport_can_bind_on_this_chassis(vif_plug_ctx_in->chassis_rec, pb)
-        && pb->requested_chassis == vif_plug_ctx_in->chassis_rec) {
+        && (pb->requested_chassis == vif_plug_ctx_in->chassis_rec ||
+                pb->migration_destination == vif_plug_ctx_in->chassis_rec)) {
         const char *vif_plug_type = smap_get(&pb->options,
                                              VIF_PLUG_OPTION_TYPE);
         if (!vif_plug_type) {
@@ -560,6 +561,7 @@ vif_plug_run(struct vif_plug_ctx_in *vif_plug_ctx_in,
                               !vif_plug_prime_idl_count);
     }
 
+    /* Handle requested-chassis. */
     struct sbrec_port_binding *target =
         sbrec_port_binding_index_init_row(
             vif_plug_ctx_in->sbrec_port_binding_by_requested_chassis);
@@ -570,6 +572,24 @@ vif_plug_run(struct vif_plug_ctx_in *vif_plug_ctx_in,
     SBREC_PORT_BINDING_FOR_EACH_EQUAL (
             pb, target,
             vif_plug_ctx_in->sbrec_port_binding_by_requested_chassis) {
+        enum en_lport_type lport_type = get_lport_type(pb);
+        if (lport_type == LP_VIF) {
+            vif_plug_handle_lport_vif(pb, vif_plug_ctx_in, vif_plug_ctx_out,
+                                      !vif_plug_prime_idl_count);
+        }
+    }
+    sbrec_port_binding_index_destroy_row(target);
+
+    /* Handle migration-destination. */
+    target =
+        sbrec_port_binding_index_init_row(
+            vif_plug_ctx_in->sbrec_port_binding_by_migration_destination);
+    sbrec_port_binding_index_set_migration_destination(
+        target,
+        vif_plug_ctx_in->chassis_rec);
+    SBREC_PORT_BINDING_FOR_EACH_EQUAL (
+            pb, target,
+            vif_plug_ctx_in->sbrec_port_binding_by_migration_destination) {
         enum en_lport_type lport_type = get_lport_type(pb);
         if (lport_type == LP_VIF) {
             vif_plug_handle_lport_vif(pb, vif_plug_ctx_in, vif_plug_ctx_out,

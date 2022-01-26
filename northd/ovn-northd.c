@@ -100,7 +100,10 @@ static const char *rbac_fdb_update[] =
 static const char *rbac_port_binding_auth[] =
     {""};
 static const char *rbac_port_binding_update[] =
-    {"chassis", "encap", "up", "virtual_parent"};
+    {"chassis", "encap", "up", "virtual_parent",
+     /* NOTE: we only need to update the migration-unblocked key,
+      * but RBAC_Role doesn't support mutate operation. */
+     "options"};
 
 static const char *rbac_mac_binding_auth[] =
     {""};

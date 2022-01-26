@@ -13655,6 +13655,174 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([options:migration-destination for logical port])
+ovn_start
+
+net_add n1
+
+ovn-nbctl ls-add ls0 -- add Logical_Switch ls0 other_config vlan-passthru=true
+ovn-nbctl lsp-add ls0 lsp0
+ovn-nbctl lsp-set-addresses lsp0 "00:00:00:00:00:01 10.0.0.1"
+
+ovn-nbctl lsp-add ls0 lsp1
+ovn-nbctl lsp-set-addresses lsp1 "00:00:00:00:00:10 10.0.0.10"
+
+# create two hypervisors, each with one vif port for the same LSP
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.11
+ovs-vsctl -- add-port br-int hv1-vif0 -- \
+set Interface hv1-vif0 ofport-request=1 \
+    external-ids:iface-id=lsp0 \
+    options:tx_pcap=hv1/vif0-tx.pcap \
+    options:rxq_pcap=hv1/vif0-rx.pcap
+
+sim_add hv2
+as hv2
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.12
+ovs-vsctl -- add-port br-int hv2-vif0 -- \
+set Interface hv2-vif0 ofport-request=1 \
+    external-ids:iface-id=lsp0 \
+    options:tx_pcap=hv2/vif0-tx.pcap \
+    options:rxq_pcap=hv2/vif0-rx.pcap
+
+# create another hypervisor to receive packets from the migrating LSP
+sim_add hv3
+as hv3
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.13
+ovs-vsctl -- add-port br-int vif1 -- \
+set Interface vif1 ofport-request=2
+ovs-vsctl set interface vif1 external-ids:iface-id=lsp1 \
+    options:tx_pcap=vif1-tx.pcap \
+    options:rxq_pcap=vif1-rx.pcap
+
+# Allow only chassis hv2 to bind logical port lsp0.
+ovn-nbctl lsp-set-options lsp0 requested-chassis=hv2
+
+# Allow some time for ovn-northd and ovn-controller to catch up.
+check ovn-nbctl --wait=hv sync
+
+# Check that migration destination is not set for port binding
+hv1_uuid=$(fetch_column Chassis _uuid name=hv1)
+hv2_uuid=$(fetch_column Chassis _uuid name=hv2)
+pb_uuid=$(fetch_column Port_Binding _uuid logical_port=lsp0)
+migration_destination=$(ovn-sbctl get port_binding $pb_uuid migration_destination)
+AT_CHECK([test x"${migration_destination}" = x"[[]]"], [0], [])
+
+# Migrate port hv2 -> hv1: both hypervisors are bound
+check ovn-nbctl --wait=hv lsp-set-options lsp0 requested-chassis=hv2 migration-destination=hv1
+check ovn-nbctl --wait=hv sync
+
+# Check that migration destination is set now
+migration_destination=$(ovn-sbctl get port_binding $pb_uuid migration_destination)
+AT_CHECK([test x"${migration_destination}" = x"${hv1_uuid}"], [0], [])
+
+# Check that both vifs got flows set
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [0], [ignore])
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=65 | grep actions=output:1], [0], [ignore])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [0], [ignore])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep actions=output:1], [0], [ignore])
+
+# Check that hv1 has a flow to circumvent RARP
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=8 | grep priority=1010 | grep rarp | grep actions=controller], [0], [ignore])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=8 | grep priority=1000 | grep actions=drop], [0], [ignore])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=40 | grep priority=1000 | grep actions=drop], [0], [ignore])
+
+# Check that hv2 doesn't have these flows
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=8 | grep priority=1010 | grep rarp | grep actions=controller], [1], [ignore])
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=8 | grep priority=1000 | grep actions=drop], [1], [ignore])
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=40 | grep priority=1000 | grep actions=drop], [1], [ignore])
+
+OVN_POPULATE_ARP
+
+: > expected
+
+send_garp() {
+    local hv=$1 inport=$2 eth_src=$3 eth_dst=$4 spa=$5 tpa=$6 succ=$7
+    local request=${eth_dst}${eth_src}08060001080006040001${eth_src}${spa}${eth_dst}${tpa}
+    as ${hv} ovs-appctl netdev-dummy/receive $inport $request
+    if [[ x${succ} = x1 ]]; then
+        echo ${request} >> expected
+    fi
+}
+
+send_rarp() {
+    local hv=$1 inport=$2 eth_src=$3 eth_dst=$4 spa=$5 tpa=$6
+    local request=${eth_dst}${eth_src}80350001080006040001${eth_src}${spa}${eth_dst}${tpa}
+    as ${hv} ovs-appctl netdev-dummy/receive $inport $request
+    echo ${request} >> expected
+}
+
+reset_pcap_file() {
+    local iface=$1
+    local pcap_file=$2
+    ovs-vsctl -- set Interface $iface options:tx_pcap=dummy-tx.pcap \
+options:rxq_pcap=dummy-rx.pcap
+    rm -f ${pcap_file}*.pcap
+    ovs-vsctl -- set Interface $iface options:tx_pcap=${pcap_file}-tx.pcap \
+options:rxq_pcap=${pcap_file}-rx.pcap
+}
+
+# Send three packets from each port binding, only one will allow them
+spa=$(ip_to_hex 10 0 0 1)
+tpa=$(ip_to_hex 10 0 0 10)
+for i in 1 2 3; do
+    send_garp hv1 hv1-vif0 000000000001 ffffffffffff $spa $tpa 0
+    send_garp hv2 hv2-vif0 000000000001 ffffffffffff $spa $tpa 1
+done
+
+# Check that migrating destination didn't observe RARP activation yet
+migration_unblocked=$(ovn-sbctl get port_binding $pb_uuid options:migration-unblocked | tr -d '""')
+AT_CHECK([test x"${migration_unblocked}" = x""], [0], [])
+
+OVN_CHECK_PACKETS([vif1-tx.pcap], [expected])
+as hv3 reset_pcap_file vif1 vif1
+
+# Now "activate" hv1 binding with a RARP sent by migration-destination vif
+send_rarp hv1 hv1-vif0 000000000001 ffffffffffff $spa $tpa
+
+# Check that the binding is now tagged as observed, meaning traffic is unblocked
+migration_unblocked=$(ovn-sbctl get port_binding $pb_uuid options:migration-unblocked | tr -d '""')
+AT_CHECK([test x"${migration_unblocked}" = x"true"], [0], [])
+
+# Check that flows that blocked traffic for the migration destination port are now gone
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=8 | grep priority=1010 | grep rarp | grep actions=controller], [1], [ignore])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=8 | grep priority=1000 | grep actions=drop], [1], [ignore])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=40 | grep priority=1000 | grep actions=drop], [1], [ignore])
+
+: > expected
+
+# Send three packets from each port binding, now expect both allowed
+for i in 1 2 3; do
+    send_garp hv1 hv1-vif0 000000000001 ffffffffffff $spa $tpa 1
+    send_garp hv2 hv2-vif0 000000000001 ffffffffffff $spa $tpa 1
+done
+
+OVN_CHECK_PACKETS([vif1-tx.pcap], [expected])
+
+# Complete migration: destination is bound
+check ovn-nbctl --wait=hv lsp-set-options lsp0 requested-chassis=hv1
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [1], [])
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=65 | grep actions=output:1], [1], [])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [0], [ignore])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep actions=output:1], [0], [ignore])
+
+# Check that migration-destination and migration-unblocked are reset
+migration_unblocked=$(ovn-sbctl get port_binding $pb_uuid options:migration-unblocked  | tr -d '""')
+AT_CHECK([test x"${migration_unblocked}" = x""], [0], [])
+
+migration_destination=$(ovn-sbctl get port_binding $pb_uuid migration_destination)
+AT_CHECK([test x"${migration_destination}" = x'[[]]'], [0], [])
+
+OVN_CLEANUP([hv1],[hv2])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([options:requested-chassis with hostname])
 
 ovn_start

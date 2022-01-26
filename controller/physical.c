@@ -40,6 +40,7 @@
 #include "lib/mcast-group-index.h"
 #include "lib/ovn-sb-idl.h"
 #include "lib/ovn-util.h"
+#include "ovn/actions.h"
 #include "physical.h"
 #include "openvswitch/shash.h"
 #include "simap.h"
@@ -886,6 +887,68 @@ get_binding_peer(struct ovsdb_idl_index *sbrec_port_binding_by_name,
 }
 
 static void
+handle_migration_destination(const struct sbrec_port_binding *binding,
+                             const struct sbrec_chassis *chassis,
+                             struct ovn_desired_flow_table *flow_table,
+                             struct ofpbuf *ofpacts_p)
+{
+    /* Block all traffic for the migrating port until it sends a RARP. */
+    const char *migration_destination_option = smap_get(
+            &binding->options, "migration-destination");
+    if (migration_destination_option && migration_destination_option[0] &&
+            !strcmp(migration_destination_option, chassis->name)) {
+        if (!smap_get_bool(&binding->options, "migration-unblocked", false)) {
+            struct match match = MATCH_CATCHALL_INITIALIZER;
+            uint32_t dp_key = binding->datapath->tunnel_key;
+            uint32_t port_key = binding->tunnel_key;
+
+            /* Unblock the port on ingress RARP. */
+            match_set_metadata(&match, htonll(dp_key));
+            match_set_dl_type(&match, htons(ETH_TYPE_RARP));
+            match_set_reg(&match, MFF_LOG_INPORT - MFF_REG0, port_key);
+            ofpbuf_clear(ofpacts_p);
+
+            size_t ofs = ofpacts_p->size;
+            struct ofpact_controller *oc = ofpact_put_CONTROLLER(ofpacts_p);
+            oc->max_len = UINT16_MAX;
+            oc->reason = OFPR_ACTION;
+            oc->pause = true;
+
+            struct action_header ah = {
+                .opcode = htonl(ACTION_OPCODE_UNBLOCK_MIGRATION)
+            };
+            ofpbuf_put(ofpacts_p, &ah, sizeof ah);
+
+            ofpacts_p->header = oc;
+            oc->userdata_len = ofpacts_p->size - (ofs + sizeof *oc);
+            ofpact_finish_CONTROLLER(ofpacts_p, &oc);
+
+            ofctrl_add_flow(flow_table, OFTABLE_LOG_INGRESS_PIPELINE, 1010,
+                            binding->header_.uuid.parts[0],
+                            &match, ofpacts_p, &binding->header_.uuid);
+            ofpbuf_clear(ofpacts_p);
+
+            /* Block all non-RARP traffic for the port, both directions. */
+            match_init_catchall(&match);
+            match_set_metadata(&match, htonll(dp_key));
+            match_set_reg(&match, MFF_LOG_INPORT - MFF_REG0, port_key);
+
+            ofctrl_add_flow(flow_table, OFTABLE_LOG_INGRESS_PIPELINE, 1000,
+                            binding->header_.uuid.parts[0],
+                            &match, ofpacts_p, &binding->header_.uuid);
+
+            match_init_catchall(&match);
+            match_set_metadata(&match, htonll(dp_key));
+            match_set_reg(&match, MFF_LOG_OUTPORT - MFF_REG0, port_key);
+
+            ofctrl_add_flow(flow_table, OFTABLE_LOG_EGRESS_PIPELINE, 1000,
+                            binding->header_.uuid.parts[0],
+                            &match, ofpacts_p, &binding->header_.uuid);
+        }
+    }
+}
+
+static void
 consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                       enum mf_field_id mff_ovn_geneve,
                       const struct simap *ct_zones,
@@ -902,11 +965,13 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     uint32_t dp_key = binding->datapath->tunnel_key;
     uint32_t port_key = binding->tunnel_key;
     struct local_datapath *ld;
+    struct match match;
     if (!(ld = get_local_datapath(local_datapaths, dp_key))) {
         return;
     }
 
-    struct match match;
+    handle_migration_destination(binding, chassis, flow_table, ofpacts_p);
+
     if (!strcmp(binding->type, "patch")
         || (!strcmp(binding->type, "l3gateway")
             && binding->chassis == chassis)) {

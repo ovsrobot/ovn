@@ -137,7 +137,8 @@ relation OutProxy_Port_Binding (
     mac: Set<istring>,
     nat_addresses: Set<istring>,
     external_ids: Map<istring,istring>,
-    requested_chassis: Option<uuid>
+    requested_chassis: Option<uuid>,
+    migration_destination: Option<uuid>
 )
 
 /* Case 1a: Create a Port_Binding per logical switch port that is not of type
@@ -154,7 +155,8 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
                       .mac                = lsp.addresses,
                       .nat_addresses      = set_empty(),
                       .external_ids       = eids,
-                      .requested_chassis  = None) :-
+                      .requested_chassis  = None,
+                      .migration_destination = None) :-
     sp in &SwitchPort(.lsp = lsp, .sw = sw),
     SwitchPortNewDynamicTag(lsp._uuid, opt_tag),
     var tag = match (opt_tag) {
@@ -195,7 +197,8 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
                       .mac                = lsp.addresses,
                       .nat_addresses      = set_empty(),
                       .external_ids       = eids,
-                      .requested_chassis  = Some{requested_chassis}) :-
+                      .requested_chassis  = Some{requested_chassis},
+                      .migration_destination = None) :-
     sp in &SwitchPort(.lsp = lsp, .sw = sw),
     SwitchPortNewDynamicTag(lsp._uuid, opt_tag),
     var tag = match (opt_tag) {
@@ -237,7 +240,8 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
                       .mac                = lsp.addresses,
                       .nat_addresses      = set_empty(),
                       .external_ids       = eids,
-                      .requested_chassis  = None) :-
+                      .requested_chassis  = None,
+                      .migration_destination = None) :-
     sp in &SwitchPort(.lsp = lsp, .sw = sw),
     SwitchPortNewDynamicTag(lsp._uuid, opt_tag),
     var tag = match (opt_tag) {
@@ -292,7 +296,8 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
                       .mac                = lsp.addresses,
                       .nat_addresses      = nat_addresses,
                       .external_ids       = eids,
-                      .requested_chassis  = None) :-
+                      .requested_chassis  = None,
+                      .migration_destination = None) :-
     SwitchPortLBIPs(.port = &SwitchPort{.lsp = lsp, .sw = sw, .peer = peer},
                     .lbips = lbips),
     var eids = {
@@ -387,7 +392,8 @@ OutProxy_Port_Binding(._uuid              = lrp._uuid,
                       .mac                = set_singleton(i"${lrp.mac} ${lrp.networks.map(ival).to_vec().join(\" \")}"),
                       .nat_addresses      = set_empty(),
                       .external_ids       = lrp.external_ids,
-                      .requested_chassis  = None) :-
+                      .requested_chassis  = None,
+                      .migration_destination = None) :-
     rp in &RouterPort(.lrp = lrp, .router = router, .peer = peer),
     RouterPortRAOptionsComplete(lrp._uuid, options0),
     (var __type, var options1) = match (router.options.get(i"chassis")) {
@@ -583,7 +589,8 @@ OutProxy_Port_Binding(._uuid              = cr_lrp_uuid,
                       .mac                = set_singleton(i"${lrp.mac} ${lrp.networks.map(ival).to_vec().join(\" \")}"),
                       .nat_addresses      = set_empty(),
                       .external_ids       = lrp.external_ids,
-                      .requested_chassis  = None) :-
+                      .requested_chassis  = None,
+                      .migration_destination = None) :-
     DistributedGatewayPort(lrp, lr_uuid, cr_lrp_uuid),
     DistributedGatewayPortHAChassisGroup(lrp, hacg_uuid),
     var redirect_type = match (lrp.options.get(i"redirect-type")) {
@@ -629,7 +636,8 @@ sb::Out_Port_Binding(._uuid              = pbinding._uuid,
                     .nat_addresses      = pbinding.nat_addresses,
                     .external_ids       = pbinding.external_ids,
                     .up                 = Some{up},
-                    .requested_chassis  = pbinding.requested_chassis) :-
+                    .requested_chassis  = pbinding.requested_chassis,
+                    .migration_destination = pbinding.migration_destination) :-
     pbinding in OutProxy_Port_Binding(),
     PortTunKeyAllocation(pbinding._uuid, tunkey),
     QueueIDAllocation(pbinding._uuid, qid),

@@ -215,6 +215,9 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
         sbrec_port_binding_add_clause_requested_chassis(
             &pb, OVSDB_F_EQ, &chassis->header_.uuid);
 
+        sbrec_port_binding_add_clause_migration_destination(
+            &pb, OVSDB_F_EQ, &chassis->header_.uuid);
+
         /* Ensure that we find out about l2gateway and l3gateway ports that
          * should be present on this chassis.  Otherwise, we might never find
          * out about those ports, if their datapaths don't otherwise have a VIF
@@ -3129,6 +3132,10 @@ main(int argc, char *argv[])
     struct ovsdb_idl_index *sbrec_port_binding_by_requested_chassis
         = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
                                   &sbrec_port_binding_col_requested_chassis);
+    struct ovsdb_idl_index *sbrec_port_binding_by_migration_destination
+        = ovsdb_idl_index_create1(
+              ovnsb_idl_loop.idl,
+              &sbrec_port_binding_col_migration_destination);
     struct ovsdb_idl_index *sbrec_datapath_binding_by_key
         = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
                                   &sbrec_datapath_binding_col_tunnel_key);
@@ -3669,6 +3676,8 @@ main(int argc, char *argv[])
                                     sbrec_port_binding_by_name,
                                 .sbrec_port_binding_by_requested_chassis =
                                     sbrec_port_binding_by_requested_chassis,
+                                .sbrec_port_binding_by_migration_destination =
+                                   sbrec_port_binding_by_migration_destination,
                                 .ovsrec_port_by_interfaces =
                                     ovsrec_port_by_interfaces,
                                 .ovs_table = ovs_table,

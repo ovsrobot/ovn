@@ -929,18 +929,23 @@ claim_lport(const struct sbrec_port_binding *pb,
             return false;
         }
 
-        if (pb->chassis) {
-            VLOG_INFO("Changing chassis for lport %s from %s to %s.",
-                    pb->logical_port, pb->chassis->name,
-                    chassis_rec->name);
-        } else {
-            VLOG_INFO("Claiming lport %s for this chassis.", pb->logical_port);
-        }
-        for (int i = 0; i < pb->n_mac; i++) {
-            VLOG_INFO("%s: Claiming %s", pb->logical_port, pb->mac[i]);
-        }
+        /* Update chassis only when we don't migrate port to the chassis. */
+        if (!pb->migration_destination ||
+                strcmp(pb->migration_destination->name, chassis_rec->name)) {
+            if (pb->chassis) {
+                VLOG_INFO("Changing chassis for lport %s from %s to %s.",
+                        pb->logical_port, pb->chassis->name,
+                        chassis_rec->name);
+            } else {
+                VLOG_INFO("Claiming lport %s for this chassis.",
+                          pb->logical_port);
+            }
+            for (int i = 0; i < pb->n_mac; i++) {
+                VLOG_INFO("%s: Claiming %s", pb->logical_port, pb->mac[i]);
+            }
 
-        sbrec_port_binding_set_chassis(pb, chassis_rec);
+            sbrec_port_binding_set_chassis(pb, chassis_rec);
+        }
 
         if (tracked_datapaths) {
             update_lport_tracking(pb, tracked_datapaths, true);
@@ -1094,14 +1099,16 @@ consider_vif_lport_(const struct sbrec_port_binding *pb,
             /* We could, but can't claim the lport. */
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
                 VLOG_INFO_RL(&rl,
-                             "Not claiming lport %s, chassis %s "
-                             "requested-chassis %s",
+                             "Not claiming lport %s, chassis %s, "
+                             "requested-chassis %s, migration-destination %s",
                              pb->logical_port,
                              b_ctx_in->chassis_rec->name,
                              pb->requested_chassis ?
-                             pb->requested_chassis->name : "(option points at "
-                                                           "non-existent "
-                                                           "chassis)");
+                             pb->requested_chassis->name : ""
+                                 "(option points at non-existent chassis)",
+                             pb->migration_destination ?
+                             pb->migration_destination->name : ""
+                                 "(option points at non-existent chassis)");
         }
     }
 

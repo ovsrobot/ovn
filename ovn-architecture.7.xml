@@ -1157,6 +1157,45 @@
     </li>
   </ol>
 
+  <h2>Migration Life Cycle of a VIF</h2>
+
+  <p>
+    This section describes how port is migrated to a different chassis.
+  </p>
+
+  <p>
+    Sometimes a user may want to precisely control port binding location. In
+    this case, a logical switch port <code>options:requested-chassis</code>
+    property may be used. When set, the option specifies the name of the
+    chassis that should bind the port, and no other chassis will make any
+    attempts to bind it. When <code>options:requested-chassis</code> changes,
+    the old chassis will unbind the port and the new one will bind the port
+    instead.
+
+    This process requires database object translation and flow setup, which
+    takes time and may result in perceived network downtime. To avoid it,
+    a user may use <code>options:migration-destination</code> property on
+    a logical switch port. When set, the chassis that this option points to
+    will pre-configure the port binding, including all relevant flows, but
+    will keep it deactivated. Which means all traffic incoming or outgoing
+    from the port will be blocked (corresponding <code>drop</code> flows
+    are installed in tables 8 and 40). When CMS is ready to pass ownership of
+    the binding to the new chassis, it should send a RARP (Reverse ARP)
+    packet from the port, in which case a special controller action handler
+    attached to <code>rarp</code> matching flow will unblock incoming and
+    outgoing traffic for the port by removing previously installed
+    <code>drop</code> flows. It will also set
+    <code>options:migration-unblocked</code> to <code>true</code> for the
+    port binding.
+
+    At this point the port binding is active on both chassis, and it's
+    assumed that the user made sure that the original chassis wouldn't
+    send any more packets using the original port. It's expected that in
+    due course the user will complete port migration by setting
+    <code>options:requested-chassis</code> to point to the new chassis
+    and removing <code>options:migration-destination</code>.
+  </p>
+
   <h2>Architectural Physical Life Cycle of a Packet</h2>
 
   <p>
