@@ -3705,38 +3705,17 @@ static void
 packet_put_ra_dnssl_opt(struct dp_packet *b, ovs_be32 lifetime,
                         char *dnssl_data)
 {
-    char *dnssl_list, *t0, *r0 = NULL, dnssl[255] = {};
     size_t prev_l4_size = dp_packet_l4_size(b);
     size_t size = sizeof(struct ovs_nd_dnssl);
-    int i = 0;
+    char dnssl[255] = {};
+    int dnssl_size;
 
-    dnssl_list = xstrdup(dnssl_data);
-
-    /* Multiple DNS Search List must be 'comma' separated
-     * (e.g. "a.b.c, d.e.f"). Domain names must be encoded
-     * as described in Section 3.1 of RFC1035.
-     * (e.g if dns list is a.b.c,www.ovn.org, it will be encoded as:
-     * 01 61 01 62 01 63 00 03 77 77 77 03 6f 76 63 03 6f 72 67 00
-     */
-    for (t0 = strtok_r(dnssl_list, ",", &r0); t0;
-         t0 = strtok_r(NULL, ",", &r0)) {
-        char *t1, *r1 = NULL;
-
-        size += strlen(t0) + 2;
-        if (size > sizeof(dnssl)) {
-            goto out;
-        }
-
-        for (t1 = strtok_r(t0, ".", &r1); t1;
-             t1 = strtok_r(NULL, ".", &r1)) {
-            dnssl[i++] = strlen(t1);
-            memcpy(&dnssl[i], t1, strlen(t1));
-            i += strlen(t1);
-        }
-        dnssl[i++] = 0;
+    dnssl_size = encode_ra_dnssl_opt(dnssl_data, dnssl, sizeof(dnssl));
+    if (dnssl_size < 0) {
+        return;
     }
-    size = ROUND_UP(size, 8);
 
+    size += dnssl_size;
     struct ip6_hdr *nh = dp_packet_l3(b);
     nh->ip6_plen = htons(prev_l4_size + size);
 
@@ -3746,15 +3725,13 @@ packet_put_ra_dnssl_opt(struct dp_packet *b, ovs_be32 lifetime,
     nd_dnssl->reserved = 0;
     put_16aligned_be32(&nd_dnssl->lifetime, lifetime);
 
-    dp_packet_put(b, dnssl, size - sizeof *nd_dnssl);
+    dp_packet_put(b, dnssl, dnssl_size);
 
     struct ovs_ra_msg *ra = dp_packet_l4(b);
     ra->icmph.icmp6_cksum = 0;
     uint32_t icmp_csum = packet_csum_pseudoheader6(dp_packet_l3(b));
     ra->icmph.icmp6_cksum = csum_finish(csum_continue(icmp_csum, ra,
                                                       prev_l4_size + size));
-out:
-    free(dnssl_list);
 }
 
 static void
