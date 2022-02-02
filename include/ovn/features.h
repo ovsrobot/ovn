@@ -22,6 +22,7 @@
 
 /* ovn-controller supported feature names. */
 #define OVN_FEATURE_PORT_UP_NOTIF "port-up-notif"
+#define OVN_FEATURE_ACL_LOG_DIRECTION "acl-log-dir"
 
 /* OVS datapath supported features.  Based on availability OVN might generate
  * different types of openflows.

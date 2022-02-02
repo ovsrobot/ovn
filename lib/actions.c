@@ -3142,7 +3142,19 @@ encode_PUT_ND_RA_OPTS(const struct ovnact_put_opts *po,
 static void
 parse_log_arg(struct action_context *ctx, struct ovnact_log *log)
 {
-    if (lexer_match_id(ctx->lexer, "verdict")) {
+    if (lexer_match_id(ctx->lexer, "direction")) {
+        if (!lexer_force_match(ctx->lexer, LEX_T_EQUALS)) {
+            return;
+        }
+        if (lexer_match_id(ctx->lexer, "IN")) {
+            log->direction = LOG_DIRECTION_IN;
+        } else if (lexer_match_id(ctx->lexer, "OUT")) {
+            log->direction = LOG_DIRECTION_OUT;
+        } else {
+            lexer_syntax_error(ctx->lexer, "unknown direction");
+            return;
+        }
+    } else if (lexer_match_id(ctx->lexer, "verdict")) {
         if (!lexer_force_match(ctx->lexer, LEX_T_EQUALS)) {
             return;
         }
@@ -3216,6 +3228,7 @@ parse_LOG(struct action_context *ctx)
     struct ovnact_log *log = ovnact_put_LOG(ctx->ovnacts);
 
     /* Provide default values. */
+    log->direction = LOG_DIRECTION_NONE;
     log->severity = LOG_SEVERITY_INFO;
     log->verdict = LOG_VERDICT_UNKNOWN;
 
@@ -3271,7 +3284,8 @@ encode_LOG(const struct ovnact_log *log,
                                                   meter_id, ofpacts);
 
     struct log_pin_header *lph = ofpbuf_put_uninit(ofpacts, sizeof *lph);
-    lph->verdict = log->verdict;
+    lph->direction_verdict = LOG_DIRECTION_VERDICT(log->direction,
+                                                   log->verdict);
     lph->severity = log->severity;
 
     if (log->name) {

@@ -1383,24 +1383,33 @@ join_datapaths(struct northd_input *input_data,
     }
 }
 
-static bool
-is_vxlan_mode(struct northd_input *input_data)
+static void
+chassis_data_init(struct northd_input *input_data, struct chassis_data *data)
 {
+    data->vxlan_mode = false;
+    data->log_acl_direction = true;
+
     const struct sbrec_chassis *chassis;
     SBREC_CHASSIS_TABLE_FOR_EACH (chassis, input_data->sbrec_chassis) {
-        for (int i = 0; i < chassis->n_encaps; i++) {
+        if (data->log_acl_direction
+            && !smap_get_bool(&chassis->other_config,
+                              OVN_FEATURE_ACL_LOG_DIRECTION,
+                              false)) {
+            data->log_acl_direction = false;
+        }
+        for (int i = 0; !data->vxlan_mode && i < chassis->n_encaps; i++) {
             if (!strcmp(chassis->encaps[i]->type, "vxlan")) {
-                return true;
+                data->vxlan_mode = true;
+                break;
             }
         }
     }
-    return false;
 }
 
 static uint32_t
-get_ovn_max_dp_key_local(struct northd_input *input_data)
+get_ovn_max_dp_key_local(struct chassis_data *chassis_info)
 {
-    if (is_vxlan_mode(input_data)) {
+    if (chassis_info->vxlan_mode) {
         /* OVN_MAX_DP_GLOBAL_NUM doesn't apply for vxlan mode. */
         return OVN_MAX_DP_VXLAN_KEY;
     }
@@ -1408,14 +1417,14 @@ get_ovn_max_dp_key_local(struct northd_input *input_data)
 }
 
 static void
-ovn_datapath_allocate_key(struct northd_input *input_data,
+ovn_datapath_allocate_key(struct chassis_data *chassis_info,
                           struct hmap *datapaths, struct hmap *dp_tnlids,
                           struct ovn_datapath *od, uint32_t *hint)
 {
     if (!od->tunnel_key) {
         od->tunnel_key = ovn_allocate_tnlid(dp_tnlids, "datapath",
                                     OVN_MIN_DP_KEY_LOCAL,
-                                    get_ovn_max_dp_key_local(input_data),
+                                    get_ovn_max_dp_key_local(chassis_info),
                                     hint);
         if (!od->tunnel_key) {
             if (od->sb) {
@@ -1428,7 +1437,7 @@ ovn_datapath_allocate_key(struct northd_input *input_data,
 }
 
 static void
-ovn_datapath_assign_requested_tnl_id(struct northd_input *input_data,
+ovn_datapath_assign_requested_tnl_id(struct chassis_data *chassis_info,
                                      struct hmap *dp_tnlids,
                                      struct ovn_datapath *od)
 {
@@ -1438,7 +1447,7 @@ ovn_datapath_assign_requested_tnl_id(struct northd_input *input_data,
     uint32_t tunnel_key = smap_get_int(other_config, "requested-tnl-key", 0);
     if (tunnel_key) {
         const char *interconn_ts = smap_get(other_config, "interconn-ts");
-        if (!interconn_ts && is_vxlan_mode(input_data) &&
+        if (!interconn_ts && chassis_info->vxlan_mode &&
             tunnel_key >= 1 << 12) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_WARN_RL(&rl, "Tunnel key %"PRIu32" for datapath %s is "
@@ -1465,6 +1474,7 @@ ovn_datapath_assign_requested_tnl_id(struct northd_input *input_data,
  * switch and router. */
 static void
 build_datapaths(struct northd_input *input_data,
+                struct chassis_data *chassis_info,
                 struct ovsdb_idl_txn *ovnsb_txn,
                 struct hmap *datapaths,
                 struct ovs_list *lr_list)
@@ -1478,10 +1488,10 @@ build_datapaths(struct northd_input *input_data,
     struct hmap dp_tnlids = HMAP_INITIALIZER(&dp_tnlids);
     struct ovn_datapath *od, *next;
     LIST_FOR_EACH (od, list, &both) {
-        ovn_datapath_assign_requested_tnl_id(input_data, &dp_tnlids, od);
+        ovn_datapath_assign_requested_tnl_id(chassis_info, &dp_tnlids, od);
     }
     LIST_FOR_EACH (od, list, &nb_only) {
-        ovn_datapath_assign_requested_tnl_id(input_data, &dp_tnlids, od);
+        ovn_datapath_assign_requested_tnl_id(chassis_info, &dp_tnlids, od);
     }
 
     /* Keep nonconflicting tunnel IDs that are already assigned. */
@@ -1494,11 +1504,11 @@ build_datapaths(struct northd_input *input_data,
     /* Assign new tunnel ids where needed. */
     uint32_t hint = 0;
     LIST_FOR_EACH_SAFE (od, next, list, &both) {
-        ovn_datapath_allocate_key(input_data,
+        ovn_datapath_allocate_key(chassis_info,
                                   datapaths, &dp_tnlids, od, &hint);
     }
     LIST_FOR_EACH_SAFE (od, next, list, &nb_only) {
-        ovn_datapath_allocate_key(input_data,
+        ovn_datapath_allocate_key(chassis_info,
                                   datapaths, &dp_tnlids, od, &hint);
     }
 
@@ -4047,7 +4057,7 @@ ovn_port_add_tnlid(struct ovn_port *op, uint32_t tunnel_key)
 }
 
 static void
-ovn_port_assign_requested_tnl_id(struct northd_input *input_data,
+ovn_port_assign_requested_tnl_id(struct chassis_data *chassis_info,
                                  struct ovn_port *op)
 {
     const struct smap *options = (op->nbsp
@@ -4055,7 +4065,7 @@ ovn_port_assign_requested_tnl_id(struct northd_input *input_data,
                                   : &op->nbrp->options);
     uint32_t tunnel_key = smap_get_int(options, "requested-tnl-key", 0);
     if (tunnel_key) {
-        if (is_vxlan_mode(input_data) &&
+        if (chassis_info->vxlan_mode &&
                 tunnel_key >= OVN_VXLAN_MIN_MULTICAST) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_WARN_RL(&rl, "Tunnel key %"PRIu32" for port %s "
@@ -4074,12 +4084,11 @@ ovn_port_assign_requested_tnl_id(struct northd_input *input_data,
 }
 
 static void
-ovn_port_allocate_key(struct northd_input *input_data,
-                      struct hmap *ports,
-                      struct ovn_port *op)
+ovn_port_allocate_key(struct chassis_data *chassis_info,
+                      struct hmap *ports, struct ovn_port *op)
 {
     if (!op->tunnel_key) {
-        uint8_t key_bits = is_vxlan_mode(input_data)? 12 : 16;
+        uint8_t key_bits = chassis_info->vxlan_mode ? 12 : 16;
         op->tunnel_key = ovn_allocate_tnlid(&op->od->port_tnlids, "port",
                                             1, (1u << (key_bits - 1)) - 1,
                                             &op->od->port_key_hint);
@@ -4101,6 +4110,7 @@ ovn_port_allocate_key(struct northd_input *input_data,
  * datapaths. */
 static void
 build_ports(struct northd_input *input_data,
+            struct chassis_data *chassis_info,
             struct ovsdb_idl_txn *ovnsb_txn,
             struct ovsdb_idl_index *sbrec_chassis_by_name,
             struct ovsdb_idl_index *sbrec_chassis_by_hostname,
@@ -4124,10 +4134,10 @@ build_ports(struct northd_input *input_data,
     /* Assign explicitly requested tunnel ids first. */
     struct ovn_port *op, *next;
     LIST_FOR_EACH (op, list, &both) {
-        ovn_port_assign_requested_tnl_id(input_data, op);
+        ovn_port_assign_requested_tnl_id(chassis_info, op);
     }
     LIST_FOR_EACH (op, list, &nb_only) {
-        ovn_port_assign_requested_tnl_id(input_data, op);
+        ovn_port_assign_requested_tnl_id(chassis_info, op);
     }
 
     /* Keep nonconflicting tunnel IDs that are already assigned. */
@@ -4139,10 +4149,10 @@ build_ports(struct northd_input *input_data,
 
     /* Assign new tunnel ids where needed. */
     LIST_FOR_EACH_SAFE (op, next, list, &both) {
-        ovn_port_allocate_key(input_data, ports, op);
+        ovn_port_allocate_key(chassis_info, ports, op);
     }
     LIST_FOR_EACH_SAFE (op, next, list, &nb_only) {
-        ovn_port_allocate_key(input_data, ports, op);
+        ovn_port_allocate_key(chassis_info, ports, op);
     }
 
     /* For logical ports that are in both databases, update the southbound
@@ -6093,6 +6103,7 @@ build_acl_log_meter(struct ds *actions, const struct nbrec_acl *acl,
 
 static void
 build_acl_log(struct ds *actions, const struct nbrec_acl *acl,
+              enum ovn_stage stage, const struct chassis_data *chassis_info,
               const struct shash *meter_groups)
 {
     if (!acl->log) {
@@ -6100,6 +6111,10 @@ build_acl_log(struct ds *actions, const struct nbrec_acl *acl,
     }
 
     ds_put_cstr(actions, "log(");
+    if (chassis_info->log_acl_direction) {
+        ds_put_format(actions, "direction=%s, ",
+                      stage == S_SWITCH_IN_ACL ? "IN" : "OUT");
+    }
 
     if (acl->name) {
         ds_put_format(actions, "name=\"%s\", ", acl->name);
@@ -6134,6 +6149,7 @@ build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
                        enum ovn_stage stage, struct nbrec_acl *acl,
                        struct ds *extra_match, struct ds *extra_actions,
                        const struct ovsdb_idl_row *stage_hint,
+                       const struct chassis_data *chassis_info,
                        const struct shash *meter_groups)
 {
     struct ds match = DS_EMPTY_INITIALIZER;
@@ -6146,7 +6162,7 @@ build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
                   ingress ? ovn_stage_get_table(S_SWITCH_OUT_QOS_MARK)
                           : ovn_stage_get_table(S_SWITCH_IN_L2_LKUP));
 
-    build_acl_log(&actions, acl, meter_groups);
+    build_acl_log(&actions, acl, stage, chassis_info, meter_groups);
     if (extra_match->length > 0) {
         ds_put_format(&match, "(%s) && ", extra_match->string);
     }
@@ -6175,6 +6191,7 @@ build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
 static void
 consider_acl(struct hmap *lflows, struct ovn_datapath *od,
              struct nbrec_acl *acl, bool has_stateful,
+             const struct chassis_data *chassis_info,
              const struct shash *meter_groups, struct ds *match,
              struct ds *actions)
 {
@@ -6183,7 +6200,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
 
     if (!strcmp(acl->action, "allow-stateless")) {
         ds_clear(actions);
-        build_acl_log(actions, acl, meter_groups);
+        build_acl_log(actions, acl, stage, chassis_info, meter_groups);
         ds_put_cstr(actions, "next;");
         ovn_lflow_add_with_hint(lflows, od, stage,
                                 acl->priority + OVN_ACL_PRI_OFFSET,
@@ -6198,7 +6215,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
          * associated conntrack entry and would return "+invalid". */
         if (!has_stateful) {
             ds_clear(actions);
-            build_acl_log(actions, acl, meter_groups);
+            build_acl_log(actions, acl, stage, chassis_info, meter_groups);
             ds_put_cstr(actions, "next;");
             ovn_lflow_add_with_hint(lflows, od, stage,
                                     acl->priority + OVN_ACL_PRI_OFFSET,
@@ -6227,7 +6244,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
                 ds_put_format(actions, REGBIT_ACL_LABEL" = 1; "
                               REG_LABEL" = %"PRId64"; ", acl->label);
             }
-            build_acl_log(actions, acl, meter_groups);
+            build_acl_log(actions, acl, stage, chassis_info, meter_groups);
             ds_put_cstr(actions, "next;");
             ovn_lflow_add_with_hint(lflows, od, stage,
                                     acl->priority + OVN_ACL_PRI_OFFSET,
@@ -6252,7 +6269,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
                 ds_put_format(actions, REGBIT_ACL_LABEL" = 1; "
                               REG_LABEL" = %"PRId64"; ", acl->label);
             }
-            build_acl_log(actions, acl, meter_groups);
+            build_acl_log(actions, acl, stage, chassis_info, meter_groups);
             ds_put_cstr(actions, "next;");
             ovn_lflow_add_with_hint(lflows, od, stage,
                                     acl->priority + OVN_ACL_PRI_OFFSET,
@@ -6272,11 +6289,12 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             ds_clear(actions);
             ds_put_cstr(match, REGBIT_ACL_HINT_DROP " == 1");
             if (!strcmp(acl->action, "reject")) {
-                build_reject_acl_rules(od, lflows, stage, acl, match,
-                                       actions, &acl->header_, meter_groups);
+                build_reject_acl_rules(od, lflows, stage, acl, match, actions,
+                                       &acl->header_, chassis_info,
+                                       meter_groups);
             } else {
                 ds_put_format(match, " && (%s)", acl->match);
-                build_acl_log(actions, acl, meter_groups);
+                build_acl_log(actions, acl, stage, chassis_info, meter_groups);
                 ds_put_cstr(actions, "/* drop */");
                 ovn_lflow_add_with_hint(lflows, od, stage,
                                         acl->priority + OVN_ACL_PRI_OFFSET,
@@ -6299,11 +6317,12 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             ds_put_cstr(match, REGBIT_ACL_HINT_BLOCK " == 1");
             ds_put_cstr(actions, "ct_commit { ct_label.blocked = 1; }; ");
             if (!strcmp(acl->action, "reject")) {
-                build_reject_acl_rules(od, lflows, stage, acl, match,
-                                       actions, &acl->header_, meter_groups);
+                build_reject_acl_rules(od, lflows, stage, acl, match, actions,
+                                       &acl->header_, chassis_info,
+                                       meter_groups);
             } else {
                 ds_put_format(match, " && (%s)", acl->match);
-                build_acl_log(actions, acl, meter_groups);
+                build_acl_log(actions, acl, stage, chassis_info, meter_groups);
                 ds_put_cstr(actions, "/* drop */");
                 ovn_lflow_add_with_hint(lflows, od, stage,
                                         acl->priority + OVN_ACL_PRI_OFFSET,
@@ -6317,10 +6336,11 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             ds_clear(match);
             ds_clear(actions);
             if (!strcmp(acl->action, "reject")) {
-                build_reject_acl_rules(od, lflows, stage, acl, match,
-                                       actions, &acl->header_, meter_groups);
+                build_reject_acl_rules(od, lflows, stage, acl, match, actions,
+                                       &acl->header_, chassis_info,
+                                       meter_groups);
             } else {
-                build_acl_log(actions, acl, meter_groups);
+                build_acl_log(actions, acl, stage, chassis_info, meter_groups);
                 ds_put_cstr(actions, "/* drop */");
                 ovn_lflow_add_with_hint(lflows, od, stage,
                                         acl->priority + OVN_ACL_PRI_OFFSET,
@@ -6400,7 +6420,9 @@ build_port_group_lswitches(struct northd_input *input_data,
 
 static void
 build_acls(struct ovn_datapath *od, struct hmap *lflows,
-           const struct hmap *port_groups, const struct shash *meter_groups)
+           const struct chassis_data *chassis_info,
+           const struct hmap *port_groups,
+           const struct shash *meter_groups)
 {
     bool has_stateful = od->has_stateful_acl || od->has_lb_vip;
     struct ds match   = DS_EMPTY_INITIALIZER;
@@ -6515,15 +6537,15 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
     /* Ingress or Egress ACL Table (Various priorities). */
     for (size_t i = 0; i < od->nbs->n_acls; i++) {
         struct nbrec_acl *acl = od->nbs->acls[i];
-        consider_acl(lflows, od, acl, has_stateful, meter_groups, &match,
-                     &actions);
+        consider_acl(lflows, od, acl, has_stateful, chassis_info, meter_groups,
+                     &match, &actions);
     }
     struct ovn_port_group *pg;
     HMAP_FOR_EACH (pg, key_node, port_groups) {
         if (ovn_port_group_ls_find(pg, &od->nbs->header_.uuid)) {
             for (size_t i = 0; i < pg->nb_pg->n_acls; i++) {
                 consider_acl(lflows, od, pg->nb_pg->acls[i], has_stateful,
-                             meter_groups, &match, &actions);
+                             chassis_info, meter_groups, &match, &actions);
             }
         }
     }
@@ -7527,6 +7549,7 @@ build_lswitch_flows(const struct hmap *datapaths,
  * Ingress tables 3 through 10.  Egress tables 0 through 7. */
 static void
 build_lswitch_lflows_pre_acl_and_acl(struct ovn_datapath *od,
+                                     const struct chassis_data *chassis_info,
                                      const struct hmap *port_groups,
                                      struct hmap *lflows,
                                      const struct shash *meter_groups)
@@ -7538,7 +7561,7 @@ build_lswitch_lflows_pre_acl_and_acl(struct ovn_datapath *od,
         build_pre_lb(od, lflows);
         build_pre_stateful(od, lflows);
         build_acl_hints(od, lflows);
-        build_acls(od, lflows, port_groups, meter_groups);
+        build_acls(od, lflows, chassis_info, port_groups, meter_groups);
         build_qos(od, lflows);
         build_stateful(od, lflows);
         build_lb_hairpin(od, lflows);
@@ -13248,6 +13271,7 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
 
 
 struct lswitch_flow_build_info {
+    const struct chassis_data *chassis_info;
     const struct hmap *datapaths;
     const struct hmap *ports;
     const struct hmap *port_groups;
@@ -13275,8 +13299,9 @@ build_lswitch_and_lrouter_iterate_by_od(struct ovn_datapath *od,
                                         struct lswitch_flow_build_info *lsi)
 {
     /* Build Logical Switch Flows. */
-    build_lswitch_lflows_pre_acl_and_acl(od, lsi->port_groups, lsi->lflows,
-                                         lsi->meter_groups);
+    build_lswitch_lflows_pre_acl_and_acl(od, lsi->chassis_info,
+                                         lsi->port_groups,
+                                         lsi->lflows, lsi->meter_groups);
 
     build_fwd_group_lflows(od, lsi->lflows);
     build_lswitch_lflows_admission_control(od, lsi->lflows);
@@ -13512,7 +13537,8 @@ fix_flow_map_size(struct hmap *lflow_map,
 }
 
 static void
-build_lswitch_and_lrouter_flows(const struct hmap *datapaths,
+build_lswitch_and_lrouter_flows(const struct chassis_data *chassis_info,
+                                const struct hmap *datapaths,
                                 const struct hmap *ports,
                                 const struct hmap *port_groups,
                                 struct hmap *lflows,
@@ -13564,6 +13590,7 @@ build_lswitch_and_lrouter_flows(const struct hmap *datapaths,
             lsiv[index].meter_groups = meter_groups;
             lsiv[index].lbs = lbs;
             lsiv[index].bfd_connections = bfd_connections;
+            lsiv[index].chassis_info = chassis_info;
             lsiv[index].svc_check_match = svc_check_match;
             lsiv[index].thread_lflow_counter = 0;
             ds_init(&lsiv[index].match);
@@ -13602,6 +13629,7 @@ build_lswitch_and_lrouter_flows(const struct hmap *datapaths,
             .meter_groups = meter_groups,
             .lbs = lbs,
             .bfd_connections = bfd_connections,
+            .chassis_info = chassis_info,
             .svc_check_match = svc_check_match,
             .match = DS_EMPTY_INITIALIZER,
             .actions = DS_EMPTY_INITIALIZER,
@@ -13757,7 +13785,8 @@ void build_lflows(struct lflow_input *input_data,
         use_parallel_build = false;
         reset_parallel = true;
     }
-    build_lswitch_and_lrouter_flows(input_data->datapaths, input_data->ports,
+    build_lswitch_and_lrouter_flows(input_data->chassis_info,
+                                    input_data->datapaths, input_data->ports,
                                     input_data->port_groups, &lflows,
                                     &mcast_groups, &igmp_groups,
                                     input_data->meter_groups, input_data->lbs,
@@ -14869,6 +14898,9 @@ ovnnb_db_run(struct northd_input *input_data,
     }
     stopwatch_start(BUILD_LFLOWS_CTX_STOPWATCH_NAME, time_msec());
 
+    /* Update chassis-specific supported data. */
+    chassis_data_init(input_data, &data->chassis_info);
+
     /* Sync ipsec configuration.
      * Copy nb_cfg from northbound to southbound database.
      * Also set up to update sb_cfg once our southbound transaction commits. */
@@ -14912,7 +14944,8 @@ ovnnb_db_run(struct northd_input *input_data,
         smap_replace(&options, "svc_monitor_mac", svc_monitor_mac);
     }
 
-    char *max_tunid = xasprintf("%d", get_ovn_max_dp_key_local(input_data));
+    char *max_tunid =
+        xasprintf("%d", get_ovn_max_dp_key_local(&data->chassis_info));
     smap_replace(&options, "max_tunid", max_tunid);
     free(max_tunid);
 
@@ -14948,11 +14981,12 @@ ovnnb_db_run(struct northd_input *input_data,
     check_lsp_is_up = !smap_get_bool(&nb->options,
                                      "ignore_lsp_down", true);
 
-    build_datapaths(input_data, ovnsb_txn, &data->datapaths, &data->lr_list);
+    build_datapaths(input_data, &data->chassis_info, ovnsb_txn,
+                    &data->datapaths, &data->lr_list);
     build_ovn_lbs(input_data, ovnsb_txn, &data->datapaths, &data->lbs);
     build_lrouter_lbs(&data->datapaths, &data->lbs);
-    build_ports(input_data, ovnsb_txn, sbrec_chassis_by_name,
-                sbrec_chassis_by_hostname,
+    build_ports(input_data, &data->chassis_info, ovnsb_txn,
+                sbrec_chassis_by_name, sbrec_chassis_by_hostname,
                 &data->datapaths, &data->ports);
     build_lrouter_lbs_reachable_ips(&data->datapaths, &data->lbs);
     build_ovn_lr_lbs(&data->datapaths, &data->lbs);

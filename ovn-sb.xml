@@ -2174,6 +2174,12 @@
               <code>debug</code>.  If a severity is not provided, the default
               is <code>info</code>.
             </dd>
+            <dt><code>direction=</code><var>value</var></dt>
+            <dd>
+              The direction (logical pipeline) in which packets matched the
+              flow.  The value must be one of: <code>IN</code> for ingress
+              pipeline, or <code>OUT</code> for egress pipeline.
+            </dd>
             <dt><code>verdict=</code><var>value</var></dt>
             <dd>
               The verdict for packets matching the flow.  The value must be one
