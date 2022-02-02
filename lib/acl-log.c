@@ -40,6 +40,21 @@ log_verdict_to_string(uint8_t verdict)
 }
 
 const char *
+log_direction_to_string(uint8_t direction)
+{
+    switch (direction) {
+    case LOG_DIRECTION_NONE:
+        return "none";
+    case LOG_DIRECTION_IN:
+        return "IN";
+    case LOG_DIRECTION_OUT:
+        return "OUT";
+    default:
+        return "<unknown>";
+    }
+}
+
+const char *
 log_severity_to_string(uint8_t severity)
 {
     if (severity == LOG_SEVERITY_ALERT) {
@@ -88,14 +103,21 @@ handle_acl_log(const struct flow *headers, struct ofpbuf *userdata)
         return;
     }
 
+    uint8_t direction = LOG_DIRECTION(lph->direction_verdict);
+    uint8_t verdict = LOG_VERDICT(lph->direction_verdict);
+
     size_t name_len = userdata->size;
     char *name = name_len ? xmemdup0(userdata->data, name_len) : NULL;
 
     struct ds ds = DS_EMPTY_INITIALIZER;
     ds_put_cstr(&ds, "name=");
     json_string_escape(name_len ? name : "<unnamed>", &ds);
+    if (direction != LOG_DIRECTION_NONE) {
+        ds_put_format(&ds, ", direction=%s",
+                      log_direction_to_string(direction));
+    }
     ds_put_format(&ds, ", verdict=%s, severity=%s: ",
-                  log_verdict_to_string(lph->verdict),
+                  log_verdict_to_string(verdict),
                   log_severity_to_string(lph->severity));
     flow_format(&ds, headers, NULL);
 

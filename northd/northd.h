@@ -53,8 +53,14 @@ struct northd_input {
     struct ovsdb_idl_index *sbrec_ip_mcast_by_dp;
 };
 
+struct chassis_data {
+    bool vxlan_mode;
+    bool log_acl_direction;
+};
+
 struct northd_data {
     /* Global state for 'en-northd'. */
+    struct chassis_data chassis_info;
     struct hmap datapaths;
     struct hmap ports;
     struct hmap port_groups;
@@ -78,6 +84,7 @@ struct lflow_input {
     /* Indexes */
     struct ovsdb_idl_index *sbrec_mcast_group_by_name_dp;
 
+    const struct chassis_data *chassis_info;
     const struct hmap *datapaths;
     const struct hmap *ports;
     const struct hmap *port_groups;

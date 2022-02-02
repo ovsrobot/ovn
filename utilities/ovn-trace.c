@@ -2461,8 +2461,10 @@ execute_log(const struct ovnact_log *log, struct flow *uflow,
 {
     char *packet_str = flow_to_string(uflow, NULL);
     ovntrace_node_append(super, OVNTRACE_NODE_TRANSFORMATION,
-                    "LOG: ACL name=%s, verdict=%s, severity=%s, packet=\"%s\"",
+                    "LOG: ACL name=%s, direction=%s, verdict=%s, "
+                    "severity=%s, packet=\"%s\"",
                     log->name ? log->name : "<unnamed>",
+                    log_direction_to_string(log->direction),
                     log_verdict_to_string(log->verdict),
                     log_severity_to_string(log->severity),
                     packet_str);

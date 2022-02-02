@@ -370,6 +370,7 @@ struct ovnact_result {
 /* OVNACT_LOG. */
 struct ovnact_log {
     struct ovnact ovnact;
+    uint8_t direction;          /* One of LOG_DIRECTION_*. */
     uint8_t verdict;            /* One of LOG_VERDICT_*. */
     uint8_t severity;           /* One of LOG_SEVERITY_*. */
     char *name;
