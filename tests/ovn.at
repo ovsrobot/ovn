@@ -28325,6 +28325,8 @@ sim_add hv1
 as hv1
 ovs-vsctl add-br br-phys
 ovn_attach n1 br-phys 192.168.0.1
+#ovn-appctl -t ovn-controller vlog/set dbg
+ovn-appctl -t ovn-sb vlog/set dbg
 
 ovn-nbctl lr-add lr0
 
@@ -28353,6 +28355,8 @@ ovs-vsctl add-port br-int lsp0-1 -- set interface lsp0-1 external_ids:iface-id=l
 
 check ovn-nbctl --wait=hv sync
 AT_CHECK([test $(ovs-ofctl dump-flows br-int table=44 | grep conjunction | wc -l) == 22])
+OVS_WAIT_UNTIL([test `ovs-vsctl get Interface lsp0-0 external_ids:ovn-installed` = '"true"'])
+OVS_WAIT_UNTIL([test `ovs-vsctl get Interface lsp0-1 external_ids:ovn-installed` = '"true"'])
 
 # Save the current lflow_run counter
 lflow_run=$(ovn-appctl -t ovn-controller coverage/read-counter lflow_run)
@@ -28377,11 +28381,13 @@ AT_CHECK([test $(ovs-ofctl dump-flows br-int table=44 | grep 192.168 | wc -l) ==
 ovs-vsctl add-port br-int lsp0-0 -- set interface lsp0-0 external_ids:iface-id=lsp0-0
 check ovn-nbctl --wait=hv sync
 AT_CHECK([test $(ovs-ofctl dump-flows br-int table=44 | grep conjunction | wc -l) == 12])
+OVS_WAIT_UNTIL([test `ovs-vsctl get Interface lsp0-0 external_ids:ovn-installed` = '"true"'])
 
 # 4. Bind a lsp (lsp9-0) that doesn't belong to pg1, should not see any change.
 ovs-vsctl add-port br-int lsp9-0 -- set interface lsp9-0 external_ids:iface-id=lsp9-0
 check ovn-nbctl --wait=hv sync
 AT_CHECK([test $(ovs-ofctl dump-flows br-int table=44 | grep conjunction | wc -l) == 12])
+OVS_WAIT_UNTIL([test `ovs-vsctl get Interface lsp9-0 external_ids:ovn-installed` = '"true"'])
 
 # 5. Bind another 2 lsps (lsp1-0 lsp1-1) that belong to pg1 and on a different
 #    LS (ls1), should see conjunction flows doubled (12 x 2 = 24)
@@ -28389,6 +28395,8 @@ ovs-vsctl add-port br-int lsp1-0 -- set interface lsp1-0 external_ids:iface-id=l
 ovs-vsctl add-port br-int lsp1-1 -- set interface lsp1-1 external_ids:iface-id=lsp1-1
 check ovn-nbctl --wait=hv sync
 AT_CHECK([test $(ovs-ofctl dump-flows br-int table=44 | grep conjunction | wc -l) == 24])
+OVS_WAIT_UNTIL([test `ovs-vsctl get Interface lsp1-0 external_ids:ovn-installed` = '"true"'])
+OVS_WAIT_UNTIL([test `ovs-vsctl get Interface lsp1-1 external_ids:ovn-installed` = '"true"'])
 
 # 6. Simulate a SB port-group "del and add" notification to ovn-controller in the
 #    same IDL iteration. ovn-controller should still program the same flows. In
@@ -28414,11 +28422,11 @@ for i in $(seq 1 10); do
 
     # Finally check flow count is the same as before.
     AT_CHECK([test $(ovs-ofctl dump-flows br-int table=44 | grep conjunction | wc -l) == 24])
+    OVS_WAIT_UNTIL([test `ovs-vsctl get Interface lsp0-0 external_ids:ovn-installed` = '"true"'])
 done
 
 # Make sure all the above was performed with I-P (no recompute)
 AT_CHECK([test $(ovn-appctl -t ovn-controller coverage/read-counter lflow_run) == $lflow_run])
-
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])

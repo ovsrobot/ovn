@@ -688,7 +688,7 @@ local_binding_set_up(struct shash *local_bindings, const char *pb_name,
         local_binding_find(local_bindings, pb_name);
     struct binding_lport *b_lport = local_binding_get_primary_lport(lbinding);
 
-    if (!ovs_readonly && lbinding && lbinding->iface
+    if (!ovs_readonly && !sb_readonly && lbinding && lbinding->iface
             && !smap_get_bool(&lbinding->iface->external_ids,
                               OVN_INSTALLED_EXT_ID, false)) {
         VLOG_INFO("Setting lport %s ovn-installed in OVS", pb_name);
