@@ -2191,8 +2191,6 @@ struct ed_type_lflow_output {
 
 static void
 init_lflow_ctx(struct engine_node *node,
-               struct ed_type_runtime_data *rt_data,
-               struct ed_type_non_vif_data *non_vif_data,
                struct ed_type_lflow_output *fo,
                struct lflow_ctx_in *l_ctx_in,
                struct lflow_ctx_out *l_ctx_out)
@@ -2273,6 +2271,12 @@ init_lflow_ctx(struct engine_node *node,
     }
 
     ovs_assert(chassis);
+
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
 
     struct ed_type_addr_sets *as_data =
         engine_get_input_data("addr_sets", node);
@@ -2360,11 +2364,6 @@ en_lflow_output_cleanup(void *data)
 static void
 en_lflow_output_run(struct engine_node *node, void *data)
 {
-    struct ed_type_runtime_data *rt_data =
-        engine_get_input_data("runtime_data", node);
-    struct ed_type_non_vif_data *non_vif_data =
-        engine_get_input_data("non_vif_data", node);
-
     struct ovsrec_open_vswitch_table *ovs_table =
         (struct ovsrec_open_vswitch_table *)EN_OVSDB_GET(
             engine_get_input("OVS_open_vswitch", node));
@@ -2409,7 +2408,7 @@ en_lflow_output_run(struct engine_node *node, void *data)
 
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, non_vif_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
     lflow_run(&l_ctx_in, &l_ctx_out);
 
     engine_set_node_state(node, EN_UPDATED);
@@ -2418,15 +2417,10 @@ en_lflow_output_run(struct engine_node *node, void *data)
 static bool
 lflow_output_sb_logical_flow_handler(struct engine_node *node, void *data)
 {
-    struct ed_type_runtime_data *rt_data =
-        engine_get_input_data("runtime_data", node);
-    struct ed_type_non_vif_data *non_vif_data =
-        engine_get_input_data("non_vif_data", node);
-
     struct ed_type_lflow_output *fo = data;
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, non_vif_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
 
     bool handled = lflow_handle_changed_flows(&l_ctx_in, &l_ctx_out);
 
@@ -2462,16 +2456,11 @@ lflow_output_sb_mac_binding_handler(struct engine_node *node, void *data)
 static bool
 lflow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
 {
-    struct ed_type_runtime_data *rt_data =
-        engine_get_input_data("runtime_data", node);
-    struct ed_type_non_vif_data *non_vif_data =
-        engine_get_input_data("non_vif_data", node);
-
     struct ed_type_lflow_output *lfo = data;
 
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, non_vif_data, lfo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, lfo, &l_ctx_in, &l_ctx_out);
     if (!lflow_handle_changed_mc_groups(&l_ctx_in, &l_ctx_out)) {
         return false;
     }
@@ -2483,16 +2472,11 @@ lflow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
 static bool
 lflow_output_sb_port_binding_handler(struct engine_node *node, void *data)
 {
-    struct ed_type_runtime_data *rt_data =
-        engine_get_input_data("runtime_data", node);
-    struct ed_type_non_vif_data *non_vif_data =
-        engine_get_input_data("non_vif_data", node);
-
     struct ed_type_lflow_output *lfo = data;
 
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, non_vif_data, lfo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, lfo, &l_ctx_in, &l_ctx_out);
     if (!lflow_handle_changed_port_bindings(&l_ctx_in, &l_ctx_out)) {
         return false;
     }
@@ -2505,11 +2489,6 @@ static bool
 _lflow_output_resource_ref_handler(struct engine_node *node, void *data,
                                   enum ref_type ref_type)
 {
-    struct ed_type_runtime_data *rt_data =
-        engine_get_input_data("runtime_data", node);
-    struct ed_type_non_vif_data *non_vif_data =
-        engine_get_input_data("non_vif_data", node);
-
     struct ed_type_addr_sets *as_data =
         engine_get_input_data("addr_sets", node);
 
@@ -2520,7 +2499,7 @@ _lflow_output_resource_ref_handler(struct engine_node *node, void *data,
 
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, non_vif_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
 
     bool changed;
     const char *ref_name;
@@ -2607,8 +2586,6 @@ lflow_output_runtime_data_handler(struct engine_node *node,
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
-    struct ed_type_non_vif_data *non_vif_data =
-        engine_get_input_data("non_vif_data", node);
 
     /* There is no tracked data. Fall back to full recompute of
      * flow_output. */
@@ -2628,7 +2605,7 @@ lflow_output_runtime_data_handler(struct engine_node *node,
     struct lflow_ctx_out l_ctx_out;
     struct ed_type_lflow_output *fo = data;
     struct hmap *lbs = NULL;
-    init_lflow_ctx(node, rt_data, non_vif_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
 
     struct tracked_datapath *tdp;
     HMAP_FOR_EACH (tdp, node, tracked_dp_bindings) {
@@ -2666,15 +2643,10 @@ lflow_output_runtime_data_handler(struct engine_node *node,
 static bool
 lflow_output_sb_load_balancer_handler(struct engine_node *node, void *data)
 {
-    struct ed_type_runtime_data *rt_data =
-        engine_get_input_data("runtime_data", node);
-    struct ed_type_non_vif_data *non_vif_data =
-        engine_get_input_data("non_vif_data", node);
-
     struct ed_type_lflow_output *fo = data;
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, non_vif_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
 
     bool handled = lflow_handle_changed_lbs(&l_ctx_in, &l_ctx_out);
 
@@ -2685,15 +2657,10 @@ lflow_output_sb_load_balancer_handler(struct engine_node *node, void *data)
 static bool
 lflow_output_sb_fdb_handler(struct engine_node *node, void *data)
 {
-    struct ed_type_runtime_data *rt_data =
-        engine_get_input_data("runtime_data", node);
-    struct ed_type_non_vif_data *non_vif_data =
-        engine_get_input_data("non_vif_data", node);
-
     struct ed_type_lflow_output *fo = data;
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, rt_data, non_vif_data, fo, &l_ctx_in, &l_ctx_out);
+    init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
 
     bool handled = lflow_handle_changed_fdbs(&l_ctx_in, &l_ctx_out);
 
