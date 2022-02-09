@@ -157,6 +157,26 @@ lflow_conj_ids_alloc_specified(struct conj_ids *conj_ids,
     return true;
 }
 
+/* Find and return the start id that is allocated to the logical flow. Return
+ * 0 if not found. */
+uint32_t
+lflow_conj_ids_find(struct conj_ids *conj_ids, const struct uuid *lflow_uuid)
+{
+    struct lflow_conj_node *lflow_conj;
+    bool found = false;
+    HMAP_FOR_EACH_WITH_HASH (lflow_conj, hmap_node, uuid_hash(lflow_uuid),
+                             &conj_ids->lflow_conj_ids) {
+        if (uuid_equals(&lflow_conj->lflow_uuid, lflow_uuid)) {
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        return 0;
+    }
+    return lflow_conj->start_conj_id;
+}
+
 /* Frees the conjunction IDs used by lflow_uuid. */
 void
 lflow_conj_ids_free(struct conj_ids *conj_ids, const struct uuid *lflow_uuid)
