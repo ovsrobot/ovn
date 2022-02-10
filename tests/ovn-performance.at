@@ -543,6 +543,21 @@ OVN_CONTROLLER_EXPECT_HIT(
     [as hv3 ovs-vsctl set interface vgw3 external-ids:ovn-egress-iface=true]
 )
 
+
+ovn-nbctl --event lb-add lb0 192.168.1.100:80 ""
+ovn-nbctl --wait=hv ls-lb-add ls1 lb0
+ovn-nbctl --wait=hv meter-add meter0 drop 100 pktps 10
+
+OVN_CONTROLLER_EXPECT_NO_HIT(
+    [hv1 hv2], [lflow_run],
+    [ovn-nbctl --wait=hv ls-copp-add ls1 event-elb meter0]
+)
+
+OVN_CONTROLLER_EXPECT_NO_HIT(
+    [hv1 hv2], [lflow_run],
+    [ovn-nbctl --wait=hv --may-exist meter-add meter0 drop 200 pktps 10]
+)
+
 for i in 1 2; do
     j=$((i%2 + 1))
     lp=lp$i

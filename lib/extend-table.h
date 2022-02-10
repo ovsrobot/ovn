@@ -53,6 +53,8 @@ struct ovn_extend_table_info {
     struct hmap references; /* The lflows that are using this item, with
                              * ovn_extend_table_lflow_ref nodes. Only useful
                              * for items in ovn_extend_table.desired. */
+    void *priv_data; /* Pointer to private data (e.g. meter-bands for meters). */
+    int priv_size; /* Number of elements in data pointer. */
 };
 
 /* Maintains the link between a lflow and an ovn_extend_table_info item in

@@ -344,8 +344,6 @@ static enum mf_field_id mff_ovn_geneve;
  * is restarted, even if there is no change in the desired flow table. */
 static bool need_reinstall_flows;
 
-static ovs_be32 queue_msg(struct ofpbuf *);
-
 static struct ofpbuf *encode_flow_mod(struct ofputil_flow_mod *);
 
 static struct ofpbuf *encode_group_mod(const struct ofputil_group_mod *);
@@ -797,7 +795,7 @@ ofctrl_get_cur_cfg(void)
     return cur_cfg;
 }
 
-static ovs_be32
+ovs_be32
 queue_msg(struct ofpbuf *msg)
 {
     const struct ofp_header *oh = msg->data;
@@ -1802,26 +1800,12 @@ add_meter_string(struct ovn_extend_table_info *m_desired,
 }
 
 static void
-add_meter(struct ovn_extend_table_info *m_desired,
-          const struct sbrec_meter_table *meter_table,
-          struct ovs_list *msgs)
+meter_create_msg(const struct sbrec_meter *sb_meter,
+                 struct ovs_list *msgs, int cmd, int id)
 {
-    const struct sbrec_meter *sb_meter;
-    SBREC_METER_TABLE_FOR_EACH (sb_meter, meter_table) {
-        if (!strcmp(m_desired->name, sb_meter->name)) {
-            break;
-        }
-    }
-
-    if (!sb_meter) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-        VLOG_ERR_RL(&rl, "could not find meter named \"%s\"", m_desired->name);
-        return;
-    }
-
     struct ofputil_meter_mod mm;
-    mm.command = OFPMC13_ADD;
-    mm.meter.meter_id = m_desired->table_id;
+    mm.command = cmd;
+    mm.meter.meter_id = id;
     mm.meter.flags = OFPMF13_STATS;
 
     if (!strcmp(sb_meter->unit, "pktps")) {
@@ -1852,6 +1836,76 @@ add_meter(struct ovn_extend_table_info *m_desired,
 
     add_meter_mod(&mm, msgs);
     free(mm.meter.bands);
+}
+
+void
+meter_update(const struct sbrec_meter *sb_meter, struct ovs_list *msgs)
+{
+    struct ovn_extend_table_info *m_installed, *next_meter;
+    HMAP_FOR_EACH_SAFE (m_installed, next_meter, hmap_node,
+                        &meters->existing) {
+        if (!strcmp(m_installed->name, sb_meter->name)) {
+            struct sbrec_meter_band *band;
+
+            for (int i = 0; i < sb_meter->n_bands; i++) {
+                int j;
+
+                for (j = 0; j < m_installed->priv_size / sizeof *band; j++)  {
+                    band =
+                        (struct sbrec_meter_band *)m_installed->priv_data + j;
+                    if (band->rate == sb_meter->bands[i]->rate &&
+                        band->burst_size == sb_meter->bands[i]->burst_size) {
+                        break;
+                    }
+                }
+
+                if (j == m_installed->priv_size / sizeof *band) {
+                    meter_create_msg(sb_meter, msgs, OFPMC13_MODIFY,
+                                     m_installed->table_id);
+                    /* Recreate meter-bands cache. */
+                    free(m_installed->priv_data);
+                    m_installed->priv_size = sb_meter->n_bands * sizeof *band;
+                    m_installed->priv_data = xmalloc(m_installed->priv_size);
+                    for (i = 0; i < sb_meter->n_bands; i++) {
+                        band = (struct sbrec_meter_band *)m_installed->priv_data;
+                        memcpy(band + i, sb_meter->bands[i], sizeof *band);
+                    }
+                    return;
+                }
+            }
+        }
+    }
+}
+
+static void
+add_meter(struct ovn_extend_table_info *m_desired,
+          const struct sbrec_meter_table *meter_table,
+          struct ovs_list *msgs)
+{
+    const struct sbrec_meter *sb_meter;
+    SBREC_METER_TABLE_FOR_EACH (sb_meter, meter_table) {
+        if (!strcmp(m_desired->name, sb_meter->name)) {
+            break;
+        }
+    }
+
+    if (!sb_meter) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_ERR_RL(&rl, "could not find meter named \"%s\"", m_desired->name);
+        return;
+    }
+
+    meter_create_msg(sb_meter, msgs, OFPMC13_ADD, m_desired->table_id);
+
+    /* create private data - meter_bands */
+    struct sbrec_meter_band *band;
+    m_desired->priv_size = sb_meter->n_bands * sizeof *band;
+    m_desired->priv_data = xmalloc(m_desired->priv_size);
+
+    for (int i = 0; i < sb_meter->n_bands; i++) {
+        band = (struct sbrec_meter_band *)m_desired->priv_data + i;
+        memcpy(band, sb_meter->bands[i], sizeof *band);
+    }
 }
 
 static void
@@ -2339,6 +2393,11 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
 
     /* Sync the contents of meters->desired to meters->existing. */
     ovn_extend_table_sync(meters);
+
+    const struct sbrec_meter *sb_meter;
+    SBREC_METER_TABLE_FOR_EACH (sb_meter, meter_table) {
+        meter_update(sb_meter, &msgs);
+    }
 
     if (!ovs_list_is_empty(&msgs)) {
         /* Add a barrier to the list of messages. */

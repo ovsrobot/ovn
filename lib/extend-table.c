@@ -48,6 +48,7 @@ ovn_extend_table_info_alloc(const char *name, uint32_t id, bool is_new_id,
     e->table_id = id;
     e->new_table_id = is_new_id;
     e->hmap_node.hash = hash;
+    e->priv_data = NULL;
     hmap_init(&e->references);
     return e;
 }
@@ -56,6 +57,7 @@ static void
 ovn_extend_table_info_destroy(struct ovn_extend_table_info *e)
 {
     free(e->name);
+    free(e->priv_data);
     struct ovn_extend_table_lflow_ref *r, *r_next;
     HMAP_FOR_EACH_SAFE (r, r_next, hmap_node, &e->references) {
         hmap_remove(&e->references, &r->hmap_node);
@@ -262,6 +264,10 @@ ovn_extend_info_clone(struct ovn_extend_table_info *source)
                                     source->table_id,
                                     source->new_table_id,
                                     source->hmap_node.hash);
+    if (source->priv_data) { /* copy private data */
+        clone->priv_data = xmemdup(source->priv_data, source->priv_size);
+        clone->priv_size = source->priv_size;
+    }
     return clone;
 }
 
