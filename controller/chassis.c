@@ -64,6 +64,8 @@ struct ovs_chassis_cfg {
     struct ds iface_types;
     /* Is this chassis an interconnection gateway. */
     bool is_interconn;
+    /* Whether we should configure local_ip tunnel port option.*/
+    bool set_local_ip;
 };
 
 static void
@@ -190,6 +192,12 @@ static bool
 get_is_interconn(const struct smap *ext_ids)
 {
     return smap_get_bool(ext_ids, "ovn-is-interconn", false);
+}
+
+static bool
+get_set_local_ip(const struct smap *ext_ids)
+{
+    return smap_get_bool(ext_ids, "ovn-set-local-ip", false);
 }
 
 static void
@@ -324,6 +332,8 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
 
     ovs_cfg->is_interconn = get_is_interconn(&cfg->external_ids);
 
+    ovs_cfg->set_local_ip = get_set_local_ip(&cfg->external_ids);
+
     return true;
 }
 
@@ -350,6 +360,8 @@ chassis_build_other_config(const struct ovs_chassis_cfg *ovs_cfg,
     smap_replace(config, "is-interconn",
                  ovs_cfg->is_interconn ? "true" : "false");
     smap_replace(config, OVN_FEATURE_PORT_UP_NOTIF, "true");
+    smap_replace(config, "ovn-set-local-ip",
+                 ovs_cfg->set_local_ip ? "true" : "false");
 }
 
 /*

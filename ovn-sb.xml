@@ -300,6 +300,15 @@
       See <code>ovn-controller</code>(8) for more information.
     </column>
 
+    <column name="other_config" key="ovn-set-local-ip">
+      <code>ovn-controller</code> populates this key with the setting
+      configured in the <ref table="Open_vSwitch"
+      column="external_ids:ovn-set-local-ip"/> column of the Open_vSwitch
+      database's <ref table="Open_vSwitch" db="Open_vSwitch"/> table.
+      If set to true, the <code>ovn-controller</code> configures
+      <code>local_ip</code> option on tunnel ports.
+    </column>
+
     <column name="other_config" key="is-remote">
       <code>ovn-ic</code> set this key to true for remote interconnection
       gateway chassises learned from the interconnection southbound database.
