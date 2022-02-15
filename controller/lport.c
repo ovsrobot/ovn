@@ -129,8 +129,23 @@ lport_can_bind_on_this_chassis(const struct sbrec_chassis *chassis_rec,
         return !strcmp(requested_chassis_option, chassis_rec->name)
                || !strcmp(requested_chassis_option, chassis_rec->hostname);
     }
-    return !requested_chassis_option || !requested_chassis_option[0]
-           || chassis_rec == pb->requested_chassis;
+    if (!requested_chassis_option || !requested_chassis_option[0]
+           || chassis_rec == pb->requested_chassis) {
+        return true;
+    }
+
+    const char *rac_option = smap_get(&pb->options,
+                                      "requested-additional-chassis");
+    if (rac_option && rac_option[0]) {
+        if (pb->requested_additional_chassis) {
+            return (pb->requested_chassis &&
+                    chassis_rec == pb->requested_additional_chassis);
+        } else {
+            return !strcmp(rac_option, chassis_rec->name)
+                   || !strcmp(rac_option, chassis_rec->hostname);
+        }
+    }
+    return false;
 }
 
 const struct sbrec_datapath_binding *

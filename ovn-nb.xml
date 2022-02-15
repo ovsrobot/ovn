@@ -1011,6 +1011,14 @@
           one chassis.
         </column>
 
+        <column name="options" key="requested-additional-chassis">
+          If set and used with <ref column="requested-chassis"/>, identifies an
+          additional chassis (by name or hostname) that is allowed to bind this
+          port. Using this option allows to configure a new location for a port
+          binding before the old location is ripped off. This option may be
+          useful in live migration scenarios, for port mirroring, etc.
+        </column>
+
         <column name="options" key="iface-id-ver">
           If set, this port will be bound by <code>ovn-controller</code>
           only if this same key and value is configured in the
