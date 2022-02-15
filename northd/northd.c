@@ -3373,6 +3373,8 @@ ovn_port_update_sbrec(struct northd_input *input_data,
                                            "nat-addresses");
             size_t n_nats = 0;
             char **nats = NULL;
+            bool l3dgw_ports = op->peer && op->peer->od &&
+                               op->peer->od->n_l3dgw_ports;
             if (nat_addresses && !strcmp(nat_addresses, "router")) {
                 if (op->peer && op->peer->od
                     && (chassis || op->peer->od->n_l3dgw_ports)) {
@@ -3380,17 +3382,24 @@ ovn_port_update_sbrec(struct northd_input *input_data,
                 }
             /* Only accept manual specification of ethernet address
              * followed by IPv4 addresses on type "l3gateway" ports. */
-            } else if (nat_addresses && chassis) {
+            } else if (nat_addresses && (chassis || l3dgw_ports)) {
                 struct lport_addresses laddrs;
                 if (!extract_lsp_addresses(nat_addresses, &laddrs)) {
                     static struct vlog_rate_limit rl =
                         VLOG_RATE_LIMIT_INIT(1, 1);
                     VLOG_WARN_RL(&rl, "Error extracting nat-addresses.");
                 } else {
+                    struct ds data = DS_EMPTY_INITIALIZER;
+                    ds_put_format(&data, "%s", nat_addresses);
+                    if (l3dgw_ports) {
+                        ds_put_format(&data, " is_chassis_resident(%s)",
+                            op->peer->od->l3dgw_ports[0]->cr_port->json_key);
+                    }
                     destroy_lport_addresses(&laddrs);
                     n_nats = 1;
                     nats = xcalloc(1, sizeof *nats);
-                    nats[0] = xstrdup(nat_addresses);
+                    nats[0] = xstrdup(ds_cstr(&data));
+                    ds_destroy(&data);
                 }
             }
 
