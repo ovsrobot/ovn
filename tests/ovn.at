@@ -14472,6 +14472,7 @@ send_rarp() {
     local hv=$1 inport=$2 eth_src=$3 eth_dst=$4 spa=$5 tpa=$6
     local request=${eth_dst}${eth_src}80350001080006040001${eth_src}${spa}${eth_dst}${tpa}
     as ${hv} ovs-appctl netdev-dummy/receive $inport $request
+    echo "${request}"
 }
 
 reset_pcap_file() {
@@ -14530,7 +14531,12 @@ reset_env
 AT_CHECK([ovn-sbctl find port_binding logical_port=migrator | grep -q additional-chassis-activated], [1])
 
 # Now activate hv2:Migrator location
-send_rarp hv2 migrator 000000000001 ffffffffffff $migrator_spa $migrator_spa
+request=$(send_rarp hv2 migrator 000000000001 ffffffffffff $migrator_spa $migrator_spa)
+
+# RARP was reinjected into the pipeline
+echo $request >> hv3/outside.expected
+
+check_packets
 reset_env
 
 pb_uuid=$(ovn-sbctl --bare --columns _uuid find Port_Binding logical_port=migrator)
