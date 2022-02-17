@@ -115,6 +115,7 @@ static void ovs_iface_set_state(struct if_status_mgr *, struct ovs_iface *,
 
 static void if_status_mgr_update_bindings(
     struct if_status_mgr *mgr, struct local_binding_data *binding_data,
+    const struct sbrec_chassis *,
     bool sb_readonly, bool ovs_readonly);
 
 struct if_status_mgr *
@@ -311,6 +312,7 @@ if_status_mgr_update(struct if_status_mgr *mgr,
 void
 if_status_mgr_run(struct if_status_mgr *mgr,
                   struct local_binding_data *binding_data,
+                  const struct sbrec_chassis *chassis_rec,
                   bool sb_readonly, bool ovs_readonly)
 {
     struct ofctrl_acked_seqnos *acked_seqnos =
@@ -335,8 +337,8 @@ if_status_mgr_run(struct if_status_mgr *mgr,
     ofctrl_acked_seqnos_destroy(acked_seqnos);
 
     /* Update binding states. */
-    if_status_mgr_update_bindings(mgr, binding_data, sb_readonly,
-                                  ovs_readonly);
+    if_status_mgr_update_bindings(mgr, binding_data, chassis_rec,
+                                  sb_readonly, ovs_readonly);
 }
 
 static void
@@ -397,6 +399,7 @@ ovs_iface_set_state(struct if_status_mgr *mgr, struct ovs_iface *iface,
 static void
 if_status_mgr_update_bindings(struct if_status_mgr *mgr,
                               struct local_binding_data *binding_data,
+                              const struct sbrec_chassis *chassis_rec,
                               bool sb_readonly, bool ovs_readonly)
 {
     if (!binding_data) {
@@ -412,7 +415,8 @@ if_status_mgr_update_bindings(struct if_status_mgr *mgr,
     HMAPX_FOR_EACH (node, &mgr->ifaces_per_state[OIF_INSTALL_FLOWS]) {
         struct ovs_iface *iface = node->data;
 
-        local_binding_set_down(bindings, iface->id, sb_readonly, ovs_readonly);
+        local_binding_set_down(bindings, iface->id, chassis_rec,
+                               sb_readonly, ovs_readonly);
     }
 
     /* Notifiy the binding module to set "up" all bindings that have had
@@ -423,7 +427,7 @@ if_status_mgr_update_bindings(struct if_status_mgr *mgr,
     HMAPX_FOR_EACH (node, &mgr->ifaces_per_state[OIF_MARK_UP]) {
         struct ovs_iface *iface = node->data;
 
-        local_binding_set_up(bindings, iface->id, ts_now_str,
+        local_binding_set_up(bindings, iface->id, chassis_rec, ts_now_str,
                              sb_readonly, ovs_readonly);
     }
     free(ts_now_str);
@@ -434,7 +438,8 @@ if_status_mgr_update_bindings(struct if_status_mgr *mgr,
     HMAPX_FOR_EACH (node, &mgr->ifaces_per_state[OIF_MARK_DOWN]) {
         struct ovs_iface *iface = node->data;
 
-        local_binding_set_down(bindings, iface->id, sb_readonly, ovs_readonly);
+        local_binding_set_down(bindings, iface->id, chassis_rec,
+                               sb_readonly, ovs_readonly);
     }
 }
 
