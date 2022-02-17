@@ -3370,6 +3370,13 @@ ovn_port_update_sbrec(struct northd_input *input_data,
                 smap_add(&options, "vlan-passthru", "true");
             }
 
+            /* Retain activated flag. */
+            if (op->sb->requested_additional_chassis
+                    && smap_get_bool(&op->sb->options,
+                                     "additional-chassis-activated", false)) {
+                smap_add(&options, "additional-chassis-activated", "true");
+            }
+
             sbrec_port_binding_set_options(op->sb, &options);
             smap_destroy(&options);
             if (ovn_is_known_nb_lsp_type(op->nbsp->type)) {

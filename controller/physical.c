@@ -40,7 +40,9 @@
 #include "lib/mcast-group-index.h"
 #include "lib/ovn-sb-idl.h"
 #include "lib/ovn-util.h"
+#include "ovn/actions.h"
 #include "physical.h"
+#include "pinctrl.h"
 #include "openvswitch/shash.h"
 #include "simap.h"
 #include "smap.h"
@@ -979,6 +981,59 @@ get_additional_tunnel(const struct sbrec_port_binding *binding,
 }
 
 static void
+setup_rarp_activation_strategy(const struct sbrec_port_binding *binding,
+                               struct ovn_desired_flow_table *flow_table,
+                               struct ofpbuf *ofpacts_p)
+{
+    struct match match = MATCH_CATCHALL_INITIALIZER;
+    uint32_t dp_key = binding->datapath->tunnel_key;
+    uint32_t port_key = binding->tunnel_key;
+
+    /* Unblock the port on ingress RARP. */
+    match_set_metadata(&match, htonll(dp_key));
+    match_set_dl_type(&match, htons(ETH_TYPE_RARP));
+    match_set_reg(&match, MFF_LOG_INPORT - MFF_REG0, port_key);
+    ofpbuf_clear(ofpacts_p);
+
+    size_t ofs = ofpacts_p->size;
+    struct ofpact_controller *oc = ofpact_put_CONTROLLER(ofpacts_p);
+    oc->max_len = UINT16_MAX;
+    oc->reason = OFPR_ACTION;
+    oc->pause = true;
+
+    struct action_header ah = {
+        .opcode = htonl(ACTION_OPCODE_ACTIVATION_STRATEGY_RARP)
+    };
+    ofpbuf_put(ofpacts_p, &ah, sizeof ah);
+
+    ofpacts_p->header = oc;
+    oc->userdata_len = ofpacts_p->size - (ofs + sizeof *oc);
+    ofpact_finish_CONTROLLER(ofpacts_p, &oc);
+
+    ofctrl_add_flow(flow_table, OFTABLE_LOG_INGRESS_PIPELINE, 1010,
+                    binding->header_.uuid.parts[0],
+                    &match, ofpacts_p, &binding->header_.uuid);
+    ofpbuf_clear(ofpacts_p);
+
+    /* Block all non-RARP traffic for the port, both directions. */
+    match_init_catchall(&match);
+    match_set_metadata(&match, htonll(dp_key));
+    match_set_reg(&match, MFF_LOG_INPORT - MFF_REG0, port_key);
+
+    ofctrl_add_flow(flow_table, OFTABLE_LOG_INGRESS_PIPELINE, 1000,
+                    binding->header_.uuid.parts[0],
+                    &match, ofpacts_p, &binding->header_.uuid);
+
+    match_init_catchall(&match);
+    match_set_metadata(&match, htonll(dp_key));
+    match_set_reg(&match, MFF_LOG_OUTPORT - MFF_REG0, port_key);
+
+    ofctrl_add_flow(flow_table, OFTABLE_LOG_EGRESS_PIPELINE, 1000,
+                    binding->header_.uuid.parts[0],
+                    &match, ofpacts_p, &binding->header_.uuid);
+}
+
+static void
 consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                       enum mf_field_id mff_ovn_geneve,
                       const struct simap *ct_zones,
@@ -1190,6 +1245,25 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                 /* It's distributed across the chassis belonging to
                  * an HA chassis group. */
                 is_ha_remote = true;
+            }
+        }
+    }
+
+    if (binding->additional_chassis == chassis) {
+        const char *strategy = smap_get(&binding->options,
+                                        "activation-strategy");
+        if (strategy
+                && !smap_get_bool(&binding->options,
+                                  "additional-chassis-activated", false)
+                && !pinctrl_is_port_activated(dp_key, port_key)) {
+            if (!strcmp(strategy, "rarp")) {
+                setup_rarp_activation_strategy(binding, flow_table, ofpacts_p);
+            } else {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+                VLOG_WARN_RL(&rl,
+                             "Unknown activation strategy defined for "
+                             "port %s: %s", binding->logical_port, strategy);
+                goto out;
             }
         }
     }

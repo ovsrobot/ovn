@@ -3266,6 +3266,21 @@ tcp.flags = RST;
         useful in live migration scenarios, for port mirroring, etc.
       </column>
 
+      <column name="options" key="activation-strategy">
+        If set and used with <ref column="requested-additional-chassis"/>,
+        specifies an activation strategy for the additional chassis. By
+        default, no activation strategy is used, meaning the additional port
+        location is immediately available for use. When set to "rarp", the
+        port is blocked for ingress and egress communication until a RARP
+        packet is sent from the new location. The "rarp" strategy is useful
+        in live migration scenarios for virtual machines.
+      </column>
+
+      <column name="options" key="additional-chassis-activated">
+        When <ref column="activation-strategy"/> is set, this option indicates
+        that the port was activated using the strategy specified.
+      </column>
+
       <column name="options" key="iface-id-ver">
         If set, this port will be bound by <code>ovn-controller</code>
         only if this same key and value is configured in the

@@ -372,13 +372,19 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
         };
         eids
     },
-    var options = {
+    var options0 = {
         var options = lsp.options;
         if (sw.other_config.get(i"vlan-passthru") == Some{i"true"}) {
             options.insert(i"vlan-passthru", i"true")
         };
         options
-    }.
+    },
+    PreserveAdditionalChassisActivated(lsp._uuid, activated),
+    var options1 = match (activated) {
+        None -> map_empty(),
+        Some{value} -> [i"additional-chassis-activated" -> value]
+    },
+    var options = options0.union(options1).
 
 relation SwitchPortLBIPs(
     port: Intern<SwitchPort>,
@@ -1592,6 +1598,8 @@ sb::Out_RBAC_Permission (
     .update         = [i"type", i"options", i"ip"].to_set()
 ).
 
+/* NOTE: we only need to update the additional-chassis-activated key,
+ * but RBAC_Role doesn't support mutate operation for subkeys. */
 sb::Out_RBAC_Permission (
     ._uuid          = 128'hd8ceff1a_2b11_48bd_802f_4a991aa4e908,
     .table          = i"Port_Binding",
@@ -1599,7 +1607,8 @@ sb::Out_RBAC_Permission (
     .insert_delete  = false,
     .update         = [i"chassis", i"additional_chassis",
                        i"encap", i"additional_encap",
-                       i"up", i"virtual_parent"].to_set()
+                       i"up", i"virtual_parent",
+                       i"options"].to_set()
 ).
 
 sb::Out_RBAC_Permission (
@@ -8894,6 +8903,18 @@ PreserveIPv6RAPDList(lrp_uuid, ipv6_ra_pd_list) :-
 PreserveIPv6RAPDList(lrp_uuid, None) :-
     &nb::Logical_Router_Port(._uuid = lrp_uuid),
     not sb::Port_Binding(._uuid = lrp_uuid).
+
+/*
+ * This allows ovn-northd to preserve options:additional-chassis-activated,
+ * which is set by ovn-controller.
+ */
+relation PreserveAdditionalChassisActivated(lsp_uuid: uuid, activated: Option<istring>)
+PreserveAdditionalChassisActivated(lsp_uuid, activated) :-
+    sb::Port_Binding(._uuid = lsp_uuid, .options = options),
+    var activated = options.get(i"additional-chassis-activated").
+PreserveAdditionalChassisActivated(lsp_uuid, None) :-
+    &nb::Logical_Switch_Port(._uuid = lsp_uuid),
+    not sb::Port_Binding(._uuid = lsp_uuid).
 
 /*
  * Tag allocation for nested containers.
