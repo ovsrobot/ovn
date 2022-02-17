@@ -1166,7 +1166,9 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     if (!ofport) {
         /* It is remote port, may be reached by tunnel or localnet port */
         is_remote = true;
-        if (localnet_port) {
+        /* Enforce tunneling while we clone packets to additional chassis b/c
+         * otherwise upstream switch won't flood the packet to both chassis. */
+        if (localnet_port && !binding->additional_chassis) {
             ofport = u16_to_ofp(simap_get(patch_ofports,
                                           localnet_port->logical_port));
             if (!ofport) {
@@ -1193,11 +1195,8 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     }
 
     /* Clone packets to additional chassis if needed. */
-    const struct chassis_tunnel *additional_tun = NULL;
-    if (!localnet_port) {
-        additional_tun = get_additional_tunnel(binding, chassis,
-                                               chassis_tunnels);
-    }
+    const struct chassis_tunnel *additional_tun;
+    additional_tun = get_additional_tunnel(binding, chassis, chassis_tunnels);
 
     if (!is_remote) {
         /* Packets that arrive from a vif can belong to a VM or
