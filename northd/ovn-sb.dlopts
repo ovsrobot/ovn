@@ -25,7 +25,9 @@
 --output-only Logical_Flow
 --ro IP_Multicast.seq_no
 --ro Port_Binding.chassis
+--ro Port_Binding.additional_chassis
 --ro Port_Binding.encap
+--ro Port_Binding.additional_encap
 --ro Port_Binding.virtual_parent
 --ro SB_Global.connections
 --ro SB_Global.external_ids
