@@ -1709,6 +1709,7 @@ physical_run(struct physical_ctx *p_ctx,
             OVS_NOT_REACHED();
         }
 
+        put_load(1, MFF_LOG_FLAGS, MLF_LOCAL_ONLY_BIT, 1, &ofpacts);
         put_resubmit(OFTABLE_LOCAL_OUTPUT, &ofpacts);
 
         ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 100, 0, &match,
