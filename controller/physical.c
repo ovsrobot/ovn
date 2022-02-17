@@ -287,12 +287,13 @@ match_outport_dp_and_port_keys(struct match *match,
 }
 
 static void
-put_remote_port_redirect_overlay(const struct
-                                 sbrec_port_binding *binding,
+put_remote_port_redirect_overlay(const struct sbrec_port_binding *binding,
                                  bool is_ha_remote,
                                  struct ha_chassis_ordered *ha_ch_ordered,
                                  enum mf_field_id mff_ovn_geneve,
                                  const struct chassis_tunnel *tun,
+                                 const struct chassis_tunnel *additional_tun,
+                                 uint32_t dp_key,
                                  uint32_t port_key,
                                  struct match *match,
                                  struct ofpbuf *ofpacts_p,
@@ -301,14 +302,51 @@ put_remote_port_redirect_overlay(const struct
 {
     if (!is_ha_remote) {
         /* Setup encapsulation */
-        if (!tun) {
-            return;
+        bool is_vtep = !strcmp(binding->type, "vtep");
+        if (!additional_tun) {
+            /* Output to main chassis tunnel. */
+            put_encapsulation(mff_ovn_geneve, tun, binding->datapath, port_key,
+                              is_vtep, ofpacts_p);
+            ofpact_put_OUTPUT(ofpacts_p)->port = tun->ofport;
+
+            ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 100,
+                            binding->header_.uuid.parts[0],
+                            match, ofpacts_p, &binding->header_.uuid);
+        } else {
+            /* For packets arriving from tunnels, don't clone to avoid sending
+             * packets received from another chassis back to it. */
+            match_outport_dp_and_port_keys(match, dp_key, port_key);
+            match_set_reg_masked(match, MFF_LOG_FLAGS - MFF_REG0,
+                                 MLF_LOCAL_ONLY, MLF_LOCAL_ONLY);
+
+            /* Output to main chassis tunnel. */
+            put_encapsulation(mff_ovn_geneve, tun, binding->datapath, port_key,
+                              is_vtep, ofpacts_p);
+            ofpact_put_OUTPUT(ofpacts_p)->port = tun->ofport;
+
+            ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 110,
+                            binding->header_.uuid.parts[0], match, ofpacts_p,
+                            &binding->header_.uuid);
+
+            /* For packets originating from this chassis, clone in addition to
+             * handling it locally. */
+            match_outport_dp_and_port_keys(match, dp_key, port_key);
+            ofpbuf_clear(ofpacts_p);
+
+            /* Output to main chassis tunnel. */
+            put_encapsulation(mff_ovn_geneve, tun, binding->datapath, port_key,
+                              is_vtep, ofpacts_p);
+            ofpact_put_OUTPUT(ofpacts_p)->port = tun->ofport;
+
+            /* Output to additional chassis tunnel. */
+            put_encapsulation(mff_ovn_geneve, additional_tun,
+                              binding->datapath, port_key, is_vtep, ofpacts_p);
+            ofpact_put_OUTPUT(ofpacts_p)->port = additional_tun->ofport;
+
+            ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 100,
+                            binding->header_.uuid.parts[0], match, ofpacts_p,
+                            &binding->header_.uuid);
         }
-        put_encapsulation(mff_ovn_geneve, tun, binding->datapath, port_key,
-                          !strcmp(binding->type, "vtep"),
-                          ofpacts_p);
-        /* Output to tunnel. */
-        ofpact_put_OUTPUT(ofpacts_p)->port = tun->ofport;
     } else {
         /* Make sure all tunnel endpoints use the same encapsulation,
          * and set it up */
@@ -376,10 +414,11 @@ put_remote_port_redirect_overlay(const struct
         bundle->basis = 0;
         bundle->fields = NX_HASH_FIELDS_ETH_SRC;
         ofpact_finish_BUNDLE(ofpacts_p, &bundle);
+
+        ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 100,
+                        binding->header_.uuid.parts[0],
+                        match, ofpacts_p, &binding->header_.uuid);
     }
-    ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 100,
-                    binding->header_.uuid.parts[0],
-                    match, ofpacts_p, &binding->header_.uuid);
 }
 
 
@@ -728,6 +767,8 @@ put_local_common_flows(uint32_t dp_key,
                        const struct sbrec_port_binding *pb,
                        const struct sbrec_port_binding *parent_pb,
                        const struct zone_ids *zone_ids,
+                       const struct chassis_tunnel *additional_tun,
+                       enum mf_field_id mff_ovn_geneve,
                        struct ofpbuf *ofpacts_p,
                        struct ovn_desired_flow_table *flow_table)
 {
@@ -745,16 +786,42 @@ put_local_common_flows(uint32_t dp_key,
 
     ofpbuf_clear(ofpacts_p);
 
-    /* Match MFF_LOG_DATAPATH, MFF_LOG_OUTPORT. */
-    match_outport_dp_and_port_keys(&match, dp_key, port_key);
+    if (!additional_tun) {
+        match_outport_dp_and_port_keys(&match, dp_key, port_key);
 
-    put_zones_ofpacts(zone_ids, ofpacts_p);
+        put_zones_ofpacts(zone_ids, ofpacts_p);
+        put_resubmit(OFTABLE_CHECK_LOOPBACK, ofpacts_p);
+        ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100,
+                        pb->header_.uuid.parts[0], &match, ofpacts_p,
+                        &pb->header_.uuid);
+    } else {
+        /* For packets arriving from tunnels, don't clone again. */
+        match_outport_dp_and_port_keys(&match, dp_key, port_key);
+        match_set_reg_masked(&match, MFF_LOG_FLAGS - MFF_REG0,
+                             MLF_LOCAL_ONLY, MLF_LOCAL_ONLY);
 
-    /* Resubmit to table 39. */
-    put_resubmit(OFTABLE_CHECK_LOOPBACK, ofpacts_p);
-    ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100,
-                    pb->header_.uuid.parts[0], &match, ofpacts_p,
-                    &pb->header_.uuid);
+        put_zones_ofpacts(zone_ids, ofpacts_p);
+        put_resubmit(OFTABLE_CHECK_LOOPBACK, ofpacts_p);
+        ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 110,
+                        pb->header_.uuid.parts[0], &match, ofpacts_p,
+                        &pb->header_.uuid);
+
+        /* For packets originating from this chassis, clone in addition to
+         * handling it locally. */
+        match_outport_dp_and_port_keys(&match, dp_key, port_key);
+
+        ofpbuf_clear(ofpacts_p);
+        put_zones_ofpacts(zone_ids, ofpacts_p);
+        put_resubmit(OFTABLE_CHECK_LOOPBACK, ofpacts_p);
+
+        put_encapsulation(mff_ovn_geneve, additional_tun, pb->datapath,
+                          port_key, false, ofpacts_p);
+        ofpact_put_OUTPUT(ofpacts_p)->port = additional_tun->ofport;
+
+        ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100,
+                        pb->header_.uuid.parts[0], &match, ofpacts_p,
+                        &pb->header_.uuid);
+    }
 
     /* Table 39, Priority 100.
      * =======================
@@ -877,6 +944,40 @@ get_binding_peer(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     return peer;
 }
 
+static const struct chassis_tunnel *
+get_additional_tunnel(const struct sbrec_port_binding *binding,
+                      const struct sbrec_chassis *chassis,
+                      const struct hmap *chassis_tunnels)
+{
+    const struct chassis_tunnel *tun = NULL;
+    if (!binding->additional_chassis) {
+        return NULL;
+    }
+    if (binding->additional_chassis == chassis) {
+        tun = get_port_binding_tun(binding->encap, binding->chassis,
+                                   chassis_tunnels);
+        if (!tun) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_WARN_RL(
+                &rl, "Failed to locate tunnel to reach main chassis %s "
+                     "for port %s. Cloning packets disabled.",
+                binding->chassis->name, binding->logical_port);
+        }
+    } else {
+        tun = get_port_binding_tun(binding->additional_encap,
+                                   binding->additional_chassis,
+                                   chassis_tunnels);
+        if (!tun) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_WARN_RL(
+                &rl, "Failed to locate tunnel to reach additional chassis %s "
+                     "for port %s. Cloning packets disabled.",
+                binding->additional_chassis->name, binding->logical_port);
+        }
+    }
+    return tun;
+}
+
 static void
 consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                       enum mf_field_id mff_ovn_geneve,
@@ -911,6 +1012,7 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
 
         struct zone_ids binding_zones = get_zone_ids(binding, ct_zones);
         put_local_common_flows(dp_key, binding, NULL, &binding_zones,
+                               NULL, mff_ovn_geneve,
                                ofpacts_p, flow_table);
 
         ofpbuf_clear(ofpacts_p);
@@ -1051,7 +1153,7 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                                                 binding->logical_port);
         if (ofport && !lport_can_bind_on_this_chassis(chassis, binding)) {
             /* Even though there is an ofport for this port_binding, it is
-             * requested on a different chassis. So ignore this ofport.
+             * requested on different chassis. So ignore this ofport.
              */
             ofport = 0;
         }
@@ -1090,6 +1192,13 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
         }
     }
 
+    /* Clone packets to additional chassis if needed. */
+    const struct chassis_tunnel *additional_tun = NULL;
+    if (!localnet_port) {
+        additional_tun = get_additional_tunnel(binding, chassis,
+                                               chassis_tunnels);
+    }
+
     if (!is_remote) {
         /* Packets that arrive from a vif can belong to a VM or
          * to a container located inside that VM. Packets that
@@ -1100,6 +1209,7 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
         /* Pass the parent port binding if the port is a nested
          * container. */
         put_local_common_flows(dp_key, binding, parent_port, &zone_ids,
+                               additional_tun, mff_ovn_geneve,
                                ofpacts_p, flow_table);
 
         /* Table 0, Priority 150 and 100.
@@ -1328,7 +1438,9 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
         } else {
             put_remote_port_redirect_overlay(binding, is_ha_remote,
                                              ha_ch_ordered, mff_ovn_geneve,
-                                             tun, port_key, &match, ofpacts_p,
+                                             tun, additional_tun,
+                                             dp_key, port_key,
+                                             &match, ofpacts_p,
                                              chassis_tunnels, flow_table);
         }
     }
@@ -1462,7 +1574,8 @@ consider_mc_group(struct ovsdb_idl_index *sbrec_port_binding_by_name,
             put_load(port->tunnel_key, MFF_LOG_OUTPORT, 0, 32,
                      &remote_ofpacts);
             put_resubmit(OFTABLE_CHECK_LOOPBACK, &remote_ofpacts);
-        } else if (port->chassis == chassis
+        } else if ((port->chassis == chassis
+                    || port->additional_chassis == chassis)
                    && (local_binding_get_primary_pb(local_bindings, lport_name)
                        || !strcmp(port->type, "l3gateway"))) {
             put_load(port->tunnel_key, MFF_LOG_OUTPORT, 0, 32, &ofpacts);
@@ -1485,15 +1598,24 @@ consider_mc_group(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                     put_resubmit(OFTABLE_CHECK_LOOPBACK, &ofpacts);
                 }
             }
-        } else if (port->chassis && !get_localnet_port(
-                local_datapaths, mc->datapath->tunnel_key)) {
+        } else if (!get_localnet_port(local_datapaths,
+                                      mc->datapath->tunnel_key)) {
             /* Add remote chassis only when localnet port not exist,
              * otherwise multicast will reach remote ports through localnet
              * port. */
-            if (chassis_is_vtep(port->chassis)) {
-                sset_add(&vtep_chassis, port->chassis->name);
-            } else {
-                sset_add(&remote_chassis, port->chassis->name);
+            if (port->chassis) {
+                if (chassis_is_vtep(port->chassis)) {
+                    sset_add(&vtep_chassis, port->chassis->name);
+                } else {
+                    sset_add(&remote_chassis, port->chassis->name);
+                }
+            }
+            if (port->additional_chassis) {
+                if (chassis_is_vtep(port->additional_chassis)) {
+                    sset_add(&vtep_chassis, port->additional_chassis->name);
+                } else {
+                    sset_add(&remote_chassis, port->additional_chassis->name);
+                }
             }
         }
     }
