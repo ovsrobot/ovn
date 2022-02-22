@@ -2952,47 +2952,41 @@ pinctrl_handle_dns_lookup(
     }
 
     ds_destroy(&query_name);
-    if (!answer_data) {
-        goto exit;
-    }
 
 
-    uint16_t ancount = 0;
-    uint64_t dns_ans_stub[128 / 8];
-    struct ofpbuf dns_answer = OFPBUF_STUB_INITIALIZER(dns_ans_stub);
+    if (answer_data) {
+        uint16_t ancount = 0;
+        uint64_t dns_ans_stub[128 / 8];
+        struct ofpbuf dns_answer = OFPBUF_STUB_INITIALIZER(dns_ans_stub);
 
-    if (query_type == DNS_QUERY_TYPE_PTR) {
-        dns_build_ptr_answer(&dns_answer, in_queryname, idx, answer_data);
-        ancount++;
-    } else {
-        struct lport_addresses ip_addrs;
-        if (!extract_ip_addresses(answer_data, &ip_addrs)) {
-            goto exit;
-        }
-
-        if (query_type == DNS_QUERY_TYPE_A ||
-            query_type == DNS_QUERY_TYPE_ANY) {
-            for (size_t i = 0; i < ip_addrs.n_ipv4_addrs; i++) {
-                dns_build_a_answer(&dns_answer, in_queryname, idx,
-                                   ip_addrs.ipv4_addrs[i].addr);
-                ancount++;
+        if (query_type == DNS_QUERY_TYPE_PTR) {
+            dns_build_ptr_answer(&dns_answer, in_queryname, idx, answer_data);
+            ancount++;
+        } else {
+            struct lport_addresses ip_addrs;
+            if (!extract_ip_addresses(answer_data, &ip_addrs)) {
+                goto exit;
             }
-        }
 
-        if (query_type == DNS_QUERY_TYPE_AAAA ||
-            query_type == DNS_QUERY_TYPE_ANY) {
-            for (size_t i = 0; i < ip_addrs.n_ipv6_addrs; i++) {
-                dns_build_aaaa_answer(&dns_answer, in_queryname, idx,
-                                      &ip_addrs.ipv6_addrs[i].addr);
-                ancount++;
+            if (query_type == DNS_QUERY_TYPE_A ||
+                query_type == DNS_QUERY_TYPE_ANY) {
+                for (size_t i = 0; i < ip_addrs.n_ipv4_addrs; i++) {
+                    dns_build_a_answer(&dns_answer, in_queryname, idx,
+                                       ip_addrs.ipv4_addrs[i].addr);
+                    ancount++;
+                }
             }
-        }
-        destroy_lport_addresses(&ip_addrs);
-    }
 
-    if (!ancount) {
-        ofpbuf_uninit(&dns_answer);
-        goto exit;
+            if (query_type == DNS_QUERY_TYPE_AAAA ||
+                query_type == DNS_QUERY_TYPE_ANY) {
+                for (size_t i = 0; i < ip_addrs.n_ipv6_addrs; i++) {
+                    dns_build_aaaa_answer(&dns_answer, in_queryname, idx,
+                                          &ip_addrs.ipv6_addrs[i].addr);
+                    ancount++;
+                }
+            }
+            destroy_lport_addresses(&ip_addrs);
+        }
     }
 
     uint16_t new_l4_size = ntohs(in_udp->udp_len) +  dns_answer.size;
@@ -3023,6 +3017,12 @@ pinctrl_handle_dns_lookup(
     /* Set the response bit to 1 in the flags. */
     out_dns_header->lo_flag |= 0x80;
 
+    if (ancount == 0) {
+        /*Set the reply code bits to 0011 in the flags
+         *when here is no dns record. */
+        out_dns_header->hi_flag |= 0x03;
+    }
+
     /* Set the answer RRs. */
     out_dns_header->ancount = htons(ancount);
     out_dns_header->arcount = 0;
@@ -3030,8 +3030,10 @@ pinctrl_handle_dns_lookup(
     /* Copy the Query section. */
     dp_packet_put(&pkt_out, dp_packet_data(pkt_in), dp_packet_size(pkt_in));
 
-    /* Copy the answer sections. */
-    dp_packet_put(&pkt_out, dns_answer.data, dns_answer.size);
+    if (dns_answer.size > 0) {
+        /* Copy the answer sections. */
+        dp_packet_put(&pkt_out, dns_answer.data, dns_answer.size);
+    }
     ofpbuf_uninit(&dns_answer);
 
     out_udp->udp_len = htons(new_l4_size);
