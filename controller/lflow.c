@@ -1094,7 +1094,7 @@ lflow_parse_ctrl_meter(const struct sbrec_logical_flow *lflow,
     if (lflow->controller_meter) {
         *meter_id = ovn_extend_table_assign_id(meter_table,
                                                lflow->controller_meter,
-                                               lflow->header_.uuid);
+                                               lflow->header_.uuid, true);
         if (*meter_id == EXT_TABLE_ID_INVALID) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
             VLOG_WARN_RL(&rl, "Unable to assign id for meter: %s",

@@ -1584,13 +1584,13 @@ reg1[0] = dns_lookup("foo");
 set_meter(0);
     Rate 0 for set_meter is not in valid.
 set_meter(1);
-    encodes as meter:1
+    encodes as meter:32767
 set_meter(100, 1000);
-    encodes as meter:2
+    encodes as meter:32768
 set_meter(100, 1000, );
     Syntax error at `,' expecting `)'.
 set_meter(4294967295, 4294967295);
-    encodes as meter:3
+    encodes as meter:32769
 
 # log
 log(verdict=allow, severity=warning);
@@ -9159,8 +9159,8 @@ AT_SKIP_IF([test $d_secs -gt 9])
 
 # Print some information that may help debugging.
 AT_CHECK([as hv ovs-appctl -t ovn-controller meter-table-list], [0], [dnl
-http-rl1: 1
-http-rl2: 2
+http-rl1: 32767
+http-rl2: 32768
 ])
 as hv ovs-ofctl -O OpenFlow13 meter-stats br-int
 

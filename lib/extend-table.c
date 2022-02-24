@@ -286,7 +286,7 @@ ovn_extend_table_sync(struct ovn_extend_table *table)
  * If it already exists, return the old ID. */
 uint32_t
 ovn_extend_table_assign_id(struct ovn_extend_table *table, const char *name,
-                           struct uuid lflow_uuid)
+                           struct uuid lflow_uuid, bool is_meter)
 {
     uint32_t table_id = 0, hash;
     struct ovn_extend_table_info *table_info;
@@ -315,8 +315,10 @@ ovn_extend_table_assign_id(struct ovn_extend_table *table, const char *name,
 
     bool new_table_id = false;
     if (!table_id) {
+        size_t start = is_meter ? MAX_EXT_TABLE_ID / 2 : 1;
         /* Reserve a new group_id. */
-        table_id = bitmap_scan(table->table_ids, 0, 1, MAX_EXT_TABLE_ID + 1);
+        table_id = bitmap_scan(table->table_ids, 0, start,
+                               MAX_EXT_TABLE_ID + 1);
         new_table_id = true;
     }
 

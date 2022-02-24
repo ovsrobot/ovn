@@ -92,7 +92,7 @@ void ovn_extend_table_sync(struct ovn_extend_table *);
 
 uint32_t ovn_extend_table_assign_id(struct ovn_extend_table *,
                                     const char *name,
-                                    struct uuid lflow_uuid);
+                                    struct uuid lflow_uuid, bool is_meter);
 
 /* Iterates 'DESIRED' through all of the 'ovn_extend_table_info's in
  * 'TABLE'->desired that are not in 'TABLE'->existing.  (The loop body

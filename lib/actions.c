@@ -1307,7 +1307,7 @@ encode_CT_LB(const struct ovnact_ct_lb *cl,
     }
 
     table_id = ovn_extend_table_assign_id(ep->group_table, ds_cstr(&ds),
-                                          ep->lflow_uuid);
+                                          ep->lflow_uuid, false);
     ds_destroy(&ds);
     if (table_id == EXT_TABLE_ID_INVALID) {
         return;
@@ -1447,7 +1447,7 @@ encode_SELECT(const struct ovnact_select *select,
     }
 
     table_id = ovn_extend_table_assign_id(ep->group_table, ds_cstr(&ds),
-                                          ep->lflow_uuid);
+                                          ep->lflow_uuid, false);
     ds_destroy(&ds);
     if (table_id == EXT_TABLE_ID_INVALID) {
         return;
@@ -3413,7 +3413,7 @@ encode_LOG(const struct ovnact_log *log,
 
     if (log->meter) {
         meter_id = ovn_extend_table_assign_id(ep->meter_table, log->meter,
-                                              ep->lflow_uuid);
+                                              ep->lflow_uuid, true);
         if (meter_id == EXT_TABLE_ID_INVALID) {
             VLOG_WARN("Unable to assign id for log meter: %s", log->meter);
             return;
@@ -3508,7 +3508,7 @@ encode_SET_METER(const struct ovnact_set_meter *cl,
     }
 
     table_id = ovn_extend_table_assign_id(ep->meter_table, name,
-                                          ep->lflow_uuid);
+                                          ep->lflow_uuid, true);
     free(name);
     if (table_id == EXT_TABLE_ID_INVALID) {
         return;
@@ -3849,7 +3849,7 @@ encode_FWD_GROUP(const struct ovnact_fwd_group *fwd_group,
     uint32_t table_id = 0;
     struct ofpact_group *og;
     table_id = ovn_extend_table_assign_id(ep->group_table, ds_cstr(&ds),
-                                          ep->lflow_uuid);
+                                          ep->lflow_uuid, false);
     ds_destroy(&ds);
     if (table_id == EXT_TABLE_ID_INVALID) {
         return;
