@@ -1084,27 +1084,6 @@ lflow_handle_changed_ref(enum ref_type ref_type, const char *ref_name,
 }
 
 static void
-lflow_parse_ctrl_meter(const struct sbrec_logical_flow *lflow,
-                       struct ovn_extend_table *meter_table,
-                       uint32_t *meter_id)
-{
-    ovs_assert(meter_id);
-    *meter_id = NX_CTLR_NO_METER;
-
-    if (lflow->controller_meter) {
-        *meter_id = ovn_extend_table_assign_id(meter_table,
-                                               lflow->controller_meter,
-                                               lflow->header_.uuid, true);
-        if (*meter_id == EXT_TABLE_ID_INVALID) {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-            VLOG_WARN_RL(&rl, "Unable to assign id for meter: %s",
-                         lflow->controller_meter);
-            return;
-        }
-    }
-}
-
-static void
 add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
                           const struct local_datapath *ldp,
                           struct hmap *matches, uint8_t ptable,
@@ -1126,8 +1105,10 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
      * controller.
      */
     uint32_t ctrl_meter_id = NX_CTLR_NO_METER;
-    lflow_parse_ctrl_meter(lflow, l_ctx_out->meter_table,
-                           &ctrl_meter_id);
+    if (lflow->controller_meter) {
+        ctrl_meter_id = ovn_controller_get_meter_id(l_ctx_in->meter_table,
+                                                    lflow->controller_meter);
+    }
 
     /* Encode OVN logical actions into OpenFlow. */
     uint64_t ofpacts_stub[1024 / 8];
@@ -1153,6 +1134,7 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
         .fdb_ptable = OFTABLE_GET_FDB,
         .fdb_lookup_ptable = OFTABLE_LOOKUP_FDB,
         .ctrl_meter_id = ctrl_meter_id,
+        .meter_hash = l_ctx_in->meter_table,
     };
     ovnacts_encode(ovnacts->data, ovnacts->size, &ep, &ofpacts);
 

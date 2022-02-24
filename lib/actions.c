@@ -3411,10 +3411,9 @@ encode_LOG(const struct ovnact_log *log,
 {
     uint32_t meter_id = NX_CTLR_NO_METER;
 
-    if (log->meter) {
-        meter_id = ovn_extend_table_assign_id(ep->meter_table, log->meter,
-                                              ep->lflow_uuid, true);
-        if (meter_id == EXT_TABLE_ID_INVALID) {
+    if (ep->meter_hash && log->meter) {
+        meter_id = ovn_controller_get_meter_id(ep->meter_hash, log->meter);
+        if (meter_id == MAX_METER_ID + 1) {
             VLOG_WARN("Unable to assign id for log meter: %s", log->meter);
             return;
         }

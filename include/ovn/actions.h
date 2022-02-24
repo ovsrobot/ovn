@@ -799,6 +799,7 @@ struct ovnact_encode_params {
                                 * 'lookup_fdb' to resubmit. */
     uint32_t ctrl_meter_id;     /* Meter to be used if the resulting flow
                                    sends packets to controller. */
+    const struct shash *meter_hash;
 };
 
 void ovnacts_encode(const struct ovnact[], size_t ovnacts_len,

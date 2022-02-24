@@ -303,5 +303,20 @@ struct ovsrec_bridge_table;
 const struct ovsrec_bridge *get_bridge(const struct ovsrec_bridge_table *,
                                        const char *br_name);
 
+#define MAX_METER_ID    (MAX_EXT_TABLE_ID / 2)
+struct ed_meter_band_data {
+    int64_t burst_size;
+    int64_t rate;
+};
+
+struct ed_meter_data {
+    uint32_t id; /* ovs meter id */
+    struct ed_meter_band_data *bands;
+    size_t n_bands;
+};
+
+struct shash;
+uint32_t ovn_controller_get_meter_id(const struct shash *meter_sets,
+                                     const char *name);
 
 #endif /* OVN_UTIL_H */
