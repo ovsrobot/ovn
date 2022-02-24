@@ -913,6 +913,27 @@
               </p>
             </dd>
 
+            <dt><code>nat-only-router</code></dt>
+            <dd>
+              <p>
+                Gratuitous ARPs will be sent for all SNAT and DNAT external IP
+                addresses defined on the <ref column="options"
+                key="router-port"/>'s logical router, using the
+                <ref column="options" key="router-port"/>'s MAC address.
+              </p>
+
+              <p>
+                This form of <ref column="options" key="nat-addresses"/> is
+                valid for logical switch ports where <ref column="options"
+                key="router-port"/> is the name of a port on a gateway router,
+                or the name of a distributed gateway port.
+              </p>
+
+              <p>
+                Supported only in OVN 2.21.12.1 and later.
+              </p>
+            </dd>
+
             <dt><code>Ethernet address followed by one or more IPv4 addresses</code></dt>
             <dd>
               <p>
