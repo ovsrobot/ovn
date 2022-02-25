@@ -30,6 +30,7 @@ struct ovn_extend_table {
     unsigned long *table_ids;  /* Used as a bitmap with value set
                                 * for allocated group ids in either
                                 * desired or existing. */
+    size_t table_ids_offset;   /* table first id offset */
     struct hmap desired;
     struct hmap lflow_to_desired; /* Index for looking up desired table
                                    * items from given lflow uuid, with
@@ -72,7 +73,7 @@ struct ovn_extend_table_lflow_ref {
     struct ovn_extend_table_info *desired;
 };
 
-void ovn_extend_table_init(struct ovn_extend_table *);
+void ovn_extend_table_init(struct ovn_extend_table *, size_t);
 
 void ovn_extend_table_destroy(struct ovn_extend_table *);
 

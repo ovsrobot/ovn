@@ -30,9 +30,10 @@ ovn_extend_table_delete_desired(struct ovn_extend_table *table,
                                 struct ovn_extend_table_lflow_to_desired *l);
 
 void
-ovn_extend_table_init(struct ovn_extend_table *table)
+ovn_extend_table_init(struct ovn_extend_table *table, size_t offset)
 {
     table->table_ids = bitmap_allocate(MAX_EXT_TABLE_ID);
+    table->table_ids_offset = offset;
     bitmap_set1(table->table_ids, 0); /* table id 0 is invalid. */
     hmap_init(&table->desired);
     hmap_init(&table->lflow_to_desired);
@@ -316,7 +317,8 @@ ovn_extend_table_assign_id(struct ovn_extend_table *table, const char *name,
     bool new_table_id = false;
     if (!table_id) {
         /* Reserve a new group_id. */
-        table_id = bitmap_scan(table->table_ids, 0, 1, MAX_EXT_TABLE_ID + 1);
+        table_id = bitmap_scan(table->table_ids, 0, table->table_ids_offset,
+                               MAX_EXT_TABLE_ID + 1);
         new_table_id = true;
     }
 
