@@ -369,8 +369,6 @@ static enum mf_field_id mff_ovn_geneve;
  * is restarted, even if there is no change in the desired flow table. */
 static bool need_reinstall_flows;
 
-static ovs_be32 queue_msg(struct ofpbuf *);
-
 static struct ofpbuf *encode_flow_mod(struct ofputil_flow_mod *);
 
 static struct ofpbuf *encode_group_mod(const struct ofputil_group_mod *);
@@ -822,7 +820,7 @@ ofctrl_get_cur_cfg(void)
     return cur_cfg;
 }
 
-static ovs_be32
+ovs_be32
 queue_msg(struct ofpbuf *msg)
 {
     const struct ofp_header *oh = msg->data;
@@ -1978,29 +1976,16 @@ add_meter_string(struct ovn_extend_table_info *m_desired,
     free(meter_string);
 }
 
-static void
-add_meter(struct ovn_extend_table_info *m_desired,
-          const struct sbrec_meter_table *meter_table,
-          struct ovs_list *msgs)
+void
+meter_create_msg(struct ovs_list *msgs,
+                 const struct sbrec_meter *sb_meter,
+                 int cmd, int id)
 {
-    const struct sbrec_meter *sb_meter;
-    SBREC_METER_TABLE_FOR_EACH (sb_meter, meter_table) {
-        if (!strcmp(m_desired->name, sb_meter->name)) {
-            break;
-        }
-    }
-
-    if (!sb_meter) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-        VLOG_ERR_RL(&rl, "could not find meter named \"%s\"", m_desired->name);
-        return;
-    }
-
     struct ofputil_meter_mod mm;
-    mm.command = OFPMC13_ADD;
-    mm.meter.meter_id = m_desired->table_id;
-    mm.meter.flags = OFPMF13_STATS;
+    mm.command = cmd;
+    mm.meter.meter_id = id;
 
+    mm.meter.flags = OFPMF13_STATS;
     if (!strcmp(sb_meter->unit, "pktps")) {
         mm.meter.flags |= OFPMF13_PKTPS;
     } else {
@@ -2329,7 +2314,6 @@ void
 ofctrl_put(struct ovn_desired_flow_table *lflow_table,
            struct ovn_desired_flow_table *pflow_table,
            struct shash *pending_ct_zones,
-           const struct sbrec_meter_table *meter_table,
            uint64_t req_cfg,
            bool lflows_changed,
            bool pflows_changed)
@@ -2414,8 +2398,6 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
             /* The "set-meter" action creates a meter entry name that
              * describes the meter itself. */
             add_meter_string(m_desired, &msgs);
-        } else {
-            add_meter(m_desired, meter_table, &msgs);
         }
     }
 
