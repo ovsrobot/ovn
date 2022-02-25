@@ -2366,8 +2366,9 @@ en_lflow_output_init(struct engine_node *node OVS_UNUSED,
 {
     struct ed_type_lflow_output *data = xzalloc(sizeof *data);
     ovn_desired_flow_table_init(&data->flow_table);
-    ovn_extend_table_init(&data->group_table);
-    ovn_extend_table_init(&data->meter_table);
+    ovn_extend_table_init(&data->group_table, 0, MAX_EXT_TABLE_ID);
+    ovn_extend_table_init(&data->meter_table, MAX_EXT_TABLE_ID / 2,
+                          MAX_EXT_TABLE_ID / 2);
     lflow_resource_init(&data->lflow_resource_ref);
     lflow_conj_ids_init(&data->conj_ids);
     hmap_init(&data->lflows_processed);

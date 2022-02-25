@@ -30,9 +30,12 @@ ovn_extend_table_delete_desired(struct ovn_extend_table *table,
                                 struct ovn_extend_table_lflow_to_desired *l);
 
 void
-ovn_extend_table_init(struct ovn_extend_table *table)
+ovn_extend_table_init(struct ovn_extend_table *table,
+                      size_t offset, size_t size)
 {
-    table->table_ids = bitmap_allocate(MAX_EXT_TABLE_ID);
+    table->table_ids = bitmap_allocate(size);
+    table->table_ids_offset = offset;
+    table->table_ids_size = size;
     bitmap_set1(table->table_ids, 0); /* table id 0 is invalid. */
     hmap_init(&table->desired);
     hmap_init(&table->lflow_to_desired);
@@ -187,7 +190,8 @@ ovn_extend_table_clear(struct ovn_extend_table *table, bool existing)
         /* Don't unset bitmap for desired group_info if the group_id
          * was not freshly reserved. */
         if (existing || g->new_table_id) {
-            bitmap_set0(table->table_ids, g->table_id);
+            bitmap_set0(table->table_ids,
+                        g->table_id - table->table_ids_offset);
         }
         ovn_extend_table_info_destroy(g);
     }
@@ -213,7 +217,8 @@ ovn_extend_table_remove_existing(struct ovn_extend_table *table,
     hmap_remove(&table->existing, &existing->hmap_node);
 
     /* Dealloc group_id. */
-    bitmap_set0(table->table_ids, existing->table_id);
+    bitmap_set0(table->table_ids,
+                existing->table_id - table->table_ids_offset);
     ovn_extend_table_info_destroy(existing);
 }
 
@@ -231,7 +236,8 @@ ovn_extend_table_delete_desired(struct ovn_extend_table *table,
                      e->name, UUID_ARGS(&l->lflow_uuid));
             hmap_remove(&table->desired, &e->hmap_node);
             if (e->new_table_id) {
-                bitmap_set0(table->table_ids, e->table_id);
+                bitmap_set0(table->table_ids,
+                            e->table_id - table->table_ids_offset);
             }
             ovn_extend_table_info_destroy(e);
         }
@@ -316,16 +322,18 @@ ovn_extend_table_assign_id(struct ovn_extend_table *table, const char *name,
     bool new_table_id = false;
     if (!table_id) {
         /* Reserve a new group_id. */
-        table_id = bitmap_scan(table->table_ids, 0, 1, MAX_EXT_TABLE_ID + 1);
+        table_id = bitmap_scan(table->table_ids, 0, 1,
+                               table->table_ids_size + 1);
         new_table_id = true;
     }
 
-    if (table_id == MAX_EXT_TABLE_ID + 1) {
+    if (table_id == table->table_ids_size + 1) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         VLOG_ERR_RL(&rl, "%"PRIu32" out of table ids.", table_id);
         return EXT_TABLE_ID_INVALID;
     }
     bitmap_set1(table->table_ids, table_id);
+    table_id += table->table_ids_offset;
 
     table_info = ovn_extend_table_info_alloc(name, table_id, new_table_id,
                                              hash);

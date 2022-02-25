@@ -1290,11 +1290,12 @@ test_parse_actions(struct ovs_cmdl_context *ctx OVS_UNUSED)
 
     /* Initialize group ids. */
     struct ovn_extend_table group_table;
-    ovn_extend_table_init(&group_table);
+    ovn_extend_table_init(&group_table, 0, MAX_EXT_TABLE_ID);
 
     /* Initialize meter ids for QoS. */
     struct ovn_extend_table meter_table;
-    ovn_extend_table_init(&meter_table);
+    ovn_extend_table_init(&meter_table, MAX_EXT_TABLE_ID / 2,
+                          MAX_EXT_TABLE_ID / 2);
 
     simap_init(&ports);
     simap_put(&ports, "eth0", 5);
