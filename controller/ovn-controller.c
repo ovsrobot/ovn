@@ -76,6 +76,8 @@
 #include "stopwatch.h"
 #include "lib/inc-proc-eng.h"
 #include "hmapx.h"
+#include "openvswitch/ofp-util.h"
+#include "openvswitch/ofp-meter.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
 
@@ -968,7 +970,8 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     SB_NODE(dhcpv6_options, "dhcpv6_options") \
     SB_NODE(dns, "dns") \
     SB_NODE(load_balancer, "load_balancer") \
-    SB_NODE(fdb, "fdb")
+    SB_NODE(fdb, "fdb") \
+    SB_NODE(meter, "meter")
 
 enum sb_engine_node {
 #define SB_NODE(NAME, NAME_STR) SB_##NAME,
@@ -1540,6 +1543,221 @@ addr_sets_sb_address_set_handler(struct engine_node *node, void *data)
     }
 
     as->change_tracked = true;
+    return true;
+}
+
+struct ed_type_meter {
+    unsigned long *ids;
+    struct shash meter_sets;
+};
+
+static void *
+en_meter_init(struct engine_node *node OVS_UNUSED,
+              struct engine_arg *arg OVS_UNUSED)
+{
+    struct ed_type_meter *m = xzalloc(sizeof *m);
+    m->ids = bitmap_allocate(MAX_METER_ID);
+    bitmap_set1(m->ids, 0); /* table id 0 is invalid. */
+    shash_init(&m->meter_sets);
+
+    return m;
+}
+
+static bool
+en_meter_data_check_bands(struct ed_meter_data *md,
+                          const struct sbrec_meter *sb_meter)
+{
+    if (md->n_bands != sb_meter->n_bands) {
+        return true;
+    }
+
+    for (int i = 0; i < sb_meter->n_bands; i++) {
+        int j;
+        for (j = 0; j < md->n_bands; j++) {
+            if (sb_meter->bands[i]->rate == md->bands[j].rate &&
+                sb_meter->bands[i]->burst_size == md->bands[j].burst_size) {
+                break;
+            }
+        }
+        if (j == md->n_bands) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void
+en_meter_data_update(struct ed_meter_data *md,
+                     const struct sbrec_meter *sb_meter)
+{
+    free(md->bands);
+    md->n_bands = sb_meter->n_bands;
+    md->bands = xcalloc(md->n_bands, sizeof *md->bands);
+    for (int i = 0; i < sb_meter->n_bands; i++) {
+        md->bands[i].rate = sb_meter->bands[i]->rate;
+        md->bands[i].burst_size = sb_meter->bands[i]->burst_size;
+    }
+}
+
+static struct ed_meter_data *
+en_meter_data_alloc(struct ed_type_meter *m,
+                    const struct sbrec_meter *sb_meter)
+{
+    uint32_t id = bitmap_scan(m->ids, 0, 1, MAX_METER_ID + 1);
+    if (id == MAX_METER_ID + 1) {
+        static struct vlog_rate_limit rl =
+            VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_ERR_RL(&rl, "%"PRIu32" out of meter ids.", id);
+        return NULL;
+    }
+
+    struct ed_meter_data *md = xzalloc(sizeof *md);
+    bitmap_set1(m->ids, id);
+    md->id = id;
+    en_meter_data_update(md, sb_meter);
+    shash_add(&m->meter_sets, sb_meter->name, md);
+
+    return md;
+}
+
+static void
+en_meter_data_destroy(struct ed_type_meter *m, struct ed_meter_data *md)
+{
+    bitmap_set0(m->ids, md->id);
+    free(md->bands);
+    free(md);
+}
+
+static void
+en_meter_send_msgs(struct ovs_list *msgs)
+{
+    if (ovs_list_is_empty(msgs)) {
+        return;
+    }
+
+    struct ofpbuf *barrier = ofputil_encode_barrier_request(OFP15_VERSION);
+    ovs_list_push_back(msgs, &barrier->list_node);
+    /* Queue the messages. */
+    struct ofpbuf *msg;
+    LIST_FOR_EACH_POP (msg, list_node, msgs) {
+        queue_msg(msg);
+    }
+}
+
+static void
+en_meter_delete_msg(struct ovs_list *msgs, uint32_t id)
+{
+    struct ofputil_meter_mod mm = {
+        .command = OFPMC13_DELETE,
+        .meter = { .meter_id = id },
+    };
+    struct ofpbuf *msg = ofputil_encode_meter_mod(OFP15_VERSION, &mm);
+    ovs_list_push_back(msgs, &msg->list_node);
+}
+
+static void
+en_meter_cleanup(void *data)
+{
+    struct ed_type_meter *m = data;
+
+    struct shash_node *node, *next;
+    SHASH_FOR_EACH_SAFE (node, next, &m->meter_sets) {
+        struct ed_meter_data *md = node->data;
+        shash_delete(&m->meter_sets, node);
+        en_meter_data_destroy(m, md);
+    }
+    shash_destroy(&m->meter_sets);
+    bitmap_free(m->ids);
+}
+
+static void
+en_meter_run(struct engine_node *node, void *data)
+{
+    struct ovs_list msgs = OVS_LIST_INITIALIZER(&msgs);
+    const struct sbrec_meter *sb_meter;
+    struct ed_type_meter *m = data;
+    struct ed_meter_data *md;
+
+    struct sbrec_meter_table *m_table =
+        (struct sbrec_meter_table *)EN_OVSDB_GET(
+            engine_get_input("SB_meter", node));
+
+    /* remove stale entries */
+    struct shash_node *iter, *next;
+    SHASH_FOR_EACH_SAFE (iter, next, &m->meter_sets) {
+        bool found = false;
+        SBREC_METER_TABLE_FOR_EACH (sb_meter, m_table) {
+            if (!strcmp(sb_meter->name, iter->name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            md = iter->data;
+            shash_delete(&m->meter_sets, iter);
+            en_meter_delete_msg(&msgs, md->id);
+            en_meter_data_destroy(m, md);
+        }
+    }
+
+    /* add new entries or update current ones */
+    SBREC_METER_TABLE_FOR_EACH (sb_meter, m_table) {
+        md = shash_find_data(&m->meter_sets, sb_meter->name);
+        if (md) {
+            if (en_meter_data_check_bands(md, sb_meter)) {
+                en_meter_data_update(md, sb_meter);
+                meter_create_msg(&msgs, sb_meter, OFPMC13_MODIFY, md->id);
+            }
+        } else {
+            md = en_meter_data_alloc(m, sb_meter);
+            if (md) {
+                meter_create_msg(&msgs, sb_meter, OFPMC13_ADD, md->id);
+            }
+        }
+    }
+
+    en_meter_send_msgs(&msgs);
+    engine_set_node_state(node, EN_UPDATED);
+}
+
+static bool
+meter_sb_meter_handler(struct engine_node *node, void *data)
+{
+    struct ovs_list msgs = OVS_LIST_INITIALIZER(&msgs);
+    struct ed_type_meter *m = data;
+    struct sbrec_meter_table *m_table =
+        (struct sbrec_meter_table *)EN_OVSDB_GET(
+            engine_get_input("SB_meter", node));
+
+    const struct sbrec_meter *iter;
+    SBREC_METER_TABLE_FOR_EACH_TRACKED (iter, m_table) {
+        struct ed_meter_data *md;
+        if (sbrec_meter_is_deleted(iter)) {
+            md = shash_find_and_delete(&m->meter_sets, iter->name);
+            if (md) {
+                en_meter_delete_msg(&msgs, md->id);
+                en_meter_data_destroy(m, md);
+                engine_set_node_state(node, EN_UPDATED);
+            }
+        } else {
+            if (sbrec_meter_is_new(iter)) {
+                md = en_meter_data_alloc(m, iter);
+                if (md) {
+                    meter_create_msg(&msgs, iter, OFPMC13_ADD, md->id);
+                    engine_set_node_state(node, EN_UPDATED);
+                }
+            } else {
+                md = shash_find_data(&m->meter_sets, iter->name);
+                if (md) {
+                    en_meter_data_update(md, iter);
+                }
+                meter_create_msg(&msgs, iter, OFPMC13_MODIFY, md->id);
+            }
+        }
+    }
+    en_meter_send_msgs(&msgs);
+
     return true;
 }
 
@@ -2298,6 +2516,10 @@ init_lflow_ctx(struct engine_node *node,
         (struct ovsrec_open_vswitch_table *)EN_OVSDB_GET(
             engine_get_input("OVS_open_vswitch", node));
 
+    struct ed_type_meter *meter_data =
+        engine_get_input_data("meter", node);
+    struct shash *meter_sets = &meter_data->meter_sets;
+
     const char *chassis_id = get_ovs_chassis_id(ovs_table);
     const struct sbrec_chassis *chassis = NULL;
     struct ovsdb_idl_index *sbrec_chassis_by_name =
@@ -2348,6 +2570,7 @@ init_lflow_ctx(struct engine_node *node,
     l_ctx_in->active_tunnels = &rt_data->active_tunnels;
     l_ctx_in->related_lport_ids = &rt_data->related_lports.lport_ids;
     l_ctx_in->chassis_tunnels = &non_vif_data->chassis_tunnels;
+    l_ctx_in->meter_table = meter_sets;
 
     l_ctx_out->flow_table = &fo->flow_table;
     l_ctx_out->group_table = &fo->group_table;
@@ -3222,6 +3445,7 @@ main(int argc, char *argv[])
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA(lflow_output, "logical_flow_output");
     ENGINE_NODE(flow_output, "flow_output");
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA(addr_sets, "addr_sets");
+    ENGINE_NODE(meter, "meter");
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA(port_groups, "port_groups");
 
 #define SB_NODE(NAME, NAME_STR) ENGINE_NODE_SB(NAME, NAME_STR);
@@ -3242,6 +3466,8 @@ main(int argc, char *argv[])
      * locally bound ports. */
     engine_add_input(&en_port_groups, &en_runtime_data,
                      port_groups_runtime_data_handler);
+
+    engine_add_input(&en_meter, &en_sb_meter, meter_sb_meter_handler);
 
     engine_add_input(&en_non_vif_data, &en_ovs_open_vswitch, NULL);
     engine_add_input(&en_non_vif_data, &en_ovs_bridge, NULL);
@@ -3287,6 +3513,7 @@ main(int argc, char *argv[])
                      lflow_output_runtime_data_handler);
     engine_add_input(&en_lflow_output, &en_non_vif_data,
                      NULL);
+    engine_add_input(&en_lflow_output, &en_meter, NULL);
 
     engine_add_input(&en_lflow_output, &en_sb_multicast_group,
                      lflow_output_sb_multicast_group_handler);
@@ -3768,7 +3995,6 @@ main(int argc, char *argv[])
                         ofctrl_put(&lflow_output_data->flow_table,
                                    &pflow_output_data->flow_table,
                                    &ct_zones_data->pending,
-                                   sbrec_meter_table_get(ovnsb_idl_loop.idl),
                                    ofctrl_seqno_get_req_cfg(),
                                    engine_node_changed(&en_lflow_output),
                                    engine_node_changed(&en_pflow_output));

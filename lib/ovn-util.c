@@ -30,6 +30,8 @@
 #include "socket-util.h"
 #include "svec.h"
 #include "unixctl.h"
+#include "controller/ovn-controller.h"
+#include "openvswitch/ofp-actions.h"
 
 VLOG_DEFINE_THIS_MODULE(ovn_util);
 
@@ -805,4 +807,11 @@ get_bridge(const struct ovsrec_bridge_table *bridge_table, const char *br_name)
         }
     }
     return NULL;
+}
+
+uint32_t
+ovn_controller_get_meter_id(const struct shash *meter_sets, const char *name)
+{
+    struct ed_meter_data *md = shash_find_data(meter_sets, name);
+    return md ? md->id : NX_CTLR_NO_METER;
 }
