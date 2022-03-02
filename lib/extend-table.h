@@ -44,12 +44,21 @@ struct ovn_extend_table_lflow_to_desired {
     struct ovs_list desired; /* List of desired items used by the lflow. */
 };
 
+enum ovn_extend_table_sync_cmd {
+    UNSPEC_CMD = 0,
+    ADD_CMD,
+    DEL_CMD,
+    UPDATE_CMD,
+};
+
 struct ovn_extend_table_info {
     struct hmap_node hmap_node;
     char *name;         /* Name for the table entity. */
     uint32_t table_id;
     bool new_table_id;  /* 'True' if 'table_id' was reserved from
                          * ovn_extend_table's 'table_ids' bitmap. */
+    enum ovn_extend_table_sync_cmd cmd; /* This entry needs to be synced with OVS
+                                         * running the provided command. */
     struct hmap references; /* The lflows that are using this item, with
                              * ovn_extend_table_lflow_ref nodes. Only useful
                              * for items in ovn_extend_table.desired. */
@@ -93,6 +102,10 @@ void ovn_extend_table_sync(struct ovn_extend_table *);
 uint32_t ovn_extend_table_assign_id(struct ovn_extend_table *,
                                     const char *name,
                                     struct uuid lflow_uuid);
+
+struct ovn_extend_table_info *
+ovn_extend_table_desired_lookup_by_name(struct ovn_extend_table * table,
+                                        const char *name);
 
 /* Iterates 'DESIRED' through all of the 'ovn_extend_table_info's in
  * 'TABLE'->desired that are not in 'TABLE'->existing.  (The loop body

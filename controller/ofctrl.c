@@ -1979,9 +1979,9 @@ add_meter_string(struct ovn_extend_table_info *m_desired,
 }
 
 static void
-add_meter(struct ovn_extend_table_info *m_desired,
-          const struct sbrec_meter_table *meter_table,
-          struct ovs_list *msgs)
+update_meter(struct ovn_extend_table_info *m_desired,
+             const struct sbrec_meter_table *meter_table,
+             int cmd, struct ovs_list *msgs)
 {
     const struct sbrec_meter *sb_meter;
     SBREC_METER_TABLE_FOR_EACH (sb_meter, meter_table) {
@@ -1997,7 +1997,7 @@ add_meter(struct ovn_extend_table_info *m_desired,
     }
 
     struct ofputil_meter_mod mm;
-    mm.command = OFPMC13_ADD;
+    mm.command = cmd;
     mm.meter.meter_id = m_desired->table_id;
     mm.meter.flags = OFPMF13_STATS;
 
@@ -2029,6 +2029,7 @@ add_meter(struct ovn_extend_table_info *m_desired,
 
     add_meter_mod(&mm, msgs);
     free(mm.meter.bands);
+    m_desired->cmd = UNSPEC_CMD;
 }
 
 static void
@@ -2314,6 +2315,38 @@ ofctrl_can_put(void)
     return true;
 }
 
+static void
+ofctl_sync_ovs_meters(const struct sbrec_meter_table *meter_table,
+                      struct ovs_list *msgs)
+{
+    /* Iterate through all the desired meters to check if OVS meter needs
+     * to be updated.
+     */
+    struct ovn_extend_table_info *m_desired;
+    HMAP_FOR_EACH (m_desired, hmap_node, &meters->desired) {
+        switch (m_desired->cmd) {
+        case ADD_CMD:
+            update_meter(m_desired, meter_table, OFPMC13_ADD, msgs);
+            break;
+        case UPDATE_CMD:
+            update_meter(m_desired, meter_table, OFPMC13_MODIFY, msgs);
+            break;
+        case DEL_CMD: {
+            struct ofputil_meter_mod mm = {
+                .command = OFPMC13_DELETE,
+                .meter = { .meter_id = m_desired->table_id },
+            };
+            add_meter_mod(&mm, msgs);
+            m_desired->cmd = UNSPEC_CMD;
+            break;
+        }
+        case UNSPEC_CMD:
+        default:
+            break;
+        }
+    }
+}
+
 /* Replaces the flow table on the switch, if possible, by the flows added
  * with ofctrl_add_flow().
  *
@@ -2415,9 +2448,11 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
              * describes the meter itself. */
             add_meter_string(m_desired, &msgs);
         } else {
-            add_meter(m_desired, meter_table, &msgs);
+            update_meter(m_desired, meter_table, OFPMC13_ADD, &msgs);
         }
     }
+
+    ofctl_sync_ovs_meters(meter_table, &msgs);
 
     /* Add all flow updates into a bundle. */
     static int bundle_id = 0;
