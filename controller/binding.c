@@ -489,12 +489,14 @@ update_active_pb_ras_pd(const struct sbrec_port_binding *pb,
     bool ras_pd_conf = smap_get_bool(&pb->options, conf, false);
     struct shash_node *iter = shash_find(map, pb->logical_port);
     struct pb_ld_binding *ras_pd = iter ? iter->data : NULL;
+    bool deleted = sbrec_port_binding_is_deleted(pb);
 
-    if (iter && !ras_pd_conf) {
+    if (iter && (!ras_pd_conf || deleted)) {
         shash_delete(map, iter);
         free(ras_pd);
         return;
     }
+
     if (ras_pd_conf) {
         if (!ras_pd) {
             ras_pd = xzalloc(sizeof *ras_pd);
@@ -2338,11 +2340,9 @@ delete_done:
 
     SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (pb,
                                                b_ctx_in->port_binding_table) {
-        /* Loop to handle create and update changes only. */
-        if (sbrec_port_binding_is_deleted(pb)) {
-            continue;
-        }
-
+        /* handle port changes/deletion and update the local active ports ipv6
+         * releated lists.
+         */
         update_active_pb_ras_pd(pb, b_ctx_out->local_datapaths,
                                 b_ctx_out->local_active_ports_ipv6_pd,
                                 "ipv6_prefix_delegation");
@@ -2350,6 +2350,11 @@ delete_done:
         update_active_pb_ras_pd(pb, b_ctx_out->local_datapaths,
                                 b_ctx_out->local_active_ports_ras,
                                 "ipv6_ra_send_periodic");
+
+        /* Loop to handle create and update changes only. */
+        if (sbrec_port_binding_is_deleted(pb)) {
+            continue;
+        }
 
         enum en_lport_type lport_type = get_lport_type(pb);
 
