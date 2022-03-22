@@ -2,6 +2,12 @@ Post v22.03.0
 -------------
   - Support IGMP and MLD snooping on transit logical switches that connect
     different OVN Interconnection availability zones.
+  - Replaced the usage of masked ct_label by ct_mark in most cases to work
+    better with hardware-offloading. Note that for backward compatibility
+    during upgrading some hairpin related flows are still kept by default, and
+    a new option "ovn-check-ct-label-for-lb-hairpin" for ovn-controller needs
+    to be set to "false" after the central upgrading completion to remove those
+    flows.
 
 OVN v22.03.0 - XX XXX XXXX
 --------------------------

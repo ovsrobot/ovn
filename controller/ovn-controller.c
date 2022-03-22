@@ -486,6 +486,17 @@ get_ovs_chassis_id(const struct ovsrec_open_vswitch_table *ovs_table)
     return chassis_id;
 }
 
+static bool
+get_check_ct_label_for_lb_hairpin(
+    const struct ovsrec_open_vswitch_table *ovs_table)
+{
+    const struct ovsrec_open_vswitch *cfg
+        = ovsrec_open_vswitch_table_first(ovs_table);
+    return cfg ? smap_get_bool(&cfg->external_ids,
+                               "ovn-check-ct-label-for-lb-hairpin", true)
+               : true;
+}
+
 static void
 update_ssl_config(const struct ovsrec_ssl_table *ssl_table)
 {
@@ -2349,6 +2360,8 @@ init_lflow_ctx(struct engine_node *node,
     l_ctx_in->active_tunnels = &rt_data->active_tunnels;
     l_ctx_in->related_lport_ids = &rt_data->related_lports.lport_ids;
     l_ctx_in->chassis_tunnels = &non_vif_data->chassis_tunnels;
+    l_ctx_in->check_ct_label_for_lb_hairpin =
+        get_check_ct_label_for_lb_hairpin(ovs_table);
 
     l_ctx_out->flow_table = &fo->flow_table;
     l_ctx_out->group_table = &fo->group_table;

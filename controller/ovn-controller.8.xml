@@ -311,6 +311,19 @@
         heplful to pin source outer IP for the tunnel when multiple interfaces
         are used on the host for overlay traffic.
       </dd>
+      <dt><code>external_ids:ovn-check-ct-label-for-lb-hairpin</code></dt>
+      <dd>
+        The check for ct_label has been replaced by ct_mark to work better with
+        hardware offloading with smart NICs. However, to be backward compatible
+        during upgrading from an older version that uses ct_label to the
+        current version, some LB hairpin related flows using ct_label are kept.
+        This boolean flag can be set to <code>false</code> after
+        <code>ovn-northd</code> (central component) upgrading is complete, to
+        tell <code>ovn-controller</code> to remove those ct_label flows.
+        Without this option (or set to <code>true</code>), the related hairpin
+        flows using ct_label are still programmed, which could still lead to
+        undesirable behavior for hardware-offloading on some NICs.
+      </dd>
     </dl>
 
     <p>
