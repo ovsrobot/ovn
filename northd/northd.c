@@ -13242,7 +13242,7 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
 
     /* NAT rules are not currently supported on logical routers with multiple
      * distributed gateway ports. */
-    if (od->n_l3dgw_ports > 1) {
+    if (od->nbr->n_nat && od->n_l3dgw_ports > 1) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         VLOG_WARN_RL(&rl, "NAT is configured on logical router %s, which has %"
                      PRIuSIZE" distributed gateway ports. NAT is not supported"
