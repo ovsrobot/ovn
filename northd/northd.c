@@ -11890,6 +11890,38 @@ build_gateway_redirect_flows_for_lrouter(
                                 ds_cstr(match), ds_cstr(actions),
                                 stage_hint);
     }
+
+    for (int i = 0; i < od->nbr->n_nat; i++) {
+        const struct nbrec_nat *nat = nat = od->nbr->nat[i];
+        if (!lrouter_nat_is_stateless(nat) ||
+            strcmp(nat->type, "dnat_and_snat")) {
+           continue;
+        }
+
+        bool is_v6 = false;
+        ovs_be32 ip, mask;
+        char *error = ip_parse_masked(nat->external_ip, &ip, &mask);
+        if (error || mask != OVS_BE32_MAX) {
+            free(error);
+            struct in6_addr ipv6, mask_v6, v6_exact = IN6ADDR_EXACT_INIT;
+            error = ipv6_parse_masked(nat->external_ip, &ipv6, &mask_v6);
+            if (error || memcmp(&mask_v6, &v6_exact, sizeof(mask_v6))) {
+                 /* Invalid for both IPv4 and IPv6 */
+                 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                 VLOG_WARN_RL(&rl, "bad external ip %s for nat",
+                              nat->external_ip);
+                 free(error);
+                 continue;
+             }
+             is_v6 = true;
+        }
+        ds_clear(match);
+        ds_put_format(match, "ip && ip%s.dst == %s", is_v6 ? "6" : "4",
+                      nat->external_ip);
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_GW_REDIRECT, 100,
+                      ds_cstr(match), "drop;");
+    }
+
     /* Packets are allowed by default. */
     ovn_lflow_add(lflows, od, S_ROUTER_IN_GW_REDIRECT, 0, "1", "next;");
 }
@@ -12638,8 +12670,7 @@ build_lrouter_in_unsnat_flow(struct hmap *lflows, struct ovn_datapath *od,
         ds_put_format(match, "ip && ip%s.dst == %s",
                       is_v6 ? "6" : "4", nat->external_ip);
         if (!strcmp(nat->type, "dnat_and_snat") && stateless) {
-            ds_put_format(actions, "ip%s.dst=%s; next;",
-                          is_v6 ? "6" : "4", nat->logical_ip);
+            ds_put_format(actions, "next;");
         } else {
             ds_put_cstr(actions, "ct_snat;");
         }
@@ -12664,8 +12695,7 @@ build_lrouter_in_unsnat_flow(struct hmap *lflows, struct ovn_datapath *od,
         }
 
         if (!strcmp(nat->type, "dnat_and_snat") && stateless) {
-            ds_put_format(actions, "ip%s.dst=%s; next;",
-                          is_v6 ? "6" : "4", nat->logical_ip);
+            ds_put_format(actions, "next;");
         } else {
             ds_put_cstr(actions, "ct_snat_in_czone;");
         }
@@ -12818,8 +12848,7 @@ build_lrouter_out_undnat_flow(struct hmap *lflows, struct ovn_datapath *od,
 
     if (!strcmp(nat->type, "dnat_and_snat") &&
         lrouter_nat_is_stateless(nat)) {
-        ds_put_format(actions, "ip%s.src=%s; next;",
-                      is_v6 ? "6" : "4", nat->external_ip);
+        ds_put_format(actions, "next;");
     } else {
         ds_put_format(actions,
                       od->is_gw_router ? "ct_dnat;" : "ct_dnat_in_czone;");
