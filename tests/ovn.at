@@ -14227,10 +14227,12 @@ check ovn-nbctl lsp-add ls0 first
 check ovn-nbctl lsp-add ls0 second
 check ovn-nbctl lsp-add ls0 third
 check ovn-nbctl lsp-add ls0 migrator
+check ovn-nbctl lsp-add ls0 migrator-no-cloning
 check ovn-nbctl lsp-set-addresses first "00:00:00:00:00:01 10.0.0.1"
 check ovn-nbctl lsp-set-addresses second "00:00:00:00:00:02 10.0.0.2"
 check ovn-nbctl lsp-set-addresses third "00:00:00:00:00:03 10.0.0.3"
 check ovn-nbctl lsp-set-addresses migrator "00:00:00:00:00:ff 10.0.0.100"
+check ovn-nbctl lsp-set-addresses migrator-no-cloning "00:00:00:00:01:ff 10.0.1.100"
 
 check ovn-nbctl lsp-add ls0 public
 check ovn-nbctl lsp-set-type public localnet
@@ -14242,6 +14244,9 @@ check ovn-nbctl lsp-set-options public network_name=phys
 # chassis locations. Connectivity will be checked for resources located at hv1
 # (First) and hv2 (Second) as well as for hv3 (Third) that does not take part
 # in port migration.
+#
+# Also, check that a port with chassis-mirroring-enabled=false doesn't clone
+# packets through an enforced tunnel; instead localnet port still used
 check ovn-nbctl lsp-set-options first requested-chassis=hv1
 check ovn-nbctl lsp-set-options second requested-chassis=hv2
 check ovn-nbctl lsp-set-options third requested-chassis=hv3
@@ -14265,6 +14270,10 @@ for hv in hv1 hv2; do
         set Interface migrator external-ids:iface-id=migrator \
         options:tx_pcap=$hv/migrator-tx.pcap \
         options:rxq_pcap=$hv/migrator-rx.pcap
+    as $hv check ovs-vsctl -- add-port br-int migrator-no-cloning -- \
+        set Interface migrator-no-cloning external-ids:iface-id=migrator-no-cloning \
+        options:tx_pcap=$hv/migrator-no-cloning-tx.pcap \
+        options:rxq_pcap=$hv/migrator-no-cloning-rx.pcap
 done
 
 send_arp() {
@@ -14298,8 +14307,12 @@ reset_env() {
     reset_pcap_file hv3 third hv3/third
     reset_pcap_file hv1 migrator hv1/migrator
     reset_pcap_file hv2 migrator hv2/migrator
+    reset_pcap_file hv1 migrator-no-cloning hv1/migrator-no-cloning
+    reset_pcap_file hv2 migrator-no-cloning hv2/migrator-no-cloning
 
-    for port in hv1/migrator hv2/migrator hv1/first hv2/second hv3/third; do
+    for port in hv1/migrator hv2/migrator \
+                hv1/migrator-no-cloning hv2/migrator-no-cloning \
+                hv1/first hv2/second hv3/third; do
         : > $port.expected
     done
 }
@@ -14309,12 +14322,15 @@ check_packets() {
     # attachment, hence using CONTAIN instead of strict matching
     OVN_CHECK_PACKETS_CONTAIN([hv1/migrator-tx.pcap], [hv1/migrator.expected])
     OVN_CHECK_PACKETS_CONTAIN([hv2/migrator-tx.pcap], [hv2/migrator.expected])
+    OVN_CHECK_PACKETS_CONTAIN([hv1/migrator-no-cloning-tx.pcap], [hv1/migrator-no-cloning.expected])
+    OVN_CHECK_PACKETS_CONTAIN([hv2/migrator-no-cloning-tx.pcap], [hv2/migrator-no-cloning.expected])
     OVN_CHECK_PACKETS_CONTAIN([hv1/first-tx.pcap], [hv1/first.expected])
     OVN_CHECK_PACKETS_CONTAIN([hv2/second-tx.pcap], [hv2/second.expected])
     OVN_CHECK_PACKETS_CONTAIN([hv3/third-tx.pcap], [hv3/third.expected])
 }
 
 migrator_tpa=$(ip_to_hex 10 0 0 100)
+nocloning_tpa=$(ip_to_hex 10 0 1 100)
 first_spa=$(ip_to_hex 10 0 0 1)
 second_spa=$(ip_to_hex 10 0 0 2)
 third_spa=$(ip_to_hex 10 0 0 3)
@@ -14336,7 +14352,8 @@ wait_column "" Port_Binding requested_additional_chassis logical_port=migrator
 wait_for_ports_up
 
 # advertise location of ports through localnet port
-send_garp hv1 migrator 0000000000ff ffffffffffff $migrator_spa $migrator_tpa
+send_garp hv1 migrator 0000000000ff ffffffffffff $migrator_tpa $migrator_tpa
+send_garp hv1 migrator-no-cloning 0000000001ff ffffffffffff $nocloning_tpa $nocloning_tpa
 send_garp hv1 first 000000000001 ffffffffffff $first_spa $first_tpa
 send_garp hv2 second 000000000002 ffffffffffff $second_spa $second_tpa
 send_garp hv3 third 000000000003 ffffffffffff $third_spa $third_tpa
@@ -14404,13 +14421,19 @@ request=$(send_arp hv2 migrator 0000000000ff ffffffffffff $migrator_tpa $first_s
 check_packets
 reset_env
 
-# Start port migration hv1 -> hv2: both hypervisors are now bound
+# Start ports migration hv1 -> hv2: both hypervisors are now bound
 check ovn-nbctl lsp-set-options migrator requested-chassis=hv1,hv2
+check ovn-nbctl lsp-set-options migrator-no-cloning requested-chassis=hv1,hv2 \
+                                                    chassis-mirroring-enabled=false
 wait_for_ports_up
-wait_column "$hv1_uuid" Port_Binding chassis logical_port=migrator
-wait_column "$hv1_uuid" Port_Binding requested_chassis logical_port=migrator
-wait_column "$hv2_uuid" Port_Binding additional_chassis logical_port=migrator
-wait_column "$hv2_uuid" Port_Binding requested_additional_chassis logical_port=migrator
+for port in migrator migrator-no-cloning; do
+    wait_column "$hv1_uuid" Port_Binding chassis logical_port=$port
+    wait_column "$hv1_uuid" Port_Binding requested_chassis logical_port=$port
+    wait_column "$hv2_uuid" Port_Binding additional_chassis logical_port=$port
+    wait_column "$hv2_uuid" Port_Binding requested_additional_chassis logical_port=$port
+done
+
+send_garp hv1 migrator-no-cloning 0000000001ff ffffffffffff $nocloning_tpa $nocloning_tpa
 
 # check that...
 # unicast from First arrives to hv1:Migrator
@@ -14419,11 +14442,20 @@ request=$(send_arp hv1 first 000000000001 0000000000ff $first_spa $migrator_tpa)
 echo $request >> hv1/migrator.expected
 echo $request >> hv2/migrator.expected
 
+# unicast from First arrives to hv1:Migrator-no-cloning
+# unicast from First doesn't arrive to hv2:Migrator-no-cloning
+request=$(send_arp hv1 first 000000000001 0000000001ff $first_spa $nocloning_tpa)
+echo $request >> hv1/migrator-no-cloning.expected
+
 # mcast from First arrives to hv1:Migrator
 # mcast from First arrives to hv2:Migrator
+# mcast from First arrives to hv1:Migrator-no-cloning
+# mcast from First arrives to hv2:Migrator-no-cloning
 request=$(send_arp hv1 first 000000000001 ffffffffffff $first_spa $migrator_tpa)
 echo $request >> hv1/migrator.expected
 echo $request >> hv2/migrator.expected
+echo $request >> hv1/migrator-no-cloning.expected
+echo $request >> hv2/migrator-no-cloning.expected
 echo $request >> hv3/third.expected
 echo $request >> hv2/second.expected
 
@@ -14433,11 +14465,20 @@ request=$(send_arp hv2 second 000000000002 0000000000ff $second_spa $migrator_tp
 echo $request >> hv1/migrator.expected
 echo $request >> hv2/migrator.expected
 
+# unicast from Second doesn't arrive to hv1:Migrator-no-cloning
+# unicast from Second arrives to hv2:Migrator-no-cloning
+request=$(send_arp hv2 second 000000000002 0000000001ff $second_spa $nocloning_tpa)
+echo $request >> hv2/migrator-no-cloning.expected
+
 # mcast from Second arrives to hv1:Migrator
 # mcast from Second arrives to hv2:Migrator
+# mcast from Second arrives to hv1:Migrator-no-cloning
+# mcast from Second arrives to hv2:Migrator-no-cloning
 request=$(send_arp hv2 second 000000000002 ffffffffffff $second_spa $migrator_tpa)
 echo $request >> hv1/migrator.expected
 echo $request >> hv2/migrator.expected
+echo $request >> hv1/migrator-no-cloning.expected
+echo $request >> hv2/migrator-no-cloning.expected
 echo $request >> hv3/third.expected
 echo $request >> hv1/first.expected
 
@@ -14447,11 +14488,20 @@ request=$(send_arp hv3 third 000000000003 0000000000ff $third_spa $migrator_tpa)
 echo $request >> hv1/migrator.expected
 echo $request >> hv2/migrator.expected
 
+# unicast from Third arrives to hv1:Migrator-no-cloning
+# unicast from Third doesn't arrive to hv2:Migrator-no-cloning
+request=$(send_arp hv3 third 000000000003 0000000001ff $third_spa $nocloning_tpa)
+echo $request >> hv1/migrator-no-cloning.expected
+
 # mcast from Third arrives to hv1:Migrator
 # mcast from Third arrives to hv2:Migrator
+# mcast from Third arrives to hv1:Migrator-no-cloning
+# mcast from Third arrives to hv2:Migrator-no-cloning
 request=$(send_arp hv3 third 000000000003 ffffffffffff $third_spa $migrator_tpa)
 echo $request >> hv1/migrator.expected
 echo $request >> hv2/migrator.expected
+echo $request >> hv1/migrator-no-cloning.expected
+echo $request >> hv2/migrator-no-cloning.expected
 echo $request >> hv1/first.expected
 echo $request >> hv2/second.expected
 
@@ -14476,12 +14526,14 @@ request=$(send_arp hv1 migrator 0000000000ff ffffffffffff $migrator_tpa $first_s
 echo $request >> hv1/first.expected
 echo $request >> hv2/second.expected
 echo $request >> hv3/third.expected
+echo $request >> hv1/migrator-no-cloning.expected
 
 # mcast from hv2:Migrator arrives to First, Second, and Third
 request=$(send_arp hv2 migrator 0000000000ff ffffffffffff $migrator_tpa $first_spa)
 echo $request >> hv1/first.expected
 echo $request >> hv2/second.expected
 echo $request >> hv3/third.expected
+echo $request >> hv1/migrator-no-cloning.expected
 
 check_packets
 

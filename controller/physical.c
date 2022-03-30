@@ -1257,6 +1257,9 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
         }
     }
 
+    bool mirroring_enabled = smap_get_bool(
+        &binding->options, "chassis-mirroring-enabled", true);
+
     bool is_ha_remote = false;
     const struct chassis_tunnel *tun = NULL;
     const struct sbrec_port_binding *localnet_port =
@@ -1266,7 +1269,8 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
         is_remote = true;
         /* Enforce tunneling while we clone packets to additional chassis b/c
          * otherwise upstream switch won't flood the packet to both chassis. */
-        if (localnet_port && !binding->additional_chassis) {
+        if (localnet_port &&
+                (!binding->additional_chassis || !mirroring_enabled)) {
             ofport = u16_to_ofp(simap_get(patch_ofports,
                                           localnet_port->logical_port));
             if (!ofport) {
@@ -1316,8 +1320,10 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     }
 
     /* Clone packets to additional chassis if needed. */
-    additional_tuns = get_additional_tunnels(binding, chassis,
-                                             chassis_tunnels);
+    if (mirroring_enabled) {
+        additional_tuns = get_additional_tunnels(binding, chassis,
+                                                 chassis_tunnels);
+    }
 
     if (!is_remote) {
         /* Packets that arrive from a vif can belong to a VM or
