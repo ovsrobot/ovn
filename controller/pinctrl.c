@@ -201,7 +201,14 @@ static void send_mac_binding_buffered_pkts(struct rconn *swconn)
     OVS_REQUIRES(pinctrl_mutex);
 
 static void pinctrl_rarp_activation_strategy_handler(struct rconn *swconn,
-                                                     const struct match *md);
+                                                     const struct match *md,
+                                                     struct dp_packet *pkt_in);
+
+static void init_pending_rarp_packets(void);
+static void destroy_pending_rarp_packets(void);
+static void flush_pending_rarp_packets(struct rconn *swconn, uint32_t xid)
+    OVS_REQUIRES(pinctrl_mutex);
+
 static void init_activated_ports(void);
 static void destroy_activated_ports(void);
 static void wait_activated_ports(struct ovsdb_idl_txn *ovnsb_idl_txn);
@@ -537,6 +544,7 @@ pinctrl_init(void)
     init_ipv6_prefixd();
     init_buffered_packets_map();
     init_activated_ports();
+    init_pending_rarp_packets();
     init_event_table();
     ip_mcast_snoop_init();
     init_put_vport_bindings();
@@ -3263,7 +3271,8 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
 
     case ACTION_OPCODE_ACTIVATION_STRATEGY_RARP:
         ovs_mutex_lock(&pinctrl_mutex);
-        pinctrl_rarp_activation_strategy_handler(swconn, &pin.flow_metadata);
+        pinctrl_rarp_activation_strategy_handler(swconn, &pin.flow_metadata,
+                                                 &packet);
         ovs_mutex_unlock(&pinctrl_mutex);
         break;
 
@@ -3324,6 +3333,10 @@ pinctrl_recv(struct rconn *swconn, const struct ofp_header *oh,
     } else if (type == OFPTYPE_PACKET_IN) {
         COVERAGE_INC(pinctrl_total_pin_pkts);
         process_packet_in(swconn, oh);
+    } else if (type == OFPTYPE_BARRIER_REPLY) {
+        ovs_mutex_lock(&pinctrl_mutex);
+        flush_pending_rarp_packets(swconn, ntohl(oh->xid));
+        ovs_mutex_unlock(&pinctrl_mutex);
     } else {
         if (VLOG_IS_DBG_ENABLED()) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(30, 300);
@@ -4052,6 +4065,7 @@ pinctrl_destroy(void)
     destroy_ipv6_prefixd();
     destroy_buffered_packets_map();
     destroy_activated_ports();
+    destroy_pending_rarp_packets();
     event_table_destroy();
     destroy_put_mac_bindings();
     destroy_put_vport_bindings();
@@ -7740,6 +7754,70 @@ encode_flow_mod(struct ofputil_flow_mod *fm)
     return ofputil_encode_flow_mod(fm, OFPUTIL_P_OF15_OXM);
 }
 
+struct rarp_packet {
+    uint32_t xid;
+    int64_t dp_key;
+    int64_t port_key;
+    struct dp_packet *pkt;
+    struct ovs_list list;
+};
+
+static struct ovs_list pending_rarp_packets;
+
+static void
+init_pending_rarp_packets(void)
+{
+    ovs_list_init(&pending_rarp_packets);
+}
+
+static void
+destroy_pending_rarp_packets(void)
+{
+    struct rarp_packet *rp;
+    LIST_FOR_EACH_POP (rp, list, &pending_rarp_packets) {
+        free(rp->pkt);
+        free(rp);
+    }
+}
+
+static void flush_pending_rarp_packets(struct rconn *swconn, uint32_t xid)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    struct rarp_packet *rp, *next;
+    LIST_FOR_EACH_SAFE (rp, next, list, &pending_rarp_packets) {
+        if (rp->xid != xid) {
+            continue;
+        }
+        /* Blocking flows are now gone; re-inject RARP message. */
+        uint64_t ofpacts_stub[4096 / 8];
+        struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(ofpacts_stub);
+        enum ofp_version version = rconn_get_version(swconn);
+        put_load(rp->dp_key, MFF_LOG_DATAPATH, 0, 64, &ofpacts);
+        put_load(rp->port_key, MFF_LOG_INPORT, 0, 32, &ofpacts);
+        struct ofpact_resubmit *resubmit = ofpact_put_RESUBMIT(&ofpacts);
+        resubmit->in_port = OFPP_CONTROLLER;
+        resubmit->table_id = OFTABLE_LOG_INGRESS_PIPELINE;
+
+        struct ofputil_packet_out po = {
+            .packet = dp_packet_data(rp->pkt),
+            .packet_len = dp_packet_size(rp->pkt),
+            .buffer_id = UINT32_MAX,
+            .ofpacts = ofpacts.data,
+            .ofpacts_len = ofpacts.size,
+        };
+        match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
+
+        enum ofputil_protocol proto;
+        proto = ofputil_protocol_from_ofp_version(version);
+        queue_msg(swconn, ofputil_encode_packet_out(&po, proto));
+        ofpbuf_uninit(&ofpacts);
+
+        ovs_list_remove(&rp->list);
+        free(rp->pkt);
+        free(rp);
+    }
+}
+
 struct port_pair {
     uint32_t dp_key;
     uint32_t port_key;
@@ -7844,7 +7922,8 @@ bool pinctrl_is_port_activated(int64_t dp_key, int64_t port_key)
 
 static void
 pinctrl_rarp_activation_strategy_handler(struct rconn *swconn,
-                                         const struct match *md)
+                                         const struct match *md,
+                                         struct dp_packet *pkt_in)
     OVS_REQUIRES(pinctrl_mutex)
 {
     struct match match;
@@ -7890,10 +7969,24 @@ pinctrl_rarp_activation_strategy_handler(struct rconn *swconn,
     queue_msg(swconn, encode_flow_mod(&fm));
     minimatch_destroy(&mmatch);
 
+    ovs_be32 xid = queue_msg(
+        swconn, ofputil_encode_barrier_request(OFP15_VERSION));
+
+    /* Delay delivery of RARP to when blocking flows are deleted. */
+    uint32_t port_key = md->flow.regs[MFF_LOG_INPORT - MFF_REG0];
+    uint32_t dp_key = ntohll(md->flow.metadata);
+
+    struct rarp_packet *rp = xmalloc(sizeof *rp);
+    rp->xid = ntohl(xid);
+    rp->port_key = port_key;
+    rp->dp_key = dp_key;
+    rp->pkt = dp_packet_clone(pkt_in);
+    ovs_list_push_back(&pending_rarp_packets, &rp->list);
+
     /* Tag the port as activated in-memory. */
     struct port_pair *pp = xmalloc(sizeof *pp);
-    pp->port_key = md->flow.regs[MFF_LOG_INPORT - MFF_REG0];
-    pp->dp_key = ntohll(md->flow.metadata);
+    pp->port_key = port_key;
+    pp->dp_key = dp_key;
     ovs_list_push_front(&activated_ports, &pp->list);
 
     /* Notify main thread on pending additional-chassis-activated updates. */
