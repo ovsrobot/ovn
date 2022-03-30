@@ -2883,6 +2883,9 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
             /* Nothing to do for tracing. */
             break;
 
+        case OVNACT_ACTIVATION_STRATEGY_RARP:
+            break;
+
         case OVNACT_GET_FDB:
             execute_get_fdb(ovnact_get_GET_FDB(a), dp, uflow);
             break;

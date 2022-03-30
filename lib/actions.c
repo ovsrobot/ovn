@@ -3823,6 +3823,41 @@ ovnact_handle_svc_check_free(struct ovnact_handle_svc_check *sc OVS_UNUSED)
 }
 
 static void
+parse_activation_strategy_rarp(struct action_context *ctx OVS_UNUSED)
+{
+     if (!lexer_force_match(ctx->lexer, LEX_T_LPAREN)) {
+        return;
+    }
+
+    ovnact_put_ACTIVATION_STRATEGY_RARP(ctx->ovnacts);
+    lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+}
+
+static void
+format_ACTIVATION_STRATEGY_RARP(
+        const struct ovnact_activation_strategy_rarp *activation OVS_UNUSED,
+        struct ds *s)
+{
+    ds_put_cstr(s, "activation_strategy_rarp();");
+}
+
+static void
+encode_ACTIVATION_STRATEGY_RARP(
+        const struct ovnact_activation_strategy_rarp *activation OVS_UNUSED,
+        const struct ovnact_encode_params *ep,
+        struct ofpbuf *ofpacts)
+{
+    encode_controller_op(ACTION_OPCODE_ACTIVATION_STRATEGY_RARP,
+                         ep->ctrl_meter_id, ofpacts);
+}
+
+static void
+ovnact_activation_strategy_rarp_free(
+    struct ovnact_activation_strategy_rarp *activation OVS_UNUSED)
+{
+}
+
+static void
 parse_fwd_group_action(struct action_context *ctx)
 {
     char *child_port, **child_port_list = NULL;
@@ -4376,6 +4411,8 @@ parse_action(struct action_context *ctx)
         parse_bind_vport(ctx);
     } else if (lexer_match_id(ctx->lexer, "handle_svc_check")) {
         parse_handle_svc_check(ctx);
+    } else if (lexer_match_id(ctx->lexer, "activation_strategy_rarp")) {
+        parse_activation_strategy_rarp(ctx);
     } else if (lexer_match_id(ctx->lexer, "fwd_group")) {
         parse_fwd_group_action(ctx);
     } else if (lexer_match_id(ctx->lexer, "handle_dhcpv6_reply")) {
@@ -4619,7 +4656,8 @@ ovnact_op_to_string(uint32_t ovnact_opc)
         ACTION_OPCODE(BIND_VPORT)                   \
         ACTION_OPCODE(DHCP6_SERVER)                 \
         ACTION_OPCODE(HANDLE_SVC_CHECK)             \
-        ACTION_OPCODE(BFD_MSG)
+        ACTION_OPCODE(BFD_MSG)                      \
+        ACTION_OPCODE(ACTIVATION_STRATEGY_RARP)
 #define ACTION_OPCODE(ENUM) \
     case ACTION_OPCODE_##ENUM: return xstrdup(#ENUM);
     ACTION_OPCODES
