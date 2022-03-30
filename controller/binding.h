@@ -194,4 +194,7 @@ enum en_lport_type {
 
 enum en_lport_type get_lport_type(const struct sbrec_port_binding *);
 
+bool is_additional_chassis(const struct sbrec_port_binding *pb,
+                           const struct sbrec_chassis *chassis_rec);
+
 #endif /* controller/binding.h */
