@@ -28232,6 +28232,11 @@ check ovn-nbctl --wait=sb set logical_switch_port vm1 parent_name=vm-cont1
 
 wait_for_ports_up
 
+# Try to claim container port to ovs
+check ovn-nbctl set logical_switch_port vm-cont2 parent_name=vm2
+check as hv1 ovs-vsctl set Interface vm1 external_ids:iface-id=vm-cont2
+AT_CHECK([test 1 = `cat hv1/ovn-controller.log |grep -c "claim lport vm-cont2 of type container"`])
+
 # Delete vm1, vm-cont1 and vm-cont2 and recreate again.
 check ovn-nbctl lsp-del vm1
 check ovn-nbctl lsp-del vm-cont1

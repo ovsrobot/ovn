@@ -2012,6 +2012,17 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
         int64_t ofport = iface_rec->n_ofport ? *iface_rec->ofport : 0;
         if (iface_id && ofport > 0 &&
                 is_iface_in_int_bridge(iface_rec, b_ctx_in->br_int)) {
+            const struct sbrec_port_binding *pb = NULL;
+            pb = lport_lookup_by_name(b_ctx_in->sbrec_port_binding_by_name,
+                                      iface_id);
+            if (pb && (get_lport_type(pb) == LP_CONTAINER)) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+                VLOG_WARN_RL(&rl, "Can't claim lport %s of type container to "
+                             "OVS bridge,\nplease remove the lport prent_name"
+                             " before claiming it.", pb->logical_port);
+                continue;
+            }
+
             handled = consider_iface_claim(iface_rec, iface_id, b_ctx_in,
                                            b_ctx_out, qos_map_ptr);
             if (!handled) {
