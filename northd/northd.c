@@ -13426,6 +13426,23 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
         }
     }
 
+    if (od->nbr->n_nat) {
+        ds_clear(match);
+        ds_put_cstr(match, "ip && ct_label.natted == 1");
+        /* This flow is unique since it is in the egress pipeline but checks the
+         * value of ct_label.natted, which would have been set in the ingress
+         * pipeline. If a change is ever introduced that clears or otherwise
+         * invalidates the ct_label between the ingress and egress pipelines, then
+         * an alternative will need to be devised.
+         */
+        ds_clear(actions);
+        ds_put_cstr(actions, REGBIT_DST_NAT_IP_LOCAL" = 1; next;");
+        ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_CHECK_DNAT_LOCAL,
+                                50, ds_cstr(match), ds_cstr(actions),
+                                &od->nbr->header_);
+
+    }
+
     /* Handle force SNAT options set in the gateway router. */
     if (od->is_gw_router) {
         if (dnat_force_snat_ip) {
