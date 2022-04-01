@@ -1095,6 +1095,29 @@
     <h3>Ingress Table 17: Hairpin</h3>
     <ul>
       <li>
+        A priority-2000 flow that passes traffic to next table for hairpin ARP
+        processing with
+        <code>next;</code> action, which matches on:
+        <ul>
+          <li>
+            <code>reg0[14]</code> register bit, that is set in
+            ls_in_port_sec_l2 table for traffic received from HW VTEP (ramp)
+            switch AND
+          </li>
+          <li>
+            all Distrubited Gateway ports, which are associated with current LS
+            <code>router</code> type LSPs if <code>is_chassis_resident()</code>
+            for them is true.
+          </li>
+        </ul>
+      </li>
+      <li>
+        A priority-1000 flow that matches on <code>reg0[14]</code> register
+        bit that is set in ls_in_port_sec_l2 table for traffic received from HW
+        VTEP (ramp) switch. This traffic is passed to ingress table
+        ls_in_l2_lkup.
+      </li>
+      <li>
         A priority-1 flow that hairpins traffic matched by non-default
         flows in the Pre-Hairpin table. Hairpinning is done at L2, Ethernet
         addresses are swapped and the packets are looped back on the input
@@ -1150,27 +1173,27 @@
     </p>
 
     <p>
-      Note that ARP requests received from <code>localnet</code> or
-      <code>vtep</code> logical inports can either go directly to VMs, in
-      which case the VM responds or can hit an ARP responder for a logical
-      router port if the packet is used to resolve a logical router port
-      next hop address.  In either case, logical switch ARP responder rules
-      will not be hit.  It contains these logical flows:
+      Note that ARP requests received from <code>localnet</code> logical
+      inports can either go directly to VMs, in which case the VM responds or
+      can hit an ARP responder for a logical router port if the packet is used
+      to resolve a logical router port next hop address.  In either case,
+      logical switch ARP responder rules will not be hit.  It contains these
+      logical flows:
      </p>
 
     <ul>
       <li>
         Priority-100 flows to skip the ARP responder if inport is of type
-        <code>localnet</code> or <code>vtep</code> and advances directly
-        to the next table.  ARP requests sent to <code>localnet</code> or
-        <code>vtep</code> ports can be received by multiple hypervisors.
-        Now, because the same mac binding rules are downloaded to all
-        hypervisors, each of the multiple hypervisors will respond.  This
-        will confuse L2 learning on the source of the ARP requests.  ARP
-        requests received on an inport of type <code>router</code> are not
-        expected to hit any logical switch ARP responder flows.  However,
-        no skip flows are installed for these packets, as there would be
-        some additional flow cost for this and the value appears limited.
+        <code>localnet</code> advances directly to the next table.  ARP
+        requests sent to <code>localnet</code> ports can be received by
+        multiple hypervisors.  Now, because the same mac binding rules are
+        downloaded to all hypervisors, each of the multiple hypervisors will
+        respond.  This will confuse L2 learning on the source of the ARP
+        requests.  ARP requests received on an inport of type
+        <code>router</code> are not expected to hit any logical switch ARP
+        responder flows.  However, no skip flows are installed for these
+        packets, as there would be some additional flow cost for this and the
+        value appears limited.
       </li>
 
       <li>
