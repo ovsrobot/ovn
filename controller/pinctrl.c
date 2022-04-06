@@ -3441,6 +3441,7 @@ pinctrl_set_br_int_name_(char *br_int_name)
 {
     if (br_int_name && (!pinctrl.br_int_name || strcmp(pinctrl.br_int_name,
                                                        br_int_name))) {
+        VLOG_INFO("pinctrl set br_int_name");
         free(pinctrl.br_int_name);
         pinctrl.br_int_name = xstrdup(br_int_name);
         /* Notify pinctrl_handler that integration bridge is
@@ -3479,6 +3480,7 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             const struct shash *local_active_ports_ipv6_pd,
             const struct shash *local_active_ports_ras)
 {
+    VLOG_INFO("pinctrl_run");
     ovs_mutex_lock(&pinctrl_mutex);
     pinctrl_set_br_int_name_(br_int->name);
     run_put_mac_bindings(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
