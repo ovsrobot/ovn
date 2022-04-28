@@ -7,6 +7,10 @@ Post v22.03.0
   - Support NAT for logical routers with multiple distributed gateway ports.
   - Add global option (NB_Global.options:default_acl_drop) to enable
     implicit drop behavior on logical switches with ACLs applied.
+  - Add NB.Load_Balancer.options:neighbor_responder to allow the CMS to
+    explicitly request routers to reply to any ARP/ND request for a VIP
+    (when set to "all") and only for reachable VIPs (when set to "reachable"
+    or by default).
 
 OVN v22.03.0 - 11 Mar 2022
 --------------------------
