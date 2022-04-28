@@ -977,6 +977,7 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     SB_NODE(load_balancer, "load_balancer") \
     SB_NODE(fdb, "fdb") \
     SB_NODE(meter, "meter") \
+    SB_NODE(mirror, "mirror") \
     SB_NODE(static_mac_binding, "static_mac_binding")
 
 enum sb_engine_node {
@@ -994,7 +995,8 @@ enum sb_engine_node {
     OVS_NODE(bridge, "bridge") \
     OVS_NODE(port, "port") \
     OVS_NODE(interface, "interface") \
-    OVS_NODE(qos, "qos")
+    OVS_NODE(qos, "qos") \
+    OVS_NODE(mirror, "mirror")
 
 enum ovs_engine_node {
 #define OVS_NODE(NAME, NAME_STR) OVS_##NAME,
@@ -1222,9 +1224,17 @@ init_binding_ctx(struct engine_node *node,
         (struct ovsrec_qos_table *)EN_OVSDB_GET(
             engine_get_input("OVS_qos", node));
 
+    struct ovsrec_mirror_table *mirror_table =
+        (struct ovsrec_mirror_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_mirror", node));
+
     struct sbrec_port_binding_table *pb_table =
         (struct sbrec_port_binding_table *)EN_OVSDB_GET(
             engine_get_input("SB_port_binding", node));
+
+    struct sbrec_mirror_table *sb_mirror_table =
+        (struct sbrec_mirror_table *)EN_OVSDB_GET(
+            engine_get_input("SB_mirror", node));
 
     struct ovsdb_idl_index *sbrec_datapath_binding_by_key =
         engine_ovsdb_node_get_index(
@@ -1251,7 +1261,9 @@ init_binding_ctx(struct engine_node *node,
     b_ctx_in->port_table = port_table;
     b_ctx_in->iface_table = iface_table;
     b_ctx_in->qos_table = qos_table;
+    b_ctx_in->mirror_table = mirror_table;
     b_ctx_in->port_binding_table = pb_table;
+    b_ctx_in->sb_mirror_table = sb_mirror_table;
     b_ctx_in->br_int = br_int;
     b_ctx_in->chassis_rec = chassis;
     b_ctx_in->active_tunnels = &rt_data->active_tunnels;
@@ -3464,8 +3476,10 @@ main(int argc, char *argv[])
     engine_add_input(&en_runtime_data, &en_ovs_open_vswitch, NULL);
     engine_add_input(&en_runtime_data, &en_ovs_bridge, NULL);
     engine_add_input(&en_runtime_data, &en_ovs_qos, NULL);
+    engine_add_input(&en_runtime_data, &en_ovs_mirror, NULL);
 
     engine_add_input(&en_runtime_data, &en_sb_chassis, NULL);
+    engine_add_input(&en_runtime_data, &en_sb_mirror, NULL);
     engine_add_input(&en_runtime_data, &en_sb_datapath_binding,
                      runtime_data_sb_datapath_binding_handler);
     engine_add_input(&en_runtime_data, &en_sb_port_binding,

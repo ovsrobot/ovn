@@ -20,6 +20,7 @@
 --intern-table Load_Balancer
 --intern-table Logical_Switch
 --intern-table Load_Balancer_Health_Check
+--intern-table Mirror
 --intern-table Meter
 --intern-table NAT
 --intern-table Address_Set

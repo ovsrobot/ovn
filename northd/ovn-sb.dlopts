@@ -13,6 +13,7 @@
 -o Load_Balancer
 -o Logical_DP_Group
 -o MAC_Binding
+-o Mirror
 -o Meter
 -o Meter_Band
 -o Multicast_Group
