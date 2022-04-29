@@ -59,6 +59,7 @@
 VLOG_DEFINE_THIS_MODULE(northd);
 
 static bool controller_event_en;
+static bool lflow_hash_lock_initialized = false;
 
 static bool check_lsp_is_up;
 
@@ -4673,7 +4674,13 @@ ovn_lflow_equal(const struct ovn_lflow *a, const struct ovn_datapath *od,
 /* If this option is 'true' northd will combine logical flows that differ by
  * logical datapath only by creating a datapath group. */
 static bool use_logical_dp_groups = false;
-static bool use_parallel_build = false;
+
+enum {
+    STATE_NULL,
+    STATE_INIT_HASH_SIZES,
+    STATE_USE_PARALLELIZATION
+};
+static int parallelization_state = STATE_NULL;
 
 static void
 ovn_lflow_init(struct ovn_lflow *lflow, struct ovn_datapath *od,
@@ -4692,7 +4699,8 @@ ovn_lflow_init(struct ovn_lflow *lflow, struct ovn_datapath *od,
     lflow->ctrl_meter = ctrl_meter;
     lflow->dpg = NULL;
     lflow->where = where;
-    if (use_parallel_build && use_logical_dp_groups) {
+    if ((parallelization_state == STATE_USE_PARALLELIZATION)
+        && use_logical_dp_groups) {
         ovs_mutex_init(&lflow->odg_lock);
     }
 }
@@ -4706,7 +4714,7 @@ ovn_dp_group_add_with_reference(struct ovn_lflow *lflow_ref,
         return false;
     }
 
-    if (use_parallel_build) {
+    if (parallelization_state == STATE_USE_PARALLELIZATION) {
         ovs_mutex_lock(&lflow_ref->odg_lock);
         hmapx_add(&lflow_ref->od_group, od);
         ovs_mutex_unlock(&lflow_ref->odg_lock);
@@ -4739,6 +4747,18 @@ lflow_hash_lock_init(void)
     for (size_t i = 0; i < LFLOW_HASH_LOCK_MASK + 1; i++) {
         ovs_mutex_init(&lflow_hash_locks[i]);
     }
+    lflow_hash_lock_initialized = true;
+}
+
+static void
+lflow_hash_lock_destroy(void)
+{
+    if (lflow_hash_lock_initialized) {
+        for (size_t i = 0; i < LFLOW_HASH_LOCK_MASK + 1; i++) {
+            ovs_mutex_destroy(&lflow_hash_locks[i]);
+        }
+    }
+    lflow_hash_lock_initialized = false;
 }
 
 /* This thread-local var is used for parallel lflow building when dp-groups is
@@ -4786,7 +4806,7 @@ do_ovn_lflow_add(struct hmap *lflow_map, struct ovn_datapath *od,
                    nullable_xstrdup(ctrl_meter),
                    ovn_lflow_hint(stage_hint), where);
     hmapx_add(&lflow->od_group, od);
-    if (!use_parallel_build) {
+    if (parallelization_state != STATE_USE_PARALLELIZATION) {
         hmap_insert(lflow_map, &lflow->hmap_node, hash);
     } else {
         hmap_insert_fast(lflow_map, &lflow->hmap_node, hash);
@@ -4829,7 +4849,8 @@ ovn_lflow_add_at_with_hash(struct hmap *lflow_map, struct ovn_datapath *od,
     struct ovn_lflow *lflow;
 
     ovs_assert(ovn_stage_to_datapath_type(stage) == ovn_datapath_get_type(od));
-    if (use_logical_dp_groups && use_parallel_build) {
+    if (use_logical_dp_groups
+        && (parallelization_state == STATE_USE_PARALLELIZATION)) {
         lflow = do_ovn_lflow_add_pd(lflow_map, od, hash, stage, priority,
                                     match, actions, io_port, stage_hint, where,
                                     ctrl_meter);
@@ -13708,15 +13729,10 @@ build_lswitch_and_lrouter_iterate_by_op(struct ovn_port *op,
                                       &lsi->actions);
 }
 
-struct lflows_thread_pool {
-    struct worker_pool *pool;
-};
-
 static void *
 build_lflows_thread(void *arg)
 {
     struct worker_control *control = (struct worker_control *) arg;
-    struct lflows_thread_pool *workload;
     struct lswitch_flow_build_info *lsi;
 
     struct ovn_datapath *od;
@@ -13727,17 +13743,16 @@ build_lflows_thread(void *arg)
 
     while (!stop_parallel_processing()) {
         wait_for_work(control);
-        workload = (struct lflows_thread_pool *) control->workload;
         lsi = (struct lswitch_flow_build_info *) control->data;
         if (stop_parallel_processing()) {
             return NULL;
         }
         thread_lflow_counter = 0;
-        if (lsi && workload) {
+        if (lsi) {
             /* Iterate over bucket ThreadID, ThreadID+size, ... */
             for (bnum = control->id;
                     bnum <= lsi->datapaths->mask;
-                    bnum += workload->pool->size)
+                    bnum += control->pool->size)
             {
                 HMAP_FOR_EACH_IN_PARALLEL (od, key_node, bnum, lsi->datapaths) {
                     if (stop_parallel_processing()) {
@@ -13748,7 +13763,7 @@ build_lflows_thread(void *arg)
             }
             for (bnum = control->id;
                     bnum <= lsi->ports->mask;
-                    bnum += workload->pool->size)
+                    bnum += control->pool->size)
             {
                 HMAP_FOR_EACH_IN_PARALLEL (op, key_node, bnum, lsi->ports) {
                     if (stop_parallel_processing()) {
@@ -13759,7 +13774,7 @@ build_lflows_thread(void *arg)
             }
             for (bnum = control->id;
                     bnum <= lsi->lbs->mask;
-                    bnum += workload->pool->size)
+                    bnum += control->pool->size)
             {
                 HMAP_FOR_EACH_IN_PARALLEL (lb, hmap_node, bnum, lsi->lbs) {
                     if (stop_parallel_processing()) {
@@ -13780,7 +13795,7 @@ build_lflows_thread(void *arg)
             }
             for (bnum = control->id;
                     bnum <= lsi->igmp_groups->mask;
-                    bnum += workload->pool->size)
+                    bnum += control->pool->size)
             {
                 HMAP_FOR_EACH_IN_PARALLEL (
                         igmp_group, hmap_node, bnum, lsi->igmp_groups) {
@@ -13799,33 +13814,7 @@ build_lflows_thread(void *arg)
     return NULL;
 }
 
-static bool pool_init_done = false;
-static struct lflows_thread_pool *build_lflows_pool = NULL;
-
-static void
-init_lflows_thread_pool(void)
-{
-    int index;
-
-    if (!pool_init_done) {
-        struct worker_pool *pool = add_worker_pool(build_lflows_thread);
-        pool_init_done = true;
-        if (pool) {
-            build_lflows_pool = xmalloc(sizeof(*build_lflows_pool));
-            build_lflows_pool->pool = pool;
-            for (index = 0; index < build_lflows_pool->pool->size; index++) {
-                build_lflows_pool->pool->controls[index].workload =
-                    build_lflows_pool;
-            }
-        }
-    }
-}
-
-/* TODO: replace hard cutoffs by configurable via commands. These are
- * temporary defines to determine single-thread to multi-thread processing
- * cutoff.
- * Setting to 1 forces "all parallel" lflow build.
- */
+static struct worker_pool *build_lflows_pool = NULL;
 
 static void
 noop_callback(struct worker_pool *pool OVS_UNUSED,
@@ -13871,28 +13860,21 @@ build_lswitch_and_lrouter_flows(const struct hmap *datapaths,
 
     char *svc_check_match = xasprintf("eth.dst == %s", svc_monitor_mac);
 
-    if (use_parallel_build) {
-        init_lflows_thread_pool();
-        if (!can_parallelize_hashes(false)) {
-            use_parallel_build = false;
-        }
-    }
-
-    if (use_parallel_build) {
+    if (parallelization_state == STATE_USE_PARALLELIZATION) {
         struct hmap *lflow_segs;
         struct lswitch_flow_build_info *lsiv;
         int index;
 
-        lsiv = xcalloc(sizeof(*lsiv), build_lflows_pool->pool->size);
+        lsiv = xcalloc(sizeof(*lsiv), build_lflows_pool->size);
         if (use_logical_dp_groups) {
             lflow_segs = NULL;
         } else {
-            lflow_segs = xcalloc(sizeof(*lflow_segs), build_lflows_pool->pool->size);
+            lflow_segs = xcalloc(sizeof(*lflow_segs), build_lflows_pool->size);
         }
 
         /* Set up "work chunks" for each thread to work on. */
 
-        for (index = 0; index < build_lflows_pool->pool->size; index++) {
+        for (index = 0; index < build_lflows_pool->size; index++) {
             if (use_logical_dp_groups) {
                 /* if dp_groups are in use we lock a shared lflows hash
                  * on a per-bucket level instead of merging hash frags */
@@ -13915,19 +13897,19 @@ build_lswitch_and_lrouter_flows(const struct hmap *datapaths,
             ds_init(&lsiv[index].match);
             ds_init(&lsiv[index].actions);
 
-            build_lflows_pool->pool->controls[index].data = &lsiv[index];
+            build_lflows_pool->controls[index].data = &lsiv[index];
         }
 
         /* Run thread pool. */
         if (use_logical_dp_groups) {
-            run_pool_callback(build_lflows_pool->pool, NULL, NULL,
+            run_pool_callback(build_lflows_pool, NULL, NULL,
                               noop_callback);
-            fix_flow_map_size(lflows, lsiv, build_lflows_pool->pool->size);
+            fix_flow_map_size(lflows, lsiv, build_lflows_pool->size);
         } else {
-            run_pool_hash(build_lflows_pool->pool, lflows, lflow_segs);
+            run_pool_hash(build_lflows_pool, lflows, lflow_segs);
         }
 
-        for (index = 0; index < build_lflows_pool->pool->size; index++) {
+        for (index = 0; index < build_lflows_pool->size; index++) {
             ds_destroy(&lsiv[index].match);
             ds_destroy(&lsiv[index].actions);
         }
@@ -14063,8 +14045,21 @@ ovn_sb_set_lflow_logical_dp_group(
 }
 
 static ssize_t max_seen_lflow_size = 128;
-static bool needs_parallel_init = true;
-static bool reset_parallel = false;
+
+void run_update_worker_pool(int n_threads)
+{
+    /* If number of threads has been updated (or initially set),
+     * update the worker pool */
+    if (update_worker_pool(n_threads,
+        &build_lflows_pool, build_lflows_thread)) {
+        /* worker pool was updated */
+        if (get_worker_pool_size() <= 1) {
+            /* destroy potentially created lflow_hash_lock */
+            lflow_hash_lock_destroy();
+            parallelization_state = STATE_NULL;
+        }
+    }
+}
 
 static void
 build_mcast_groups(struct lflow_input *data,
@@ -14085,24 +14080,23 @@ void build_lflows(struct lflow_input *input_data,
     build_mcast_groups(input_data, input_data->datapaths, input_data->ports,
                        &mcast_groups, &igmp_groups);
 
-    if (reset_parallel) {
-        /* Parallel build was disabled before, we need to
-         * re-enable it. */
-        use_parallel_build = true;
-        reset_parallel = false;
+    if (get_worker_pool_size() > 1) {
+        /* Disable parallel build on first run with dp_groups
+         * to determine the correct sizing of hashes.
+         */
+        if (parallelization_state != STATE_USE_PARALLELIZATION) {
+            if ((parallelization_state == STATE_NULL)
+                && (use_logical_dp_groups)) {
+                lflow_hash_lock_init();
+                parallelization_state = STATE_INIT_HASH_SIZES;
+            } else {
+                parallelization_state = STATE_USE_PARALLELIZATION;
+            }
+        }
     }
 
     fast_hmap_size_for(&lflows, max_seen_lflow_size);
 
-    if (use_parallel_build && use_logical_dp_groups &&
-        needs_parallel_init) {
-        lflow_hash_lock_init();
-        needs_parallel_init = false;
-        /* Disable parallel build on first run with dp_groups
-         * to determine the correct sizing of hashes. */
-        use_parallel_build = false;
-        reset_parallel = true;
-    }
     build_lswitch_and_lrouter_flows(input_data->datapaths, input_data->ports,
                                     input_data->port_groups, &lflows,
                                     &mcast_groups, &igmp_groups,
@@ -15349,10 +15343,6 @@ ovnnb_db_run(struct northd_input *input_data,
     }
 
     smap_destroy(&options);
-
-    use_parallel_build =
-        (smap_get_bool(&nb->options, "use_parallel_build", false) &&
-         can_parallelize_hashes(false));
 
     use_logical_dp_groups = smap_get_bool(&nb->options,
                                           "use_logical_dp_groups", true);
