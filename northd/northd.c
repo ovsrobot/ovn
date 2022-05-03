@@ -10004,10 +10004,6 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
         char *est_match_p = est_match;
         const char *meter = NULL;
 
-        if (reject) {
-            meter = copp_meter_get(COPP_REJECT, od->nbr->copp, meter_groups);
-        }
-
         if (sset_contains(&od->external_ips, lb_vip->vip_str)) {
             /* The load balancer vip is also present in the NAT entries.
              * So add a high priority lflow to advance the the packet
@@ -10025,8 +10021,15 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
                                      &lb->nlb->header_);
         }
 
-        if (od->n_l3dgw_ports &&
-            (lb_vip->n_backends || !lb_vip->empty_backend_rej)) {
+        if (!od->n_l3dgw_ports) {
+            continue;
+        }
+
+        if (reject) {
+            meter = copp_meter_get(COPP_REJECT, od->nbr->copp, meter_groups);
+        }
+
+        if (lb_vip->n_backends || !lb_vip->empty_backend_rej) {
             new_match_p = xasprintf("%s && is_chassis_resident(%s)",
                                     new_match,
                                     od->l3dgw_ports[0]->cr_port->json_key);
@@ -10036,33 +10039,27 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
         }
 
         if (snat_type == SKIP_SNAT) {
-            if (od->n_l3dgw_ports) {
-                ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_DNAT, prio,
-                                          new_match_p, skip_snat_new_action,
-                                          NULL, meter, &lb->nlb->header_);
-                ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
-                                        est_match_p, skip_snat_est_action,
-                                        &lb->nlb->header_);
-            }
+            ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_DNAT, prio,
+                                      new_match_p, skip_snat_new_action,
+                                      NULL, meter, &lb->nlb->header_);
+            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
+                                    est_match_p, skip_snat_est_action,
+                                    &lb->nlb->header_);
         } else if (snat_type == FORCE_SNAT) {
-            if (od->n_l3dgw_ports) {
-                ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_DNAT, prio,
-                                          new_match_p, new_actions, NULL,
-                                          meter, &lb->nlb->header_);
-                ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
-                                        est_match_p,
-                                        "flags.force_snat_for_lb = 1; next;",
-                                        &lb->nlb->header_);
-            }
+            ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_DNAT, prio,
+                                      new_match_p, new_actions, NULL,
+                                      meter, &lb->nlb->header_);
+            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
+                                    est_match_p,
+                                    "flags.force_snat_for_lb = 1; next;",
+                                    &lb->nlb->header_);
         } else if (snat_type == NO_FORCE_SNAT) {
-            if (od->n_l3dgw_ports) {
-                ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_DNAT, prio,
-                                          new_match_p, ds_cstr(action), NULL,
-                                          meter, &lb->nlb->header_);
-                ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
-                                        est_match_p, "next;",
-                                        &lb->nlb->header_);
-            }
+            ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_DNAT, prio,
+                                      new_match_p, ds_cstr(action), NULL,
+                                      meter, &lb->nlb->header_);
+            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
+                                    est_match_p, "next;",
+                                    &lb->nlb->header_);
         }
 
         if (new_match_p != new_match) {
@@ -10072,7 +10069,7 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
             free(est_match_p);
         }
 
-        if (!od->n_l3dgw_ports || !lb_vip->n_backends) {
+        if (!lb_vip->n_backends) {
             continue;
         }
 
