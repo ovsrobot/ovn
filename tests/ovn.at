@@ -13918,6 +13918,95 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([options:multiple requested-chassis for logical port])
+ovn_start
+
+net_add n1
+
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.11
+
+sim_add hv2
+as hv2
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.12
+
+check ovn-nbctl ls-add ls0
+check ovn-nbctl lsp-add ls0 lsp0
+
+# Allow only chassis hv1 to bind logical port lsp0.
+check ovn-nbctl lsp-set-options lsp0 requested-chassis=hv1
+
+as hv1 check ovs-vsctl -- add-port br-int lsp0 -- \
+    set Interface lsp0 external-ids:iface-id=lsp0
+as hv2 check ovs-vsctl -- add-port br-int lsp0 -- \
+    set Interface lsp0 external-ids:iface-id=lsp0
+
+wait_row_count Chassis 1 name=hv1
+wait_row_count Chassis 1 name=hv2
+hv1_uuid=$(fetch_column Chassis _uuid name=hv1)
+hv2_uuid=$(fetch_column Chassis _uuid name=hv2)
+
+wait_column "$hv1_uuid" Port_Binding chassis logical_port=lsp0
+wait_column "$hv1_uuid" Port_Binding requested_chassis logical_port=lsp0
+wait_column "" Port_Binding additional_chassis logical_port=lsp0
+wait_column "" Port_Binding requested_additional_chassis logical_port=lsp0
+
+# Request port binding at an additional chassis
+check ovn-nbctl lsp-set-options lsp0 \
+    requested-chassis=hv1,hv2
+
+wait_column "$hv1_uuid" Port_Binding chassis logical_port=lsp0
+wait_column "$hv1_uuid" Port_Binding requested_chassis logical_port=lsp0
+wait_column "$hv2_uuid" Port_Binding additional_chassis logical_port=lsp0
+wait_column "$hv2_uuid" Port_Binding requested_additional_chassis logical_port=lsp0
+
+# Check that setting iface:encap-ip populates Port_Binding:additional_encap
+wait_row_count Encap 2 chassis_name=hv1
+wait_row_count Encap 2 chassis_name=hv2
+encap_hv1_uuid=$(fetch_column Encap _uuid chassis_name=hv1 type=geneve)
+encap_hv2_uuid=$(fetch_column Encap _uuid chassis_name=hv2 type=geneve)
+
+wait_column "" Port_Binding encap logical_port=lsp0
+wait_column "" Port_Binding additional_encap logical_port=lsp0
+
+as hv1 check ovs-vsctl -- \
+    set Interface lsp0 external-ids:encap-ip=192.168.0.11
+as hv2 check ovs-vsctl -- \
+    set Interface lsp0 external-ids:encap-ip=192.168.0.12
+
+wait_column "$encap_hv1_uuid" Port_Binding encap logical_port=lsp0
+wait_column "$encap_hv2_uuid" Port_Binding additional_encap logical_port=lsp0
+
+# Complete moving the binding to the new location
+check ovn-nbctl lsp-set-options lsp0 requested-chassis=hv2
+
+wait_column "$hv2_uuid" Port_Binding chassis logical_port=lsp0
+wait_column "$hv2_uuid" Port_Binding requested_chassis logical_port=lsp0
+wait_column "" Port_Binding additional_chassis logical_port=lsp0
+wait_column "" Port_Binding requested_additional_chassis logical_port=lsp0
+
+# Check that additional_encap is cleared
+wait_column "" Port_Binding additional_encap logical_port=lsp0
+
+# Check that abrupted port migration clears additional_encap
+check ovn-nbctl lsp-set-options lsp0 \
+    requested-chassis=hv2,hv1
+wait_column "$hv2_uuid" Port_Binding chassis logical_port=lsp0
+wait_column "$hv2_uuid" Port_Binding requested_chassis logical_port=lsp0
+wait_column "$hv1_uuid" Port_Binding additional_chassis logical_port=lsp0
+wait_column "$hv1_uuid" Port_Binding requested_additional_chassis logical_port=lsp0
+check ovn-nbctl lsp-set-options lsp0 requested-chassis=hv2
+wait_column "" Port_Binding additional_encap logical_port=lsp0
+
+OVN_CLEANUP([hv1],[hv2])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([options:requested-chassis for logical port])
 ovn_start
 
