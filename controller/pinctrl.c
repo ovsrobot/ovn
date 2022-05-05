@@ -586,6 +586,8 @@ set_actions_and_enqueue_msg(struct rconn *swconn,
     enum ofp_version version = rconn_get_version(swconn);
 
     reload_metadata(&ofpacts, md);
+    /* Allow packet to leave the node. */
+    put_load(0, MFF_LOG_FLAGS, MLF_LOCAL_ONLY_BIT, 1, &ofpacts);
     enum ofperr error = ofpacts_pull_openflow_actions(userdata, userdata->size,
                                                       version, NULL, NULL,
                                                       &ofpacts);
