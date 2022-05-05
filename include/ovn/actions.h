@@ -116,6 +116,7 @@ struct ovn_extend_table;
     OVNACT(PUT_FDB,           ovnact_put_fdb)         \
     OVNACT(GET_FDB,           ovnact_get_fdb)         \
     OVNACT(LOOKUP_FDB,        ovnact_lookup_fdb)      \
+    OVNACT(ACTIVATION_STRATEGY_RARP, ovnact_activation_strategy_rarp) \
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -420,6 +421,11 @@ struct ovnact_handle_svc_check {
     struct expr_field port;     /* Logical port name. */
 };
 
+/* OVNACT_ACTIVATION_STRATEGY_RARP. */
+struct ovnact_activation_strategy_rarp {
+    struct ovnact ovnact;
+};
+
 /* OVNACT_FWD_GROUP. */
 struct ovnact_fwd_group {
     struct ovnact ovnact;
@@ -681,6 +687,9 @@ enum action_opcode {
     /* put_fdb(inport, eth.src).
      */
     ACTION_OPCODE_PUT_FDB,
+
+    /* activation_strategy_rarp() */
+    ACTION_OPCODE_ACTIVATION_STRATEGY_RARP,
 };
 
 /* Header. */

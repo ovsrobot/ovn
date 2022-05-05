@@ -33,6 +33,7 @@ struct sbrec_dns_table;
 struct sbrec_controller_event_table;
 struct sbrec_service_monitor_table;
 struct sbrec_bfd_table;
+struct sbrec_port_binding;
 
 void pinctrl_init(void);
 void pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
@@ -56,4 +57,8 @@ void pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
 void pinctrl_wait(struct ovsdb_idl_txn *ovnsb_idl_txn);
 void pinctrl_destroy(void);
 void pinctrl_set_br_int_name(char *br_int_name);
+
+bool pinctrl_is_port_activated(int64_t dp_key, int64_t port_key);
+bool db_is_port_activated(const struct sbrec_port_binding *pb,
+                          const struct sbrec_chassis *chassis);
 #endif /* controller/pinctrl.h */
