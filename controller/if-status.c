@@ -115,6 +115,7 @@ static void ovs_iface_set_state(struct if_status_mgr *, struct ovs_iface *,
 
 static void if_status_mgr_update_bindings(
     struct if_status_mgr *mgr, struct local_binding_data *binding_data,
+    const struct sbrec_chassis *chassis_rec,
     bool sb_readonly, bool ovs_readonly);
 
 struct if_status_mgr *
@@ -179,6 +180,13 @@ if_status_mgr_claim_iface(struct if_status_mgr *mgr, const char *iface_id)
         OVS_NOT_REACHED();
         break;
     }
+}
+
+bool
+if_status_mgr_iface_is_present(struct if_status_mgr *mgr, const char *iface_id)
+{
+    struct ovs_iface *iface = shash_find_data(&mgr->ifaces, iface_id);
+    return (!!iface);
 }
 
 void
@@ -247,7 +255,8 @@ if_status_mgr_delete_iface(struct if_status_mgr *mgr, const char *iface_id)
 
 void
 if_status_mgr_update(struct if_status_mgr *mgr,
-                     struct local_binding_data *binding_data)
+                     struct local_binding_data *binding_data,
+                     const struct sbrec_chassis *chassis_rec)
 {
     if (!binding_data) {
         return;
@@ -262,7 +271,7 @@ if_status_mgr_update(struct if_status_mgr *mgr,
     HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_MARK_UP]) {
         struct ovs_iface *iface = node->data;
 
-        if (local_binding_is_up(bindings, iface->id)) {
+        if (local_binding_is_up(bindings, iface->id, chassis_rec)) {
             ovs_iface_set_state(mgr, iface, OIF_INSTALLED);
         }
     }
@@ -273,7 +282,7 @@ if_status_mgr_update(struct if_status_mgr *mgr,
     HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_MARK_DOWN]) {
         struct ovs_iface *iface = node->data;
 
-        if (local_binding_is_down(bindings, iface->id)) {
+        if (local_binding_is_down(bindings, iface->id, chassis_rec)) {
             ovs_iface_destroy(mgr, iface);
         }
     }
@@ -306,6 +315,7 @@ if_status_mgr_update(struct if_status_mgr *mgr,
 void
 if_status_mgr_run(struct if_status_mgr *mgr,
                   struct local_binding_data *binding_data,
+                  const struct sbrec_chassis *chassis_rec,
                   bool sb_readonly, bool ovs_readonly)
 {
     struct ofctrl_acked_seqnos *acked_seqnos =
@@ -328,8 +338,8 @@ if_status_mgr_run(struct if_status_mgr *mgr,
     ofctrl_acked_seqnos_destroy(acked_seqnos);
 
     /* Update binding states. */
-    if_status_mgr_update_bindings(mgr, binding_data, sb_readonly,
-                                  ovs_readonly);
+    if_status_mgr_update_bindings(mgr, binding_data, chassis_rec,
+                                  sb_readonly, ovs_readonly);
 }
 
 static void
@@ -390,6 +400,7 @@ ovs_iface_set_state(struct if_status_mgr *mgr, struct ovs_iface *iface,
 static void
 if_status_mgr_update_bindings(struct if_status_mgr *mgr,
                               struct local_binding_data *binding_data,
+                              const struct sbrec_chassis *chassis_rec,
                               bool sb_readonly, bool ovs_readonly)
 {
     if (!binding_data) {
@@ -404,6 +415,9 @@ if_status_mgr_update_bindings(struct if_status_mgr *mgr,
      */
     HMAPX_FOR_EACH (node, &mgr->ifaces_per_state[OIF_INSTALL_FLOWS]) {
         struct ovs_iface *iface = node->data;
+        if (!sb_readonly) {
+            local_binding_set_pb(bindings, iface->id, chassis_rec);
+        }
 
         local_binding_set_down(bindings, iface->id, sb_readonly, ovs_readonly);
     }
@@ -415,7 +429,9 @@ if_status_mgr_update_bindings(struct if_status_mgr *mgr,
     char *ts_now_str = xasprintf("%lld", time_wall_msec());
     HMAPX_FOR_EACH (node, &mgr->ifaces_per_state[OIF_MARK_UP]) {
         struct ovs_iface *iface = node->data;
-
+        if (!sb_readonly) {
+            local_binding_set_pb(bindings, iface->id, chassis_rec);
+        }
         local_binding_set_up(bindings, iface->id, ts_now_str,
                              sb_readonly, ovs_readonly);
     }
@@ -426,6 +442,9 @@ if_status_mgr_update_bindings(struct if_status_mgr *mgr,
      */
     HMAPX_FOR_EACH (node, &mgr->ifaces_per_state[OIF_MARK_DOWN]) {
         struct ovs_iface *iface = node->data;
+        if (!sb_readonly) {
+            local_binding_set_pb(bindings, iface->id, NULL);
+        }
 
         local_binding_set_down(bindings, iface->id, sb_readonly, ovs_readonly);
     }

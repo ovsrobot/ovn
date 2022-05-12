@@ -657,11 +657,15 @@ local_binding_get_lport_ofport(const struct shash *local_bindings,
 }
 
 bool
-local_binding_is_up(struct shash *local_bindings, const char *pb_name)
+local_binding_is_up(struct shash *local_bindings, const char *pb_name,
+                    const struct sbrec_chassis *chassis_rec)
 {
     struct local_binding *lbinding =
         local_binding_find(local_bindings, pb_name);
     struct binding_lport *b_lport = local_binding_get_primary_lport(lbinding);
+    if (b_lport && b_lport->pb->chassis != chassis_rec) {
+        return false;
+    }
     if (lbinding && b_lport && lbinding->iface) {
         if (b_lport->pb->n_up && !b_lport->pb->up[0]) {
             return false;
@@ -673,12 +677,22 @@ local_binding_is_up(struct shash *local_bindings, const char *pb_name)
 }
 
 bool
-local_binding_is_down(struct shash *local_bindings, const char *pb_name)
+local_binding_is_down(struct shash *local_bindings, const char *pb_name,
+                      const struct sbrec_chassis *chassis_rec)
 {
     struct local_binding *lbinding =
         local_binding_find(local_bindings, pb_name);
 
     struct binding_lport *b_lport = local_binding_get_primary_lport(lbinding);
+
+    if (b_lport) {
+        if (b_lport->pb->chassis == chassis_rec) {
+            return false;
+        } else if (b_lport->pb->chassis) {
+            VLOG_DBG("lport %s already claimed by other chassis",
+                     b_lport->pb->logical_port);
+        }
+    }
 
     if (!lbinding) {
         return true;
@@ -894,6 +908,48 @@ get_lport_type_str(enum en_lport_type lport_type)
     OVS_NOT_REACHED();
 }
 
+static void set_pb_chassis_in_sbrec(const struct sbrec_port_binding *pb,
+                          const struct sbrec_chassis *chassis_rec)
+{
+    if (pb->chassis != chassis_rec) {
+        if (pb->chassis) {
+            VLOG_INFO("Changing chassis for lport %s from %s to %s.",
+                    pb->logical_port, pb->chassis->name,
+                    chassis_rec->name);
+        } else {
+            VLOG_INFO("Claiming lport %s for this chassis.", pb->logical_port);
+        }
+        for (int i = 0; i < pb->n_mac; i++) {
+            VLOG_INFO("%s: Claiming %s", pb->logical_port, pb->mac[i]);
+        }
+        sbrec_port_binding_set_chassis(pb, chassis_rec);
+    }
+}
+
+static void clear_pb_chassis_in_sbrec(const struct sbrec_port_binding *pb)
+{
+    if (pb->chassis) {
+        sbrec_port_binding_set_chassis(pb, NULL);
+    }
+}
+
+void
+local_binding_set_pb(struct shash *local_bindings, const char *pb_name,
+                    const struct sbrec_chassis *chassis_rec)
+{
+    struct local_binding *lbinding =
+        local_binding_find(local_bindings, pb_name);
+    struct binding_lport *b_lport = local_binding_get_primary_lport(lbinding);
+
+    if (b_lport) {
+        if (chassis_rec) {
+            set_pb_chassis_in_sbrec(b_lport->pb, chassis_rec);
+        } else {
+            clear_pb_chassis_in_sbrec(b_lport->pb);
+        }
+    }
+}
+
 /* For newly claimed ports, if 'notify_up' is 'false':
  * - set the 'pb.up' field to true if 'pb' has no 'parent_pb'.
  * - set the 'pb.up' field to true if 'parent_pb.up' is 'true' (e.g., for
@@ -906,23 +962,37 @@ get_lport_type_str(enum en_lport_type lport_type)
  *   it's explicitly set to 'false'.
  *   This is to ensure compatibility with older versions of ovn-northd.
  */
-static void
+static bool
 claimed_lport_set_up(const struct sbrec_port_binding *pb,
                      const struct sbrec_port_binding *parent_pb,
                      const struct sbrec_chassis *chassis_rec,
-                     bool notify_up, struct if_status_mgr *if_mgr)
+                     bool notify_up, struct if_status_mgr *if_mgr,
+                     bool sb_readonly)
 {
+
     if (!notify_up) {
         bool up = true;
         if (!parent_pb || (parent_pb->n_up && parent_pb->up[0])) {
-            sbrec_port_binding_set_up(pb, &up, 1);
+            if (!sb_readonly) {
+                sbrec_port_binding_set_up(pb, &up, 1);
+            } else if (pb->n_up && !pb->up[0]) {
+                return false;
+            }
         }
-        return;
+        if (sb_readonly && (pb->chassis != chassis_rec)) {
+            /* Handle the cases where if_status_mgr does not claim the
+             * interface.In those cases, if we do not set pb->chassis in sb
+             * now (as readonly), we might not do it later ...
+             */
+            return false;
+        }
+        return true;
     }
 
     if (pb->chassis != chassis_rec || (pb->n_up && !pb->up[0])) {
         if_status_mgr_claim_iface(if_mgr, pb->logical_port);
     }
+    return true;
 }
 
 /* Returns false if lport is not claimed due to 'sb_readonly'.
@@ -937,27 +1007,15 @@ claim_lport(const struct sbrec_port_binding *pb,
             struct hmap *tracked_datapaths,
             struct if_status_mgr *if_mgr)
 {
-    if (!sb_readonly) {
-        claimed_lport_set_up(pb, parent_pb, chassis_rec, notify_up, if_mgr);
+
+    if (!claimed_lport_set_up(pb, parent_pb, chassis_rec, notify_up,
+           if_mgr, sb_readonly)) {
+        return false;
     }
-
     if (pb->chassis != chassis_rec) {
-        if (sb_readonly) {
-            return false;
+        if (!sb_readonly) {
+            set_pb_chassis_in_sbrec(pb, chassis_rec);
         }
-
-        if (pb->chassis) {
-            VLOG_INFO("Changing chassis for lport %s from %s to %s.",
-                    pb->logical_port, pb->chassis->name,
-                    chassis_rec->name);
-        } else {
-            VLOG_INFO("Claiming lport %s for this chassis.", pb->logical_port);
-        }
-        for (int i = 0; i < pb->n_mac; i++) {
-            VLOG_INFO("%s: Claiming %s", pb->logical_port, pb->mac[i]);
-        }
-
-        sbrec_port_binding_set_chassis(pb, chassis_rec);
 
         if (tracked_datapaths) {
             update_lport_tracking(pb, tracked_datapaths, true);
@@ -974,7 +1032,6 @@ claim_lport(const struct sbrec_port_binding *pb,
         }
         sbrec_port_binding_set_encap(pb, encap_rec);
     }
-
     return true;
 }
 
@@ -986,7 +1043,8 @@ claim_lport(const struct sbrec_port_binding *pb,
  * Caller should make sure that this is the case.
  */
 static bool
-release_lport_(const struct sbrec_port_binding *pb, bool sb_readonly)
+release_lport_(const struct sbrec_port_binding *pb, bool sb_readonly,
+               struct if_status_mgr *if_mgr)
 {
     if (pb->encap) {
         if (sb_readonly) {
@@ -995,11 +1053,13 @@ release_lport_(const struct sbrec_port_binding *pb, bool sb_readonly)
         sbrec_port_binding_set_encap(pb, NULL);
     }
 
+    /* if sb readonly, pb->chassis unset through if-status if present */
     if (pb->chassis) {
-        if (sb_readonly) {
+        if (!sb_readonly) {
+            sbrec_port_binding_set_chassis(pb, NULL);
+        } else if (!if_status_mgr_iface_is_present(if_mgr, pb->logical_port)) {
             return false;
         }
-        sbrec_port_binding_set_chassis(pb, NULL);
     }
 
     if (pb->virtual_parent) {
@@ -1009,7 +1069,8 @@ release_lport_(const struct sbrec_port_binding *pb, bool sb_readonly)
         sbrec_port_binding_set_virtual_parent(pb, NULL);
     }
 
-    VLOG_INFO("Releasing lport %s from this chassis.", pb->logical_port);
+    VLOG_INFO("Releasing lport %s from this chassis (sb_readonly=%d)",
+              pb->logical_port, sb_readonly);
     return true;
 }
 
@@ -1017,7 +1078,7 @@ static bool
 release_lport(const struct sbrec_port_binding *pb, bool sb_readonly,
               struct hmap *tracked_datapaths, struct if_status_mgr *if_mgr)
 {
-    if (!release_lport_(pb, sb_readonly)) {
+    if (!release_lport_(pb, sb_readonly, if_mgr)) {
         return false;
     }
 
@@ -1342,10 +1403,9 @@ consider_localport(const struct sbrec_port_binding *pb,
     /* If the port binding is claimed, then release it as localport is claimed
      * by any ovn-controller. */
     if (pb->chassis == b_ctx_in->chassis_rec) {
-        if (!release_lport_(pb, !b_ctx_in->ovnsb_idl_txn)) {
+        if (!release_lport_(pb, !b_ctx_in->ovnsb_idl_txn, b_ctx_out->if_mgr)) {
             return false;
         }
-
         remove_related_lport(pb, b_ctx_out);
     }
 

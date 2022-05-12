@@ -151,14 +151,17 @@ const struct sbrec_port_binding *local_binding_get_primary_pb(
 ofp_port_t local_binding_get_lport_ofport(const struct shash *local_bindings,
                                           const char *pb_name);
 
-bool local_binding_is_up(struct shash *local_bindings, const char *pb_name);
-bool local_binding_is_down(struct shash *local_bindings, const char *pb_name);
+bool local_binding_is_up(struct shash *local_bindings, const char *pb_name,
+                         const struct sbrec_chassis *);
+bool local_binding_is_down(struct shash *local_bindings, const char *pb_name,
+                         const struct sbrec_chassis *);
 void local_binding_set_up(struct shash *local_bindings, const char *pb_name,
                           const char *ts_now_str, bool sb_readonly,
                           bool ovs_readonly);
 void local_binding_set_down(struct shash *local_bindings, const char *pb_name,
                             bool sb_readonly, bool ovs_readonly);
-
+void local_binding_set_pb(struct shash *local_bindings, const char *pb_name,
+                         const struct sbrec_chassis *chassis_rec);
 void binding_register_ovs_idl(struct ovsdb_idl *);
 void binding_run(struct binding_ctx_in *, struct binding_ctx_out *);
 bool binding_cleanup(struct ovsdb_idl_txn *ovnsb_idl_txn,

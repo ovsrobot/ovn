@@ -31,10 +31,14 @@ void if_status_mgr_claim_iface(struct if_status_mgr *, const char *iface_id);
 void if_status_mgr_release_iface(struct if_status_mgr *, const char *iface_id);
 void if_status_mgr_delete_iface(struct if_status_mgr *, const char *iface_id);
 
-void if_status_mgr_update(struct if_status_mgr *, struct local_binding_data *);
+void if_status_mgr_update(struct if_status_mgr *, struct local_binding_data *,
+                          const struct sbrec_chassis *chassis);
 void if_status_mgr_run(struct if_status_mgr *mgr, struct local_binding_data *,
+                       const struct sbrec_chassis *chassis,
                        bool sb_readonly, bool ovs_readonly);
 void if_status_mgr_get_memory_usage(struct if_status_mgr *mgr,
                                     struct simap *usage);
+bool if_status_mgr_iface_is_present(struct if_status_mgr *mgr,
+                                    const char *iface_id);
 
 # endif /* controller/if-status.h */

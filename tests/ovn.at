@@ -13934,6 +13934,7 @@ ovn_attach n1 br-phys 192.168.0.11
 ovs-vsctl -- add-port br-int hv1-vif0 -- \
 set Interface hv1-vif0 ofport-request=1
 
+
 sim_add hv2
 as hv2
 ovs-vsctl add-br br-phys
@@ -13983,7 +13984,10 @@ AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep actions=output:1], 
 echo "verifying that lsp0 binding moves when requested-chassis is changed"
 
 ovn-nbctl lsp-set-options lsp0 requested-chassis=hv2
-OVS_WAIT_UNTIL([test 1 = $(grep -c "Releasing lport lsp0 from this chassis" hv1/ovn-controller.log)])
+
+# We might see multiple "Releasing lport ...", when sb is read only
+OVS_WAIT_UNTIL([test 1 -le $(grep -c "Releasing lport lsp0 from this chassis" hv1/ovn-controller.log)])
+
 wait_column "$hv2_uuid" Port_Binding chassis logical_port=lsp0
 
 # (6) Chassis hv2 should add flows and hv1 should not.
@@ -14029,7 +14033,7 @@ AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [0], [ig
 AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep actions=output:1], [0], [ignore])
 
 check ovn-nbctl --wait=hv lsp-set-options lsp0 requested-chassis=non-existant-chassis
-OVS_WAIT_UNTIL([test 1 = $(grep -c "Releasing lport lsp0 from this chassis" hv1/ovn-controller.log)])
+OVS_WAIT_UNTIL([test 1 -le $(grep -c "Releasing lport lsp0 from this chassis" hv1/ovn-controller.log)])
 check ovn-nbctl --wait=hv sync
 wait_column '' Port_Binding chasssi logical_port=lsp0
 AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [1], [])
@@ -30593,5 +30597,52 @@ test_mac_binding_flows hv1 00\:00\:00\:00\:10\:10 1
 test_mac_binding_flows hv2 00\:00\:00\:00\:10\:10 1
 
 OVN_CLEANUP([hv1], [hv2])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([recomputes])
+ovn_start
+
+# Add chassis
+net_add n1
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+add_switch_ports() {
+    for port in $(seq $1 $2); do
+        logical_switch_port=lsp${port}
+        check ovn-nbctl lsp-add ls1 $logical_switch_port
+        check ovn-nbctl lsp-set-addresses $logical_switch_port dynamic
+
+        as hv1 ovs-vsctl \
+            -- add-port br-int vif${port} \
+            -- set Interface vif${port} external_ids:iface-id=$logical_switch_port
+    done
+
+    check ovn-nbctl --wait=hv sync
+    AT_CHECK([test $(ovn-appctl -t ovn-controller coverage/read-counter lflow_run) == $lflow_run])
+}
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl set Logical_Switch ls1 other_config:subnet=10.1.0.0/16
+check ovn-nbctl set Logical_Switch ls1 other_config:exclude_ips=10.1.255.254
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lsp-add ls1 lsp0 -- set Logical_Switch_Port lsp0 type=router options:router-port=lrp0 addresses=dynamic
+check ovn-nbctl lrp-add lr1 lrp0 "f0:00:00:01:00:01" 10.1.255.254/16
+check ovn-nbctl lr-nat-add lr1 snat 10.2.0.1 10.1.0.0/16
+
+check ovn-nbctl --wait=hv sync
+lflow_run=$(ovn-appctl -t ovn-controller coverage/read-counter lflow_run)
+
+add_switch_ports 1 50
+add_switch_ports 51 100
+add_switch_ports 101 150
+
+OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
