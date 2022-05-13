@@ -1351,6 +1351,8 @@ test_parse_actions(struct ovs_cmdl_context *ctx OVS_UNUSED)
                 .ct_snat_vip_ptable = OFTABLE_CT_SNAT_HAIRPIN,
                 .fdb_ptable = OFTABLE_GET_FDB,
                 .fdb_lookup_ptable = OFTABLE_LOOKUP_FDB,
+                .in_port_sec_ptable = OFTABLE_CHK_IN_PORT_SEC,
+                .out_port_sec_ptable = OFTABLE_CHK_OUT_PORT_SEC,
             };
             struct ofpbuf ofpacts;
             ofpbuf_init(&ofpacts, 0);
