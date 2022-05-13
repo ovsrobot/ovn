@@ -2045,7 +2045,8 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
                 continue;
             }
 
-            if (t_lport->tracked_type == TRACKED_RESOURCE_NEW) {
+            if (t_lport->tracked_type == TRACKED_RESOURCE_NEW ||
+                t_lport->tracked_type == TRACKED_RESOURCE_UPDATED) {
                 if (!simap_contains(&ct_zones_data->current,
                                     t_lport->pb->logical_port)) {
                     alloc_id_to_ct_zone(t_lport->pb->logical_port,
@@ -2067,8 +2068,6 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
                     simap_delete(&ct_zones_data->current, ct_zone);
                     updated = true;
                 }
-            } else {
-                OVS_NOT_REACHED();
             }
         }
     }
@@ -2523,6 +2522,7 @@ init_lflow_ctx(struct engine_node *node,
     l_ctx_in->port_groups = port_groups;
     l_ctx_in->active_tunnels = &rt_data->active_tunnels;
     l_ctx_in->related_lport_ids = &rt_data->related_lports.lport_ids;
+    l_ctx_in->binding_lports = &rt_data->lbinding_data.lports;
     l_ctx_in->chassis_tunnels = &non_vif_data->chassis_tunnels;
     l_ctx_in->check_ct_label_for_lb_hairpin =
         get_check_ct_label_for_lb_hairpin(n_ver->ver);
@@ -2877,14 +2877,13 @@ lflow_output_runtime_data_handler(struct engine_node *node,
                     &l_ctx_in, &l_ctx_out)) {
                 return false;
             }
-        } else {
-            struct shash_node *shash_node;
-            SHASH_FOR_EACH (shash_node, &tdp->lports) {
-                struct tracked_lport *lport = shash_node->data;
-                if (!lflow_handle_flows_for_lport(lport->pb, &l_ctx_in,
-                                                  &l_ctx_out)) {
-                    return false;
-                }
+        }
+        struct shash_node *shash_node;
+        SHASH_FOR_EACH (shash_node, &tdp->lports) {
+            struct tracked_lport *lport = shash_node->data;
+            if (!lflow_handle_flows_for_lport(lport->pb, &l_ctx_in,
+                                                &l_ctx_out)) {
+                return false;
             }
         }
     }
