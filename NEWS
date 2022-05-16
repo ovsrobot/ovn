@@ -9,6 +9,13 @@ Post v22.03.0
     implicit drop behavior on logical switches with ACLs applied.
   - Support (LSP.options:qos_min_rate) to guarantee minimal bandwidth available
     for a logical port.
+  - Changed the way to enable northd parallelization.
+    Removed support for:
+    - use_parallel_build in NBDB.
+    - --dummy-numa in northd cmdline.
+    Added support for:
+    -  --n-threads=<N> in northd cmdline.
+    - set-n-threads/get-n-threads unixctls.
 
 OVN v22.03.0 - 11 Mar 2022
 --------------------------
