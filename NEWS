@@ -13,6 +13,7 @@ Post v22.03.0
     explicitly request routers to reply to any ARP/ND request for a VIP
     (when set to "all") and only for reachable VIPs (when set to "reachable"
     or by default).
+  - Support list of chassis for Logical_Switch_Port:options:requested-chassis.
 
 OVN v22.03.0 - 11 Mar 2022
 --------------------------
