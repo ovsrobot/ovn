@@ -22993,9 +22993,6 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([interconnection])
 
-dnl This test has problems with ovn-northd-ddlog.
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test "$RUN_ANYWAY" != yes])
-
 ovn_init_ic_db
 n_az=5
 n_ts=5
