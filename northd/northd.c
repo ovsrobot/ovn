@@ -5408,8 +5408,14 @@ build_lswitch_learn_fdb_op(
         struct ovn_port *op, struct hmap *lflows,
         struct ds *actions, struct ds *match)
 {
-    if (op->nbsp && !op->n_ps_addrs && !strcmp(op->nbsp->type, "") &&
-        op->has_unknown) {
+    if (!op->nbsp) {
+        return;
+    }
+
+    bool localnet_learn_fdb = smap_get_bool(&op->nbsp->options,
+                                            "localnet_learn_fdb", false);
+    if (!op->n_ps_addrs && op->has_unknown && (!strcmp(op->nbsp->type, "") ||
+        (localnet_learn_fdb && lsp_is_localnet(op->nbsp)))) {
         ds_clear(match);
         ds_clear(actions);
         ds_put_format(match, "inport == %s", op->json_key);
