@@ -29,10 +29,12 @@
 #include "lport.h"
 #include "mac-learn.h"
 #include "nx-match.h"
+#include "ofctrl.h"
 #include "latch.h"
 #include "lib/packets.h"
 #include "lib/sset.h"
 #include "openvswitch/ofp-actions.h"
+#include "openvswitch/ofp-flow.h"
 #include "openvswitch/ofp-msgs.h"
 #include "openvswitch/ofp-packet.h"
 #include "openvswitch/ofp-print.h"
@@ -152,8 +154,8 @@ VLOG_DEFINE_THIS_MODULE(pinctrl);
  *  and pinctrl_run().
  *  'pinctrl_handler_seq' is used by pinctrl_run() to
  *  wake up pinctrl_handler thread from poll_block() if any changes happened
- *  in 'send_garp_rarp_data', 'ipv6_ras' and 'buffered_mac_bindings'
- *  structures.
+ *  in 'send_garp_rarp_data', 'ipv6_ras', 'activated_ports' and
+ *  'buffered_mac_bindings' structures.
  *
  *  'pinctrl_main_seq' is used by pinctrl_handler() thread to wake up
  *  the main thread from poll_block() when mac bindings/igmp groups need to
@@ -197,6 +199,19 @@ static void run_put_mac_bindings(
 static void wait_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn);
 static void send_mac_binding_buffered_pkts(struct rconn *swconn)
     OVS_REQUIRES(pinctrl_mutex);
+
+static void pinctrl_rarp_activation_strategy_handler(struct rconn *swconn,
+                                                     const struct match *md,
+                                                     struct dp_packet *pkt_in);
+
+static void init_activated_ports(void);
+static void destroy_activated_ports(void);
+static void wait_activated_ports(struct ovsdb_idl_txn *ovnsb_idl_txn);
+static void run_activated_ports(
+    struct ovsdb_idl_txn *ovnsb_idl_txn,
+    struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
+    struct ovsdb_idl_index *sbrec_port_binding_by_name,
+    const struct sbrec_chassis *chassis);
 
 static void init_send_garps_rarps(void);
 static void destroy_send_garps_rarps(void);
@@ -522,6 +537,7 @@ pinctrl_init(void)
     init_ipv6_ras();
     init_ipv6_prefixd();
     init_buffered_packets_map();
+    init_activated_ports();
     init_event_table();
     ip_mcast_snoop_init();
     init_put_vport_bindings();
@@ -3269,6 +3285,13 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
         ovs_mutex_unlock(&pinctrl_mutex);
         break;
 
+    case ACTION_OPCODE_ACTIVATION_STRATEGY_RARP:
+        ovs_mutex_lock(&pinctrl_mutex);
+        pinctrl_rarp_activation_strategy_handler(swconn, &pin.flow_metadata,
+                                                 &packet);
+        ovs_mutex_unlock(&pinctrl_mutex);
+        break;
+
     default:
         VLOG_WARN_RL(&rl, "unrecognized packet-in opcode %"PRIu32,
                      ntohl(ah->opcode));
@@ -3533,6 +3556,8 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
     bfd_monitor_run(ovnsb_idl_txn, bfd_table, sbrec_port_binding_by_name,
                     chassis, active_tunnels);
     run_put_fdbs(ovnsb_idl_txn, sbrec_fdb_by_dp_key_mac);
+    run_activated_ports(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
+                        sbrec_port_binding_by_key, chassis);
     ovs_mutex_unlock(&pinctrl_mutex);
 }
 
@@ -4036,6 +4061,7 @@ pinctrl_wait(struct ovsdb_idl_txn *ovnsb_idl_txn)
     int64_t new_seq = seq_read(pinctrl_main_seq);
     seq_wait(pinctrl_main_seq, new_seq);
     wait_put_fdbs(ovnsb_idl_txn);
+    wait_activated_ports(ovnsb_idl_txn);
 }
 
 /* Called by ovn-controller. */
@@ -4050,6 +4076,7 @@ pinctrl_destroy(void)
     destroy_ipv6_ras();
     destroy_ipv6_prefixd();
     destroy_buffered_packets_map();
+    destroy_activated_ports();
     event_table_destroy();
     destroy_put_mac_bindings();
     destroy_put_vport_bindings();
@@ -7725,6 +7752,170 @@ pinctrl_handle_svc_check(struct rconn *swconn, const struct flow *ip_flow,
         /* Calculate next_send_time. */
         svc_mon->next_send_time = time_msec() + svc_mon->interval;
     }
+}
+
+static struct ovs_list activated_ports = OVS_LIST_INITIALIZER(
+    &activated_ports);
+
+struct ovs_list *
+get_activated_ports(void)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    if (ovs_list_is_empty(&activated_ports)) {
+        return NULL;
+    }
+
+    struct activated_port *pp;
+    struct ovs_list *res = xmalloc(sizeof *res);
+    ovs_list_init(res);
+
+    LIST_FOR_EACH (pp, list, &activated_ports) {
+        struct activated_port *pp_copy = xmalloc(sizeof *pp_copy);
+        pp_copy->port_key = pp->port_key;
+        pp_copy->dp_key = pp->dp_key;
+        ovs_list_push_front(res, &pp_copy->list);
+    }
+    return res;
+}
+
+static void
+init_activated_ports(void)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    ovs_list_init(&activated_ports);
+}
+
+static void
+destroy_activated_ports(void)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    struct activated_port *pp;
+    LIST_FOR_EACH_POP (pp, list, &activated_ports) {
+        free(pp);
+    }
+}
+
+static void
+wait_activated_ports(struct ovsdb_idl_txn *ovnsb_idl_txn)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    if (ovnsb_idl_txn && !ovs_list_is_empty(&activated_ports)) {
+        poll_immediate_wake();
+    }
+}
+
+bool
+db_is_port_activated(const struct sbrec_port_binding *pb,
+                     const struct sbrec_chassis *chassis)
+{
+    const char *activated_chassis = smap_get(&pb->options,
+                                             "additional-chassis-activated");
+    if (activated_chassis) {
+        char *save_ptr;
+        char *tokstr = xstrdup(activated_chassis);
+        for (const char *chassis_name = strtok_r(tokstr, ",", &save_ptr);
+             chassis_name != NULL;
+             chassis_name = strtok_r(NULL, ",", &save_ptr)) {
+            if (!strcmp(chassis_name, chassis->name)) {
+                free(tokstr);
+                return true;
+            }
+        }
+        free(tokstr);
+    }
+    return false;
+}
+
+bool pinctrl_is_port_activated(int64_t dp_key, int64_t port_key)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    const struct activated_port *pp;
+    LIST_FOR_EACH (pp, list, &activated_ports) {
+        if (pp->dp_key == dp_key && pp->port_key == port_key) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void
+run_activated_ports(struct ovsdb_idl_txn *ovnsb_idl_txn,
+                    struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
+                    struct ovsdb_idl_index *sbrec_port_binding_by_key,
+                    const struct sbrec_chassis *chassis)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    if (!ovnsb_idl_txn) {
+        return;
+    }
+
+    struct activated_port *pp;
+    LIST_FOR_EACH_SAFE (pp, list, &activated_ports) {
+        const struct sbrec_port_binding *pb = lport_lookup_by_key(
+            sbrec_datapath_binding_by_key, sbrec_port_binding_by_key,
+            pp->dp_key, pp->port_key);
+        if (!pb || db_is_port_activated(pb, chassis)) {
+            ovs_list_remove(&pp->list);
+            free(pp);
+            continue;
+        }
+        const char *activated_chassis = smap_get(
+            &pb->options, "additional-chassis-activated");
+        char *activated_str;
+        if (activated_chassis) {
+            activated_str = xasprintf(
+                "%s,%s", activated_chassis, chassis->name);
+            sbrec_port_binding_update_options_setkey(
+                pb, "additional-chassis-activated", activated_str);
+            free(activated_str);
+        } else {
+            sbrec_port_binding_update_options_setkey(
+                pb, "additional-chassis-activated", chassis->name);
+        }
+    }
+}
+
+static void
+pinctrl_rarp_activation_strategy_handler(struct rconn *swconn,
+                                         const struct match *md,
+                                         struct dp_packet *pkt_in)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    /* Admitted; send RARP back to the pipeline. */
+    uint32_t port_key = md->flow.regs[MFF_LOG_INPORT - MFF_REG0];
+    uint32_t dp_key = ntohll(md->flow.metadata);
+
+    uint64_t ofpacts_stub[4096 / 8];
+    struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(ofpacts_stub);
+    enum ofp_version version = rconn_get_version(swconn);
+    put_load(dp_key, MFF_LOG_DATAPATH, 0, 64, &ofpacts);
+    put_load(port_key, MFF_LOG_INPORT, 0, 32, &ofpacts);
+    struct ofpact_resubmit *resubmit = ofpact_put_RESUBMIT(&ofpacts);
+    resubmit->in_port = OFPP_CONTROLLER;
+    resubmit->table_id = OFTABLE_LOG_INGRESS_PIPELINE;
+
+    struct ofputil_packet_out po = {
+        .packet = dp_packet_data(pkt_in),
+        .packet_len = dp_packet_size(pkt_in),
+        .buffer_id = UINT32_MAX,
+        .ofpacts = ofpacts.data,
+        .ofpacts_len = ofpacts.size,
+    };
+    match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
+
+    enum ofputil_protocol proto;
+    proto = ofputil_protocol_from_ofp_version(version);
+    queue_msg(swconn, ofputil_encode_packet_out(&po, proto));
+    ofpbuf_uninit(&ofpacts);
+
+    /* Tag the port as activated in-memory. */
+    struct activated_port *pp = xmalloc(sizeof *pp);
+    pp->port_key = port_key;
+    pp->dp_key = dp_key;
+    ovs_list_push_front(&activated_ports, &pp->list);
+
+    /* Notify main thread on pending additional-chassis-activated updates. */
+    notify_pinctrl_main();
 }
 
 static struct hmap put_fdbs;
