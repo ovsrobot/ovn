@@ -1823,6 +1823,12 @@ lsp_is_remote(const struct nbrec_logical_switch_port *nbsp)
 }
 
 static bool
+lsp_is_localnet(const struct nbrec_logical_switch_port *nbsp)
+{
+    return !strcmp(nbsp->type, "localnet");
+}
+
+static bool
 lsp_is_type_changed(const struct sbrec_port_binding *sb,
                 const struct nbrec_logical_switch_port *nbsp,
                 bool *is_old_container_lport)
@@ -2593,7 +2599,7 @@ join_logical_ports(struct northd_input *input_data,
                     ovs_list_push_back(nb_only, &op->list);
                 }
 
-                if (!strcmp(nbsp->type, "localnet")) {
+                if (lsp_is_localnet(nbsp)) {
                    if (od->n_localnet_ports >= n_allocated_localnet_ports) {
                        od->localnet_ports = x2nrealloc(
                            od->localnet_ports, &n_allocated_localnet_ports,
@@ -3405,7 +3411,7 @@ ovn_port_update_sbrec(struct northd_input *input_data,
             struct smap options;
             char *name = "";
 
-            if (!strcmp(op->nbsp->type, "localnet")) {
+            if (lsp_is_localnet(op->nbsp)) {
                 uuid = &op->sb->header_.uuid;
                 name = "localnet";
             } else if (op->sb->chassis) {
@@ -5384,7 +5390,7 @@ build_lswitch_port_sec_op(struct ovn_port *op, struct hmap *lflows,
                                           ds_cstr(match), ds_cstr(actions),
                                           op->key, &op->nbsp->header_);
 
-        if (!strcmp(op->nbsp->type, "localnet")) {
+        if (lsp_is_localnet(op->nbsp)) {
             ds_clear(match);
             ds_clear(actions);
             ds_put_format(match, "outport == %s", op->json_key);
@@ -7637,15 +7643,13 @@ build_lswitch_arp_nd_responder_skip_local(struct ovn_port *op,
                                           struct hmap *lflows,
                                           struct ds *match)
 {
-    if (op->nbsp) {
-        if (!strcmp(op->nbsp->type, "localnet")) {
-            ds_clear(match);
-            ds_put_format(match, "inport == %s", op->json_key);
-            ovn_lflow_add_with_lport_and_hint(lflows, op->od,
-                                              S_SWITCH_IN_ARP_ND_RSP, 100,
-                                              ds_cstr(match), "next;", op->key,
-                                              &op->nbsp->header_);
-        }
+    if (op->nbsp && lsp_is_localnet(op->nbsp)) {
+        ds_clear(match);
+        ds_put_format(match, "inport == %s", op->json_key);
+        ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+                                          S_SWITCH_IN_ARP_ND_RSP, 100,
+                                          ds_cstr(match), "next;", op->key,
+                                          &op->nbsp->header_);
     }
 }
 
