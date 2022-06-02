@@ -60,6 +60,7 @@ struct northd_input {
 
 struct chassis_features {
     bool ct_lb_mark;
+    bool ct_masked_mark;
 };
 
 struct northd_data {
