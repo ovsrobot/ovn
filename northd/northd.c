@@ -4146,7 +4146,8 @@ build_lb_port_related_data(struct hmap *datapaths, struct hmap *ports,
  */
 static void
 sync_lbs(struct northd_input *input_data, struct ovsdb_idl_txn *ovnsb_txn,
-         struct hmap *datapaths, struct hmap *lbs)
+         struct hmap *datapaths, struct hmap *lbs,
+         const struct chassis_features *features)
 {
     struct ovn_northd_lb *lb;
 
@@ -4193,6 +4194,8 @@ sync_lbs(struct northd_input *input_data, struct ovsdb_idl_txn *ovnsb_txn,
         struct smap options;
         smap_clone(&options, &lb->nlb->options);
         smap_replace(&options, "hairpin_orig_tuple", "true");
+        smap_replace(&options, "hairpin_use_ct_mark",
+                     features->ct_lb_mark ? "true" : "false");
 
         struct sbrec_datapath_binding **lb_dps =
             xmalloc(lb->n_nb_ls * sizeof *lb_dps);
@@ -15344,7 +15347,8 @@ ovnnb_db_run(struct northd_input *input_data,
     ovn_update_ipv6_options(&data->ports);
     ovn_update_ipv6_prefix(&data->ports);
 
-    sync_lbs(input_data, ovnsb_txn, &data->datapaths, &data->lbs);
+    sync_lbs(input_data, ovnsb_txn, &data->datapaths, &data->lbs,
+             &data->features);
     sync_address_sets(input_data, ovnsb_txn, &data->datapaths);
     sync_port_groups(input_data, ovnsb_txn, &data->port_groups);
     sync_meters(input_data, ovnsb_txn, &data->meter_groups);

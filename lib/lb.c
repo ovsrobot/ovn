@@ -304,6 +304,9 @@ ovn_controller_lb_create(const struct sbrec_load_balancer *sbrec_lb)
     lb->hairpin_orig_tuple = smap_get_bool(&sbrec_lb->options,
                                            "hairpin_orig_tuple",
                                            false);
+    lb->hairpin_use_ct_mark = smap_get_bool(&sbrec_lb->options,
+                                            "hairpin_use_ct_mark",
+                                            false);
     ovn_lb_get_hairpin_snat_ip(&sbrec_lb->header_.uuid, &sbrec_lb->options,
                                &lb->hairpin_snat_ips);
     return lb;

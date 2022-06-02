@@ -101,6 +101,10 @@ struct ovn_controller_lb {
     bool hairpin_orig_tuple; /* True if ovn-northd stores the original
                               * destination tuple in registers.
                               */
+    bool hairpin_use_ct_mark; /* True if ovn-northd uses ct_mark for
+                               * load balancer sessions.  False if it uses
+                               * ct_label.
+                               */
 
     struct lport_addresses hairpin_snat_ips; /* IP (v4 and/or v6) to be used
                                               * as source for hairpinned
