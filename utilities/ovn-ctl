@@ -40,9 +40,16 @@ ovn_ic_db_conf_file="$ovn_etcdir/ovn-ic-db-params.conf"
 ## start ##
 ## ----- ##
 
+pid_exe_matches () {
+    pid=$1
+    binary=$2
+    [ -z "$binary" -o `readlink /proc/$pid/exe` = "$binary" ]
+}
+
 pidfile_is_running () {
     pidfile=$1
-    test -e "$pidfile" && [ -s "$pidfile" ] && pid=`cat "$pidfile"` && pid_exists "$pid"
+    binary=$2
+    test -e "$pidfile" && [ -s "$pidfile" ] && pid=`cat "$pidfile"` && pid_exists "$pid" && pid_exe_matches "$pid" "$binary"
 } >/dev/null 2>&1
 
 stop_nb_ovsdb() {
