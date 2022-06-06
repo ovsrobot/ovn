@@ -2,6 +2,10 @@ Post v22.06.0
 -------------
   - ovn-controller: Add configuration knob, through OVS external-id
     "ovn-encap-df_default" to enable or disable tunnel DF flag.
+  - Added nb_global IPsec options ipsec_encapsulation=true (libreswan)
+    and ipsec_forceencaps=true (strongswan) to unconditionally enforce
+    NAT-T UDP encapsulation. Requires OVS support for IPsec custom tunnel
+    options.
 
 OVN v22.06.0 - XX XXX XXXX
 --------------------------
