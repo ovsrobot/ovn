@@ -1417,6 +1417,100 @@ en_runtime_data_run(struct engine_node *node, void *data)
     engine_set_node_state(node, EN_UPDATED);
 }
 
+struct ed_type_activated_ports {
+    struct ovs_list *activated_ports;
+};
+
+static void *
+en_activated_ports_init(struct engine_node *node OVS_UNUSED,
+                        struct engine_arg *arg OVS_UNUSED)
+{
+    struct ed_type_activated_ports *data = xzalloc(sizeof *data);
+    data->activated_ports = NULL;
+    return data;
+}
+
+static void
+en_activated_ports_cleanup(void *data_)
+{
+    struct ed_type_activated_ports *data = data_;
+
+    struct activated_port *pp;
+    if (!data->activated_ports) {
+        return;
+    }
+
+    LIST_FOR_EACH_POP (pp, list, data->activated_ports) {
+        free(pp);
+    }
+    free(data->activated_ports);
+    data->activated_ports = NULL;
+}
+
+static void
+en_activated_ports_clear_tracked_data(void *data)
+{
+    en_activated_ports_cleanup(data);
+}
+
+static void
+en_activated_ports_run(struct engine_node *node, void *data_)
+{
+    struct ed_type_activated_ports *data = data_;
+    enum engine_node_state state = EN_UNCHANGED;
+
+    if (!data->activated_ports) {
+        get_activated_ports(&data->activated_ports);
+        if (data->activated_ports) {
+            state = EN_UPDATED;
+        }
+    } else {
+        struct ovs_list *new_activated_ports;
+        bool ap_changed = get_activated_ports(&new_activated_ports);
+        if (ap_changed && new_activated_ports) {
+            en_activated_ports_cleanup(data);
+            data->activated_ports = new_activated_ports;
+            state = EN_UPDATED;
+        }
+    }
+    engine_set_node_state(node, state);
+}
+
+static bool
+runtime_data_activated_ports_handler(struct engine_node *node, void *data)
+{
+    struct ed_type_runtime_data *rt_data = data;
+
+    struct ed_type_activated_ports *ap =
+        engine_get_input_data("activated_ports", node);
+
+    if (!ap->activated_ports) {
+        return true;
+    }
+
+    struct activated_port *pp;
+    LIST_FOR_EACH (pp, list, ap->activated_ports) {
+        struct ovsdb_idl_index *sbrec_datapath_binding_by_key =
+            engine_ovsdb_node_get_index(
+                    engine_get_input("SB_datapath_binding", node),
+                    "key");
+        struct ovsdb_idl_index *sbrec_port_binding_by_key =
+            engine_ovsdb_node_get_index(
+                    engine_get_input("SB_port_binding", node),
+                    "key");
+        const struct sbrec_port_binding *pb = lport_lookup_by_key(
+            sbrec_datapath_binding_by_key, sbrec_port_binding_by_key,
+            pp->dp_key, pp->port_key);
+        if (pb) {
+            rt_data->tracked = true;
+            tracked_datapath_lport_add(pb, TRACKED_RESOURCE_UPDATED,
+                                       &rt_data->tracked_dp_bindings);
+            engine_set_node_state(node, EN_UPDATED);
+        }
+    }
+    return true;
+}
+
 static bool
 runtime_data_ovs_interface_shadow_handler(struct engine_node *node, void *data)
 {
@@ -3445,6 +3539,7 @@ main(int argc, char *argv[])
     ENGINE_NODE(non_vif_data, "non_vif_data");
     ENGINE_NODE(mff_ovn_geneve, "mff_ovn_geneve");
     ENGINE_NODE(ofctrl_is_connected, "ofctrl_is_connected");
+    ENGINE_NODE_WITH_CLEAR_TRACK_DATA(activated_ports, "activated_ports");
     ENGINE_NODE(pflow_output, "physical_flow_output");
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA(lflow_output, "logical_flow_output");
     ENGINE_NODE(flow_output, "flow_output");
@@ -3576,6 +3671,8 @@ main(int argc, char *argv[])
                      runtime_data_sb_datapath_binding_handler);
     engine_add_input(&en_runtime_data, &en_sb_port_binding,
                      runtime_data_sb_port_binding_handler);
+    engine_add_input(&en_runtime_data, &en_activated_ports,
+                     runtime_data_activated_ports_handler);
 
     /* The OVS interface handler for runtime_data changes MUST be executed
      * after the sb_port_binding_handler as port_binding deletes must be
