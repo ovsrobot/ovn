@@ -12010,6 +12010,7 @@ build_gateway_redirect_flows_for_lrouter(
     }
     for (size_t i = 0; i < od->n_l3dgw_ports; i++) {
         const struct ovsdb_idl_row *stage_hint = NULL;
+        bool add_def_flow = true;
 
         if (od->l3dgw_ports[i]->nbrp) {
             stage_hint = &od->l3dgw_ports[i]->nbrp->header_;
@@ -12028,22 +12029,38 @@ build_gateway_redirect_flows_for_lrouter(
         ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_GW_REDIRECT, 50,
                                 ds_cstr(match), ds_cstr(actions),
                                 stage_hint);
-    }
+        for (int j = 0; j < od->n_nat_entries; j++) {
+            const struct ovn_nat *nat = &od->nat_entries[j];
 
-    for (int i = 0; i < od->n_nat_entries; i++) {
-        const struct ovn_nat *nat = &od->nat_entries[i];
+            if (!lrouter_nat_is_stateless(nat->nb) ||
+                strcmp(nat->nb->type, "dnat_and_snat")) {
+                continue;
+            }
 
-        if (!lrouter_nat_is_stateless(nat->nb) ||
-            strcmp(nat->nb->type, "dnat_and_snat")) {
-           continue;
+            if (nat->nb->allowed_ext_ips || nat->nb->exempted_ext_ips) {
+                struct nbrec_address_set  *as = nat->nb->allowed_ext_ips
+                    ? nat->nb->allowed_ext_ips : nat->nb->exempted_ext_ips;
+                struct ds match_ext = DS_EMPTY_INITIALIZER;
+
+                ds_put_format(&match_ext, "%s && ip%s.src == $%s",
+                              ds_cstr(match), nat_entry_is_v6(nat) ? "6" : "4",
+                              as->name);
+                ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_GW_REDIRECT,
+                                        75, ds_cstr(&match_ext),
+                                        ds_cstr(actions), stage_hint);
+
+                if (add_def_flow) {
+                    ds_clear(&match_ext);
+                    ds_put_format(&match_ext, "ip && ip%s.dst == %s",
+                                  nat_entry_is_v6(nat) ? "6" : "4",
+                                  nat->nb->external_ip);
+                    ovn_lflow_add(lflows, od, S_ROUTER_IN_GW_REDIRECT, 70,
+                                  ds_cstr(&match_ext), "drop;");
+                    add_def_flow = false;
+                }
+                ds_destroy(&match_ext);
+            }
         }
-
-        ds_clear(match);
-        ds_put_format(match, "ip && ip%s.dst == %s",
-                      nat_entry_is_v6(nat) ? "6" : "4",
-                      nat->nb->external_ip);
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_GW_REDIRECT, 100,
-                      ds_cstr(match), "drop;");
     }
 
     /* Packets are allowed by default. */
