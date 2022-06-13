@@ -76,6 +76,7 @@
 #include "stopwatch.h"
 #include "lib/inc-proc-eng.h"
 #include "hmapx.h"
+#include "mirror.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
 
@@ -958,6 +959,7 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     bfd_register_ovs_idl(ovs_idl);
     physical_register_ovs_idl(ovs_idl);
     vif_plug_register_ovs_idl(ovs_idl);
+    mirror_register_ovs_idl(ovs_idl);
 }
 
 #define SB_NODES \
@@ -978,6 +980,7 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     SB_NODE(load_balancer, "load_balancer") \
     SB_NODE(fdb, "fdb") \
     SB_NODE(meter, "meter") \
+    SB_NODE(mirror, "mirror") \
     SB_NODE(static_mac_binding, "static_mac_binding")
 
 enum sb_engine_node {
@@ -995,7 +998,8 @@ enum sb_engine_node {
     OVS_NODE(bridge, "bridge") \
     OVS_NODE(port, "port") \
     OVS_NODE(interface, "interface") \
-    OVS_NODE(qos, "qos")
+    OVS_NODE(qos, "qos") \
+    OVS_NODE(mirror, "mirror")
 
 enum ovs_engine_node {
 #define OVS_NODE(NAME, NAME_STR) OVS_##NAME,
@@ -2214,6 +2218,170 @@ load_balancers_by_dp_cleanup(struct hmap *lbs)
     }
     hmap_destroy(lbs);
     free(lbs);
+}
+
+/* Mirror Engine */
+struct ed_type_port_mirror {
+    struct shash ovs_mirrors;
+};
+
+static void *
+en_port_mirror_init(struct engine_node *node OVS_UNUSED,
+                    struct engine_arg *arg OVS_UNUSED)
+{
+    struct ed_type_port_mirror *port_mirror = xzalloc(sizeof *port_mirror);
+    ovn_port_mirror_init(&port_mirror->ovs_mirrors);
+    return port_mirror;
+}
+
+static void
+en_port_mirror_cleanup(void *data)
+{
+    struct ed_type_port_mirror *port_mirror = data;
+    ovn_port_mirror_destroy(&port_mirror->ovs_mirrors);
+}
+
+static void
+init_port_mirror_ctx(struct engine_node *node,
+                 struct ed_type_port_mirror *port_mirror_data,
+                 struct port_mirror_ctx *pm_ctx)
+{
+    struct ovsrec_open_vswitch_table *ovs_table =
+        (struct ovsrec_open_vswitch_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_open_vswitch", node));
+    struct ovsrec_bridge_table *bridge_table =
+        (struct ovsrec_bridge_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_bridge", node));
+    const char *chassis_id = get_ovs_chassis_id(ovs_table);
+    const struct ovsrec_bridge *br_int = get_br_int(bridge_table, ovs_table);
+
+    ovs_assert(br_int && chassis_id);
+
+    struct ovsrec_port_table *port_table =
+        (struct ovsrec_port_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_port", node));
+
+    struct ed_type_ovs_interface_shadow *iface_shadow =
+        engine_get_input_data("ovs_interface_shadow", node);
+
+    struct ovsrec_mirror_table *mirror_table =
+        (struct ovsrec_mirror_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_mirror", node));
+
+    struct sbrec_port_binding_table *pb_table =
+        (struct sbrec_port_binding_table *)EN_OVSDB_GET(
+            engine_get_input("SB_port_binding", node));
+
+    struct sbrec_mirror_table *sb_mirror_table =
+        (struct sbrec_mirror_table *)EN_OVSDB_GET(
+            engine_get_input("SB_mirror", node));
+
+    pm_ctx->ovs_idl_txn = engine_get_context()->ovs_idl_txn;
+    pm_ctx->port_table = port_table;
+    pm_ctx->iface_table = iface_shadow->iface_table;
+    pm_ctx->mirror_table = mirror_table;
+    pm_ctx->port_binding_table = pb_table;
+    pm_ctx->sb_mirror_table = sb_mirror_table;
+    pm_ctx->br_int = br_int;
+    pm_ctx->bridge_table = bridge_table;
+    pm_ctx->ovs_table = ovs_table;
+    pm_ctx->ovs_mirrors = &port_mirror_data->ovs_mirrors;
+}
+
+static void
+en_port_mirror_run(struct engine_node *node, void *data)
+{
+    struct port_mirror_ctx pm_ctx;
+    struct ed_type_port_mirror *port_mirror_data = data;
+    init_port_mirror_ctx(node, port_mirror_data, &pm_ctx);
+
+    ovn_port_mirror_run(&pm_ctx);
+    engine_set_node_state(node, EN_UPDATED);
+}
+
+static bool
+port_mirror_runtime_data_handler(struct engine_node *node, void *data)
+{
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+
+    /* There is no tracked data. Fall back to full recompute of port_mirror */
+    if (!rt_data->tracked) {
+        return false;
+    }
+
+    struct hmap *tracked_dp_bindings = &rt_data->tracked_dp_bindings;
+    if (hmap_is_empty(tracked_dp_bindings)) {
+        return true;
+    }
+
+    struct port_mirror_ctx pm_ctx;
+    struct ed_type_port_mirror *port_mirror_data = data;
+    init_port_mirror_ctx(node, port_mirror_data, &pm_ctx);
+
+    struct tracked_datapath *tdp;
+    HMAP_FOR_EACH (tdp, node, tracked_dp_bindings) {
+        if (tdp->tracked_type != TRACKED_RESOURCE_UPDATED) {
+            /* Fall back to full recompute when a local datapath
+             * is added or deleted. */
+            return false;
+        }
+
+        struct shash_node *shash_node;
+        SHASH_FOR_EACH (shash_node, &tdp->lports) {
+            struct tracked_lport *lport = shash_node->data;
+            bool removed =
+                lport->tracked_type == TRACKED_RESOURCE_REMOVED ? true: false;
+            if (!ovn_port_mirror_handle_lport(lport->pb, removed, &pm_ctx)) {
+                return false;
+            }
+        }
+    }
+
+    engine_set_node_state(node, EN_UPDATED);
+    return true;
+}
+
+static bool
+port_mirror_port_binding_handler(struct engine_node *node, void *data)
+{
+    struct port_mirror_ctx pm_ctx;
+    struct ed_type_port_mirror *port_mirror_data = data;
+    init_port_mirror_ctx(node, port_mirror_data, &pm_ctx);
+
+    /* handle port binding updates (i.,e when the mirror column
+     * of port_binding is updated)
+     */
+    const struct sbrec_port_binding *pb;
+    SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (pb,
+                                               pm_ctx.port_binding_table) {
+        bool removed = sbrec_port_binding_is_deleted(pb);
+        if (!ovn_port_mirror_handle_lport(pb, removed, &pm_ctx)) {
+            return false;
+        }
+    }
+
+    engine_set_node_state(node, EN_UPDATED);
+    return true;
+
+}
+
+static bool
+port_mirror_sb_mirror_handler(struct engine_node *node, void *data)
+{
+    struct port_mirror_ctx pm_ctx;
+    struct ed_type_port_mirror *port_mirror_data = data;
+    init_port_mirror_ctx(node, port_mirror_data, &pm_ctx);
+
+    /* handle sb mirror updates
+     */
+    if (!ovn_port_mirror_handle_update(&pm_ctx)) {
+        return false;
+    }
+
+    engine_set_node_state(node, EN_UPDATED);
+    return true;
+
 }
 
 /* Engine node which is used to handle the Non VIF data like
@@ -3451,6 +3619,7 @@ main(int argc, char *argv[])
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA(addr_sets, "addr_sets");
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA(port_groups, "port_groups");
     ENGINE_NODE(northd_options, "northd_options");
+    ENGINE_NODE(port_mirror, "port_mirror");
 
 #define SB_NODE(NAME, NAME_STR) ENGINE_NODE_SB(NAME, NAME_STR);
     SB_NODES
@@ -3593,6 +3762,22 @@ main(int argc, char *argv[])
                      flow_output_lflow_output_handler);
     engine_add_input(&en_flow_output, &en_pflow_output,
                      flow_output_pflow_output_handler);
+
+    engine_add_input(&en_port_mirror, &en_ovs_open_vswitch, NULL);
+    engine_add_input(&en_port_mirror, &en_ovs_bridge, NULL);
+    engine_add_input(&en_port_mirror, &en_ovs_mirror, NULL);
+
+    engine_add_input(&en_port_mirror, &en_ovs_port, NULL);
+    engine_add_input(&en_port_mirror, &en_ovs_interface_shadow,
+                     NULL);
+    engine_add_input(&en_flow_output, &en_port_mirror,
+                     engine_noop_handler);
+    engine_add_input(&en_port_mirror, &en_runtime_data,
+                     port_mirror_runtime_data_handler);
+    engine_add_input(&en_port_mirror, &en_sb_mirror,
+                     port_mirror_sb_mirror_handler);
+    engine_add_input(&en_port_mirror, &en_sb_port_binding,
+                     port_mirror_port_binding_handler);
 
     struct engine_arg engine_arg = {
         .sb_idl = ovnsb_idl_loop.idl,
