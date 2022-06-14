@@ -32052,3 +32052,128 @@ AT_CHECK([test $(ovn-sbctl list fdb | grep -c "00:00:00:00:10:30") = 0])
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([MAC binding aging])
+ovn_start
+
+net_add n1
+net_add n2
+
+AT_CHECK([ovn-nbctl ls-add public])
+AT_CHECK([ovn-nbctl ls-add internal])
+
+AT_CHECK([ovn-nbctl lsp-add public ln_port])
+AT_CHECK([ovn-nbctl lsp-set-addresses ln_port unknown])
+AT_CHECK([ovn-nbctl lsp-set-type ln_port localnet])
+AT_CHECK([ovn-nbctl lsp-set-options ln_port network_name=physnet1])
+
+AT_CHECK([ovn-nbctl lsp-add public public-gw])
+AT_CHECK([ovn-nbctl lsp-set-type public-gw router])
+AT_CHECK([ovn-nbctl lsp-set-addresses public-gw 00:00:00:00:10:00 router])
+AT_CHECK([ovn-nbctl lsp-set-options public-gw router-port=gw-public])
+
+AT_CHECK([ovn-nbctl lsp-add internal internal-gw])
+AT_CHECK([ovn-nbctl lsp-set-type internal-gw router])
+AT_CHECK([ovn-nbctl lsp-set-addresses internal-gw router])
+AT_CHECK([ovn-nbctl lsp-set-options internal-gw router-port=gw-internal])
+
+AT_CHECK([ovn-nbctl lsp-add internal vif1])
+AT_CHECK([ovn-nbctl lsp-set-addresses vif1 "00:00:00:00:20:10 192.168.20.10"])
+
+AT_CHECK([ovn-nbctl lsp-add internal vif2])
+AT_CHECK([ovn-nbctl lsp-set-addresses vif2 "00:00:00:00:20:10 192.168.20.20"])
+
+AT_CHECK([ovn-nbctl lr-add gw])
+AT_CHECK([ovn-nbctl lrp-add gw gw-public 00:00:00:00:10:00 192.168.10.1/24])
+AT_CHECK([ovn-nbctl lrp-add gw gw-internal 00:00:00:00:20:00 192.168.20.1/24])
+
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.1.1
+ovs-vsctl -- add-port br-int vif1 -- \
+    set interface vif1 external-ids:iface-id=vif1 \
+    options:tx_pcap=hv1/vif1-tx.pcap \
+    options:rxq_pcap=hv1/vif1-rx.pcap \
+    ofport-request=1
+ovs-vsctl -- add-port br-phys ext1 -- \
+    set interface ext1 \
+    options:tx_pcap=hv1/ext1-tx.pcap \
+    options:rxq_pcap=hv1/ext1-rx.pcap \
+    ofport-request=2
+ovs-vsctl set open . external_ids:ovn-bridge-mappings=physnet1:br-phys
+ovn-appctl vlog/set file:mac_binding_aging:DBG
+
+sim_add hv2
+as hv2
+ovs-vsctl add-br br-phys
+ovn_attach n2 br-phys 192.168.2.1
+ovs-vsctl -- add-port br-int vif2 -- \
+    set interface vif2 external-ids:iface-id=vif2 \
+    options:tx_pcap=hv2/vif2-tx.pcap \
+    options:rxq_pcap=hv2/vif2-rx.pcap \
+    ofport-request=1
+ovs-vsctl -- add-port br-phys ext2 -- \
+    set interface ext2 \
+    options:tx_pcap=hv2/ext2-tx.pcap \
+    options:rxq_pcap=hv2/ext2-rx.pcap \
+    ofport-request=2
+ovs-vsctl set open . external_ids:ovn-bridge-mappings=physnet1:br-phys
+ovn-appctl vlog/set file:mac_binding_aging:DBG
+
+send_garp() {
+    hv=$1
+    dev=$2
+    mac_byte=$3
+    ip_byte=${4-$3}
+
+    mac="0000000010$mac_byte"
+    ip=`ip_to_hex 192 168 10 $ip_byte`
+    packet=ffffffffffff${mac}08060001080006040002${mac}${ip}${mac}${ip}
+    as $hv ovs-appctl netdev-dummy/receive $dev $packet
+}
+
+# Check if the option is not present by default
+AT_CHECK([fetch_column sb_global options | grep -q mac_binding_age_threshold], [1])
+
+# Set the MAC binding aging threshold
+AT_CHECK([ovn-nbctl set nb_global . options:mac_binding_age_threshold=2])
+AT_CHECK([ovn-nbctl --wait=sb sync])
+AT_CHECK([fetch_column sb_global options | grep -q mac_binding_age_threshold=2], [0])
+
+# Send GARP to populate MAC binding table records
+send_garp hv1 ext1 10
+send_garp hv2 ext2 20
+
+OVS_WAIT_UNTIL([ovn-sbctl list mac_binding | grep -q "192.168.10.10"])
+OVS_WAIT_UNTIL([ovn-sbctl list mac_binding | grep -q "192.168.10.20"])
+
+ext1_mb_uuid=$(fetch_column mac_binding _uuid ip="192.168.10.10")
+ext2_mb_uuid=$(fetch_column mac_binding _uuid ip="192.168.10.20")
+
+# Check if the records are removed after 1 sec of inactivity
+OVS_WAIT_UNTIL([grep -q "MAC binding exceeded threshold uuid=$ext1_mb_uuid" hv1/ovn-controller.log])
+OVS_WAIT_UNTIL([grep -q "MAC binding exceeded threshold uuid=$ext2_mb_uuid" hv2/ovn-controller.log])
+AT_CHECK([ovn-nbctl --wait=sb sync])
+
+hv1_uuid=$(fetch_column chassis _uuid name=hv1)
+hv2_uuid=$(fetch_column chassis _uuid name=hv2)
+
+# Add MAC binding on hv1
+send_garp hv1 ext1 10
+OVS_WAIT_UNTIL([ovn-sbctl list mac_binding | grep -q "$hv1_uuid"])
+
+# Change the MAC binding owner to hv2
+send_garp hv2 ext2 20 10
+OVS_WAIT_UNTIL([ovn-sbctl list mac_binding | grep -q "$hv2_uuid"])
+
+mb_uuid=$(fetch_column mac_binding _uuid ip="192.168.10.10")
+
+# Log message should be present only on hv2
+OVS_WAIT_UNTIL([grep -q "MAC binding exceeded threshold uuid=$mb_uuid" hv2/ovn-controller.log])
+AT_CHECK([grep -q "MAC binding exceeded threshold uuid=$mb_uuid" hv1/ovn-controller.log], [1])
+
+OVN_CLEANUP([hv1], [hv2])
+AT_CLEANUP
+])
