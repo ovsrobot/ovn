@@ -15623,6 +15623,17 @@ handle_port_binding_changes(struct northd_input *input_data,
     }
 }
 
+static void
+remove_orphaned_mac_bindings(struct northd_input *input_data) {
+    const struct sbrec_mac_binding *mb;
+    SBREC_MAC_BINDING_TABLE_FOR_EACH_SAFE (mb,
+                                       input_data->sbrec_mac_binding_table) {
+        if (!mb->chassis) {
+            sbrec_mac_binding_delete(mb);
+        }
+    }
+}
+
 /* Handle a fairly small set of changes in the southbound database. */
 static void
 ovnsb_db_run(struct northd_input *input_data,
@@ -15641,6 +15652,7 @@ ovnsb_db_run(struct northd_input *input_data,
     if (ovnsb_txn) {
         update_sb_ha_group_ref_chassis(input_data,
                                        &ha_ref_chassis_map);
+        remove_orphaned_mac_bindings(input_data);
     }
     shash_destroy(&ha_ref_chassis_map);
 }
