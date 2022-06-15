@@ -644,13 +644,18 @@ local_binding_get_lport_ofport(const struct shash *local_bindings,
 }
 
 bool
-local_binding_is_up(struct shash *local_bindings, const char *pb_name)
+local_binding_is_up(struct shash *local_bindings, const char *pb_name,
+                    bool ovs_readonly)
 {
     struct local_binding *lbinding =
         local_binding_find(local_bindings, pb_name);
     struct binding_lport *b_lport = local_binding_get_primary_lport(lbinding);
     if (lbinding && b_lport && lbinding->iface) {
         if (b_lport->pb->n_up && !b_lport->pb->up[0]) {
+            return false;
+        }
+        if (ovs_readonly) {
+            /* We might be reading stale data from OVS */
             return false;
         }
         return smap_get_bool(&lbinding->iface->external_ids,
@@ -1297,9 +1302,11 @@ consider_vif_lport_(const struct sbrec_port_binding *pb,
             const char *requested_chassis_option = smap_get(
                 &pb->options, "requested-chassis");
             VLOG_INFO_RL(&rl,
-                "Not claiming lport %s, chassis %s requested-chassis %s",
+                "Not claiming lport %s, chassis %s requested-chassis %s "
+                "pb->chassis %s",
                 pb->logical_port, b_ctx_in->chassis_rec->name,
-                requested_chassis_option ? requested_chassis_option : "[]");
+                requested_chassis_option ? requested_chassis_option : "[]",
+                pb->chassis ? pb->chassis->name: "");
         }
     }
 
@@ -1313,7 +1320,6 @@ consider_vif_lport_(const struct sbrec_port_binding *pb,
                                  b_ctx_out->if_mgr);
         }
     }
-
     return true;
 }
 

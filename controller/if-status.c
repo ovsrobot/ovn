@@ -248,7 +248,8 @@ if_status_mgr_delete_iface(struct if_status_mgr *mgr, const char *iface_id)
 
 void
 if_status_mgr_update(struct if_status_mgr *mgr,
-                     struct local_binding_data *binding_data)
+                     struct local_binding_data *binding_data,
+                     bool ovs_readonly)
 {
     if (!binding_data) {
         return;
@@ -263,7 +264,7 @@ if_status_mgr_update(struct if_status_mgr *mgr,
     HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_MARK_UP]) {
         struct ovs_iface *iface = node->data;
 
-        if (local_binding_is_up(bindings, iface->id)) {
+        if (local_binding_is_up(bindings, iface->id, ovs_readonly)) {
             ovs_iface_set_state(mgr, iface, OIF_INSTALLED);
         }
     }
