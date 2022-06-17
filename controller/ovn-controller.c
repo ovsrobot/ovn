@@ -110,6 +110,7 @@ static unixctl_cb_func debug_delay_nb_cfg_report;
 #define OFCTRL_SEQNO_RUN_STOPWATCH_NAME "ofctrl-seqno-run"
 #define BFD_RUN_STOPWATCH_NAME "bfd-run"
 #define VIF_PLUG_RUN_STOPWATCH_NAME "vif-plug-run"
+#define MAC_BINDING_AGING_STOPWATCH_NAME "mac-binding-aging"
 
 #define OVS_NB_CFG_NAME "ovn-nb-cfg"
 #define OVS_NB_CFG_TS_NAME "ovn-nb-cfg-ts"
@@ -3441,6 +3442,7 @@ main(int argc, char *argv[])
     stopwatch_create(OFCTRL_SEQNO_RUN_STOPWATCH_NAME, SW_MS);
     stopwatch_create(BFD_RUN_STOPWATCH_NAME, SW_MS);
     stopwatch_create(VIF_PLUG_RUN_STOPWATCH_NAME, SW_MS);
+    stopwatch_create(MAC_BINDING_AGING_STOPWATCH_NAME, SW_MS);
 
     /* Define inc-proc-engine nodes. */
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA_IS_VALID(ct_zones, "ct_zones");
@@ -3956,12 +3958,16 @@ main(int argc, char *argv[])
                             stopwatch_stop(VIF_PLUG_RUN_STOPWATCH_NAME,
                                            time_msec());
                         }
+                        stopwatch_start(MAC_BINDING_AGING_STOPWATCH_NAME,
+                                        time_msec());
                         mac_binding_aging_run(ovnsb_idl_txn ,br_int->name,
                                               chassis,
                                               sbrec_mac_binding_table_get
                                                   (ovnsb_idl_loop.idl),
                                               sbrec_mac_biding_by_chassis,
                                               60000);
+                        stopwatch_stop(MAC_BINDING_AGING_STOPWATCH_NAME,
+                                       time_msec());
                         stopwatch_start(PINCTRL_RUN_STOPWATCH_NAME,
                                         time_msec());
                         pinctrl_run(ovnsb_idl_txn,
