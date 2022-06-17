@@ -2292,6 +2292,7 @@ non_vif_data_ovs_iface_handler(struct engine_node *node, void *data OVS_UNUSED)
 
 struct ed_type_northd_options {
     bool lb_hairpin_use_ct_mark;
+    unsigned long long mb_age_threshold_msec;
 };
 
 
@@ -2322,6 +2323,9 @@ en_northd_options_run(struct engine_node *node, void *data)
         ? smap_get_bool(&sb_global->options, "lb_hairpin_use_ct_mark",
                         DEFAULT_SB_GLOBAL_LB_HAIRPIN_USE_CT_MARK)
         : DEFAULT_SB_GLOBAL_LB_HAIRPIN_USE_CT_MARK;
+    n_opts->mb_age_threshold_msec =
+        smap_get_ullong(&sb_global->options, "mac_binding_age_threshold",
+                        60) * 1000;
     engine_set_node_state(node, EN_UPDATED);
 }
 
@@ -2339,9 +2343,17 @@ en_northd_options_sb_sb_global_handler(struct engine_node *node, void *data)
         ? smap_get_bool(&sb_global->options, "lb_hairpin_use_ct_mark",
                         DEFAULT_SB_GLOBAL_LB_HAIRPIN_USE_CT_MARK)
         : DEFAULT_SB_GLOBAL_LB_HAIRPIN_USE_CT_MARK;
+    unsigned long long mb_age_threshold_msec =
+        smap_get_ullong(&sb_global->options, "mac_binding_age_threshold",
+                        60) * 1000;
 
     if (lb_hairpin_use_ct_mark != n_opts->lb_hairpin_use_ct_mark) {
         n_opts->lb_hairpin_use_ct_mark = lb_hairpin_use_ct_mark;
+        engine_set_node_state(node, EN_UPDATED);
+    }
+
+    if (mb_age_threshold_msec != n_opts->mb_age_threshold_msec) {
+        n_opts->mb_age_threshold_msec = mb_age_threshold_msec;
         engine_set_node_state(node, EN_UPDATED);
     }
     return true;
@@ -3960,12 +3972,14 @@ main(int argc, char *argv[])
                         }
                         stopwatch_start(MAC_BINDING_AGING_STOPWATCH_NAME,
                                         time_msec());
+                        struct ed_type_northd_options *n_opts =
+                            engine_get_data(&en_northd_options);
                         mac_binding_aging_run(ovnsb_idl_txn ,br_int->name,
                                               chassis,
                                               sbrec_mac_binding_table_get
                                                   (ovnsb_idl_loop.idl),
                                               sbrec_mac_biding_by_chassis,
-                                              60000);
+                                              n_opts->mb_age_threshold_msec);
                         stopwatch_stop(MAC_BINDING_AGING_STOPWATCH_NAME,
                                        time_msec());
                         stopwatch_start(PINCTRL_RUN_STOPWATCH_NAME,
