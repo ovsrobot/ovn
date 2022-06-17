@@ -76,6 +76,7 @@
 #include "stopwatch.h"
 #include "lib/inc-proc-eng.h"
 #include "hmapx.h"
+#include "mac-binding-aging.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
 
@@ -3306,6 +3307,7 @@ main(int argc, char *argv[])
     pinctrl_init();
     lflow_init();
     vif_plug_provider_initialize();
+    mac_binding_aging_init();
 
     /* Connect to OVS OVSDB instance. */
     struct ovsdb_idl_loop ovs_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(
@@ -3378,6 +3380,9 @@ main(int argc, char *argv[])
     struct ovsdb_idl_index *sbrec_static_mac_binding_by_datapath
         = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
                                   &sbrec_static_mac_binding_col_datapath);
+    struct ovsdb_idl_index *sbrec_mac_biding_by_chassis
+        = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
+                                  &sbrec_mac_binding_col_chassis);
 
     ovsdb_idl_track_add_all(ovnsb_idl_loop.idl);
     ovsdb_idl_omit_alert(ovnsb_idl_loop.idl,
@@ -3951,6 +3956,12 @@ main(int argc, char *argv[])
                             stopwatch_stop(VIF_PLUG_RUN_STOPWATCH_NAME,
                                            time_msec());
                         }
+                        mac_binding_aging_run(ovnsb_idl_txn ,br_int->name,
+                                              chassis,
+                                              sbrec_mac_binding_table_get
+                                                  (ovnsb_idl_loop.idl),
+                                              sbrec_mac_biding_by_chassis,
+                                              60000);
                         stopwatch_start(PINCTRL_RUN_STOPWATCH_NAME,
                                         time_msec());
                         pinctrl_run(ovnsb_idl_txn,
@@ -4218,6 +4229,7 @@ loop_done:
     shash_destroy(&vif_plug_deleted_iface_ids);
     shash_destroy(&vif_plug_changed_iface_ids);
     vif_plug_provider_destroy_all();
+    mac_binding_aging_destroy();
 
     ovsdb_idl_loop_destroy(&ovs_idl_loop);
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
