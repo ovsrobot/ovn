@@ -9038,9 +9038,13 @@ ovn-nbctl lsp-add ls0 lp1
 ovn-nbctl lsp-set-addresses lp0 "f0:00:00:00:00:01 192.168.0.1"
 ovn-nbctl lsp-set-addresses lp1 "f0:00:00:00:00:02 192.168.0.2"
 dp_uuid=$(fetch_column Datapath_Binding _uuid)
-ovn-sbctl create MAC_Binding ip=10.0.0.1 datapath=$dp_uuid logical_port=lp0 mac="mac1"
-ovn-sbctl create MAC_Binding ip=10.0.0.1 datapath=$dp_uuid logical_port=lp1 mac="mac2"
-ovn-sbctl find MAC_Binding
+chassis=$(fetch_column Chassis _uuid name=hv1)
+ovn-sbctl create MAC_Binding ip=10.0.0.1 datapath=$dp_uuid logical_port=lp0 mac="mac1" chassis=$chassis
+ovn-sbctl create MAC_Binding ip=10.0.0.1 datapath=$dp_uuid logical_port=lp1 mac="mac2" chassis=$chassis
+
+wait_row_count MAC_Binding 1 logical_port=lp0
+wait_row_count MAC_Binding 1 logical_port=lp1
+
 # Delete port lp0 and check that its MAC_Binding is deleted.
 ovn-nbctl lsp-del lp0
 ovn-sbctl find MAC_Binding
@@ -18916,8 +18920,9 @@ AT_CHECK([as hv1 ovs-ofctl dump-flows br-int  \
 ]])
 dp_uuid=$(ovn-sbctl find datapath_binding | grep sw0 -B2 | grep _uuid | \
 awk '{print $3}')
+chassis=$(fetch_column Chassis _uuid name=hv1)
 ovn-sbctl create MAC_Binding ip=172.168.0.3 datapath=$dp_uuid \
-logical_port=lr0-public mac="00\:00\:00\:12\:af\:11"
+logical_port=lr0-public mac="00\:00\:00\:12\:af\:11" chassis=$chassis
 
 # Try different gateway mtus and send a 142-byte packet (corresponding
 # to a 124-byte MTU).  If the MTU is less than 124, ovn-controller
@@ -18987,7 +18992,7 @@ ovn-nbctl lr-nat-add lr1 snat 2000::1 1000::/64
 dp_uuid=$(ovn-sbctl find datapath_binding | grep sw0 -B2 | grep _uuid | \
 awk '{print $3}')
 ovn-sbctl create MAC_Binding ip=172.168.0.3 datapath=$dp_uuid \
-logical_port=lr1-public mac="00\:00\:00\:12\:af\:11"
+logical_port=lr1-public mac="00\:00\:00\:12\:af\:11" chassis=$chassis
 
 # Try different gateway mtus and send a 142-byte packet (corresponding
 # to a 124-byte MTU).  If the MTU is less than 124, ovn-controller
@@ -19339,9 +19344,11 @@ check ovn-sbctl --all destroy mac_binding
 
 # Create a mac_binding entry on lr0-pub for 172.24.4.200 with a
 # wrong mac, expecting it to be updated with the real mac.
+ovn-sbctl list chassis
 lr0_dp=$(fetch_column Datapath_Binding _uuid external_ids:name=lr0)
+chassis=$(fetch_column Chassis _uuid name=hv1)
 ovn-sbctl create mac_binding datapath=$lr0_dp logical_port=lr0-pub \
-    ip=172.24.4.200 mac=\"aa:aa:aa:aa:aa:aa\"
+    ip=172.24.4.200 mac=\"aa:aa:aa:aa:aa:aa\" chassis=$chassis
 
 check ovn-nbctl lr-nat-add lr0 dnat_and_snat 172.24.4.100 10.0.0.10
 check ovn-nbctl lr-nat-add lr1 dnat_and_snat 172.24.4.200 20.0.0.10
@@ -25851,18 +25858,19 @@ wait_for_ports_up
 
 wait_row_count datapath_binding 1 external-ids:name=lr0
 lr0_dp_uuid=$(ovn-sbctl --bare --columns _uuid list datapath_binding lr0)
+chassis=$(fetch_column Chassis _uuid name=hv1)
 
 AT_CHECK(
   [ovn-sbctl create mac_binding datapath=$lr0_dp_uuid ip=172.168.0.120 \
-       logical_port=lr0-public mac="10\:54\:00\:00\:00\:03"
+       logical_port=lr0-public mac="10\:54\:00\:00\:00\:03" chassis=$chassis
    ovn-sbctl create mac_binding datapath=$lr0_dp_uuid ip=172.168.0.200 \
-       logical_port=lr0-public mac="10\:54\:00\:00\:00\:04"
+       logical_port=lr0-public mac="10\:54\:00\:00\:00\:04" chassis=$chassis
    ovn-sbctl create mac_binding datapath=$lr0_dp_uuid ip="bef0\:\:4" \
-       logical_port=lr0-public mac="10\:54\:00\:00\:00\:05"
+       logical_port=lr0-public mac="10\:54\:00\:00\:00\:05" chassis=$chassis
    ovn-sbctl create mac_binding datapath=$lr0_dp_uuid ip="bef0\:\:5" \
-       logical_port=lr0-public mac="10\:54\:00\:00\:00\:06"
+       logical_port=lr0-public mac="10\:54\:00\:00\:00\:06" chassis=$chassis
    ovn-sbctl create mac_binding datapath=$lr0_dp_uuid ip="bef0\:\:6" \
-       logical_port=lr0-public mac="10\:54\:00\:00\:00\:07"
+       logical_port=lr0-public mac="10\:54\:00\:00\:00\:07" chassis=$chassis
    ovn-nbctl -- --id=@lrt create Logical_Router_Static_Route \
        ip_prefix="\:\:/64" nexthop="bef0\:\:4" -- add Logical_Router lr0 \
        static_routes @lrt],
@@ -29334,9 +29342,10 @@ AS_BOX([Test routing])
 # Before sending add mac_binding entry for 10.0.0.14
 
 lr0_dp_uuid=$(fetch_column datapath_binding _uuid external_ids:name=lr0)
+chassis=$(fetch_column Chassis _uuid name=hv1)
 
 ovn-sbctl create mac_binding ip=10.0.0.14 logical_port=lr0-sw0 \
-mac="50\:54\:00\:00\:00\:14" datapath=$lr0_dp_uuid
+mac="50\:54\:00\:00\:00\:14" datapath=$lr0_dp_uuid chassis=$chassis
 
 # Wait till the mac_binding flows appear in hv1
 OVS_WAIT_UNTIL([test 1 = $(as hv1 ovs-ofctl dump-flows br-int table=66 \
@@ -31496,8 +31505,9 @@ test_mac_binding_flows() {
 }
 # Create SB MAC_Binding entry on external gateway port
 lr0_dp_uuid=$(fetch_column datapath_binding _uuid external_ids:name=lr0)
+chassis=$(fetch_column Chassis _uuid name=hv1)
 
-ovn-sbctl create mac_binding ip=172.16.1.1 logical_port=lr0-ext-ls0 mac="00\:00\:11\:22\:33\:44" datapath=$lr0_dp_uuid
+ovn-sbctl create mac_binding ip=172.16.1.1 logical_port=lr0-ext-ls0 mac="00\:00\:11\:22\:33\:44" datapath=$lr0_dp_uuid chassis=$chassis
 test_mac_binding_flows 100 00:00:11:22:33:44 1
 
 # Create Static_MAC_Binding entry on external gateway port. This should have
@@ -31595,7 +31605,8 @@ test_mac_binding_flows() {
 
 # Create SB MAC_Binding entry on external gateway port
 gw_dp_uuid=$(fetch_column datapath_binding _uuid external_ids:name=gw)
-ovn-sbctl create mac_binding ip=192.168.10.10 logical_port=gw-public mac="00\:00\:00\:00\:10\:10" datapath=$gw_dp_uuid
+chassis=$(fetch_column Chassis _uuid name=hv1)
+ovn-sbctl create mac_binding ip=192.168.10.10 logical_port=gw-public mac="00\:00\:00\:00\:10\:10" datapath=$gw_dp_uuid chassis=$chassis
 
 test_mac_binding_flows hv1 00\:00\:00\:00\:10\:10 1
 test_mac_binding_flows hv2 00\:00\:00\:00\:10\:10 0
