@@ -4081,6 +4081,31 @@ pinctrl_destroy(void)
 /* Contains "struct mac_binding"s. */
 static struct hmap put_mac_bindings;
 
+#define MAX_PUT_MAC_BINDINGS_DELAY 50
+
+struct put_mac_bindings_delay {
+    long long last_insert;
+    uint32_t delay;
+};
+
+static struct put_mac_bindings_delay put_mac_bindings_delay;
+
+static bool
+put_mac_bindings_delay_has_expired(void)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    return time_msec() - put_mac_bindings_delay.last_insert >=
+           put_mac_bindings_delay.delay;
+}
+
+static void
+put_mac_binding_delay_renew(void)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    put_mac_bindings_delay.delay = random_range(MAX_PUT_MAC_BINDINGS_DELAY);
+    put_mac_bindings_delay.last_insert = time_msec();
+}
+
 static void
 init_put_mac_bindings(void)
 {
@@ -4117,6 +4142,11 @@ pinctrl_handle_put_mac_binding(const struct flow *md,
     if (!mb) {
         COVERAGE_INC(pinctrl_drop_put_mac_binding);
         return;
+    }
+
+    /* Add slight delay to the packet processing if we are past the old one. */
+    if (put_mac_bindings_delay_has_expired()) {
+        put_mac_binding_delay_renew();
     }
 
     /* We can send the buffered packet once the main ovn-controller
@@ -4280,6 +4310,11 @@ run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
         return;
     }
 
+    /* We didn't go over the random delay yet. */
+    if (!put_mac_bindings_delay_has_expired()) {
+        return;
+    }
+
     const struct mac_binding *mb;
     HMAP_FOR_EACH (mb, hmap_node, &put_mac_bindings) {
         run_put_mac_binding(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
@@ -4336,9 +4371,10 @@ run_buffered_binding(struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
 
 static void
 wait_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn)
+    OVS_REQUIRES(pinctrl_mutex)
 {
     if (ovnsb_idl_txn && !hmap_is_empty(&put_mac_bindings)) {
-        poll_immediate_wake();
+        poll_timer_wait_until(put_mac_bindings_delay.delay);
     }
 }
 
