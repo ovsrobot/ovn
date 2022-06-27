@@ -152,6 +152,12 @@ ofp_port_t local_binding_get_lport_ofport(const struct shash *local_bindings,
                                           const char *pb_name);
 
 bool local_binding_is_up(struct shash *local_bindings, const char *pb_name);
+bool local_binding_is_ovn_installed(struct shash *local_bindings,
+                                    const char *pb_name);
+void local_binding_remove_ovn_installed(struct shash *local_bindings,
+                                        const char *pb_name,
+                                        bool ovs_readonly);
+
 bool local_binding_is_down(struct shash *local_bindings, const char *pb_name);
 void local_binding_set_up(struct shash *local_bindings, const char *pb_name,
                           const struct sbrec_chassis *chassis_rec,

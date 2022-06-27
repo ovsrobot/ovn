@@ -644,6 +644,19 @@ local_binding_get_lport_ofport(const struct shash *local_bindings,
 }
 
 bool
+local_binding_is_ovn_installed(struct shash *local_bindings,
+                               const char *pb_name)
+{
+    struct local_binding *lbinding =
+        local_binding_find(local_bindings, pb_name);
+    if (lbinding && lbinding->iface) {
+        return smap_get_bool(&lbinding->iface->external_ids,
+                             OVN_INSTALLED_EXT_ID, false);
+    }
+    return false;
+}
+
+bool
 local_binding_is_up(struct shash *local_bindings, const char *pb_name)
 {
     struct local_binding *lbinding =
@@ -712,6 +725,22 @@ local_binding_set_up(struct shash *local_bindings, const char *pb_name,
         LIST_FOR_EACH (b_lport, list_node, &lbinding->binding_lports) {
             binding_lport_set_up(b_lport, sb_readonly);
         }
+    }
+}
+
+void
+local_binding_remove_ovn_installed(struct shash *local_bindings,
+                                   const char *pb_name, bool ovs_readonly)
+{
+    struct local_binding *lbinding =
+        local_binding_find(local_bindings, pb_name);
+
+    if (!ovs_readonly && lbinding && lbinding->iface
+            && smap_get_bool(&lbinding->iface->external_ids,
+                             OVN_INSTALLED_EXT_ID, false)) {
+        VLOG_INFO("Removing lport %s ovn-installed in OVS", pb_name);
+        ovsrec_interface_update_external_ids_delkey(lbinding->iface,
+                                                    OVN_INSTALLED_EXT_ID);
     }
 }
 
@@ -1297,9 +1326,11 @@ consider_vif_lport_(const struct sbrec_port_binding *pb,
             const char *requested_chassis_option = smap_get(
                 &pb->options, "requested-chassis");
             VLOG_INFO_RL(&rl,
-                "Not claiming lport %s, chassis %s requested-chassis %s",
+                "Not claiming lport %s, chassis %s requested-chassis %s "
+                "pb->chassis %s",
                 pb->logical_port, b_ctx_in->chassis_rec->name,
-                requested_chassis_option ? requested_chassis_option : "[]");
+                requested_chassis_option ? requested_chassis_option : "[]",
+                pb->chassis ? pb->chassis->name: "");
         }
     }
 

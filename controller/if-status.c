@@ -57,6 +57,9 @@ enum if_state {
     OIF_INSTALL_FLOWS, /* Already claimed interface for which flows are still
                         * being installed.
                         */
+    OIF_REMOVE_OVN_INST,/* Interface with flows successfully installed in OVS,
+                         * but with ovn-installed still in OVSDB.
+                         */
     OIF_MARK_UP,       /* Interface with flows successfully installed in OVS
                         * but not yet marked "up" in the binding module (in
                         * SB and OVS databases).
@@ -73,6 +76,7 @@ enum if_state {
 static const char *if_state_names[] = {
     [OIF_CLAIMED]       = "CLAIMED",
     [OIF_INSTALL_FLOWS] = "INSTALL_FLOWS",
+    [OIF_REMOVE_OVN_INST] = "REMOVE_OVN_INST",
     [OIF_MARK_UP]       = "MARK_UP",
     [OIF_MARK_DOWN]     = "MARK_DOWN",
     [OIF_INSTALLED]     = "INSTALLED",
@@ -169,6 +173,7 @@ if_status_mgr_claim_iface(struct if_status_mgr *mgr, const char *iface_id)
     switch (iface->state) {
     case OIF_CLAIMED:
     case OIF_INSTALL_FLOWS:
+    case OIF_REMOVE_OVN_INST:
     case OIF_MARK_UP:
         /* Nothing to do here. */
         break;
@@ -199,6 +204,7 @@ if_status_mgr_release_iface(struct if_status_mgr *mgr, const char *iface_id)
         /* Not yet fully installed interfaces can be safely deleted. */
         ovs_iface_destroy(mgr, iface);
         break;
+    case OIF_REMOVE_OVN_INST:
     case OIF_MARK_UP:
     case OIF_INSTALLED:
         /* Properly mark interfaces "down" if their flows were already
@@ -230,6 +236,7 @@ if_status_mgr_delete_iface(struct if_status_mgr *mgr, const char *iface_id)
         /* Not yet fully installed interfaces can be safely deleted. */
         ovs_iface_destroy(mgr, iface);
         break;
+    case OIF_REMOVE_OVN_INST:
     case OIF_MARK_UP:
     case OIF_INSTALLED:
         /* Properly mark interfaces "down" if their flows were already
@@ -256,6 +263,17 @@ if_status_mgr_update(struct if_status_mgr *mgr,
 
     struct shash *bindings = &binding_data->bindings;
     struct hmapx_node *node;
+
+    /* Move all interfaces that have been confirmed without ovn-installed,
+     * from OIF_REMOVE_OVN_INST to OIF_MARK_UP.
+     */
+    HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_REMOVE_OVN_INST]) {
+        struct ovs_iface *iface = node->data;
+
+        if (!local_binding_is_ovn_installed(bindings, iface->id)) {
+            ovs_iface_set_state(mgr, iface, OIF_MARK_UP);
+        }
+    }
 
     /* Move all interfaces that have been confirmed "up" by the binding module,
      * from OIF_MARK_UP to OIF_INSTALLED.
@@ -325,7 +343,19 @@ if_status_mgr_run(struct if_status_mgr *mgr,
                                           iface->install_seqno)) {
             continue;
         }
-        ovs_iface_set_state(mgr, iface, OIF_MARK_UP);
+        /* Wait for ovn-installed to be absent before moving to MARK_UP state.
+         * Most of the times ovn-installed is already absent and hence we will
+         * not have to wait.
+         * If there is no binding_data, we can't determine if ovn-installed is
+         * present or not; hence also go to the OIF_REMOVE_OVN_INST state.
+         */
+        if (!binding_data ||
+            local_binding_is_ovn_installed(&binding_data->bindings,
+                                           iface->id)) {
+            ovs_iface_set_state(mgr, iface, OIF_REMOVE_OVN_INST);
+        } else {
+            ovs_iface_set_state(mgr, iface, OIF_MARK_UP);
+        }
     }
     ofctrl_acked_seqnos_destroy(acked_seqnos);
 
@@ -412,7 +442,16 @@ if_status_mgr_update_bindings(struct if_status_mgr *mgr,
                                sb_readonly, ovs_readonly);
     }
 
-    /* Notifiy the binding module to set "up" all bindings that have had
+    /* Notify the binding module to remove "ovn-installed" for all bindings
+     * in the OIF_REMOVE_OVN_INST state.
+     */
+    HMAPX_FOR_EACH (node, &mgr->ifaces_per_state[OIF_REMOVE_OVN_INST]) {
+        struct ovs_iface *iface = node->data;
+
+        local_binding_remove_ovn_installed(bindings, iface->id, ovs_readonly);
+    }
+
+    /* Notify the binding module to set "up" all bindings that have had
      * their flows installed but are not yet marked "up" in the binding
      * module.
      */
