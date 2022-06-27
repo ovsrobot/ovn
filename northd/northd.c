@@ -11022,6 +11022,9 @@ build_neigh_learning_flows_for_lrouter(
         ovn_lflow_add(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR, 100,
                       ds_cstr(match), "next;");
 
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR, 95,
+                      "nd_ns && (ip6.src == 0 || nd.sll == 0)", "next;");
+
         ovn_lflow_metered(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR, 90,
                           "arp", "put_arp(inport, arp.spa, arp.sha); next;",
                           copp_meter_get(COPP_ARP, od->nbr->copp,

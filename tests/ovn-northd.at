@@ -6707,6 +6707,7 @@ AT_CHECK([ovn-sbctl dump-flows DR | grep -e lr_in_unsnat -e lr_out_snat -e lr_in
 
 AT_CLEANUP
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([LR NB Static_MAC_Binding table])
 ovn_start
 
@@ -6730,6 +6731,7 @@ ovn-nbctl --may-exist static-mac-binding-add lr0-p0 192.168.10.100 00:00:22:33:5
 wait_row_count Static_MAC_Binding 1 logical_port=lr0-p0 ip=192.168.10.100 mac="00\:00\:22\:33\:55\:66"
 
 AT_CLEANUP
+])
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([LR neighbor lookup and learning flows])
@@ -6751,6 +6753,7 @@ AT_CHECK([cat lrflows | grep -e lr_in_lookup_neighbor -e lr_in_learn_neighbor | 
   table=2 (lr_in_learn_neighbor), priority=90   , match=(nd_na), action=(put_nd(inport, nd.target, nd.tll); next;)
   table=2 (lr_in_learn_neighbor), priority=90   , match=(nd_ns), action=(put_nd(inport, ip6.src, nd.sll); next;)
   table=2 (lr_in_learn_neighbor), priority=95   , match=(nd_na && nd.tll == 0), action=(put_nd(inport, nd.target, eth.src); next;)
+  table=2 (lr_in_learn_neighbor), priority=95   , match=(nd_ns && (ip6.src == 0 || nd.sll == 0)), action=(next;)
 ])
 
 AT_CLEANUP
