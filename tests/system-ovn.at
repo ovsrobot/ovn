@@ -5278,6 +5278,8 @@ chmod 664 /var/lib/dhcp/dhcpd6.leases
 NS_CHECK_EXEC([server], [dhcpd -6 -f s1 > dhcpd.log &])
 ovn-nbctl --wait=hv sync
 
+OVS_WAIT_UNTIL([ovn-sbctl list mac_binding | grep -q "f0:00:00:01:02:05"])
+
 OVS_WAIT_WHILE([test "$(ovn-nbctl get logical_router_port rp-public ipv6_prefix | cut -c4-15)" = ""])
 OVS_WAIT_WHILE([test "$(ovn-nbctl get logical_router_port rp-sw0 ipv6_prefix | cut -c4-15)" = ""])
 OVS_WAIT_WHILE([test "$(ovn-nbctl get logical_router_port rp-sw1 ipv6_prefix | cut -c4-15)" = ""])

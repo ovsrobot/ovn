@@ -19561,6 +19561,7 @@ data=0800bee4391a0001
 
 send_icmp_packet 1 1 $src_mac $router_mac0 $src_ip $dst_ip 0d1c $data
 send_arp_reply 2 1 $dst_mac $router_mac1 $dst_ip $router_ip
+OVS_WAIT_UNTIL([ovn-sbctl list mac_binding | grep -q "172.16.1.10"])
 echo $(get_arp_req $router_mac1 $router_ip $dst_ip) > expected
 echo "${dst_mac}${router_mac1}08004500001c00004000fe0122b5${router_ip}${dst_ip}${data}" >> expected
 
@@ -19601,6 +19602,7 @@ gw_router_mac=f00000010a0a
 send_icmp_packet 2 2 f00000110203 $router_mac0 $src_ip $dst_ip 0c1b $data
 echo $(get_arp_req f00000010204 $fip_ip $gw_router_ip) >> expected
 send_arp_reply 2 1 $gw_router_mac f00000010204 $gw_router_ip $fip_ip
+OVS_WAIT_UNTIL([ovn-sbctl list mac_binding | grep -q "172.16.1.11"])
 echo "${gw_router_mac}f0000001020408004500001c00004000fe0121b4${fip_ip}${dst_ip}${data}" >> expected
 
 AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=37 | grep pkt_mark=0x64 | grep -q n_packets=1],[0])
@@ -23008,6 +23010,11 @@ OVS_WAIT_UNTIL([test 2 = `cat hv1/ovn-controller.log | grep NXT_PACKET_IN2 | \
 grep table_id=10 | wc -l`])
 
 check_row_count MAC_Binding 1
+
+OVS_WAIT_UNTIL(
+    [test 1 = `as hv1 ovs-ofctl dump-flows br-int table=67 | grep dl_src=50:54:00:00:00:13 \
+| wc -l`]
+)
 
 AT_CHECK([ovn-sbctl --format=csv --bare --columns logical_port,ip,mac \
 list mac_binding], [0], [lr0-sw0
