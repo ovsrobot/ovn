@@ -48,6 +48,54 @@ VLOG_DEFINE_THIS_MODULE(binding);
 
 #define OVN_QOS_TYPE "linux-htb"
 
+#define CLAIM_TIME_THRESHOLD_MS 500
+
+struct claimed_port {
+    long long int last_claimed;
+};
+
+static struct shash _claimed_ports = SHASH_INITIALIZER(&_claimed_ports);
+static struct sset _postponed_ports = SSET_INITIALIZER(&_postponed_ports);
+
+struct sset *
+get_postponed_ports(void)
+{
+    return &_postponed_ports;
+}
+
+static long long int
+get_claim_timestamp(const char *port_name)
+{
+    struct claimed_port *cp = shash_find_data(&_claimed_ports, port_name);
+    if (!cp) {
+        return 0;
+    }
+    return cp->last_claimed;
+}
+
+static void
+register_claim_timestamp(const char *port_name, long long int t)
+{
+    struct claimed_port *cp = shash_find_data(&_claimed_ports, port_name);
+    if (!cp) {
+        cp = xzalloc(sizeof *cp);
+        shash_add(&_claimed_ports, port_name, cp);
+    }
+    cp->last_claimed = t;
+}
+
+void
+schedule_postponed_ports(void)
+{
+    const char *port_name;
+    SSET_FOR_EACH_SAFE (port_name, &_postponed_ports) {
+        long long int t = get_claim_timestamp(port_name);
+        if (t) {
+            poll_timer_wait_until(t + CLAIM_TIME_THRESHOLD_MS);
+        }
+    }
+}
+
 struct qos_queue {
     struct hmap_node node;
     uint32_t queue_id;
@@ -1045,6 +1093,23 @@ remove_additional_chassis(const struct sbrec_port_binding *pb,
     remove_additional_encap_for_chassis(pb, chassis_rec);
 }
 
+static bool
+lport_maybe_postpone(const char *port_name, long long int now,
+                     struct sset *postponed_ports)
+{
+    long long int last_claimed = get_claim_timestamp(port_name);
+    if (now - last_claimed >= CLAIM_TIME_THRESHOLD_MS) {
+        return false;
+    }
+
+    sset_add(postponed_ports, port_name);
+    VLOG_DBG("Postponed claim on logical port %s.", port_name);
+
+    /* Schedule the next attempt. */
+    poll_timer_wait_until(last_claimed + CLAIM_TIME_THRESHOLD_MS);
+    return true;
+}
+
 /* Returns false if lport is not claimed due to 'sb_readonly'.
  * Returns true otherwise.
  */
@@ -1055,19 +1120,25 @@ claim_lport(const struct sbrec_port_binding *pb,
             const struct ovsrec_interface *iface_rec,
             bool sb_readonly, bool notify_up,
             struct hmap *tracked_datapaths,
-            struct if_status_mgr *if_mgr)
+            struct if_status_mgr *if_mgr,
+            struct sset *postponed_ports)
 {
     if (!sb_readonly) {
         claimed_lport_set_up(pb, parent_pb, chassis_rec, notify_up, if_mgr);
     }
 
     enum can_bind can_bind = lport_can_bind_on_this_chassis(chassis_rec, pb);
-    bool update_tracked = false;
+    bool claimed = false;
+    long long int now = time_msec();
 
     if (can_bind == CAN_BIND_AS_MAIN) {
         if (pb->chassis != chassis_rec) {
             if (sb_readonly) {
                 return false;
+            }
+
+            if (lport_maybe_postpone(pb->logical_port, now, postponed_ports)) {
+                return true;
             }
 
             if (pb->chassis) {
@@ -1086,12 +1157,16 @@ claim_lport(const struct sbrec_port_binding *pb,
             if (is_additional_chassis(pb, chassis_rec)) {
                 remove_additional_chassis(pb, chassis_rec);
             }
-            update_tracked = true;
+            claimed = true;
         }
     } else if (can_bind == CAN_BIND_AS_ADDITIONAL) {
         if (!is_additional_chassis(pb, chassis_rec)) {
             if (sb_readonly) {
                 return false;
+            }
+
+            if (lport_maybe_postpone(pb->logical_port, now, postponed_ports)) {
+                return true;
             }
 
             VLOG_INFO("Claiming lport %s for this additional chassis.",
@@ -1104,12 +1179,16 @@ claim_lport(const struct sbrec_port_binding *pb,
             if (pb->chassis == chassis_rec) {
                 sbrec_port_binding_set_chassis(pb, NULL);
             }
-            update_tracked = true;
+            claimed = true;
         }
     }
 
-    if (update_tracked && tracked_datapaths) {
-        update_lport_tracking(pb, tracked_datapaths, true);
+    if (claimed) {
+        if (tracked_datapaths) {
+            update_lport_tracking(pb, tracked_datapaths, true);
+        }
+        register_claim_timestamp(pb->logical_port, now);
+        sset_find_and_delete(postponed_ports, pb->logical_port);
     }
 
     /* Check if the port encap binding, if any, has changed */
@@ -1271,7 +1350,8 @@ consider_vif_lport_(const struct sbrec_port_binding *pb,
                              b_lport->lbinding->iface,
                              !b_ctx_in->ovnsb_idl_txn,
                              !parent_pb, b_ctx_out->tracked_dp_bindings,
-                             b_ctx_out->if_mgr)){
+                             b_ctx_out->if_mgr,
+                             b_ctx_out->postponed_ports)) {
                 return false;
             }
 
@@ -1567,7 +1647,8 @@ consider_nonvif_lport_(const struct sbrec_port_binding *pb,
         return claim_lport(pb, NULL, b_ctx_in->chassis_rec, NULL,
                            !b_ctx_in->ovnsb_idl_txn, false,
                            b_ctx_out->tracked_dp_bindings,
-                           b_ctx_out->if_mgr);
+                           b_ctx_out->if_mgr,
+                           b_ctx_out->postponed_ports);
     }
 
     if (pb->chassis == b_ctx_in->chassis_rec ||
@@ -2772,6 +2853,21 @@ delete_done:
         }
     }
 
+    /* Also handle any postponed (throttled) ports. */
+    const char *port_name;
+    SSET_FOR_EACH_SAFE (port_name, b_ctx_out->postponed_ports) {
+        pb = lport_lookup_by_name(b_ctx_in->sbrec_port_binding_by_name,
+                                  port_name);
+        if (!pb) {
+            sset_find_and_delete(b_ctx_out->postponed_ports, port_name);
+            continue;
+        }
+        handled = handle_updated_port(b_ctx_in, b_ctx_out, pb, qos_map_ptr);
+        if (!handled) {
+            break;
+        }
+    }
+
     if (handled && qos_map_ptr && set_noop_qos(b_ctx_in->ovs_idl_txn,
                                                b_ctx_in->port_table,
                                                b_ctx_in->qos_table,
@@ -3213,4 +3309,11 @@ ovs_iface_matches_lport_iface_id_ver(const struct ovsrec_interface *iface,
     }
 
     return true;
+}
+
+void
+binding_destroy(void)
+{
+    shash_destroy_free_data(&_claimed_ports);
+    sset_clear(&_postponed_ports);
 }
