@@ -2573,6 +2573,40 @@ tcp.flags = RST;
             <b>Example:</b> <code>reg8[0..7] = check_out_port_sec();</code>
           </p>
         </dd>
+
+        <dt><code>commit_ecmp_nh(<var>ipv6</var>);</code></dt>
+        <dd>
+          <p>
+              <b>Parameters</b>: IPv4/IPv6 traffic.
+          </p>
+
+          <p>
+            This action translates to an openflow "learn" action that inserts
+            two new flows in the <code>OFTABLE_ECMP_NH_MAC</code> and in the
+            <code>OFTABLE_ECMP_NH</code> tables.
+          </p>
+
+          <ul>
+            <li>
+              Match on the the 5-tuple and the expected next-hop mac address
+              in <code>OFTABLE_ECMP_NH_MAC</code> table:
+              <code>nw_src=ip0</code>, <code>nw_dst=ip1</code>,
+              <code>ip_proto</code>,<code>dl_src=ethaddr</code> and
+              set <code>REGBIT_KNOWN_ECMP_NH</code>.
+            </li>
+            <li>
+              Match on the 5-tuple in <code>OFTABLE_ECMP_NH</code> table:
+              <code>nw_src=ip1</code>, <code>nw_dst=ip0</code>,
+              <code>ip_proto</code> and set <code>REGBIT_KNOWN_ECMP_NH</code>
+              to 1
+            </li>
+          </ul>
+
+          <p>
+            This action is applied if the packet arrives via ECMP route or
+            if it is routed via an ECMP route
+          </p>
+        </dd>
       </dl>
     </column>
 
