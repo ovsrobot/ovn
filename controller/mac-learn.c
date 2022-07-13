@@ -20,12 +20,15 @@
 /* OpenvSwitch lib includes. */
 #include "openvswitch/vlog.h"
 #include "lib/packets.h"
+#include "lib/random.h"
 #include "lib/smap.h"
+#include "lib/timeval.h"
 
 VLOG_DEFINE_THIS_MODULE(mac_learn);
 
 #define MAX_MAC_BINDINGS 1000
 #define MAX_FDB_ENTRIES  1000
+#define MAX_MAC_BINDING_DELAY_MSEC 50
 
 static size_t mac_binding_hash(uint32_t dp_key, uint32_t port_key,
                                struct in6_addr *);
@@ -64,7 +67,7 @@ ovn_mac_bindings_destroy(struct hmap *mac_bindings)
 struct mac_binding *
 ovn_mac_binding_add(struct hmap *mac_bindings, uint32_t dp_key,
                     uint32_t port_key, struct in6_addr *ip,
-                    struct eth_addr mac)
+                    struct eth_addr mac, bool is_delayed)
 {
     uint32_t hash = mac_binding_hash(dp_key, port_key, ip);
 
@@ -79,11 +82,29 @@ ovn_mac_binding_add(struct hmap *mac_bindings, uint32_t dp_key,
         mb->dp_key = dp_key;
         mb->port_key = port_key;
         mb->ip = *ip;
+        mb->delay = 0;
+        mb->created = time_msec();
+        if (is_delayed) {
+            mb->delay = random_range(MAX_MAC_BINDING_DELAY_MSEC) + 1;
+        }
         hmap_insert(mac_bindings, &mb->hmap_node, hash);
     }
     mb->mac = mac;
 
     return mb;
+}
+
+long long
+ovn_mac_binding_shortest_delay(struct hmap *mac_bindings)
+{
+    long long min = LLONG_MAX;
+
+    struct mac_binding *mb;
+    HMAP_FOR_EACH (mb, hmap_node, mac_bindings) {
+        min = MIN(mb->delay, min);
+    }
+
+    return min;
 }
 
 /* fdb functions. */

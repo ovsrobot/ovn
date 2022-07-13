@@ -4134,9 +4134,13 @@ pinctrl_handle_put_mac_binding(const struct flow *md,
         memcpy(&ip_key, &ip6, sizeof ip_key);
     }
 
+    /* If the ARP reply was unicast we should not delay it,
+     * there won't be any race. */
+    bool is_multicast = eth_addr_is_multicast(headers->dl_dst);
     struct mac_binding *mb = ovn_mac_binding_add(&put_mac_bindings, dp_key,
                                                  port_key, &ip_key,
-                                                 headers->dl_src);
+                                                 headers->dl_src,
+                                                 is_multicast);
     if (!mb) {
         COVERAGE_INC(pinctrl_drop_put_mac_binding);
         return;
@@ -4296,14 +4300,23 @@ run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
         return;
     }
 
-    const struct mac_binding *mb;
-    HMAP_FOR_EACH (mb, hmap_node, &put_mac_bindings) {
-        run_put_mac_binding(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
-                            sbrec_port_binding_by_key,
-                            sbrec_mac_binding_by_lport_ip,
-                            mb);
+    long long now = time_msec();
+
+    struct mac_binding *mb;
+    HMAP_FOR_EACH_SAFE (mb, hmap_node, &put_mac_bindings) {
+            long long elapsed = now - mb->created;
+            if (elapsed >= mb->delay) {
+                run_put_mac_binding(ovnsb_idl_txn,
+                                    sbrec_datapath_binding_by_key,
+                                    sbrec_port_binding_by_key,
+                                    sbrec_mac_binding_by_lport_ip,
+                                    mb);
+                hmap_remove(&put_mac_bindings, &mb->hmap_node);
+                free(mb);
+            } else {
+                mb->delay -= elapsed;
+            }
     }
-    ovn_mac_bindings_flush(&put_mac_bindings);
 }
 
 static void
@@ -4352,9 +4365,11 @@ run_buffered_binding(struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
 
 static void
 wait_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn)
+    OVS_REQUIRES(pinctrl_mutex)
 {
     if (ovnsb_idl_txn && !hmap_is_empty(&put_mac_bindings)) {
-        poll_immediate_wake();
+        long long delay = ovn_mac_binding_shortest_delay(&put_mac_bindings);
+        poll_timer_wait(delay);
     }
 }
 
