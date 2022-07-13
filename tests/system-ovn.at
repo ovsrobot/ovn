@@ -5981,6 +5981,32 @@ AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(-new+est+rpl+trk).*ct_lab
 1
 ])
 
+# Flush conntrack entries for easier output parsing of next test.
+AT_CHECK([ovs-appctl dpctl/flush-conntrack])
+
+# Change bob1 L2 address anche check the reply is properly updated.
+ovn-nbctl set Logical_Router_Port R2_ext mac='"00:00:10:01:02:04"'
+ovn-nbctl set Logical_Switch_Port r2-ext \
+     type=router options:router-port=R2_ext addresses='"00:00:10:01:02:04"'
+
+NS_CHECK_EXEC([bob1], [ping -q -c 20 -i 0.3 -w 15 10.0.0.2 | FORMAT_PING], \
+[0], [dnl
+20 packets transmitted, 20 received, 0% packet loss, time 0ms
+])
+
+AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-est-rpl+trk).*ct(.*label=0x1001020400000000/.*)' -c], [0], [dnl
+1
+])
+AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(-new+est+rpl+trk).*ct_label(0x1001020400000000)' -c], [0], [dnl
+1
+])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep 0x1001020400000000 | FORMAT_CT(172.16.0.1) | \
+sed -e 's/zone=[[0-9]]*/zone=<cleared>/' |
+sed -e 's/mark=[[0-9]]*/mark=<cleared>/'], [0], [dnl
+icmp,orig=(src=172.16.0.1,dst=10.0.0.2,id=<cleared>,type=8,code=0),reply=(src=10.0.0.2,dst=172.16.0.1,id=<cleared>,type=0,code=0),zone=<cleared>,mark=<cleared>,labels=0x1001020400000000
+])
+
 ovs-ofctl dump-flows br-int
 
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
@@ -6146,6 +6172,32 @@ AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd01::2) | \
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/' |
 sed -e 's/mark=[[0-9]]*/mark=<cleared>/'], [0], [dnl
 icmpv6,orig=(src=fd07::1,dst=fd01::2,id=<cleared>,type=128,code=0),reply=(src=fd01::2,dst=fd07::1,id=<cleared>,type=129,code=0),zone=<cleared>,mark=<cleared>,labels=0x401020400000000
+])
+
+# Flush conntrack entries for easier output parsing of next test.
+AT_CHECK([ovs-appctl dpctl/flush-conntrack])
+
+# Change bob1 L2 address anche check the reply is properly updated.
+ovn-nbctl set Logical_Router_Port R2_ext mac='"00:00:10:01:02:04"'
+ovn-nbctl set Logical_Switch_Port r2-ext \
+     type=router options:router-port=R2_ext addresses='"00:00:10:01:02:04"'
+
+NS_CHECK_EXEC([bob1], [ping -q -c 20 -i 0.3 -w 15 fd01::2 | FORMAT_PING], \
+[0], [dnl
+20 packets transmitted, 20 received, 0% packet loss, time 0ms
+])
+
+AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(+new-est-rpl+trk).*ct(.*label=0x1001020400000000/.*)' -c], [0], [dnl
+1
+])
+AT_CHECK([ovs-appctl dpctl/dump-flows | grep 'ct_state(-new+est+rpl+trk).*ct_label(0x1001020400000000)' -c], [0], [dnl
+1
+])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep 0x1001020400000000 | FORMAT_CT(fd01::2) | \
+sed -e 's/zone=[[0-9]]*/zone=<cleared>/' |
+sed -e 's/mark=[[0-9]]*/mark=<cleared>/'], [0], [dnl
+icmpv6,orig=(src=fd07::1,dst=fd01::2,id=<cleared>,type=128,code=0),reply=(src=fd01::2,dst=fd07::1,id=<cleared>,type=129,code=0),zone=<cleared>,mark=<cleared>,labels=0x1001020400000000
 ])
 
 ovs-ofctl dump-flows br-int

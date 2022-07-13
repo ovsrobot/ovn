@@ -5647,7 +5647,7 @@ AT_CHECK([grep -e "lr_in_ip_routing_ecmp" lr0flows | sed 's/192\.168\.0\..0/192.
 dnl The chassis was created with other_config:ct-no-masked-label=false, the flows
 dnl should be using ct_label.ecmp_reply_port.
 AT_CHECK([grep -e "lr_in_arp_resolve.*ecmp" lr0flows | sed 's/table=../table=??/'], [0], [dnl
-  table=??(lr_in_arp_resolve  ), priority=200  , match=(ct.rpl && ct_label.ecmp_reply_port == 1), action=(push(xxreg1); xxreg1 = ct_label; eth.dst = xxreg1[[32..79]]; pop(xxreg1); next;)
+  table=??(lr_in_arp_resolve  ), priority=200  , match=(ct.rpl && reg9[[5]] == 1 && ct_label.ecmp_reply_port == 1), action=(push(xxreg1); xxreg1 = ct_label; eth.dst = xxreg1[[32..79]]; pop(xxreg1); next;)
 ])
 
 dnl Simulate an ovn-controller upgrade to a version that supports
@@ -5657,7 +5657,7 @@ check ovn-sbctl set chassis ch1 other_config:ct-no-masked-label=true
 check ovn-nbctl --wait=sb sync
 ovn-sbctl dump-flows lr0 > lr0flows
 AT_CHECK([grep -e "lr_in_arp_resolve.*ecmp" lr0flows | sed 's/table=../table=??/'], [0], [dnl
-  table=??(lr_in_arp_resolve  ), priority=200  , match=(ct.rpl && ct_mark.ecmp_reply_port == 1), action=(push(xxreg1); xxreg1 = ct_label; eth.dst = xxreg1[[32..79]]; pop(xxreg1); next;)
+  table=??(lr_in_arp_resolve  ), priority=200  , match=(ct.rpl && reg9[[5]] == 1 && ct_mark.ecmp_reply_port == 1), action=(push(xxreg1); xxreg1 = ct_label; eth.dst = xxreg1[[32..79]]; pop(xxreg1); next;)
 ])
 
 # add ecmp route with wrong nexthop
