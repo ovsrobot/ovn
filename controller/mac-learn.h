@@ -31,16 +31,21 @@ struct mac_binding {
 
     /* Value. */
     struct eth_addr mac;
+
+    /* Delay before the entry is added to SB. */
+    long long created_ms;
+    uint32_t commit_delay_ms;
 };
 
 void ovn_mac_bindings_init(struct hmap *mac_bindings);
-void ovn_mac_bindings_flush(struct hmap *mac_bindings);
 void ovn_mac_bindings_destroy(struct hmap *mac_bindings);
+void ovn_mac_binding_wait(struct hmap *mac_bindings);
+void ovn_mac_binding_remove(struct mac_binding *mb, struct hmap *mac_bindings);
 
 struct mac_binding *ovn_mac_binding_add(struct hmap *mac_bindings,
                                         uint32_t dp_key, uint32_t port_key,
                                         struct in6_addr *ip,
-                                        struct eth_addr mac);
+                                        struct eth_addr mac, bool is_delayed);
 
 
 
