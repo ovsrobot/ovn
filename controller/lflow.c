@@ -1928,6 +1928,8 @@ add_lb_vip_hairpin_reply_action(struct in6_addr *vip6, ovs_be32 vip,
     src_imm = ofpbuf_put_zeros(ofpacts, OFPACT_ALIGN(imm_bytes));
     memcpy(src_imm, &imm_reg_value, imm_bytes);
 
+    /* Reload ol pointer since ofpacts buffer can be reallocated. */
+    ol = ofpacts->header;
     ofpact_finish_LEARN(ofpacts, &ol);
 }
 
