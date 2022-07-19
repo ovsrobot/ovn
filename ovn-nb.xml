@@ -2976,6 +2976,16 @@
           <ref column="options" key="gateway_mtu"/> option.
         </p>
       </column>
+
+      <column name="options" key="distributed" type='{"type": "boolean"}'>
+        If <var>true</var>, indicates, that flow for current LRP in
+        lr_in_admission must be installed on all chassis, even if it has
+        associated chassisredirect port.
+        Usable when traffic from HW VTEP goes to routable networks and logical
+        switch to which VTEP logical port is attached also needs to support
+        distributed routing features such as NAT, Load Balancing and others.
+        Empty value (default) means false.
+      </column>
     </group>
 
     <group title="Attachment">

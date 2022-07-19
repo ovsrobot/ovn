@@ -1674,6 +1674,12 @@ is_cr_port(const struct ovn_port *op)
     return op->l3dgw_port;
 }
 
+static bool
+is_distributed(const struct ovn_port *op)
+{
+    return smap_get_bool(&op->nbrp->options, "distributed", false);
+}
+
 static void
 destroy_routable_addresses(struct ovn_port_routable_addresses *ra)
 {
@@ -10920,7 +10926,7 @@ build_adm_ctrl_flows_for_lrouter_port(
         ds_clear(match);
         ds_put_format(match, "eth.dst == %s && inport == %s",
                       op->lrp_networks.ea_s, op->json_key);
-        if (is_l3dgw_port(op)) {
+        if (is_l3dgw_port(op) && !is_distributed(op)) {
             /* Traffic with eth.dst = l3dgw_port->lrp_networks.ea_s
              * should only be received on the gateway chassis. */
             ds_put_format(match, " && is_chassis_resident(%s)",
