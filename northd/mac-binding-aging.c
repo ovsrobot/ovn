@@ -28,6 +28,9 @@
 
 VLOG_DEFINE_THIS_MODULE(mac_binding_aging);
 
+#define MAC_BINDING_BULK_REMOVAL_LIMIT 15
+#define MAC_BINDING_BULK_REMOVAL_DELAY_MSEC 10
+
 struct mac_binding_waker {
     bool should_schedule;
     long long next_wake_msec;
@@ -39,7 +42,8 @@ static void
 mac_binding_aging_run_for_datapath(const struct sbrec_datapath_binding *dp,
                                    const struct nbrec_logical_router *nbr,
                                    struct ovsdb_idl_index *mb_by_datapath,
-                                   int64_t now, int64_t *wake_delay)
+                                   int64_t now, int64_t *wake_delay,
+                                   uint8_t *removed_n)
 {
     uint64_t threshold = smap_get_uint(&nbr->options,
                                          "mac_binding_age_threshold",
@@ -60,6 +64,10 @@ mac_binding_aging_run_for_datapath(const struct sbrec_datapath_binding *dp,
             return;
         } else if (elapsed >= threshold) {
             sbrec_mac_binding_delete(mb);
+            (*removed_n)++;
+            if (*removed_n == MAC_BINDING_BULK_REMOVAL_LIMIT) {
+                break;
+            }
         } else {
             *wake_delay = MIN(*wake_delay, threshold - elapsed);
         }
@@ -78,6 +86,7 @@ en_mac_binding_aging_run(struct engine_node *node, void *data OVS_UNUSED)
 
     int64_t next_expire_msec = INT64_MAX;
     int64_t now = time_wall_msec();
+    uint8_t removed_n = 0;
     struct northd_data *northd_data = engine_get_input_data("northd", node);
     struct ovsdb_idl_index *sbrec_mac_binding_by_datapath =
         engine_ovsdb_node_get_index(engine_get_input("SB_mac_binding", node),
@@ -88,7 +97,13 @@ en_mac_binding_aging_run(struct engine_node *node, void *data OVS_UNUSED)
         if (od->sb && od->nbr) {
             mac_binding_aging_run_for_datapath(od->sb, od->nbr,
                                                sbrec_mac_binding_by_datapath,
-                                               now, &next_expire_msec);
+                                               now, &next_expire_msec,
+                                               &removed_n);
+            if (removed_n == MAC_BINDING_BULK_REMOVAL_LIMIT) {
+                /* Schedule the next run after specified delay. */
+                next_expire_msec = MAC_BINDING_BULK_REMOVAL_DELAY_MSEC;
+                break;
+            }
         }
     }
 
