@@ -5270,6 +5270,16 @@ ovn-nbctl set logical_router_port rp-public options:prefix=true
 ovn-nbctl set logical_router_port rp-sw0 options:prefix=true
 ovn-nbctl set logical_router_port rp-sw1 options:prefix=true
 
+OVN_POPULATE_ARP
+
+ovn-nbctl --wait=hv sync
+
+dhcpd_pid=$(pidof dhcpd)
+if $(test "$dhcpd_pid" != "") ; then
+    echo "Leftover dhcpd was running!";
+    kill -9 $dhcpd_pid
+fi
+
 cat > /etc/dhcp/dhcpd.conf <<EOF
 option dhcp-rebinding-time 15;
 option dhcp-renewal-time 10;
@@ -5320,7 +5330,7 @@ OVS_WAIT_UNTIL([
     test "${total_pkts}" = "1"
 ])
 
-kill $(pidof dhcpd)
+kill -9 $(pidof dhcpd)
 kill $(pidof tcpdump)
 
 ovn-nbctl set logical_router_port rp-sw0 options:prefix=false
