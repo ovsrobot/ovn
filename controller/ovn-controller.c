@@ -3874,7 +3874,6 @@ main(int argc, char *argv[])
             if (!new_ovnsb_cond_seqno) {
                 VLOG_INFO("OVNSB IDL reconnected, force recompute.");
                 engine_set_force_recompute(true);
-                vif_plug_reset_idl_prime_counter();
             }
             ovnsb_cond_seqno = new_ovnsb_cond_seqno;
         }
