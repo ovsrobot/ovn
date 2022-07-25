@@ -2663,7 +2663,6 @@ delete_done:
         case LP_VIF:
         case LP_CONTAINER:
         case LP_VIRTUAL:
-            update_ld_multichassis_ports(pb, b_ctx_out->local_datapaths);
             handled = handle_updated_vif_lport(pb, lport_type, b_ctx_in,
                                                b_ctx_out, qos_map_ptr);
             break;
@@ -2721,21 +2720,11 @@ delete_done:
 
         case LP_EXTERNAL:
             handled = consider_external_lport(pb, b_ctx_in, b_ctx_out);
-            update_ld_external_ports(pb, b_ctx_out->local_datapaths);
             break;
 
         case LP_LOCALNET: {
             consider_localnet_lport(pb, b_ctx_in, b_ctx_out, qos_map_ptr);
 
-            struct shash bridge_mappings =
-                SHASH_INITIALIZER(&bridge_mappings);
-            add_ovs_bridge_mappings(b_ctx_in->ovs_table,
-                                    b_ctx_in->bridge_table,
-                                    &bridge_mappings);
-            update_ld_localnet_port(pb, &bridge_mappings,
-                                    b_ctx_out->egress_ifaces,
-                                    b_ctx_out->local_datapaths);
-            shash_destroy(&bridge_mappings);
             break;
         }
 
@@ -2747,6 +2736,26 @@ delete_done:
         if (!handled) {
             break;
         }
+    }
+
+    if (handled) {
+        /* There may be new local_datapaths added by the above handling, so go
+         * through each port_binding to update related local_datapaths if
+         * needed. */
+        struct shash bridge_mappings =
+            SHASH_INITIALIZER(&bridge_mappings);
+        add_ovs_bridge_mappings(b_ctx_in->ovs_table,
+                                b_ctx_in->bridge_table,
+                                &bridge_mappings);
+        SBREC_PORT_BINDING_TABLE_FOR_EACH (pb,
+                                           b_ctx_in->port_binding_table) {
+            update_ld_localnet_port(pb, &bridge_mappings,
+                                    b_ctx_out->egress_ifaces,
+                                    b_ctx_out->local_datapaths);
+            update_ld_external_ports(pb, b_ctx_out->local_datapaths);
+            update_ld_multichassis_ports(pb, b_ctx_out->local_datapaths);
+        }
+        shash_destroy(&bridge_mappings);
     }
 
     if (handled && qos_map_ptr && set_noop_qos(b_ctx_in->ovs_idl_txn,
