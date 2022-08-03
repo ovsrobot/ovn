@@ -91,7 +91,8 @@ def main():
         try:
             if parsed_log[key] != val:
                 print(
-                    f"Expected log {key}={val} but got {key}={parsed_log[key]} \
+                    f"Expected log {key}={val} but got \
+                    {key}={parsed_log[key]} \
                     in:\n\t'{acl_log}"
                 )
                 exit(1)
