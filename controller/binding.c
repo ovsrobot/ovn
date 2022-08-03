@@ -505,6 +505,38 @@ remove_related_lport(const struct sbrec_port_binding *pb,
     }
 }
 
+/*
+ * Update local_datapath peers when port type changed
+ * and remove irrelevant ports from this list.
+ */
+static void
+update_ld_peers(const struct sbrec_port_binding *pb,
+                 struct hmap *local_datapaths)
+{
+    struct local_datapath *ld = get_local_datapath(
+                                local_datapaths, pb->datapath->tunnel_key);
+    if (!ld) {
+        return;
+    }
+
+    /*
+     * This will handle cases where the pb type was explicitly
+     * changed from router type to any other port type and will
+     * remove it from the ld peers list.
+     */
+    enum en_lport_type type = get_lport_type(pb);
+    int num_peers = ld->n_peer_ports;
+    if (type != LP_PATCH) {
+        remove_local_datapath_peer_port(pb, ld, local_datapaths);
+        if (num_peers != ld->n_peer_ports) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+            VLOG_DBG_RL(&rl,
+                        "removing lport %s from the ld peers list",
+                        pb->logical_port);
+        }
+    }
+}
+
 static void
 delete_active_pb_ras_pd(const struct sbrec_port_binding *pb,
                         struct shash *ras_pd_map)
@@ -2612,6 +2644,7 @@ delete_done:
             continue;
         }
 
+        update_ld_peers(pb, b_ctx_out->local_datapaths);
         update_active_pb_ras_pd(pb, b_ctx_out->local_active_ports_ipv6_pd,
                                 "ipv6_prefix_delegation");
 
