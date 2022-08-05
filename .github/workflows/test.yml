@@ -169,3 +169,52 @@ jobs:
       with:
         name: logs-osx-clang---disable-ssl
         path: config.log
+
+  build-linux-deb:
+    env:
+      deb_dependencies: |
+        build-essential fakeroot devscripts equivs
+      DEB_PACKAGE: yes
+      DEB_HOST_ARCH: amd64
+
+    name: linux deb
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+
+    steps:
+    - name: checkout self
+      uses: actions/checkout@v2
+      with:
+        submodules: recursive
+
+    - name: checkout ovn-vif
+      uses: actions/checkout@v2
+      with:
+        repository: 'ovn-org/ovn-vif'
+        path: 'ovn-vif'
+        ref: 'main'
+
+    - name: update PATH
+      run:  |
+        echo "$HOME/bin"        >> $GITHUB_PATH
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: update APT cache
+      run:  sudo apt update || true
+    - name: install dependencies for debian packages
+      run:  sudo apt install -y ${{ env.deb_dependencies }}
+
+    - name: prepare
+      run:  ./.ci/linux-prepare.sh
+
+    - name: build
+      run:  ./.ci/linux-build.sh
+
+    - name: upload deb packages
+      uses: actions/upload-artifact@v2
+      with:
+        name: deb-packages
+        path: '/home/runner/work/ovn/*.deb'

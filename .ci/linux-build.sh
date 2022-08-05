@@ -69,9 +69,42 @@ if [ "$TESTSUITE" ]; then
             exit 1
         fi
     fi
+elif [ "$DEB_PACKAGE" ]; then
+    configure_ovn
+    make debian
+
+    # There is a pending SRU to the Ubuntu Open vSwitch package that allows
+    # building OVN 22.03.1 and onwards.  Let's use the Debian package until
+    # it arrives.
+    deb_ovs_pool=http://ftp.debian.org/debian/pool/main/o/openvswitch
+    wget -O /tmp/openvswitch-source_2.17.2-3_all.deb \
+        $deb_ovs_pool/openvswitch-source_2.17.2-3_all.deb
+    sudo dpkg -i /tmp/openvswitch-source_2.17.2-3_all.deb
+
+    mk-build-deps --install --root-cmd sudo --remove debian/control
+    dpkg-checkbuilddeps
+    make debian-deb
+    packages=$(ls $(pwd)/../*.deb)
+    deps=""
+    for pkg in $packages; do
+        _ifs=$IFS
+        IFS=","
+        for dep in $(dpkg-deb -f $pkg Depends); do
+            dep_name=$(echo "$dep"|awk '{print$1}')
+            # Don't install internal package inter-dependencies from apt
+            echo $dep_name | grep -q ovn && continue
+            deps+=" $dep_name"
+        done
+        IFS=$_ifs
+    done
+    # install package dependencies from apt
+    echo $deps | xargs sudo apt -y install
+    # install the locally built openvswitch packages
+    sudo dpkg -i $packages
 else
     configure_ovn $OPTS
     make -j4 || { cat config.log; exit 1; }
 fi
+
 
 exit 0
