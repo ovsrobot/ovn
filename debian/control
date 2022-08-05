@@ -1,0 +1,176 @@
+Source: ovn
+Section: net
+Priority: optional
+Maintainer: OVN developers <dev@openvswitch.org>
+Build-Depends:
+ autoconf,
+ automake,
+ bzip2,
+ debhelper-compat (= 10),
+ dh-python,
+ graphviz,
+ libcap-ng-dev,
+ libnuma-dev [amd64 i386 ppc64el arm64],
+ libpcap-dev [amd64 i386 ppc64el arm64],
+ libssl-dev,
+ libtool,
+ libudev-dev,
+ libunbound-dev,
+ openssl,
+ openstack-pkg-tools,
+ openvswitch-source (>= 2.17.2-3~),
+ pkg-config,
+ procps,
+ python3-all-dev,
+ python3-setuptools,
+ python3-sortedcontainers,
+ python3-sphinx,
+ tcpdump,
+Standards-Version: 4.6.1
+Homepage: https://www.ovn.org/
+
+Package: ovn-central
+Architecture: linux-any
+Pre-Depends: ${misc:Pre-Depends},
+Depends:
+ lsb-base,
+ lsb-release,
+ openvswitch-common (>= 2.17.0~),
+ ovn-common (= ${binary:Version}),
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: OVN central components
+ OVN, the Open Virtual Network, is a system to support virtual network
+ abstraction. OVN complements the existing capabilities of OVS to add native
+ support for virtual network abstractions, such as virtual L2 and L3 overlays
+ and security groups.
+ .
+ ovn-central provides the userspace daemons, utilities and
+ databases for OVN that is run at a central location.
+
+Package: ovn-common
+Architecture: linux-any
+Depends:
+ ${misc:Depends},
+ ${python3:Depends},
+ ${shlibs:Depends},
+Breaks:
+ ovn-ic-db (<< 22.03~),
+Replaces:
+ ovn-ic-db (<< 22.03~),
+Description: OVN common components
+ OVN, the Open Virtual Network, is a system to support virtual network
+ abstraction. OVN complements the existing capabilities of OVS to add native
+ support for virtual network abstractions, such as virtual L2 and L3 overlays
+ and security groups.
+ .
+ ovn-common provides components required by other OVN packages.
+
+Package: ovn-controller-vtep
+Architecture: linux-any
+Pre-Depends: ${misc:Pre-Depends},
+Depends:
+ lsb-base,
+ ovn-common (= ${binary:Version}),
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: OVN vtep controller
+ ovn-controller-vtep is the local controller daemon in OVN, the Open Virtual
+ Network, for VTEP enabled physical switches. It connects up to the OVN
+ Southbound database over the OVSDB protocol, and down to the VTEP database
+ over the OVSDB protocol.
+ .
+ ovn-controller-vtep provides the ovn-controller-vtep binary for controlling
+ vtep gateways.
+
+Package: ovn-doc
+Section: doc
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${sphinxdoc:Depends},
+Description: OVN documentation
+ OVN, the Open Virtual Network, is a system to support virtual network
+ abstraction.  OVN complements the existing capabilities of OVS to add
+ native support for virtual network abstractions, such as virtual L2 and L3
+ overlays and security groups.
+ .
+ This package provides documentation for configuration and use
+ of OVN.
+
+Package: ovn-docker
+Architecture: linux-any
+Depends:
+ openvswitch-common (>= 2.17.0~),
+ ovn-common (= ${binary:Version}),
+ python3-openvswitch (>= 2.17.0~),
+ ${misc:Depends},
+ ${python3:Depends},
+ ${shlibs:Depends},
+Description: OVN Docker drivers
+ OVN, the Open Virtual Network, is a system to support virtual network
+ abstraction.  OVN complements the existing capabilities of OVS to add
+ native support for virtual network abstractions, such as virtual L2 and L3
+ overlays and security groups.
+ .
+ ovn-docker provides the docker drivers for OVN.
+
+Package: ovn-host
+Architecture: linux-any
+Pre-Depends: ${misc:Pre-Depends},
+Depends:
+ lsb-base,
+ lsb-release,
+ openvswitch-switch (>= 2.17.0~),
+ ovn-common (= ${binary:Version}),
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: OVN host components
+ OVN, the Open Virtual Network, is a system to support virtual network
+ abstraction.  OVN complements the existing capabilities of OVS to add
+ native support for virtual network abstractions, such as virtual L2 and L3
+ overlays and security groups.
+ .
+ ovn-host provides the userspace components and utilities for
+ OVN that can be run on every host/hypervisor.
+
+Package: ovn-ic
+Architecture: linux-any
+Pre-Depends: ${misc:Pre-Depends},
+Depends:
+ lsb-base,
+ lsb-release,
+ ovn-common (= ${binary:Version}),
+ ${misc:Depends},
+ ${shlibs:Depends},
+Enhances:
+ ovn-central,
+Suggests:
+ ovn-ic-db,
+Description: Open Virtual Network interconnection controller
+ OVN IC, the Open Virtual Network interconnection controller, is a
+ centralized daemon which communicates with global interconnection
+ databases to configure and exchange data with local OVN databases for
+ interconnection with other OVN deployments.
+ .
+ This package provides the ovn-ic daemon which should be run alongside
+ ovn-central services in each OVN deployment zone.
+
+Package: ovn-ic-db
+Architecture: linux-any
+Pre-Depends: ${misc:Pre-Depends},
+Depends:
+ lsb-base,
+ lsb-release,
+ openvswitch-common (>= 2.17.0~),
+ ovn-common (= ${binary:Version}),
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: Open Virtual Network interconnection controller databases
+ OVN IC, the Open Virtual Network interconnection controller, is a
+ centralized daemon which communicates with global interconnection
+ databases to configure and exchange data with local OVN databases for
+ interconnection with other OVN deployments.
+ .
+ This package provides the global OVN IC southbound and northbound
+ OVSDB databases.

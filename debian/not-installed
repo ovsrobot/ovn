@@ -1,0 +1,5 @@
+# The OVN library and headers are currently not considered ABI/API stable.
+# If the need arises to build sibling projects we should probably provide an
+# ovn-source package.
+usr/include/*
+usr/lib/*

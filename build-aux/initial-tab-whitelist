@@ -6,6 +6,5 @@
 ^ovs/
 ^third-party/
 ^xenserver/
-^debian/rules.modules$
-^debian/rules$
+^debian/
 ^\.gitmodules$

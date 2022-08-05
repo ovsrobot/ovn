@@ -1,0 +1,104 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+#export DH_VERBOSE=1
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@ --with autoreconf,python3,sphinxdoc
+
+ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
+PARALLEL = -j$(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
+else
+PARALLEL =
+endif
+
+override_dh_auto_configure:
+	# Configure OVS before OVN
+	test -d $(CURDIR)/ovs || mkdir ovs
+	cd ovs && tar -xzf /usr/src/openvswitch/openvswitch.tar.gz --strip-components=1
+	cd ovs && ./configure --enable-ssl --localstatedir=/var --sysconfdir=/etc --prefix=/usr && make $(PARALLEL)
+	# Configure OVN to allow building OVN VIF
+	./boot.sh && ./configure \
+		--prefix=/usr \
+		--localstatedir=/var \
+		--sysconfdir=/etc \
+		--with-dbdir=/var/lib/ovn \
+		--with-ovs-source=$(CURDIR)/ovs \
+		--enable-ssl
+	# Configure and build OVN VIF
+	cd ovn-vif && \
+		./boot.sh && \
+		./configure \
+			--with-ovs-source=$(CURDIR)/ovs \
+			--with-ovn-source=$(CURDIR) \
+			--enable-plug-representor && \
+		make $(PARALLEL)
+	# Use dh_auto_configure to build OVN
+	dh_auto_configure -- \
+		--prefix=/usr \
+		--localstatedir=/var \
+		--sysconfdir=/etc \
+		--with-dbdir=/var/lib/ovn \
+		--with-ovs-source=$(CURDIR)/ovs \
+		--enable-ssl \
+		--with-vif-plug-provider=$(CURDIR)/ovn-vif
+	$(MAKE) debian/copyright
+
+TEST_LIST = $(shell \
+                $(CURDIR)/debian/testlist.py \
+                $(CURDIR)/debian/flaky-tests-$(DEB_HOST_ARCH).txt \
+                $(CURDIR)/tests/testsuite)
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	if $(MAKE) check TESTSUITEFLAGS='$(PARALLEL) $(TEST_LIST)' || \
+                $(MAKE) check TESTSUITEFLAGS='--recheck'; then :; \
+	else \
+		cat tests/testsuite.log; \
+		exit 1; \
+	fi
+endif # nocheck
+
+override_dh_auto_build:
+	cd ovs && $(MAKE) $(PARALLEL)
+	$(MAKE) $(PARALLEL)
+
+override_dh_auto_clean:
+	dh_auto_clean
+	cd ovn-vif && make distclean | :
+	rm -rf ovs
+
+override_dh_installinit:
+	# Package does not ship any init.d files
+	dh_installinit --no-scripts
+
+override_dh_installsystemd:
+	dh_installsystemd --restart-after-upgrade -povn-central --name=ovn-northd
+	dh_installsystemd --restart-after-upgrade -povn-central --name=ovn-ovsdb-server-sb
+	dh_installsystemd --restart-after-upgrade -povn-central --name=ovn-ovsdb-server-nb
+	dh_installsystemd --restart-after-upgrade -povn-ic-db   --name=ovn-ovsdb-server-ic-sb
+	dh_installsystemd --restart-after-upgrade -povn-ic-db   --name=ovn-ovsdb-server-ic-nb
+	dh_installsystemd --restart-after-upgrade -povn-host    --name=ovn-controller
+	dh_installsystemd --restart-after-upgrade
+
+override_dh_python3:
+	dh_python3 --shebang=/usr/bin/python3
+
+# Helper target for creating snapshots from upstream git
+DATE=$(shell date +%Y%m%d)
+# Upstream branch to track
+BRANCH=main
+VERSION=22.09.0
+
+get-orig-snapshot:
+	rm -Rf ovn-upstream ovn-vif-upstream
+	git clone --branch $(BRANCH) --depth 1 https://github.com/ovn-org/ovn ovn-upstream
+	git clone --branch $(BRANCH) --depth 1 https://github.com/ovn-org/ovn-vif ovn-vif-upstream
+	cd ovn-upstream && \
+		export COMMIT=`git rev-parse --short HEAD` && \
+		git archive --format tgz --prefix=ovn-$(VERSION)~git$(DATE).$$COMMIT/ \
+			-o ../../ovn_$(VERSION)~git$(DATE).$$COMMIT.orig.tar.gz $(BRANCH) && \
+		cd ../ovn-vif-upstream && \
+		git archive --format tgz --prefix=ovn-vif-$(VERSION)~git$(DATE).$$COMMIT/ \
+			-o ../../ovn_$(VERSION)~git$(DATE).$$COMMIT.orig-ovn-vif.tar.gz $(BRANCH)
+	rm -Rf ovn-upstream ovn-vif-upstream

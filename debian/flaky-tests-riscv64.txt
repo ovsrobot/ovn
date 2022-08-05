@@ -1,0 +1,6 @@
+send gratuitous arp on localnet
+1 LR with distributed router gateway port
+router - check packet length - icmp defrag
+multi-vtep SB Chassis encap updates
+ACL with Port Group conjunction flow efficiency
+ipsec -- basic configuration
