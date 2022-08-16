@@ -15,6 +15,7 @@ Post v22.06.0
     options (which will be available in OVS 2.18).
   - Removed possibility of disabling logical datapath groups.
   - Removed the copying of SB's Chassis other_config into external_ids.
+  - Bump python version required for building OVN to 3.6.
 
 OVN v22.06.0 - 03 Jun 2022
 --------------------------
