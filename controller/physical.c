@@ -992,14 +992,15 @@ setup_rarp_activation_strategy(const struct sbrec_port_binding *binding,
                                struct ovn_desired_flow_table *flow_table)
 {
     struct match match = MATCH_CATCHALL_INITIALIZER;
-    struct ofpbuf ofpacts;
-    ofpbuf_init(&ofpacts, 0);
+    uint64_t stub[1024 / 8];
+    struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(stub);
 
     /* Unblock the port on ingress RARP. */
     match_set_dl_type(&match, htons(ETH_TYPE_RARP));
     match_set_in_port(&match, ofport);
 
     load_logical_ingress_metadata(binding, zone_ids, &ofpacts);
+    uint32_t offset = ofpacts.size;
 
     struct ofpact_controller *oc = ofpact_put_CONTROLLER(&ofpacts);
     oc->max_len = UINT16_MAX;
@@ -1011,7 +1012,7 @@ setup_rarp_activation_strategy(const struct sbrec_port_binding *binding,
     ofpbuf_put(&ofpacts, &ah, sizeof ah);
 
     ofpacts.header = oc;
-    oc->userdata_len = ofpacts.size - (sizeof *oc);
+    oc->userdata_len = ofpacts.size - (offset + sizeof *oc);
     ofpact_finish_CONTROLLER(&ofpacts, &oc);
     put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, &ofpacts);
 
