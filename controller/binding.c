@@ -2607,6 +2607,31 @@ consider_patch_port_for_local_datapaths(const struct sbrec_port_binding *pb,
     }
 }
 
+static void
+update_ld_ports(struct binding_ctx_in *b_ctx_in,
+                struct binding_ctx_out *b_ctx_out)
+{
+    const struct sbrec_port_binding *pb;
+    SBREC_PORT_BINDING_TABLE_FOR_EACH (pb,
+                                       b_ctx_in->port_binding_table) {
+        enum en_lport_type lport_type = get_lport_type(pb);
+        if (lport_type == LP_LOCALNET) {
+            struct shash bridge_mappings =
+                SHASH_INITIALIZER(&bridge_mappings);
+            add_ovs_bridge_mappings(b_ctx_in->ovs_table,
+                                    b_ctx_in->bridge_table,
+                                    &bridge_mappings);
+            update_ld_localnet_port(pb, &bridge_mappings,
+                                    b_ctx_out->egress_ifaces,
+                                    b_ctx_out->local_datapaths);
+            shash_destroy(&bridge_mappings);
+        } else if (lport_type == LP_EXTERNAL) {
+            update_ld_external_ports(pb, b_ctx_out->local_datapaths);
+        }
+    }
+}
+
+
 static bool
 handle_updated_port(struct binding_ctx_in *b_ctx_in,
                     struct binding_ctx_out *b_ctx_out,
@@ -2708,6 +2733,14 @@ handle_updated_port(struct binding_ctx_in *b_ctx_in,
         }
         consider_patch_port_for_local_datapaths(distributed_pb, b_ctx_in,
                                                 b_ctx_out);
+        /* If option always-redirect has changed, check if localnet should
+         * be updated
+         */
+        if (sbrec_port_binding_is_updated(pb,
+                                          SBREC_PORT_BINDING_COL_OPTIONS)) {
+            update_ld_ports(b_ctx_in, b_ctx_out);
+        }
+
         break;
 
     case LP_EXTERNAL:
