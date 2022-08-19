@@ -1001,6 +1001,7 @@ setup_rarp_activation_strategy(const struct sbrec_port_binding *binding,
 
     load_logical_ingress_metadata(binding, zone_ids, &ofpacts);
 
+    size_t ofs = ofpacts.size;
     struct ofpact_controller *oc = ofpact_put_CONTROLLER(&ofpacts);
     oc->max_len = UINT16_MAX;
     oc->reason = OFPR_ACTION;
@@ -1011,7 +1012,7 @@ setup_rarp_activation_strategy(const struct sbrec_port_binding *binding,
     ofpbuf_put(&ofpacts, &ah, sizeof ah);
 
     ofpacts.header = oc;
-    oc->userdata_len = ofpacts.size - (sizeof *oc);
+    oc->userdata_len = ofpacts.size - (ofs + sizeof *oc);
     ofpact_finish_CONTROLLER(&ofpacts, &oc);
     put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, &ofpacts);
 
