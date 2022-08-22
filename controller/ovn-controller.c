@@ -94,7 +94,6 @@ static unixctl_cb_func debug_dump_lflow_conj_ids;
 static unixctl_cb_func lflow_cache_flush_cmd;
 static unixctl_cb_func lflow_cache_show_stats_cmd;
 static unixctl_cb_func debug_delay_nb_cfg_report;
-static unixctl_cb_func debug_ignore_startup_delay;
 
 #define DEFAULT_BRIDGE_NAME "br-int"
 #define DEFAULT_DATAPATH "system"
@@ -190,7 +189,14 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
      * avoid the unnecessarily extra wake-ups of ovn-controller. */
     ovsdb_idl_condition_add_clause_true(&ldpg);
 
-    if (monitor_all) {
+    /* Don't enable conditional monitoring until we have a full view on a
+     * data that we need to monitor.  Without that we will send a first
+     * monitor request with incomplete conditions, receive a reply, update
+     * conditions and receive the rest of data.  Such a split may result in
+     * removal and re-addition of certain resources (e.g. patch ports)
+     * on restart of ovn-controller.  Database will send deletion requiests
+     * for all the data that we don't actually need. */
+    if (monitor_all || !ovsdb_idl_has_ever_connected(ovnsb_idl)) {
         ovsdb_idl_condition_add_clause_true(&pb);
         ovsdb_idl_condition_add_clause_true(&lf);
         ovsdb_idl_condition_add_clause_true(&mb);
@@ -867,12 +873,11 @@ static void
 store_nb_cfg(struct ovsdb_idl_txn *sb_txn, struct ovsdb_idl_txn *ovs_txn,
              const struct sbrec_chassis_private *chassis,
              const struct ovsrec_bridge *br_int,
-             unsigned int delay_nb_cfg_report)
+             unsigned int delay_nb_cfg_report, int64_t startup_ts)
 {
     struct ofctrl_acked_seqnos *acked_nb_cfg_seqnos =
         ofctrl_acked_seqnos_get(ofctrl_seq_type_nb_cfg);
     uint64_t cur_cfg = acked_nb_cfg_seqnos->last_acked;
-    int64_t startup_ts = daemon_startup_ts();
 
     if (ovs_txn && br_int
             && startup_ts != smap_get_ullong(&br_int->external_ids,
@@ -3860,9 +3865,6 @@ main(int argc, char *argv[])
                              debug_dump_lflow_conj_ids,
                              &lflow_output_data->conj_ids);
 
-    unixctl_command_register("debug/ignore-startup-delay", "", 0, 0,
-                             debug_ignore_startup_delay, NULL);
-
     unsigned int ovs_cond_seqno = UINT_MAX;
     unsigned int ovnsb_cond_seqno = UINT_MAX;
     unsigned int ovnsb_expected_cond_seqno = UINT_MAX;
@@ -3884,6 +3886,7 @@ main(int argc, char *argv[])
     /* Main loop. */
     exiting = false;
     restart = false;
+    int64_t startup_ts = time_wall_msec();
     bool sb_monitor_all = false;
     while (!exiting) {
         memory_run();
@@ -4062,10 +4065,6 @@ main(int argc, char *argv[])
                     }
                     stopwatch_stop(CONTROLLER_LOOP_STOPWATCH_NAME,
                                    time_msec());
-                    if (engine_has_updated()) {
-                        daemon_started_recently_countdown();
-                    }
-
                     ct_zones_data = engine_get_data(&en_ct_zones);
                     if (ovs_idl_txn) {
                         if (ct_zones_data) {
@@ -4228,7 +4227,7 @@ main(int argc, char *argv[])
             }
 
             store_nb_cfg(ovnsb_idl_txn, ovs_idl_txn, chassis_private,
-                         br_int, delay_nb_cfg_report);
+                         br_int, delay_nb_cfg_report, startup_ts);
 
             if (pending_pkt.conn) {
                 struct ed_type_addr_sets *as_data =
@@ -4704,12 +4703,4 @@ debug_dump_lflow_conj_ids(struct unixctl_conn *conn, int argc OVS_UNUSED,
     lflow_conj_ids_dump(conj_ids, &conj_ids_dump);
     unixctl_command_reply(conn, ds_cstr(&conj_ids_dump));
     ds_destroy(&conj_ids_dump);
-}
-
-static void
-debug_ignore_startup_delay(struct unixctl_conn *conn, int argc OVS_UNUSED,
-                           const char *argv[] OVS_UNUSED, void *arg OVS_UNUSED)
-{
-    daemon_started_recently_ignore();
-    unixctl_command_reply(conn, NULL);
 }

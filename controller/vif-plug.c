@@ -469,8 +469,7 @@ vif_plug_iface_touched_this_txn(
 static bool
 vif_plug_handle_lport_vif(const struct sbrec_port_binding *pb,
                           struct vif_plug_ctx_in *vif_plug_ctx_in,
-                          struct vif_plug_ctx_out *vif_plug_ctx_out,
-                          bool can_unplug)
+                          struct vif_plug_ctx_out *vif_plug_ctx_out)
 {
     if (vif_plug_iface_touched_this_txn(vif_plug_ctx_out, pb->logical_port)) {
         return true;
@@ -482,7 +481,7 @@ vif_plug_handle_lport_vif(const struct sbrec_port_binding *pb,
     if (lport_can_bind_on_this_chassis(vif_plug_ctx_in->chassis_rec, pb)) {
         handled &= consider_plug_lport(pb, lbinding,
                                        vif_plug_ctx_in, vif_plug_ctx_out);
-    } else if (can_unplug && lbinding && lbinding->iface) {
+    } else if (lbinding && lbinding->iface) {
         handled &= consider_unplug_iface(lbinding->iface, pb,
                                          vif_plug_ctx_in, vif_plug_ctx_out);
     }
@@ -492,8 +491,7 @@ vif_plug_handle_lport_vif(const struct sbrec_port_binding *pb,
 static bool
 vif_plug_handle_iface(const struct ovsrec_interface *iface_rec,
                       struct vif_plug_ctx_in *vif_plug_ctx_in,
-                      struct vif_plug_ctx_out *vif_plug_ctx_out,
-                      bool can_unplug)
+                      struct vif_plug_ctx_out *vif_plug_ctx_out)
 {
     bool handled = true;
     const char *vif_plug_type = smap_get(&iface_rec->external_ids,
@@ -513,10 +511,8 @@ vif_plug_handle_iface(const struct ovsrec_interface *iface_rec,
          * consider updating it */
         handled &= consider_plug_lport(pb, lbinding,
                                        vif_plug_ctx_in, vif_plug_ctx_out);
-    } else if (can_unplug
-               && (!pb
-                   || !lport_can_bind_on_this_chassis(
-                       vif_plug_ctx_in->chassis_rec, pb))) {
+    } else if (!pb || !lport_can_bind_on_this_chassis(
+                           vif_plug_ctx_in->chassis_rec, pb)) {
         /* No lport for this interface or it is destined for different chassis,
          * consuder unplugging it */
         handled &= consider_unplug_iface(iface_rec, pb,
@@ -525,31 +521,17 @@ vif_plug_handle_iface(const struct ovsrec_interface *iface_rec,
     return handled;
 }
 
-/* On initial startup or on IDL reconnect, several rounds of the main loop may
- * run before data is actually loaded in the IDL, primarily depending on
- * conditional monitoring status and other events that could trigger main loop
- * runs during this period.  Until we find a reliable way to determine the
- * completeness of the initial data downloading we need this counter so that we
- * do not erronously unplug ports because the data is just not loaded yet.
- */
 void
 vif_plug_run(struct vif_plug_ctx_in *vif_plug_ctx_in,
              struct vif_plug_ctx_out *vif_plug_ctx_out)
 {
-    bool delay_plug = daemon_started_recently();
-    if (delay_plug) {
-        VLOG_DBG("vif_plug_run: daemon started recently, will not unplug "
-                 "ports in this iteration.");
-    }
-
     if (!vif_plug_ctx_in->chassis_rec) {
         return;
     }
     const struct ovsrec_interface *iface_rec;
     OVSREC_INTERFACE_TABLE_FOR_EACH (iface_rec,
                                      vif_plug_ctx_in->iface_table) {
-        vif_plug_handle_iface(iface_rec, vif_plug_ctx_in, vif_plug_ctx_out,
-                              !delay_plug);
+        vif_plug_handle_iface(iface_rec, vif_plug_ctx_in, vif_plug_ctx_out);
     }
 
     struct sbrec_port_binding *target =
@@ -564,8 +546,7 @@ vif_plug_run(struct vif_plug_ctx_in *vif_plug_ctx_in,
             vif_plug_ctx_in->sbrec_port_binding_by_requested_chassis) {
         enum en_lport_type lport_type = get_lport_type(pb);
         if (lport_type == LP_VIF) {
-            vif_plug_handle_lport_vif(pb, vif_plug_ctx_in, vif_plug_ctx_out,
-                                      !delay_plug);
+            vif_plug_handle_lport_vif(pb, vif_plug_ctx_in, vif_plug_ctx_out);
         }
     }
     sbrec_port_binding_index_destroy_row(target);
