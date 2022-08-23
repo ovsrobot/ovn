@@ -194,17 +194,7 @@ add_local_datapath_peer_port(
         return;
     }
 
-    bool present = false;
-    for (size_t i = 0; i < ld->n_peer_ports; i++) {
-        if (ld->peer_ports[i].local == pb) {
-            present = true;
-            break;
-        }
-    }
-
-    if (!present) {
-        local_datapath_peer_port_add(ld, pb, peer);
-    }
+    local_datapath_peer_port_add(ld, pb, peer);
 
     struct local_datapath *peer_ld =
         get_local_datapath(local_datapaths,
@@ -216,12 +206,6 @@ add_local_datapath_peer_port(
                              peer->datapath, chassis, local_datapaths,
                              tracked_datapaths);
         return;
-    }
-
-    for (size_t i = 0; i < peer_ld->n_peer_ports; i++) {
-        if (peer_ld->peer_ports[i].local == peer) {
-            return;
-        }
     }
 
     local_datapath_peer_port_add(peer_ld, peer, pb);
@@ -597,6 +581,13 @@ add_local_datapath__(struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                                              tracked_datapaths);
                     }
                     local_datapath_peer_port_add(ld, pb, peer);
+                    struct local_datapath *peer_ld =
+                        get_local_datapath(local_datapaths,
+                                           peer->datapath->tunnel_key);
+
+                    if (peer_ld != NULL) {
+                        local_datapath_peer_port_add(peer_ld, peer, pb);
+                    }
                 }
             }
         }
@@ -622,6 +613,11 @@ local_datapath_peer_port_add(struct local_datapath *ld,
                              const struct sbrec_port_binding *local,
                              const struct sbrec_port_binding *remote)
 {
+    for (size_t i = 0; i < ld->n_peer_ports; i++) {
+        if (ld->peer_ports[i].local == local) {
+            return;
+        }
+    }
     ld->n_peer_ports++;
     if (ld->n_peer_ports > ld->n_allocated_peer_ports) {
         size_t old_n_ports = ld->n_allocated_peer_ports;
