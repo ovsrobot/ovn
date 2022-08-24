@@ -3824,18 +3824,17 @@ build_lb_vip_actions(struct ovn_lb_vip *lb_vip,
 static void
 build_lrouter_lb_ips(struct ovn_datapath *od, const struct ovn_northd_lb *lb)
 {
-    bool is_routable = smap_get_bool(&lb->nlb->options, "add_route",  false);
     const char *ip_address;
 
     SSET_FOR_EACH (ip_address, &lb->ips_v4) {
         sset_add(&od->lb_ips_v4, ip_address);
-        if (is_routable) {
+        if (lb->routable) {
             sset_add(&od->lb_ips_v4_routable, ip_address);
         }
     }
     SSET_FOR_EACH (ip_address, &lb->ips_v6) {
         sset_add(&od->lb_ips_v6, ip_address);
-        if (is_routable) {
+        if (lb->routable) {
             sset_add(&od->lb_ips_v6_routable, ip_address);
         }
     }
@@ -4007,13 +4006,10 @@ static void
 build_lrouter_lb_reachable_ips(struct ovn_datapath *od,
                                const struct ovn_northd_lb *lb)
 {
-    const char *neighbor_responder_mode =
-        smap_get_def(&lb->nlb->options, "neighbor_responder", "reachable");
-
     /* If configured to reply to neighbor requests for all VIPs force them
      * all to be considered "reachable".
      */
-    if (!strcmp(neighbor_responder_mode, "all")) {
+    if (lb->neighbor_responder_mode == LB_NEIGH_RESPOND_ALL) {
         for (size_t i = 0; i < lb->n_vips; i++) {
             if (IN6_IS_ADDR_V4MAPPED(&lb->vips[i].vip)) {
                 sset_add(&od->lb_ips_v4_reachable, lb->vips[i].vip_str);
@@ -9958,8 +9954,7 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
                       lb_vip->vip_str);
     }
 
-    bool lb_skip_snat = smap_get_bool(&lb->nlb->options, "skip_snat", false);
-    if (lb_skip_snat) {
+    if (lb->skip_snat) {
         skip_snat_new_action = xasprintf("flags.skip_snat_for_lb = 1; %s",
                                          ds_cstr(action));
         skip_snat_est_action = xasprintf("flags.skip_snat_for_lb = 1; "
@@ -10043,7 +10038,7 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
     for (size_t i = 0; i < lb->n_nb_lr; i++) {
         struct ovn_datapath *od = lb->nb_lr[i];
         if (!od->n_l3dgw_ports) {
-            if (lb_skip_snat) {
+            if (lb->skip_snat) {
                 gw_router_skip_snat[n_gw_router_skip_snat++] = od;
             } else if (!lport_addresses_is_empty(&od->lb_force_snat_addrs) ||
                        od->lb_force_snat_router_ip) {
@@ -10114,7 +10109,7 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
                                     od->l3dgw_ports[0]->cr_port->json_key);
         }
 
-        if (lb_skip_snat) {
+        if (lb->skip_snat) {
             ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_DNAT, prio,
                                       new_match_p, skip_snat_new_action,
                                       NULL, meter, &lb->nlb->header_);
@@ -10154,7 +10149,7 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
             ds_cstr(&undnat_match),
             od->l3dgw_ports[0]->json_key,
             od->l3dgw_ports[0]->cr_port->json_key);
-        if (lb_skip_snat) {
+        if (lb->skip_snat) {
             ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_UNDNAT, 120,
                                     undnat_match_p, skip_snat_est_action,
                                     &lb->nlb->header_);
