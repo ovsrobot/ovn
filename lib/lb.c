@@ -239,23 +239,27 @@ ovn_northd_lb_find(struct hmap *lbs, const struct uuid *uuid)
 }
 
 void
-ovn_northd_lb_add_lr(struct ovn_northd_lb *lb, struct ovn_datapath *od)
+ovn_northd_lb_add_lr(struct ovn_northd_lb *lb, size_t n,
+                     struct ovn_datapath **ods)
 {
-    if (lb->n_allocated_nb_lr == lb->n_nb_lr) {
+    while (lb->n_allocated_nb_lr <= lb->n_nb_lr + n) {
         lb->nb_lr = x2nrealloc(lb->nb_lr, &lb->n_allocated_nb_lr,
                                sizeof *lb->nb_lr);
     }
-    lb->nb_lr[lb->n_nb_lr++] = od;
+    memcpy(&lb->nb_lr[lb->n_nb_lr], ods, n * sizeof *ods);
+    lb->n_nb_lr += n;
 }
 
 void
-ovn_northd_lb_add_ls(struct ovn_northd_lb *lb, struct ovn_datapath *od)
+ovn_northd_lb_add_ls(struct ovn_northd_lb *lb, size_t n,
+                     struct ovn_datapath **ods)
 {
-    if (lb->n_allocated_nb_ls == lb->n_nb_ls) {
+    while (lb->n_allocated_nb_ls <= lb->n_nb_ls + n) {
         lb->nb_ls = x2nrealloc(lb->nb_ls, &lb->n_allocated_nb_ls,
                                sizeof *lb->nb_ls);
     }
-    lb->nb_ls[lb->n_nb_ls++] = od;
+    memcpy(&lb->nb_ls[lb->n_nb_ls], ods, n * sizeof *ods);
+    lb->n_nb_ls += n;
 }
 
 void

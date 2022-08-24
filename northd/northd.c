@@ -3845,7 +3845,9 @@ struct ovn_lb_group {
     struct hmap_node hmap_node;
     struct uuid uuid;
     size_t n;
-    struct ovn_northd_lb *lbs[];
+    struct ovn_northd_lb **lbs;
+    size_t n_od;
+    struct ovn_datapath **ods;
 };
 
 static struct ovn_lb_group *
@@ -3883,12 +3885,11 @@ build_lbs(struct northd_input *input_data, struct hmap *datapaths,
 
     NBREC_LOAD_BALANCER_GROUP_TABLE_FOR_EACH (nbrec_lb_group,
                                input_data->nbrec_load_balancer_group_table) {
-        size_t size = sizeof *lb_group +
-            nbrec_lb_group->n_load_balancer * sizeof(struct ovn_northd_lb *);
-
-        lb_group = xzalloc(size);
+        lb_group = xzalloc(sizeof *lb_group);
         lb_group->uuid = nbrec_lb_group->header_.uuid;
         lb_group->n = nbrec_lb_group->n_load_balancer;
+        lb_group->lbs = xzalloc(lb_group->n * sizeof *lb_group->lbs);
+        lb_group->ods = xzalloc(hmap_count(datapaths) * sizeof *lb_group->ods);
 
         for (size_t i = 0; i < nbrec_lb_group->n_load_balancer; i++) {
             const struct uuid *lb_uuid =
@@ -3910,17 +3911,23 @@ build_lbs(struct northd_input *input_data, struct hmap *datapaths,
             const struct uuid *lb_uuid =
                 &od->nbs->load_balancer[i]->header_.uuid;
             lb = ovn_northd_lb_find(lbs, lb_uuid);
-            ovn_northd_lb_add_ls(lb, od);
+            ovn_northd_lb_add_ls(lb, 1, &od);
         }
 
         for (size_t i = 0; i < od->nbs->n_load_balancer_group; i++) {
             nbrec_lb_group = od->nbs->load_balancer_group[i];
             lb_group = ovn_lb_group_find(lb_groups,
                                          &nbrec_lb_group->header_.uuid);
-            for (size_t j = 0; j < lb_group->n; j++) {
-                ovn_northd_lb_add_ls(lb_group->lbs[j], od);
-            }
+            lb_group->ods[lb_group->n_od++] = od;
         }
+    }
+
+    HMAP_FOR_EACH (lb_group, hmap_node, lb_groups) {
+        for (size_t j = 0; j < lb_group->n; j++) {
+            ovn_northd_lb_add_ls(lb_group->lbs[j], lb_group->n_od,
+                                 lb_group->ods);
+        }
+        lb_group->n_od = 0;
     }
 
     HMAP_FOR_EACH (od, key_node, datapaths) {
@@ -3932,7 +3939,7 @@ build_lbs(struct northd_input *input_data, struct hmap *datapaths,
             const struct uuid *lb_uuid =
                 &od->nbr->load_balancer[i]->header_.uuid;
             lb = ovn_northd_lb_find(lbs, lb_uuid);
-            ovn_northd_lb_add_lr(lb, od);
+            ovn_northd_lb_add_lr(lb, 1, &od);
             build_lrouter_lb_ips(od, lb);
         }
 
@@ -3940,11 +3947,19 @@ build_lbs(struct northd_input *input_data, struct hmap *datapaths,
             nbrec_lb_group = od->nbr->load_balancer_group[i];
             lb_group = ovn_lb_group_find(lb_groups,
                                          &nbrec_lb_group->header_.uuid);
+            lb_group->ods[lb_group->n_od++] = od;
             for (size_t j = 0; j < lb_group->n; j++) {
-                ovn_northd_lb_add_lr(lb_group->lbs[j], od);
                 build_lrouter_lb_ips(od, lb_group->lbs[j]);
             }
         }
+    }
+
+    HMAP_FOR_EACH (lb_group, hmap_node, lb_groups) {
+        for (size_t j = 0; j < lb_group->n; j++) {
+            ovn_northd_lb_add_lr(lb_group->lbs[j], lb_group->n_od,
+                                 lb_group->ods);
+        }
+        lb_group->n_od = 0;
     }
 }
 
@@ -4130,7 +4145,7 @@ build_lswitch_lbs_from_lrouter(struct hmap *datapaths, struct hmap *lbs)
                    }
                 }
                 if (!installed) {
-                    ovn_northd_lb_add_ls(lb, od);
+                    ovn_northd_lb_add_ls(lb, 1, &od);
                 }
                 if (lb->nlb) {
                     od->has_lb_vip |= lb_has_vip(lb->nlb);
@@ -15412,6 +15427,8 @@ northd_destroy(struct northd_data *data)
 
     struct ovn_lb_group *lb_group;
     HMAP_FOR_EACH_POP (lb_group, hmap_node, &data->lb_groups) {
+        free(lb_group->lbs);
+        free(lb_group->ods);
         free(lb_group);
     }
     hmap_destroy(&data->lb_groups);
