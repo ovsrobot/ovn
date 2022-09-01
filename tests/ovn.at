@@ -105,6 +105,18 @@ m4_divert_text([PREPARE_TESTS],
          test 1 -le $(as $hv1 ovs-ofctl dump-flows br-int | grep -c "output:$ofport")
      ])
    }
+
+   ovn_wait_remote_input_flows () {
+     hv1=$1
+     hv2=$2
+     echo "$3: waiting for flows for remote input on $hv1"
+     # Wait for a flow outputing  to remote input
+     OVS_WAIT_UNTIL([
+         ofport=$(as $hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-${hv2}-0)
+         echo "tunnel port=$ofport"
+         test 1 -le $(as $hv1 ovs-ofctl dump-flows br-int | grep -c "in_port=$ofport")
+     ])
+   }
 ])
 
 m4_define([OVN_CHECK_PACKETS],
