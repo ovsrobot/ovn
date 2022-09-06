@@ -6870,9 +6870,8 @@ build_lb_rules(struct hmap *lflows, struct ovn_northd_lb *lb, bool ct_lb_mark,
                           lb_vip->vip_str);
         }
 
-        const char *proto = NULL;
+        const char *proto = "tcp";
         if (lb_vip->vip_port) {
-            proto = "tcp";
             if (lb->nlb->protocol) {
                 if (!strcmp(lb->nlb->protocol, "udp")) {
                     proto = "udp";
@@ -6894,8 +6893,8 @@ build_lb_rules(struct hmap *lflows, struct ovn_northd_lb *lb, bool ct_lb_mark,
                                            lb->selection_fields, true,
                                            ct_lb_mark);
 
-        ds_put_format(match, "ct.new && %s.dst == %s", ip_match,
-                      lb_vip->vip_str);
+        ds_put_format(match, "ct.new && %s.dst == %s && %s", ip_match,
+                      lb_vip->vip_str, proto);
         int priority = 110;
         if (lb_vip->vip_port) {
             ds_put_format(match, " && %s.dst == %d", proto, lb_vip->vip_port);

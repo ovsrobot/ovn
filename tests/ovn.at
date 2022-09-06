@@ -23606,7 +23606,7 @@ OVS_WAIT_FOR_OUTPUT(
   (ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip6 && sctp), action=(xxreg1 = ip6.dst; reg2[[0..15]] = sctp.dst; ct_lb_mark;)
   (ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip6 && tcp), action=(xxreg1 = ip6.dst; reg2[[0..15]] = tcp.dst; ct_lb_mark;)
   (ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip6 && udp), action=(xxreg1 = ip6.dst; reg2[[0..15]] = udp.dst; ct_lb_mark;)
-  (ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg0[[1]] = 0; reg1 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark(backends=10.0.0.3:80,20.0.0.3:80; hash_fields="ip_dst,ip_src,tcp_dst,tcp_src");)
+  (ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(reg0[[1]] = 0; reg1 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark(backends=10.0.0.3:80,20.0.0.3:80; hash_fields="ip_dst,ip_src,tcp_dst,tcp_src");)
 ])
 
 AT_CAPTURE_FILE([sbflows2])
@@ -23646,9 +23646,9 @@ grep "405400000003${svc_mon_src_mac}" | wc -l`]
 AT_CAPTURE_FILE([sbflows3])
 ovn-sbctl dump-flows sw0 > sbflows3
 AT_CHECK(
-  [grep "ip4.dst == 10.0.0.10 && tcp.dst == 80" sbflows3 | grep priority=120 |\
+  [grep "ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80" sbflows3 | grep priority=120 |\
    sed 's/table=../table=??/'], [0],
-  [  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(drop;)
+  [  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(drop;)
 ])
 
 AT_CAPTURE_FILE([sbflows4])
