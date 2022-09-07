@@ -20,8 +20,9 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include "openvswitch/hmap.h"
-#include "sset.h"
 #include "ovn-util.h"
+#include "sset.h"
+#include "uuid.h"
 
 struct nbrec_load_balancer;
 struct sbrec_load_balancer;
@@ -92,6 +93,16 @@ void
 ovn_northd_lb_add_lr(struct ovn_northd_lb *lb, struct ovn_datapath *od);
 void
 ovn_northd_lb_add_ls(struct ovn_northd_lb *lb, struct ovn_datapath *od);
+
+struct ovn_lb_group {
+    struct hmap_node hmap_node;
+    struct uuid uuid;
+    size_t n_lbs;
+    struct ovn_northd_lb **lbs;
+};
+
+struct ovn_lb_group *ovn_lb_group_find(struct hmap *lb_groups,
+                                       const struct uuid *);
 
 struct ovn_controller_lb {
     const struct sbrec_load_balancer *slb; /* May be NULL. */

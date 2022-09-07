@@ -275,6 +275,20 @@ ovn_northd_lb_destroy(struct ovn_northd_lb *lb)
     free(lb);
 }
 
+struct ovn_lb_group *
+ovn_lb_group_find(struct hmap *lb_groups, const struct uuid *uuid)
+{
+    struct ovn_lb_group *lb_group;
+    size_t hash = uuid_hash(uuid);
+
+    HMAP_FOR_EACH_WITH_HASH (lb_group, hmap_node, hash, lb_groups) {
+        if (uuid_equals(&lb_group->uuid, uuid)) {
+            return lb_group;
+        }
+    }
+    return NULL;
+}
+
 struct ovn_controller_lb *
 ovn_controller_lb_create(const struct sbrec_load_balancer *sbrec_lb)
 {
