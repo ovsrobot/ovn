@@ -196,10 +196,12 @@ void
 engine_cleanup(void)
 {
     for (size_t i = 0; i < engine_n_nodes; i++) {
-        if (engine_nodes[i]->clear_tracked_data) {
-            engine_nodes[i]->clear_tracked_data(engine_nodes[i]->data);
+        if (engine_nodes[i]->init_run) {
+            engine_nodes[i]->init_run(engine_nodes[i], engine_nodes[i]->data);
         }
+    }
 
+    for (size_t i = 0; i < engine_n_nodes; i++) {
         if (engine_nodes[i]->cleanup) {
             engine_nodes[i]->cleanup(engine_nodes[i]->data);
         }
@@ -351,8 +353,8 @@ engine_init_run(void)
     for (size_t i = 0; i < engine_n_nodes; i++) {
         engine_set_node_state(engine_nodes[i], EN_STALE);
 
-        if (engine_nodes[i]->clear_tracked_data) {
-            engine_nodes[i]->clear_tracked_data(engine_nodes[i]->data);
+        if (engine_nodes[i]->init_run) {
+            engine_nodes[i]->init_run(engine_nodes[i], engine_nodes[i]->data);
         }
     }
 }
@@ -377,10 +379,11 @@ engine_recompute(struct engine_node *node, bool allowed,
         goto done;
     }
 
-    /* Clear tracked data before calling run() so that partially tracked data
-     * from some of the change handler executions are cleared. */
-    if (node->clear_tracked_data) {
-        node->clear_tracked_data(node->data);
+    /* Make sure data is properly initialized before calling run(), e.g.,
+     * partially tracked data some of the change handler executions must
+     * be cleared. */
+    if (node->init_run) {
+        node->init_run(node, node->data);
     }
 
     /* Run the node handler which might change state. */

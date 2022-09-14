@@ -1058,7 +1058,7 @@ en_ofctrl_is_connected_run(struct engine_node *node, void *data)
  *    processing to OVS_interface changes but simply mark the node status as
  *    UPDATED (and so the run() and the change handler is the same).
  * 2. The iface_table_external_ids_old is computed/updated in the member
- *    clear_tracked_data(), because that is when the last round of processing
+ *    init_run(), because that is when the last round of processing
  *    has completed but the new IDL data is yet to refresh, so we replace the
  *    old data with the current data. */
 struct ed_type_ovs_interface_shadow {
@@ -1096,7 +1096,8 @@ en_ovs_interface_shadow_cleanup(void *data_)
 }
 
 static void
-en_ovs_interface_shadow_clear_tracked_data(void *data_)
+en_ovs_interface_shadow_init_run(struct engine_node *node OVS_UNUSED,
+                                 void *data_)
 {
     struct ed_type_ovs_interface_shadow *data = data_;
     iface_table_external_ids_old_destroy(&data->iface_table_external_ids_old);
@@ -1163,7 +1164,7 @@ en_activated_ports_cleanup(void *data_)
 }
 
 static void
-en_activated_ports_clear_tracked_data(void *data)
+en_activated_ports_init_run(struct engine_node *node OVS_UNUSED, void *data)
 {
     en_activated_ports_cleanup(data);
 }
@@ -1311,7 +1312,7 @@ struct ed_type_runtime_data {
  */
 
 static void
-en_runtime_data_clear_tracked_data(void *data_)
+en_runtime_data_init_run(struct engine_node *node OVS_UNUSED, void *data_)
 {
     struct ed_type_runtime_data *data = data_;
 
@@ -1669,14 +1670,14 @@ en_addr_sets_init(struct engine_node *node OVS_UNUSED,
 }
 
 static void
-en_addr_sets_clear_tracked_data(void *data)
+en_addr_sets_init_run(struct engine_node *node OVS_UNUSED, void *data)
 {
     struct ed_type_addr_sets *as = data;
     sset_clear(&as->new);
     sset_clear(&as->deleted);
-    struct shash_node *node;
-    SHASH_FOR_EACH_SAFE (node, &as->updated) {
-        struct addr_set_diff *asd = node->data;
+    struct shash_node *as_node;
+    SHASH_FOR_EACH_SAFE (as_node, &as->updated) {
+        struct addr_set_diff *asd = as_node->data;
         expr_constant_set_destroy(asd->added);
         free(asd->added);
         expr_constant_set_destroy(asd->deleted);
@@ -1689,8 +1690,6 @@ en_addr_sets_clear_tracked_data(void *data)
 static void
 en_addr_sets_cleanup(void *data)
 {
-    en_addr_sets_clear_tracked_data(data);
-
     struct ed_type_addr_sets *as = data;
     expr_const_sets_destroy(&as->addr_sets);
     shash_destroy(&as->addr_sets);
@@ -1933,7 +1932,7 @@ port_groups_update(const struct sbrec_port_group_table *port_group_table,
 }
 
 static void
-en_port_groups_clear_tracked_data(void *data_)
+en_port_groups_init_run(struct engine_node *node OVS_UNUSED, void *data_)
 {
     struct ed_type_port_groups *pg = data_;
     sset_clear(&pg->new);
@@ -2078,7 +2077,7 @@ en_ct_zones_init(struct engine_node *node, struct engine_arg *arg OVS_UNUSED)
 }
 
 static void
-en_ct_zones_clear_tracked_data(void *data_)
+en_ct_zones_init_run(struct engine_node *node OVS_UNUSED, void *data_)
 {
     struct ed_type_ct_zones *data = data_;
     data->recomputed = false;
@@ -2529,7 +2528,7 @@ struct ed_type_lflow_output {
     struct conj_ids conj_ids;
 
     /* lflows processed in the current engine execution.
-     * Cleared by en_lflow_output_clear_tracked_data before each engine
+     * Cleared by en_lflow_output_init_run before each engine
      * execution. */
     struct hmap lflows_processed;
 
@@ -2733,7 +2732,7 @@ en_lflow_output_init(struct engine_node *node OVS_UNUSED,
 }
 
 static void
-en_lflow_output_clear_tracked_data(void *data)
+en_lflow_output_init_run(struct engine_node *node OVS_UNUSED, void *data)
 {
     struct ed_type_lflow_output *flow_output_data = data;
     lflows_processed_destroy(&flow_output_data->lflows_processed);
@@ -3678,20 +3677,20 @@ main(int argc, char *argv[])
 
     /* Define inc-proc-engine nodes. */
     ENGINE_NODE(sb_ro, "sb_ro");
-    ENGINE_NODE_WITH_CLEAR_TRACK_DATA_IS_VALID(ct_zones, "ct_zones");
-    ENGINE_NODE_WITH_CLEAR_TRACK_DATA(ovs_interface_shadow,
+    ENGINE_NODE_WITH_INIT_RUN_IS_VALID(ct_zones, "ct_zones");
+    ENGINE_NODE_WITH_INIT_RUN(ovs_interface_shadow,
                                       "ovs_interface_shadow");
-    ENGINE_NODE_WITH_CLEAR_TRACK_DATA(runtime_data, "runtime_data");
+    ENGINE_NODE_WITH_INIT_RUN(runtime_data, "runtime_data");
     ENGINE_NODE(non_vif_data, "non_vif_data");
     ENGINE_NODE(mff_ovn_geneve, "mff_ovn_geneve");
     ENGINE_NODE(ofctrl_is_connected, "ofctrl_is_connected");
-    ENGINE_NODE_WITH_CLEAR_TRACK_DATA(activated_ports, "activated_ports");
+    ENGINE_NODE_WITH_INIT_RUN(activated_ports, "activated_ports");
     ENGINE_NODE(postponed_ports, "postponed_ports");
     ENGINE_NODE(pflow_output, "physical_flow_output");
-    ENGINE_NODE_WITH_CLEAR_TRACK_DATA(lflow_output, "logical_flow_output");
+    ENGINE_NODE_WITH_INIT_RUN(lflow_output, "logical_flow_output");
     ENGINE_NODE(flow_output, "flow_output");
-    ENGINE_NODE_WITH_CLEAR_TRACK_DATA(addr_sets, "addr_sets");
-    ENGINE_NODE_WITH_CLEAR_TRACK_DATA(port_groups, "port_groups");
+    ENGINE_NODE_WITH_INIT_RUN(addr_sets, "addr_sets");
+    ENGINE_NODE_WITH_INIT_RUN(port_groups, "port_groups");
     ENGINE_NODE(northd_options, "northd_options");
 
 #define SB_NODE(NAME, NAME_STR) ENGINE_NODE_SB(NAME, NAME_STR);

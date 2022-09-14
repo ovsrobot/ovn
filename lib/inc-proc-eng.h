@@ -150,6 +150,11 @@ struct engine_node {
     /* Method to clean up data. It may be NULL. */
     void (*cleanup)(void *data);
 
+    /* Method to initialize state at every engine run.  It can be used for
+     * example to clear up tracked data maintained by the engine node in the
+     * engine 'data'. It may be NULL. */
+    void (*init_run)(struct engine_node *node, void *data);
+
     /* Fully processes all inputs of this node and regenerates the data
      * of this node. The pointer to the node's data is passed as argument.
      * 'run' handlers can also call engine_get_context() and the
@@ -164,10 +169,6 @@ struct engine_node {
      * doesn't store pointers to DB records it's still safe to use).
      */
     bool (*is_valid)(struct engine_node *);
-
-    /* Method to clear up tracked data maintained by the engine node in the
-     * engine 'data'. It may be NULL. */
-    void (*clear_tracked_data)(void *tracked_data);
 
     /* Engine stats. */
     struct engine_stats stats;
@@ -311,20 +312,20 @@ void engine_ovsdb_node_add_index(struct engine_node *, const char *name,
         .run = en_##NAME##_run, \
         .cleanup = en_##NAME##_cleanup, \
         .is_valid = NULL, \
-        .clear_tracked_data = NULL, \
+        .init_run = NULL, \
     };
 
-#define ENGINE_NODE_WITH_CLEAR_TRACK_DATA_IS_VALID(NAME, NAME_STR) \
+#define ENGINE_NODE_WITH_INIT_RUN_IS_VALID(NAME, NAME_STR) \
     ENGINE_NODE(NAME, NAME_STR) \
-    en_##NAME.clear_tracked_data = en_##NAME##_clear_tracked_data; \
+    en_##NAME.init_run = en_##NAME##_init_run; \
     en_##NAME.is_valid = en_##NAME##_is_valid;
 
 #define ENGINE_NODE(NAME, NAME_STR) \
     ENGINE_NODE_DEF(NAME, NAME_STR)
 
-#define ENGINE_NODE_WITH_CLEAR_TRACK_DATA(NAME, NAME_STR) \
+#define ENGINE_NODE_WITH_INIT_RUN(NAME, NAME_STR) \
     ENGINE_NODE(NAME, NAME_STR) \
-    en_##NAME.clear_tracked_data = en_##NAME##_clear_tracked_data;
+    en_##NAME.init_run = en_##NAME##_init_run;
 
 /* Macro to define member functions of an engine node which represents
  * a table of OVSDB */
