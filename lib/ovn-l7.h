@@ -412,6 +412,8 @@ nd_ra_opts_destroy(struct hmap *nd_ra_opts)
 static inline void
 nd_ra_opts_init(struct hmap *nd_ra_opts)
 {
+    hmap_init(nd_ra_opts);
+
     nd_ra_opt_add(nd_ra_opts, "addr_mode", ND_RA_FLAG_ADDR_MODE, "str");
     nd_ra_opt_add(nd_ra_opts, "router_preference", ND_RA_FLAG_PRF, "str");
     nd_ra_opt_add(nd_ra_opts, "slla", ND_OPT_SOURCE_LINKADDR, "mac");

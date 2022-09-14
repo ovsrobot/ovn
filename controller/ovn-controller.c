@@ -76,6 +76,7 @@
 #include "timer.h"
 #include "stopwatch.h"
 #include "lib/inc-proc-eng.h"
+#include "lib/ovn-l7.h"
 #include "hmapx.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
@@ -2538,6 +2539,12 @@ struct ed_type_lflow_output {
 
     /* Data for managing hairpin flow conjunctive flow ids. */
     struct lflow_output_hairpin_data hd;
+
+    /* Fixed neighbor discovery supported options. */
+    struct hmap nd_ra_opts;
+
+    /* Fixed controller_event supported options. */
+    struct controller_event_options controller_event_opts;
 };
 
 static void
@@ -2655,8 +2662,6 @@ init_lflow_ctx(struct engine_node *node,
     l_ctx_in->sbrec_static_mac_binding_by_datapath =
         sbrec_static_mac_binding_by_datapath;
     l_ctx_in->port_binding_table = port_binding_table;
-    l_ctx_in->dhcp_options_table  = dhcp_table;
-    l_ctx_in->dhcpv6_options_table = dhcpv6_table;
     l_ctx_in->mac_binding_table = mac_binding_table;
     l_ctx_in->logical_flow_table = logical_flow_table;
     l_ctx_in->logical_dp_group_table = logical_dp_group_table;
@@ -2673,6 +2678,22 @@ init_lflow_ctx(struct engine_node *node,
     l_ctx_in->binding_lports = &rt_data->lbinding_data.lports;
     l_ctx_in->chassis_tunnels = &non_vif_data->chassis_tunnels;
     l_ctx_in->lb_hairpin_use_ct_mark = n_opts->lb_hairpin_use_ct_mark;
+    l_ctx_in->nd_ra_opts = &fo->nd_ra_opts;
+    l_ctx_in->controller_event_opts = &fo->controller_event_opts;
+
+    hmap_init(&l_ctx_in->dhcp_opts);
+    const struct sbrec_dhcp_options *dhcp_opt_row;
+    SBREC_DHCP_OPTIONS_TABLE_FOR_EACH (dhcp_opt_row, dhcp_table) {
+        dhcp_opt_add(&l_ctx_in->dhcp_opts, dhcp_opt_row->name,
+                     dhcp_opt_row->code, dhcp_opt_row->type);
+    }
+
+    hmap_init(&l_ctx_in->dhcpv6_opts);
+    const struct sbrec_dhcpv6_options *dhcpv6_opt_row;
+    SBREC_DHCPV6_OPTIONS_TABLE_FOR_EACH (dhcpv6_opt_row, dhcpv6_table) {
+       dhcp_opt_add(&l_ctx_in->dhcpv6_opts, dhcpv6_opt_row->name,
+                    dhcpv6_opt_row->code, dhcpv6_opt_row->type);
+    }
 
     l_ctx_out->flow_table = &fo->flow_table;
     l_ctx_out->group_table = &fo->group_table;
@@ -2683,6 +2704,14 @@ init_lflow_ctx(struct engine_node *node,
     l_ctx_out->lflow_cache = fo->pd.lflow_cache;
     l_ctx_out->hairpin_id_pool = fo->hd.pool;
     l_ctx_out->hairpin_lb_ids = &fo->hd.ids;
+}
+
+static void
+destroy_lflow_ctx(struct lflow_ctx_in *l_ctx_in,
+                  struct lflow_ctx_out *l_ctx_out OVS_UNUSED)
+{
+    dhcp_opts_destroy(&l_ctx_in->dhcp_opts);
+    dhcp_opts_destroy(&l_ctx_in->dhcpv6_opts);
 }
 
 static void *
@@ -2698,6 +2727,8 @@ en_lflow_output_init(struct engine_node *node OVS_UNUSED,
     hmap_init(&data->lflows_processed);
     simap_init(&data->hd.ids);
     data->hd.pool = id_pool_create(1, UINT32_MAX - 1);
+    nd_ra_opts_init(&data->nd_ra_opts);
+    controller_event_opts_init(&data->controller_event_opts);
     return data;
 }
 
@@ -2722,6 +2753,8 @@ en_lflow_output_cleanup(void *data)
     lflow_cache_destroy(flow_output_data->pd.lflow_cache);
     simap_destroy(&flow_output_data->hd.ids);
     id_pool_destroy(flow_output_data->hd.pool);
+    nd_ra_opts_destroy(&flow_output_data->nd_ra_opts);
+    controller_event_opts_destroy(&flow_output_data->controller_event_opts);
 }
 
 static void
@@ -2771,6 +2804,7 @@ en_lflow_output_run(struct engine_node *node, void *data)
     struct lflow_ctx_out l_ctx_out;
     init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
     lflow_run(&l_ctx_in, &l_ctx_out);
+    destroy_lflow_ctx(&l_ctx_in, &l_ctx_out);
 
     engine_set_node_state(node, EN_UPDATED);
 }
@@ -2784,6 +2818,7 @@ lflow_output_sb_logical_flow_handler(struct engine_node *node, void *data)
     init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
 
     bool handled = lflow_handle_changed_flows(&l_ctx_in, &l_ctx_out);
+    destroy_lflow_ctx(&l_ctx_in, &l_ctx_out);
 
     engine_set_node_state(node, EN_UPDATED);
     return handled;
@@ -2846,12 +2881,12 @@ lflow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
     init_lflow_ctx(node, lfo, &l_ctx_in, &l_ctx_out);
-    if (!lflow_handle_changed_mc_groups(&l_ctx_in, &l_ctx_out)) {
-        return false;
-    }
+
+    bool handled = lflow_handle_changed_mc_groups(&l_ctx_in, &l_ctx_out);
+    destroy_lflow_ctx(&l_ctx_in, &l_ctx_out);
 
     engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return handled;
 }
 
 static bool
@@ -2862,12 +2897,12 @@ lflow_output_sb_port_binding_handler(struct engine_node *node, void *data)
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
     init_lflow_ctx(node, lfo, &l_ctx_in, &l_ctx_out);
-    if (!lflow_handle_changed_port_bindings(&l_ctx_in, &l_ctx_out)) {
-        return false;
-    }
+
+    bool handled = lflow_handle_changed_port_bindings(&l_ctx_in, &l_ctx_out);
+    destroy_lflow_ctx(&l_ctx_in, &l_ctx_out);
 
     engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return handled;
 }
 
 static bool
@@ -2876,23 +2911,24 @@ lflow_output_addr_sets_handler(struct engine_node *node, void *data)
     struct ed_type_addr_sets *as_data =
         engine_get_input_data("addr_sets", node);
 
-    struct ed_type_lflow_output *fo = data;
-
-    struct lflow_ctx_in l_ctx_in;
-    struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
-
-    bool changed;
-    const char *ref_name;
-
     if (!as_data->change_tracked) {
         return false;
     }
 
+    struct ed_type_lflow_output *fo = data;
+    struct lflow_ctx_out l_ctx_out;
+    struct lflow_ctx_in l_ctx_in;
+    const char *ref_name;
+    bool handled = true;
+    bool changed;
+
+    init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
+
     SSET_FOR_EACH (ref_name, &as_data->deleted) {
         if (!lflow_handle_changed_ref(REF_TYPE_ADDRSET, ref_name, &l_ctx_in,
                                       &l_ctx_out, &changed)) {
-            return false;
+            handled = false;
+            goto done;
         }
         if (changed) {
             engine_set_node_state(node, EN_UPDATED);
@@ -2907,7 +2943,8 @@ lflow_output_addr_sets_handler(struct engine_node *node, void *data)
                      " Reprocess related lflows.", shash_node->name);
             if (!lflow_handle_changed_ref(REF_TYPE_ADDRSET, shash_node->name,
                                           &l_ctx_in, &l_ctx_out, &changed)) {
-                return false;
+                handled = false;
+                goto done;
             }
         }
         if (changed) {
@@ -2917,14 +2954,17 @@ lflow_output_addr_sets_handler(struct engine_node *node, void *data)
     SSET_FOR_EACH (ref_name, &as_data->new) {
         if (!lflow_handle_changed_ref(REF_TYPE_ADDRSET, ref_name, &l_ctx_in,
                                       &l_ctx_out, &changed)) {
-            return false;
+            handled = false;
+            goto done;
         }
         if (changed) {
             engine_set_node_state(node, EN_UPDATED);
         }
     }
 
-    return true;
+done:
+    destroy_lflow_ctx(&l_ctx_in, &l_ctx_out);
+    return handled;
 }
 
 static bool
@@ -2933,23 +2973,24 @@ lflow_output_port_groups_handler(struct engine_node *node, void *data)
     struct ed_type_port_groups *pg_data =
         engine_get_input_data("port_groups", node);
 
-    struct ed_type_lflow_output *fo = data;
-
-    struct lflow_ctx_in l_ctx_in;
-    struct lflow_ctx_out l_ctx_out;
-    init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
-
-    bool changed;
-    const char *ref_name;
-
     if (!pg_data->change_tracked) {
         return false;
     }
 
+    struct ed_type_lflow_output *fo = data;
+    struct lflow_ctx_out l_ctx_out;
+    struct lflow_ctx_in l_ctx_in;
+    const char *ref_name;
+    bool handled = true;
+    bool changed;
+
+    init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
+
     SSET_FOR_EACH (ref_name, &pg_data->deleted) {
         if (!lflow_handle_changed_ref(REF_TYPE_PORTGROUP, ref_name, &l_ctx_in,
                                       &l_ctx_out, &changed)) {
-            return false;
+            handled = false;
+            goto done;
         }
         if (changed) {
             engine_set_node_state(node, EN_UPDATED);
@@ -2958,7 +2999,8 @@ lflow_output_port_groups_handler(struct engine_node *node, void *data)
     SSET_FOR_EACH (ref_name, &pg_data->updated) {
         if (!lflow_handle_changed_ref(REF_TYPE_PORTGROUP, ref_name, &l_ctx_in,
                                       &l_ctx_out, &changed)) {
-            return false;
+            handled = false;
+            goto done;
         }
         if (changed) {
             engine_set_node_state(node, EN_UPDATED);
@@ -2967,14 +3009,17 @@ lflow_output_port_groups_handler(struct engine_node *node, void *data)
     SSET_FOR_EACH (ref_name, &pg_data->new) {
         if (!lflow_handle_changed_ref(REF_TYPE_PORTGROUP, ref_name, &l_ctx_in,
                                       &l_ctx_out, &changed)) {
-            return false;
+            handled = false;
+            goto done;
         }
         if (changed) {
             engine_set_node_state(node, EN_UPDATED);
         }
     }
 
-    return true;
+done:
+    destroy_lflow_ctx(&l_ctx_in, &l_ctx_out);
+    return handled;
 }
 
 static bool
@@ -3002,6 +3047,8 @@ lflow_output_runtime_data_handler(struct engine_node *node,
     struct lflow_ctx_out l_ctx_out;
     struct ed_type_lflow_output *fo = data;
     struct hmap *lbs = NULL;
+    bool handled = true;
+
     init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
 
     struct tracked_datapath *tdp;
@@ -3018,7 +3065,8 @@ lflow_output_runtime_data_handler(struct engine_node *node,
                     tdp->dp, lbs_by_dp ? lbs_by_dp->dp_lbs : NULL,
                     lbs_by_dp ? lbs_by_dp->n_dp_lbs : 0,
                     &l_ctx_in, &l_ctx_out)) {
-                return false;
+                handled = false;
+                goto done;
             }
         }
         struct shash_node *shash_node;
@@ -3026,14 +3074,18 @@ lflow_output_runtime_data_handler(struct engine_node *node,
             struct tracked_lport *lport = shash_node->data;
             if (!lflow_handle_flows_for_lport(lport->pb, &l_ctx_in,
                                                 &l_ctx_out)) {
-                return false;
+                handled = false;
+                goto done;
             }
         }
     }
 
     load_balancers_by_dp_cleanup(lbs);
     engine_set_node_state(node, EN_UPDATED);
-    return true;
+
+done:
+    destroy_lflow_ctx(&l_ctx_in, &l_ctx_out);
+    return handled;
 }
 
 static bool
@@ -3045,6 +3097,7 @@ lflow_output_sb_load_balancer_handler(struct engine_node *node, void *data)
     init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
 
     bool handled = lflow_handle_changed_lbs(&l_ctx_in, &l_ctx_out);
+    destroy_lflow_ctx(&l_ctx_in, &l_ctx_out);
 
     engine_set_node_state(node, EN_UPDATED);
     return handled;
@@ -3059,6 +3112,7 @@ lflow_output_sb_fdb_handler(struct engine_node *node, void *data)
     init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
 
     bool handled = lflow_handle_changed_fdbs(&l_ctx_in, &l_ctx_out);
+    destroy_lflow_ctx(&l_ctx_in, &l_ctx_out);
 
     engine_set_node_state(node, EN_UPDATED);
     return handled;
