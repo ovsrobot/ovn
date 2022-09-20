@@ -11007,8 +11007,8 @@ AT_CHECK([ovn-nbctl --wait=sb sync], [0], [ignore])
 ovn-sbctl dump-flows > sbflows
 AT_CAPTURE_FILE([sbflows])
 
-hv1_gw1_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-gw1-0)
-hv1_gw2_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-gw2-0)
+hv1_gw1_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv1-gw1-0)
+hv1_gw2_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv1-gw2-0)
 
 OVS_WAIT_UNTIL([
     test 1 = $(as hv1 ovs-ofctl dump-flows br-int table=37 | grep -c "active_backup,ofport,members:$hv1_gw1_ofport,$hv1_gw2_ofport")
@@ -11141,7 +11141,7 @@ AT_CHECK([test $gw2_claim_ct = `cat gw2/ovn-controller.log | \
 grep -c "cr-alice: Claiming"`])
 
 OVS_WAIT_UNTIL([
-    bfd_status=$(as hv1 ovs-vsctl get interface ovn-gw2-0 bfd_status:state)
+    bfd_status=$(as hv1 ovs-vsctl get interface ovn-hv1-gw2-0 bfd_status:state)
     echo "bfd status = $bfd_status"
     test "$bfd_status" = "down"
 ])
@@ -11291,8 +11291,8 @@ wait_column "$hv1_ch_uuid" HA_Chassis_Group ref_chassis
 # Allow some time for ovn-northd and ovn-controller to catch up.
 check ovn-nbctl --wait=hv sync
 
-hv1_gw1_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-gw1-0)
-hv1_gw2_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-gw2-0)
+hv1_gw1_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv1-gw1-0)
+hv1_gw2_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv1-gw2-0)
 
 OVS_WAIT_UNTIL([
     test 1 = $(as hv1 ovs-ofctl dump-flows br-int table=37 | grep -c "active_backup,ofport,members:$hv1_gw1_ofport,$hv1_gw2_ofport")
@@ -13039,10 +13039,10 @@ bfd_dump() {
 
 bfd_dump
 
-hv1_gw1_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-gw1-0)
-hv1_gw2_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-gw2-0)
-hv2_gw1_ofport=$(as hv2 ovs-vsctl --bare --columns ofport find Interface name=ovn-gw1-0)
-hv2_gw2_ofport=$(as hv2 ovs-vsctl --bare --columns ofport find Interface name=ovn-gw2-0)
+hv1_gw1_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv1-gw1-0)
+hv1_gw2_ofport=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv1-gw2-0)
+hv2_gw1_ofport=$(as hv2 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv2-gw1-0)
+hv2_gw2_ofport=$(as hv2 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv2-gw2-0)
 
 echo $hv1_gw1_ofport
 echo $hv1_gw2_ofport
@@ -13121,7 +13121,7 @@ wait_row_count Port_Binding 1 logical_port=cr-outside chassis=$gw2_chassis
 as gw1
 for chassis in gw2 hv1 hv2; do
     echo "checking gw1 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-gw1-$chassis-0],[0],
              [[enable=true
 ]])
 done
@@ -13131,7 +13131,7 @@ done
 as gw2
 for chassis in gw1 hv1 hv2; do
     echo "checking gw2 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-gw2-$chassis-0],[0],
              [[enable=true
 ]])
 done
@@ -13140,12 +13140,12 @@ done
 as hv1
 for chassis in gw1 gw2; do
     echo "checking hv1 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-$chassis-0],[0],
              [[enable=true
 ]])
 done
 # make sure BFD is not enabled to hv2, we don't need it
-AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-0],[0],
+AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-hv2-0],[0],
          [[
 ]])
 
@@ -13154,12 +13154,12 @@ AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-0],[0],
 as hv2
 for chassis in gw1 gw2; do
     echo "checking hv2 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-$chassis-0],[0],
              [[enable=true
 ]])
 done
 # make sure BFD is not enabled to hv1, we don't need it
-AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-0],[0],
+AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-hv1-0],[0],
          [[
 ]])
 
@@ -13194,7 +13194,7 @@ as gw2
 for chassis in gw1 hv1 hv2; do
     echo "checking gw2 -> $chassis"
     OVS_WAIT_UNTIL([
-    bfd_cfg=$(ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0)
+    bfd_cfg=$(ovs-vsctl --bare --columns bfd find Interface name=ovn-gw2-$chassis-0)
     test "$bfd_cfg" = "enable=true min_rx=2000"
 ])
 done
@@ -13202,7 +13202,7 @@ ovn-nbctl --wait=hv set NB_Global . options:"bfd-min-tx"=1500
 for chassis in gw1 hv1 hv2; do
     echo "checking gw2 -> $chassis"
     OVS_WAIT_UNTIL([
-    bfd_cfg=$(ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0)
+    bfd_cfg=$(ovs-vsctl --bare --columns bfd find Interface name=ovn-gw2-$chassis-0)
     test "$bfd_cfg" = "enable=true min_rx=2000 min_tx=1500"
 ])
 done
@@ -13211,7 +13211,7 @@ ovn-nbctl --wait=hv set NB_Global . options:"bfd-mult"=5
 for chassis in gw1 hv1 hv2; do
     echo "checking gw2 -> $chassis"
     OVS_WAIT_UNTIL([
-    bfd_cfg=$(ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0)
+    bfd_cfg=$(ovs-vsctl --bare --columns bfd find Interface name=ovn-gw2-$chassis-0)
     test "$bfd_cfg" = "enable=true min_tx=1500 mult=5"
 ])
 done
@@ -13347,7 +13347,7 @@ grep active_backup | grep slaves:$hv2_gw2_ofport,$hv2_gw1_ofport \
 as gw1
 for chassis in gw2 hv1 hv2; do
     echo "checking gw1 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-gw1-$chassis-0],[0],
              [[enable=true
 ]])
 done
@@ -13356,7 +13356,7 @@ done
 as gw2
 for chassis in gw1 hv1 hv2; do
     echo "checking gw2 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-gw2-$chassis-0],[0],
              [[enable=true
 ]])
 done
@@ -13365,12 +13365,12 @@ done
 as hv1
 for chassis in gw1 gw2; do
     echo "checking hv1 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-$chassis-0],[0],
              [[enable=true
 ]])
 done
 # make sure BFD is not enabled to hv2, we don't need it
-AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-0],[0],
+AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-hv2-0],[0],
          [[
 ]])
 
@@ -13378,12 +13378,12 @@ AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-0],[0],
 as hv2
 for chassis in gw1 gw2; do
     echo "checking hv2 -> $chassis"
-    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-$chassis-0],[0],
+    AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-$chassis-0],[0],
              [[enable=true
 ]])
 done
 # make sure BFD is not enabled to hv1, we don't need it
-AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-0],[0],
+AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv2-hv1-0],[0],
          [[
 ]])
 
@@ -19690,42 +19690,42 @@ check ovn-nbctl --wait=hv sync
 dnl Assert that each Chassis has a tunnel formed to every other Chassis
 as hv1
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv2-0
-ovn-hv3-0
-ovn-hv4-0
-ovn-hv5-0
+[[ovn-hv1-hv2-0
+ovn-hv1-hv3-0
+ovn-hv1-hv4-0
+ovn-hv1-hv5-0
 ]])
 
 as hv2
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv3-0
-ovn-hv4-0
-ovn-hv5-0
+[[ovn-hv2-hv1-0
+ovn-hv2-hv3-0
+ovn-hv2-hv4-0
+ovn-hv2-hv5-0
 ]])
 
 as hv3
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv2-0
-ovn-hv4-0
-ovn-hv5-0
+[[ovn-hv3-hv1-0
+ovn-hv3-hv2-0
+ovn-hv3-hv4-0
+ovn-hv3-hv5-0
 ]])
 
 as hv4
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv2-0
-ovn-hv3-0
-ovn-hv5-0
+[[ovn-hv4-hv1-0
+ovn-hv4-hv2-0
+ovn-hv4-hv3-0
+ovn-hv4-hv5-0
 ]])
 
 as hv5
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv2-0
-ovn-hv3-0
-ovn-hv4-0
+[[ovn-hv5-hv1-0
+ovn-hv5-hv2-0
+ovn-hv5-hv3-0
+ovn-hv5-hv4-0
 ]])
 
 dnl Let's now add some Chassis to different transport zones
@@ -19756,28 +19756,28 @@ check ovn-nbctl --wait=hv sync
 
 as hv1
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv2-0
-ovn-hv3-0
+[[ovn-hv1-hv2-0
+ovn-hv1-hv3-0
 ]])
 
 as hv2
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
+[[ovn-hv2-hv1-0
 ]])
 
 as hv3
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
+[[ovn-hv3-hv1-0
 ]])
 
 as hv4
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv5-0
+[[ovn-hv4-hv5-0
 ]])
 
 as hv5
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv4-0
+[[ovn-hv5-hv4-0
 ]])
 
 dnl Removing the transport zones should make all Chassis to create
@@ -19792,42 +19792,42 @@ check ovn-nbctl --wait=hv sync
 
 as hv1
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv2-0
-ovn-hv3-0
-ovn-hv4-0
-ovn-hv5-0
+[[ovn-hv1-hv2-0
+ovn-hv1-hv3-0
+ovn-hv1-hv4-0
+ovn-hv1-hv5-0
 ]])
 
 as hv2
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv3-0
-ovn-hv4-0
-ovn-hv5-0
+[[ovn-hv2-hv1-0
+ovn-hv2-hv3-0
+ovn-hv2-hv4-0
+ovn-hv2-hv5-0
 ]])
 
 as hv3
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv2-0
-ovn-hv4-0
-ovn-hv5-0
+[[ovn-hv3-hv1-0
+ovn-hv3-hv2-0
+ovn-hv3-hv4-0
+ovn-hv3-hv5-0
 ]])
 
 as hv4
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv2-0
-ovn-hv3-0
-ovn-hv5-0
+[[ovn-hv4-hv1-0
+ovn-hv4-hv2-0
+ovn-hv4-hv3-0
+ovn-hv4-hv5-0
 ]])
 
 as hv5
 AT_CHECK([ovs-vsctl --bare --columns=name find interface type="geneve" | awk NF | sort], [0],
-[[ovn-hv1-0
-ovn-hv2-0
-ovn-hv3-0
-ovn-hv4-0
+[[ovn-hv5-hv1-0
+ovn-hv5-hv2-0
+ovn-hv5-hv3-0
+ovn-hv5-hv4-0
 ]])
 
 OVN_CLEANUP([hv1], [hv2], [hv3])
@@ -25690,14 +25690,14 @@ check ovn-nbctl fwd-group-del fwd_grp1
 check ovn-nbctl --wait=hv --liveness fwd-group-add fwd_grp1 ls2 172.16.1.11 00:11:de:ad:be:ef lsp21 lsp22
 
 # Verify openflow group members
-ofport_lsp21=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv2-0)
+ofport_lsp21=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv1-hv2-0)
 tunnel_key=`ovn-sbctl --bare --column tunnel_key find port_binding logical_port=lsp21`
 AT_CHECK([as hv1 ovs-ofctl -O OpenFlow13 dump-groups br-int | \
     grep "bucket=watch_port:$ofport_lsp21,actions=load:0x"$tunnel_key | wc -l], [0], [dnl
 1
 ])
 
-ofport_lsp22=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv3-0)
+ofport_lsp22=$(as hv1 ovs-vsctl --bare --columns ofport find Interface name=ovn-hv1-hv3-0)
 tunnel_key=`ovn-sbctl --bare --column tunnel_key find port_binding logical_port=lsp22`
 AT_CHECK([as hv1 ovs-ofctl -O OpenFlow13 dump-groups br-int | \
     grep "bucket=watch_port:$ofport_lsp22,actions=load:0x"$tunnel_key | wc -l], [0], [dnl

@@ -261,7 +261,7 @@ ovs-vsctl \
 ovn_attach n1 br-phys 192.168.0.1
 
 check_tunnel_property () {
-    test "`ovs-vsctl get interface ovn-fakech-0 $1`" = "$2"
+    test "`ovs-vsctl get interface ovn-hv-fakechassis-0 $1`" = "$2"
 }
 
 # create "empty" chassis. vxlan is used here as a stub
@@ -273,8 +273,8 @@ ovn-sbctl chassis-add fakechassis vxlan 192.168.0.2
 # the chassis-id in ovn-chassis-id); if we supply a different IP here
 # we won't be able to co-relate this to the tunnel port that was created
 # in the previous step and, as a result, will end up creating another tunnel,
-# ie. we can't just lookup using "ovn-fakech-0". So, need to use the same IP
-# as above, i.e 192.168.0.2, here.
+# ie. we can't just lookup using "ovn-hv-fakechassis-0". So, need to use the
+# same IP as above, i.e 192.168.0.2, here.
 encap_uuid=$(ovn-sbctl add chassis fakechassis encaps @encap -- --id=@encap create encap type=geneve ip="192.168.0.2")
 OVS_WAIT_UNTIL([check_tunnel_property type geneve])
 
@@ -292,11 +292,11 @@ ovn-sbctl set encap ${encap_uuid} ip=192.168.0.2
 OVS_WAIT_UNTIL([check_tunnel_property options:remote_ip "\"192.168.0.2\""])
 
 # Change the type on the OVS side and check than OVN fixes it
-ovs-vsctl set interface ovn-fakech-0 type=vxlan
+ovs-vsctl set interface ovn-hv-fakechassis-0 type=vxlan
 OVS_WAIT_UNTIL([check_tunnel_property type geneve])
 
 # Delete the port entirely and it should be resurrected
-ovs-vsctl del-port ovn-fakech-0
+ovs-vsctl del-port ovn-hv-fakechassis-0
 OVS_WAIT_UNTIL([check_tunnel_property type geneve])
 
 # set `ovn-set-local-ip` option to true and check if tunnel parameters
@@ -305,7 +305,7 @@ ovs-vsctl set open . external_ids:ovn-set-local-ip=true
 OVS_WAIT_UNTIL([check_tunnel_property options:local_ip "\"192.168.0.1\""])
 
 # Change the local_ip on the OVS side and check than OVN fixes it
-ovs-vsctl set interface ovn-fakech-0 options:local_ip="1.1.1.1"
+ovs-vsctl set interface ovn-hv-fakechassis-0 options:local_ip="1.1.1.1"
 OVS_WAIT_UNTIL([check_tunnel_property options:local_ip "\"192.168.0.1\""])
 
 # Gracefully terminate daemons
@@ -769,7 +769,7 @@ ovs-vsctl \
 ovn_attach n1 br-phys 192.168.0.1
 
 check_tunnel_property () {
-    test "`ovs-vsctl get interface ovn-fakech-0 $1`" = "$2"
+    test "`ovs-vsctl get interface ovn-hv-fakechassis-0 $1`" = "$2"
 }
 
 # without any tos options
@@ -780,7 +780,7 @@ no_tos_options="{csum=\"true\", key=flow, remote_ip=\"192.168.0.2\"}"
 ovn-sbctl chassis-add fakechassis geneve 192.168.0.2
 OVS_WAIT_UNTIL([check_tunnel_property type geneve])
 
-tos_option=$(ovs-vsctl get interface ovn-fakech-0 options)
+tos_option=$(ovs-vsctl get interface ovn-hv-fakechassis-0 options)
 AT_CHECK([test "$tos_option" = "$no_tos_options"], [0], [])
 
 expected_tos_option="inherit"
@@ -791,7 +791,7 @@ ovs-vsctl \
 # now, wait for a sec
 sleep 1
 
-tos_option=$(ovs-vsctl get interface ovn-fakech-0 options:tos)
+tos_option=$(ovs-vsctl get interface ovn-hv-fakechassis-0 options:tos)
 AT_CHECK([test "$tos_option" = "$expected_tos_option"], [0], [])
 
 # Try another value
@@ -803,7 +803,7 @@ ovs-vsctl \
 # now, wait for a sec
 sleep 1
 
-tos_option=$(ovs-vsctl get interface ovn-fakech-0 options:tos)
+tos_option=$(ovs-vsctl get interface ovn-hv-fakechassis-0 options:tos)
 AT_CHECK([test "$tos_option" = "\"$expected_tos_option\""], [0], [])
 
 # Remove tos option and check if we are back to the original state
@@ -814,7 +814,7 @@ ovs-vsctl \
 # now, wait for a sec
 sleep 1
 
-tos_option=$(ovs-vsctl get interface ovn-fakech-0 options)
+tos_option=$(ovs-vsctl get interface ovn-hv-fakechassis-0 options)
 AT_CHECK([test "$tos_option" = "$no_tos_options"], [0], [])
 
 # Gracefully terminate daemons

@@ -75,7 +75,8 @@ tunnel_create_name(struct tunnel_ctx *tc, const char *chassis_id)
 
     for (i = 0; i < UINT16_MAX; i++) {
         char *port_name;
-        port_name = xasprintf("ovn-%.6s-%x", chassis_id, i);
+        port_name = xasprintf(
+            "ovn-%s-%s-%x", tc->this_chassis->name, chassis_id, i);
 
         if (!sset_contains(&tc->port_names, port_name)) {
             return port_name;

@@ -251,7 +251,7 @@ for i in `seq 1 5`; do
     for j in `seq 1 5`; do
         if [[ $i -ne $j ]] ; then
             OVS_WAIT_UNTIL([
-                test $(as hv$i ovs-vsctl list interface ovn-hv$j-0 | \
+                test $(as hv$i ovs-vsctl list interface ovn-hv$i-hv$j-0 | \
             grep -c tunnel_egress_iface_carrier=up) -eq 1
             ])
         fi
@@ -519,7 +519,7 @@ OVN_CONTROLLER_EXPECT_HIT(
 
 # Make hv4 master. There is remote possibility that full recompute
 # triggers for hv1-hv5 after hv4 becomes master because of updates to the
-# ovn-hv$i-0 interfaces. Most of the time there will be no recompute.
+# ovn-hv$i-hv$j-0 interfaces. Most of the time there will be no recompute.
 ovn-nbctl --wait=hv lrp-set-gateway-chassis lr1-public hv4 40
 hv4_ch=$(ovn-sbctl --bare --columns _uuid list chassis hv4)
 OVS_WAIT_UNTIL([ovn-sbctl find port_binding logical_port=cr-lr1-public chassis=$hv4_ch])
