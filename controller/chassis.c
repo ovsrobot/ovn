@@ -37,6 +37,8 @@ VLOG_DEFINE_THIS_MODULE(chassis);
 #define HOST_NAME_MAX 255
 #endif /* HOST_NAME_MAX */
 
+char *file_system_id = NULL;
+
 /*
  * Structure for storing the chassis config parsed from the ovs table.
  */
@@ -277,6 +279,10 @@ chassis_parse_ovs_iface_types(char **iface_types, size_t n_iface_types,
 const char *
 get_ovs_chassis_id(const struct ovsrec_open_vswitch_table *ovs_table)
 {
+    if (file_system_id) {
+        return file_system_id;
+    }
+
     const struct ovsrec_open_vswitch *cfg
         = ovsrec_open_vswitch_table_first(ovs_table);
     const char *chassis_id = cfg ? smap_get(&cfg->external_ids, "system-id")
