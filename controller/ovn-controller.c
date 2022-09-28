@@ -3465,6 +3465,56 @@ check_northd_version(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
     return true;
 }
 
+static void
+store_chassis_index_if_needed(
+        const struct ovsrec_open_vswitch_table *ovs_table)
+{
+    const struct ovsrec_open_vswitch *cfg =
+        ovsrec_open_vswitch_table_first(ovs_table);
+    const char *chassis_id = get_ovs_chassis_id(ovs_table);
+
+    char *idx_key = xasprintf(CHASSIS_IDX_PREFIX "%s", chassis_id);
+    const char *chassis_idx = smap_get(&cfg->other_config, idx_key);
+    if (!chassis_idx) {
+        /* collect all indices so far consumed by other chassis */
+        struct sset used_indices = SSET_INITIALIZER(&used_indices);
+        struct smap_node *node;
+        SMAP_FOR_EACH (node, &cfg->other_config) {
+            if (!strncmp(node->key, CHASSIS_IDX_PREFIX, 16)) {
+                sset_add(&used_indices, node->value);
+            }
+        }
+        /* first chassis on the host */
+        if (!sset_contains(&used_indices, "")) {
+            ovsrec_open_vswitch_update_other_config_setkey(
+                cfg, idx_key, "");
+            goto out;
+        }
+        /* next chassis get an alphanum index allocated */
+        char idx[] = "0";
+        for (char i = '0'; i <= '9'; i++) {
+            idx[0] = i;
+            if (!sset_contains(&used_indices, idx)) {
+                ovsrec_open_vswitch_update_other_config_setkey(
+                    cfg, idx_key, idx);
+                goto out;
+            }
+        }
+        for (char i = 'a'; i <= 'z'; i++) {
+            idx[0] = i;
+            if (!sset_contains(&used_indices, idx)) {
+                ovsrec_open_vswitch_update_other_config_setkey(
+                    cfg, idx_key, idx);
+                goto out;
+            }
+        }
+        /* all indices consumed; it's safer to abort */
+        ovs_abort();
+    }
+out:
+    free(idx_key);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -4011,6 +4061,12 @@ main(int argc, char *argv[])
                 ovsrec_open_vswitch_update_other_config_setkey(
                     cfg, "vlan-limit", "0");
             }
+        }
+
+        static bool chassis_idx_stored = false;
+        if (ovs_idl_txn && !chassis_idx_stored) {
+            store_chassis_index_if_needed(ovs_table);
+            chassis_idx_stored = true;
         }
 
         if (ovsdb_idl_has_ever_connected(ovnsb_idl_loop.idl) &&

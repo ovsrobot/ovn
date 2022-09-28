@@ -22,6 +22,7 @@
 #include "lib/vswitch-idl.h"
 #include "openvswitch/vlog.h"
 #include "lib/ovn-sb-idl.h"
+#include "lib/ovsdb-idl.h"
 #include "ovn-controller.h"
 #include "smap.h"
 
@@ -59,6 +60,7 @@ struct tunnel_ctx {
     struct sset port_names;
 
     struct ovsdb_idl_txn *ovs_txn;
+    const struct ovsrec_open_vswitch_table *ovs_table;
     const struct ovsrec_bridge *br_int;
     const struct sbrec_chassis *this_chassis;
 };
@@ -68,14 +70,21 @@ struct chassis_node {
     const struct ovsrec_bridge *bridge;
 };
 
+static const char *get_chassis_idx(struct tunnel_ctx *tc)
+{
+    const struct ovsrec_open_vswitch *cfg =
+        ovsrec_open_vswitch_table_first(tc->ovs_table);
+    char *idx_key = xasprintf(CHASSIS_IDX_PREFIX "%s", tc->this_chassis->name);
+    return smap_get_def(&cfg->other_config, idx_key, "");
+}
+
 static char *
 tunnel_create_name(struct tunnel_ctx *tc, const char *chassis_id)
 {
-    int i;
-
-    for (i = 0; i < UINT16_MAX; i++) {
-        char *port_name;
-        port_name = xasprintf("ovn-%.6s-%x", chassis_id, i);
+    for (int i = 0; i < UINT16_MAX; i++) {
+        const char *idx = get_chassis_idx(tc);
+        char *port_name = xasprintf(
+            "ovn%s-%.*s-%x", idx, strlen(idx) ? 5 : 6, chassis_id, i);
 
         if (!sset_contains(&tc->port_names, port_name)) {
             return port_name;
@@ -400,7 +409,8 @@ encaps_run(struct ovsdb_idl_txn *ovs_idl_txn,
         .chassis = SHASH_INITIALIZER(&tc.chassis),
         .port_names = SSET_INITIALIZER(&tc.port_names),
         .br_int = br_int,
-        .this_chassis = this_chassis
+        .this_chassis = this_chassis,
+        .ovs_table = ovs_table,
     };
 
     tc.ovs_txn = ovs_idl_txn;
