@@ -314,4 +314,30 @@ void daemon_started_recently_ignore(void);
 bool daemon_started_recently(void);
 int64_t daemon_startup_ts(void);
 
+const char *
+get_chassis_external_id_value(const struct smap *,
+                              const char *chassis_id,
+                              const char *option_key,
+                              const char *def);
+int
+get_chassis_external_id_value_int(const struct smap *,
+                                  const char *chassis_id,
+                                  const char *option_key,
+                                  int def);
+unsigned int
+get_chassis_external_id_value_uint(const struct smap *,
+                                   const char *chassis_id,
+                                   const char *option_key,
+                                   unsigned int def);
+unsigned long long int
+get_chassis_external_id_value_ullong(const struct smap *external_ids,
+                                     const char *chassis_id,
+                                     const char *option_key,
+                                     unsigned long long int def);
+bool
+get_chassis_external_id_value_bool(const struct smap *,
+                                   const char *chassis_id,
+                                   const char *option_key,
+                                   bool def);
+
 #endif /* OVN_UTIL_H */
