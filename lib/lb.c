@@ -710,7 +710,8 @@ ovn_lb_group_find(const struct hmap *lb_groups, const struct uuid *uuid)
 
 struct ovn_controller_lb *
 ovn_controller_lb_create(const struct sbrec_load_balancer *sbrec_lb,
-                         const struct smap *template_vars)
+                         const struct smap *template_vars,
+                         struct sset *template_vars_ref)
 {
     struct ovn_controller_lb *lb = xzalloc(sizeof *lb);
 
@@ -726,10 +727,10 @@ ovn_controller_lb_create(const struct sbrec_load_balancer *sbrec_lb,
 
         char *key_s = lexer_parse_template_string(xstrdup(node->key),
                                                   template_vars,
-                                                  NULL);
+                                                  template_vars_ref);
         char *value_s = lexer_parse_template_string(xstrdup(node->value),
                                                     template_vars,
-                                                    NULL);
+                                                    template_vars_ref);
         char *error = ovn_lb_vip_init_explicit(lb_vip, key_s, value_s);
         if (error) {
             free(error);

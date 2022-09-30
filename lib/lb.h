@@ -186,7 +186,8 @@ struct ovn_controller_lb {
 
 struct ovn_controller_lb *ovn_controller_lb_create(
     const struct sbrec_load_balancer *,
-    const struct smap *template_vars);
+    const struct smap *template_vars,
+    struct sset *template_vars_ref);
 void ovn_controller_lb_destroy(struct ovn_controller_lb *);
 
 char *ovn_lb_vip_init(struct ovn_lb_vip *lb_vip, const char *lb_key,
