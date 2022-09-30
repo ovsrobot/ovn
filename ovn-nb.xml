@@ -1908,6 +1908,18 @@
         requests only for VIPs that are part of a router's subnet.  The default
         value of this option, if not specified, is <code>reachable</code>.
       </column>
+
+      <column name="options" key="template">
+        Option to be set to <code>true</code>, if the load balancer is a
+        template.  In this case the template variables used within the
+        load balancer VIPs and backends will be instantiated differently
+        on different chassis.
+      </column>
+
+      <column name="options" key="address-family">
+        Address family used by the load balancer.  This value is used only
+        when the load balancer is a template.
+      </column>
     </group>
   </table>
 

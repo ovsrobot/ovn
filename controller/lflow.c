@@ -1993,7 +1993,9 @@ add_lb_ct_snat_hairpin_flows(struct ovn_controller_lb *lb,
 
 static void
 consider_lb_hairpin_flows(const struct sbrec_load_balancer *sbrec_lb,
-                          const struct hmap *local_datapaths, bool use_ct_mark,
+                          const struct hmap *local_datapaths,
+                          const struct smap *template_vars,
+                          bool use_ct_mark,
                           struct ovn_desired_flow_table *flow_table,
                           struct simap *ids)
 {
@@ -2029,7 +2031,8 @@ consider_lb_hairpin_flows(const struct sbrec_load_balancer *sbrec_lb,
         return;
     }
 
-    struct ovn_controller_lb *lb = ovn_controller_lb_create(sbrec_lb);
+    struct ovn_controller_lb *lb = ovn_controller_lb_create(sbrec_lb,
+                                                            template_vars);
     uint8_t lb_proto = IPPROTO_TCP;
     if (lb->slb->protocol && lb->slb->protocol[0]) {
         if (!strcmp(lb->slb->protocol, "udp")) {
@@ -2059,7 +2062,9 @@ consider_lb_hairpin_flows(const struct sbrec_load_balancer *sbrec_lb,
  * backends to handle the load balanced hairpin traffic. */
 static void
 add_lb_hairpin_flows(const struct sbrec_load_balancer_table *lb_table,
-                     const struct hmap *local_datapaths, bool use_ct_mark,
+                     const struct hmap *local_datapaths,
+                     const struct smap *template_vars,
+                     bool use_ct_mark,
                      struct ovn_desired_flow_table *flow_table,
                      struct simap *ids,
                      struct id_pool *pool)
@@ -2082,8 +2087,8 @@ add_lb_hairpin_flows(const struct sbrec_load_balancer_table *lb_table,
             ovs_assert(id_pool_alloc_id(pool, &id));
             simap_put(ids, lb->name, id);
         }
-        consider_lb_hairpin_flows(lb, local_datapaths, use_ct_mark, flow_table,
-                                  ids);
+        consider_lb_hairpin_flows(lb, local_datapaths, template_vars,
+                                  use_ct_mark, flow_table, ids);
     }
 }
 
@@ -2220,6 +2225,7 @@ lflow_run(struct lflow_ctx_in *l_ctx_in, struct lflow_ctx_out *l_ctx_out)
                        l_ctx_in->local_datapaths,
                        l_ctx_out->flow_table);
     add_lb_hairpin_flows(l_ctx_in->lb_table, l_ctx_in->local_datapaths,
+                         l_ctx_in->template_vars,
                          l_ctx_in->lb_hairpin_use_ct_mark,
                          l_ctx_out->flow_table,
                          l_ctx_out->hairpin_lb_ids,
@@ -2351,6 +2357,7 @@ lflow_add_flows_for_datapath(const struct sbrec_datapath_binding *dp,
      * associated. */
     for (size_t i = 0; i < n_dp_lbs; i++) {
         consider_lb_hairpin_flows(dp_lbs[i], l_ctx_in->local_datapaths,
+                                  l_ctx_in->template_vars,
                                   l_ctx_in->lb_hairpin_use_ct_mark,
                                   l_ctx_out->flow_table,
                                   l_ctx_out->hairpin_lb_ids);
@@ -2493,6 +2500,7 @@ lflow_handle_changed_lbs(struct lflow_ctx_in *l_ctx_in,
         VLOG_DBG("Add load balancer hairpin flows for "UUID_FMT,
                  UUID_ARGS(&lb->header_.uuid));
         consider_lb_hairpin_flows(lb, l_ctx_in->local_datapaths,
+                                  l_ctx_in->template_vars,
                                   l_ctx_in->lb_hairpin_use_ct_mark,
                                   l_ctx_out->flow_table,
                                   l_ctx_out->hairpin_lb_ids);
