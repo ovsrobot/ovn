@@ -615,6 +615,13 @@ ovn_logical_flow_hash_datapath(const struct uuid *logical_datapath,
     return hash_add(hash, uuid_hash(logical_datapath));
 }
 
+bool
+chassis_name_equals(const char *chassis_name,
+                    const struct sbrec_chassis *target)
+{
+    return !strcmp(chassis_name, target->name) ||
+        !strcmp(chassis_name, target->hostname);
+}
 
 struct tnlid_node {
     struct hmap_node hmap_node;

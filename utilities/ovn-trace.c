@@ -505,6 +505,7 @@ static struct hmap dhcp_opts;   /* Contains "struct gen_opts_map"s. */
 static struct hmap dhcpv6_opts; /* Contains "struct gen_opts_map"s. */
 static struct hmap nd_ra_opts; /* Contains "struct gen_opts_map"s. */
 static struct controller_event_options event_opts;
+static struct smap template_vars;
 
 static struct ovntrace_datapath *
 ovntrace_datapath_find_by_sb_uuid(const struct uuid *sb_uuid)
@@ -955,9 +956,13 @@ parse_lflow_for_datapath(const struct sbrec_logical_flow *sblf,
 
         char *error;
         struct expr *match;
-        match = expr_parse_string(sblf->match, &symtab, &address_sets,
+        char *match_s = lexer_parse_template_string(xstrdup(sblf->match),
+                                                    &template_vars,
+                                                    NULL);
+        match = expr_parse_string(match_s, &symtab, &address_sets,
                                   &port_groups, NULL, NULL, dp->tunnel_key,
                                   &error);
+        free(match_s);
         if (error) {
             VLOG_WARN("%s: parsing expression failed (%s)",
                       sblf->match, error);
@@ -980,7 +985,11 @@ parse_lflow_for_datapath(const struct sbrec_logical_flow *sblf,
         uint64_t stub[1024 / 8];
         struct ofpbuf ovnacts = OFPBUF_STUB_INITIALIZER(stub);
         struct expr *prereqs;
-        error = ovnacts_parse_string(sblf->actions, &pp, &ovnacts, &prereqs);
+        char *actions_s = lexer_parse_template_string(xstrdup(sblf->actions),
+                                                      &template_vars,
+                                                      NULL);
+        error = ovnacts_parse_string(actions_s, &pp, &ovnacts, &prereqs);
+        free(actions_s);
         if (error) {
             VLOG_WARN("%s: parsing actions failed (%s)", sblf->actions, error);
             free(error);
@@ -1078,6 +1087,7 @@ read_gen_opts(void)
     nd_ra_opts_init(&nd_ra_opts);
 
     controller_event_opts_init(&event_opts);
+    smap_init(&template_vars);
 }
 
 static void
@@ -3428,9 +3438,13 @@ trace_parse(const char *dp_s, const char *flow_s,
          *
          * First make sure that the expression parses. */
         char *error;
-        struct expr *e = expr_parse_string(flow_s, &symtab, &address_sets,
+        char *flow_exp_s = lexer_parse_template_string(xstrdup(flow_s),
+                                                       &template_vars,
+                                                       NULL);
+        struct expr *e = expr_parse_string(flow_exp_s, &symtab, &address_sets,
                                            &port_groups, NULL, NULL, 0,
                                            &error);
+        free(flow_exp_s);
         if (!e) {
             return trace_parse_error(error);
         }
@@ -3455,9 +3469,13 @@ trace_parse(const char *dp_s, const char *flow_s,
         free(port_name);
     }
 
-    char *error = expr_parse_microflow(flow_s, &symtab, &address_sets,
+    char *flow_exp_s = lexer_parse_template_string(xstrdup(flow_s),
+                                                   &template_vars,
+                                                   NULL);
+    char *error = expr_parse_microflow(flow_exp_s, &symtab, &address_sets,
                                        &port_groups, ovntrace_lookup_port,
                                        *dpp, uflow);
+    free(flow_exp_s);
     if (error) {
         return trace_parse_error(error);
     }

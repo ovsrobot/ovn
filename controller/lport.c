@@ -134,8 +134,7 @@ lport_can_bind_on_this_chassis(const struct sbrec_chassis *chassis_rec,
     enum can_bind can_bind = CAN_BIND_AS_MAIN;
     for (chassis = strtok_r(tokstr, ",", &save_ptr); chassis != NULL;
          chassis = strtok_r(NULL, ",", &save_ptr)) {
-        if (!strcmp(chassis, chassis_rec->name)
-                || !strcmp(chassis, chassis_rec->hostname)) {
+        if (chassis_name_equals(chassis, chassis_rec)) {
             free(tokstr);
             return can_bind;
         }

@@ -81,6 +81,8 @@ convert_match_to_expr(const struct sbrec_logical_flow *,
                       const struct local_datapath *ldp,
                       struct expr **prereqs, const struct shash *addr_sets,
                       const struct shash *port_groups,
+                      const struct smap *template_vars,
+                      struct sset *template_vars_ref,
                       struct objdep_mgr *, bool *pg_addr_set_ref);
 static void
 add_matches_to_flow_table(const struct sbrec_logical_flow *,
@@ -356,10 +358,15 @@ consider_lflow_for_added_as_ips__(
         .n_tables = LOG_PIPELINE_LEN,
         .cur_ltable = lflow->table_id,
     };
+    struct sset template_vars_ref = SSET_INITIALIZER(&template_vars_ref);
     struct expr *prereqs = NULL;
     char *error;
 
-    error = ovnacts_parse_string(lflow->actions, &pp, &ovnacts, &prereqs);
+    char *actions_s = lexer_parse_template_string(xstrdup(lflow->actions),
+                                                  l_ctx_in->template_vars,
+                                                  &template_vars_ref);
+    error = ovnacts_parse_string(actions_s, &pp, &ovnacts, &prereqs);
+    free(actions_s);
     if (error) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         VLOG_WARN_RL(&rl, "error parsing actions \"%s\": %s",
@@ -367,6 +374,7 @@ consider_lflow_for_added_as_ips__(
         free(error);
         ovnacts_free(ovnacts.data, ovnacts.size);
         ofpbuf_uninit(&ovnacts);
+        sset_destroy(&template_vars_ref);
         return true;
     }
 
@@ -430,6 +438,8 @@ consider_lflow_for_added_as_ips__(
     struct expr *expr = convert_match_to_expr(lflow, ldp, &prereqs,
                                               l_ctx_in->addr_sets,
                                               l_ctx_in->port_groups,
+                                              l_ctx_in->template_vars,
+                                              &template_vars_ref,
                                               l_ctx_out->lflow_deps_mgr, NULL);
     shash_replace((struct shash *)l_ctx_in->addr_sets, as_name, real_as);
     if (new_fake_as) {
@@ -501,6 +511,14 @@ done:
     ofpbuf_uninit(&ovnacts);
     expr_destroy(expr);
     expr_matches_destroy(&matches);
+
+    const char *tv_name;
+    SSET_FOR_EACH (tv_name, &template_vars_ref) {
+        objdep_mgr_add(l_ctx_out->lflow_deps_mgr, OBJDEP_TYPE_TEMPLATE,
+                       tv_name, &lflow->header_.uuid);
+    }
+    sset_destroy(&template_vars_ref);
+
     return handled;
 }
 
@@ -911,6 +929,8 @@ convert_match_to_expr(const struct sbrec_logical_flow *lflow,
                       struct expr **prereqs,
                       const struct shash *addr_sets,
                       const struct shash *port_groups,
+                      const struct smap *template_vars,
+                      struct sset *template_vars_ref,
                       struct objdep_mgr *mgr,
                       bool *pg_addr_set_ref)
 {
@@ -918,11 +938,16 @@ convert_match_to_expr(const struct sbrec_logical_flow *lflow,
     struct sset port_groups_ref = SSET_INITIALIZER(&port_groups_ref);
     char *error = NULL;
 
-    struct expr *e = expr_parse_string(lflow->match, &symtab, addr_sets,
+    char *match_s = lexer_parse_template_string(xstrdup(lflow->match),
+                                                template_vars,
+                                                template_vars_ref);
+    struct expr *e = expr_parse_string(match_s, &symtab, addr_sets,
                                        port_groups, &addr_sets_ref,
                                        &port_groups_ref,
                                        ldp->datapath->tunnel_key,
                                        &error);
+    free(match_s);
+
     struct shash_node *addr_sets_ref_node;
     SHASH_FOR_EACH (addr_sets_ref_node, &addr_sets_ref) {
         objdep_mgr_add_with_refcount(mgr, OBJDEP_TYPE_ADDRSET,
@@ -1027,7 +1052,12 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
     struct expr *prereqs = NULL;
     char *error;
 
-    error = ovnacts_parse_string(lflow->actions, &pp, &ovnacts, &prereqs);
+    struct sset template_vars_ref = SSET_INITIALIZER(&template_vars_ref);
+    char *actions_s = lexer_parse_template_string(xstrdup(lflow->actions),
+                                                  l_ctx_in->template_vars,
+                                                  &template_vars_ref);
+    error = ovnacts_parse_string(actions_s, &pp, &ovnacts, &prereqs);
+    free(actions_s);
     if (error) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         VLOG_WARN_RL(&rl, "error parsing actions \"%s\": %s",
@@ -1035,6 +1065,7 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
         free(error);
         ovnacts_free(ovnacts.data, ovnacts.size);
         ofpbuf_uninit(&ovnacts);
+        sset_destroy(&template_vars_ref);
         return;
     }
 
@@ -1085,6 +1116,8 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
     case LCACHE_T_NONE:
         expr = convert_match_to_expr(lflow, ldp, &prereqs, l_ctx_in->addr_sets,
                                      l_ctx_in->port_groups,
+                                     l_ctx_in->template_vars,
+                                     &template_vars_ref,
                                      l_ctx_out->lflow_deps_mgr,
                                      &pg_addr_set_ref);
         if (!expr) {
@@ -1099,11 +1132,13 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
     }
 
     /* If caching is enabled and this is a not cached expr that doesn't refer
-     * to address sets or port groups, save it to potentially cache it later.
+     * to address sets, port groups, or template variables, save it to
+     * potentially cache it later.
      */
     if (lcv_type == LCACHE_T_NONE
             && lflow_cache_is_enabled(l_ctx_out->lflow_cache)
-            && !pg_addr_set_ref) {
+            && !pg_addr_set_ref
+            && sset_is_empty(&template_vars_ref)) {
         cached_expr = expr_clone(expr);
     }
 
@@ -1188,6 +1223,13 @@ done:
     expr_destroy(cached_expr);
     expr_matches_destroy(matches);
     free(matches);
+
+    const char *tv_name;
+    SSET_FOR_EACH (tv_name, &template_vars_ref) {
+        objdep_mgr_add(l_ctx_out->lflow_deps_mgr, OBJDEP_TYPE_TEMPLATE,
+                       tv_name, &lflow->header_.uuid);
+    }
+    sset_destroy(&template_vars_ref);
 }
 
 static void
@@ -1951,8 +1993,7 @@ add_lb_ct_snat_hairpin_flows(struct ovn_controller_lb *lb,
 
 static void
 consider_lb_hairpin_flows(const struct sbrec_load_balancer *sbrec_lb,
-                          const struct hmap *local_datapaths,
-                          bool use_ct_mark,
+                          const struct hmap *local_datapaths, bool use_ct_mark,
                           struct ovn_desired_flow_table *flow_table,
                           struct simap *ids)
 {
@@ -2041,8 +2082,8 @@ add_lb_hairpin_flows(const struct sbrec_load_balancer_table *lb_table,
             ovs_assert(id_pool_alloc_id(pool, &id));
             simap_put(ids, lb->name, id);
         }
-        consider_lb_hairpin_flows(lb, local_datapaths, use_ct_mark,
-                                  flow_table, ids);
+        consider_lb_hairpin_flows(lb, local_datapaths, use_ct_mark, flow_table,
+                                  ids);
     }
 }
 

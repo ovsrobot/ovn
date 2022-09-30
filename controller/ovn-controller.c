@@ -91,6 +91,7 @@ static unixctl_cb_func debug_pause_execution;
 static unixctl_cb_func debug_resume_execution;
 static unixctl_cb_func debug_status_execution;
 static unixctl_cb_func debug_dump_local_bindings;
+static unixctl_cb_func debug_dump_local_template_vars;
 static unixctl_cb_func debug_dump_lflow_conj_ids;
 static unixctl_cb_func lflow_cache_flush_cmd;
 static unixctl_cb_func lflow_cache_show_stats_cmd;
@@ -170,6 +171,8 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
      *
      * Monitor IGMP_Groups for local chassis.
      *
+     * Monitor Template_Var for local chassis.
+     *
      * We always monitor patch ports because they allow us to see the linkages
      * between related logical datapaths.  That way, when we know that we have
      * a VIF on a particular logical switch, we immediately know to monitor all
@@ -184,6 +187,7 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
     struct ovsdb_idl_condition ip_mcast = OVSDB_IDL_CONDITION_INIT(&ip_mcast);
     struct ovsdb_idl_condition igmp = OVSDB_IDL_CONDITION_INIT(&igmp);
     struct ovsdb_idl_condition chprv = OVSDB_IDL_CONDITION_INIT(&chprv);
+    struct ovsdb_idl_condition tv = OVSDB_IDL_CONDITION_INIT(&tv);
 
     /* Always monitor all logical datapath groups. Otherwise, DPG updates may
      * be received *after* the lflows using it are seen by ovn-controller.
@@ -201,6 +205,7 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
         ovsdb_idl_condition_add_clause_true(&ip_mcast);
         ovsdb_idl_condition_add_clause_true(&igmp);
         ovsdb_idl_condition_add_clause_true(&chprv);
+        ovsdb_idl_condition_add_clause_true(&tv);
         goto out;
     }
 
@@ -239,6 +244,11 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
         /* Monitors Chassis_Private record for current chassis only. */
         sbrec_chassis_private_add_clause_name(&chprv, OVSDB_F_EQ,
                                               chassis->name);
+
+        sbrec_template_var_add_clause_chassis_name(&tv, OVSDB_F_EQ,
+                                                   chassis->name);
+        sbrec_template_var_add_clause_chassis_name(&tv, OVSDB_F_EQ,
+                                                   chassis->hostname);
     } else {
         /* During initialization, we monitor all records in Chassis_Private so
          * that we don't try to recreate existing ones. */
@@ -290,6 +300,7 @@ out:;
         sbrec_ip_multicast_set_condition(ovnsb_idl, &ip_mcast),
         sbrec_igmp_group_set_condition(ovnsb_idl, &igmp),
         sbrec_chassis_private_set_condition(ovnsb_idl, &chprv),
+        sbrec_template_var_set_condition(ovnsb_idl, &tv),
     };
 
     unsigned int expected_cond_seqno = 0;
@@ -307,6 +318,7 @@ out:;
     ovsdb_idl_condition_destroy(&ip_mcast);
     ovsdb_idl_condition_destroy(&igmp);
     ovsdb_idl_condition_destroy(&chprv);
+    ovsdb_idl_condition_destroy(&tv);
     return expected_cond_seqno;
 }
 
@@ -990,7 +1002,8 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     SB_NODE(load_balancer, "load_balancer") \
     SB_NODE(fdb, "fdb") \
     SB_NODE(meter, "meter") \
-    SB_NODE(static_mac_binding, "static_mac_binding")
+    SB_NODE(static_mac_binding, "static_mac_binding") \
+    SB_NODE(template_var, "template_var")
 
 enum sb_engine_node {
 #define SB_NODE(NAME, NAME_STR) SB_##NAME,
@@ -1650,6 +1663,214 @@ runtime_data_sb_datapath_binding_handler(struct engine_node *node OVS_UNUSED,
     }
 
     return true;
+}
+
+struct local_templates {
+    struct uuidset uuids;
+    struct smap vars;
+};
+
+static void
+local_templates_init(struct local_templates *table)
+{
+    uuidset_init(&table->uuids);
+    smap_init(&table->vars);
+}
+
+static void
+local_templates_clear(struct local_templates *table)
+{
+    uuidset_clear(&table->uuids);
+    smap_clear(&table->vars);
+}
+
+static void
+local_templates_destroy(struct local_templates *table)
+{
+    uuidset_destroy(&table->uuids);
+    smap_destroy(&table->vars);
+}
+
+static void
+local_templates_insert(struct local_templates *table,
+                       const char *name, const struct uuid *uuid,
+                       const char *value)
+{
+    uuidset_insert(&table->uuids, uuid);
+    smap_replace(&table->vars, name, value);
+}
+
+static void
+local_templates_remove(struct local_templates *table,
+                       const char *name, const struct uuid *uuid)
+{
+    uuidset_find_and_delete(&table->uuids, uuid);
+    smap_remove(&table->vars, name);
+}
+
+static bool
+local_templates_contains_uuid(const struct local_templates *table,
+                              const struct uuid *uuid)
+{
+    return !!uuidset_find(CONST_CAST(struct uuidset *, &table->uuids), uuid);
+}
+
+static void
+local_templates_to_string(const struct local_templates *table,
+                             struct ds *out_data)
+{
+    const struct smap_node *node;
+
+    SMAP_FOR_EACH (node, &table->vars) {
+        ds_put_format(out_data, "name: '%s' value: '%s'\n",
+                      node->key, node->value);
+    }
+}
+
+struct ed_type_template_vars {
+    struct local_templates var_table;
+
+    bool change_tracked;
+    struct sset new;
+    struct sset deleted;
+    struct sset updated;
+};
+
+static void
+template_vars_init(const struct sbrec_template_var_table *tv_table,
+                   const struct sbrec_chassis *chassis,
+                   struct local_templates *var_table)
+{
+    const struct sbrec_template_var *tv;
+    SBREC_TEMPLATE_VAR_TABLE_FOR_EACH (tv, tv_table) {
+        if (chassis_name_equals(tv->chassis_name, chassis)) {
+            local_templates_insert(var_table, tv->name,
+                                      &tv->header_.uuid, tv->value);
+        }
+    }
+}
+
+static void
+template_vars_update(const struct sbrec_template_var_table *tv_table,
+                     const struct sbrec_chassis *chassis,
+                     struct local_templates *var_table,
+                     struct sset *new, struct sset *deleted,
+                     struct sset *updated)
+{
+    const struct sbrec_template_var *tv;
+    SBREC_TEMPLATE_VAR_TABLE_FOR_EACH_TRACKED (tv, tv_table) {
+        if (!sbrec_template_var_is_deleted(tv)) {
+            continue;
+        }
+
+        if (!local_templates_contains_uuid(var_table, &tv->header_.uuid)) {
+            continue;
+        }
+
+        local_templates_remove(var_table, tv->name, &tv->header_.uuid);
+        sset_add(deleted, tv->name);
+    }
+
+    SBREC_TEMPLATE_VAR_TABLE_FOR_EACH_TRACKED (tv, tv_table) {
+        if (sbrec_template_var_is_deleted(tv)) {
+            continue;
+        }
+
+        struct sset *tv_set = sbrec_template_var_is_new(tv)
+                              ? new : updated;
+        if (chassis_name_equals(tv->chassis_name, chassis)) {
+            local_templates_insert(var_table, tv->name,
+                                      &tv->header_.uuid, tv->value);
+            sset_add(tv_set, tv->name);
+        }
+    }
+}
+
+static void *
+en_template_vars_init(struct engine_node *node OVS_UNUSED,
+                      struct engine_arg *arg OVS_UNUSED)
+{
+    struct ed_type_template_vars *tv_data = xzalloc(sizeof *tv_data);
+    local_templates_init(&tv_data->var_table);
+    tv_data->change_tracked = false;
+    sset_init(&tv_data->new);
+    sset_init(&tv_data->deleted);
+    sset_init(&tv_data->updated);
+    return tv_data;
+}
+
+static void
+en_template_vars_run(struct engine_node *node, void *data)
+{
+    struct ed_type_template_vars *tv_data = data;
+
+    const struct sbrec_template_var_table *tv_table =
+        EN_OVSDB_GET(engine_get_input("SB_template_var", node));
+    const struct ovsrec_open_vswitch_table *ovs_table =
+        EN_OVSDB_GET(engine_get_input("OVS_open_vswitch", node));
+    struct ovsdb_idl_index *sbrec_chassis_by_name =
+        engine_ovsdb_node_get_index(engine_get_input("SB_chassis", node),
+                                    "name");
+    const struct sbrec_chassis *chassis =
+        chassis_lookup_by_name(sbrec_chassis_by_name,
+                               get_ovs_chassis_id(ovs_table));
+
+    local_templates_clear(&tv_data->var_table);
+
+    template_vars_init(tv_table, chassis, &tv_data->var_table);
+    engine_set_node_state(node, EN_UPDATED);
+}
+
+static bool
+template_vars_sb_template_var_handler(struct engine_node *node, void *data)
+{
+    struct ed_type_template_vars *tv_data = data;
+
+    const struct sbrec_template_var_table *tv_table =
+        EN_OVSDB_GET(engine_get_input("SB_template_var", node));
+    const struct ovsrec_open_vswitch_table *ovs_table =
+        EN_OVSDB_GET(engine_get_input("OVS_open_vswitch", node));
+    struct ovsdb_idl_index *sbrec_chassis_by_name =
+        engine_ovsdb_node_get_index(engine_get_input("SB_chassis", node),
+                                    "name");
+    const struct sbrec_chassis *chassis =
+        chassis_lookup_by_name(sbrec_chassis_by_name,
+                               get_ovs_chassis_id(ovs_table));
+
+    template_vars_update(tv_table, chassis, &tv_data->var_table,
+                         &tv_data->new, &tv_data->deleted, &tv_data->updated);
+
+    if (!sset_is_empty(&tv_data->new) || !sset_is_empty(&tv_data->deleted) ||
+            !sset_is_empty(&tv_data->updated)) {
+        engine_set_node_state(node, EN_UPDATED);
+    } else {
+        engine_set_node_state(node, EN_UNCHANGED);
+    }
+
+    tv_data->change_tracked = true;
+    return true;
+}
+
+static void
+en_template_vars_clear_tracked_data(void *data)
+{
+    struct ed_type_template_vars *tv_data = data;
+
+    sset_clear(&tv_data->new);
+    sset_clear(&tv_data->deleted);
+    sset_clear(&tv_data->updated);
+    tv_data->change_tracked = false;
+}
+
+static void
+en_template_vars_cleanup(void *data)
+{
+    struct ed_type_template_vars *tv_data = data;
+    local_templates_destroy(&tv_data->var_table);
+
+    sset_destroy(&tv_data->new);
+    sset_destroy(&tv_data->deleted);
+    sset_destroy(&tv_data->updated);
 }
 
 struct ed_type_addr_sets {
@@ -2706,6 +2927,9 @@ init_lflow_ctx(struct engine_node *node,
     struct ed_type_dhcp_options *dhcp_opts =
         engine_get_input_data("dhcp_options", node);
 
+    struct ed_type_template_vars *template_vars =
+        engine_get_input_data("template_vars", node);
+
     l_ctx_in->sbrec_multicast_group_by_name_datapath =
         sbrec_mc_group_by_name_dp;
     l_ctx_in->sbrec_logical_flow_by_logical_datapath =
@@ -2738,6 +2962,7 @@ init_lflow_ctx(struct engine_node *node,
     l_ctx_in->dhcp_opts = &dhcp_opts->v4_opts;
     l_ctx_in->dhcpv6_opts = &dhcp_opts->v6_opts;
     l_ctx_in->controller_event_opts = &fo->controller_event_opts;
+    l_ctx_in->template_vars = &template_vars->var_table.vars;
 
     l_ctx_out->flow_table = &fo->flow_table;
     l_ctx_out->group_table = &fo->group_table;
@@ -3052,6 +3277,64 @@ lflow_output_port_groups_handler(struct engine_node *node, void *data)
         if (!objdep_mgr_handle_change(l_ctx_out.lflow_deps_mgr,
                                       OBJDEP_TYPE_PORTGROUP, ref_name,
                                       lflow_handle_changed_ref,
+                                      l_ctx_out.lflows_processed,
+                                      &l_ctx_in, &l_ctx_out, &changed)) {
+            return false;
+        }
+        if (changed) {
+            engine_set_node_state(node, EN_UPDATED);
+        }
+    }
+
+    return true;
+}
+
+static bool
+lflow_output_template_vars_handler(struct engine_node *node, void *data)
+{
+    struct ed_type_template_vars *tv_data =
+        engine_get_input_data("template_vars", node);
+
+    struct ed_type_lflow_output *fo = data;
+    struct lflow_ctx_out l_ctx_out;
+    struct lflow_ctx_in l_ctx_in;
+    init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
+
+    const char *res_name;
+    bool changed;
+
+    if (!tv_data->change_tracked) {
+        return false;
+    }
+
+    SSET_FOR_EACH (res_name, &tv_data->deleted) {
+        if (!objdep_mgr_handle_change(l_ctx_out.lflow_deps_mgr,
+                                      OBJDEP_TYPE_TEMPLATE,
+                                      res_name, lflow_handle_changed_ref,
+                                      l_ctx_out.lflows_processed,
+                                      &l_ctx_in, &l_ctx_out, &changed)) {
+            return false;
+        }
+        if (changed) {
+            engine_set_node_state(node, EN_UPDATED);
+        }
+    }
+    SSET_FOR_EACH (res_name, &tv_data->updated) {
+        if (!objdep_mgr_handle_change(l_ctx_out.lflow_deps_mgr,
+                                      OBJDEP_TYPE_TEMPLATE,
+                                      res_name, lflow_handle_changed_ref,
+                                      l_ctx_out.lflows_processed,
+                                      &l_ctx_in, &l_ctx_out, &changed)) {
+            return false;
+        }
+        if (changed) {
+            engine_set_node_state(node, EN_UPDATED);
+        }
+    }
+    SSET_FOR_EACH (res_name, &tv_data->new) {
+        if (!objdep_mgr_handle_change(l_ctx_out.lflow_deps_mgr,
+                                      OBJDEP_TYPE_TEMPLATE,
+                                      res_name, lflow_handle_changed_ref,
                                       l_ctx_out.lflows_processed,
                                       &l_ctx_in, &l_ctx_out, &changed)) {
             return false;
@@ -3711,6 +3994,7 @@ main(int argc, char *argv[])
 
     /* Define inc-proc-engine nodes. */
     ENGINE_NODE(sb_ro, "sb_ro");
+    ENGINE_NODE_WITH_CLEAR_TRACK_DATA(template_vars, "template_vars");
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA_IS_VALID(ct_zones, "ct_zones");
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA(ovs_interface_shadow,
                                       "ovs_interface_shadow");
@@ -3737,6 +4021,11 @@ main(int argc, char *argv[])
 #undef OVS_NODE
 
     /* Add dependencies between inc-proc-engine nodes. */
+    engine_add_input(&en_template_vars, &en_ovs_open_vswitch,
+                     engine_noop_handler);
+    engine_add_input(&en_template_vars, &en_sb_chassis, engine_noop_handler);
+    engine_add_input(&en_template_vars, &en_sb_template_var,
+                     template_vars_sb_template_var_handler);
 
     engine_add_input(&en_addr_sets, &en_sb_address_set,
                      addr_sets_sb_address_set_handler);
@@ -3804,6 +4093,8 @@ main(int argc, char *argv[])
                      lflow_output_addr_sets_handler);
     engine_add_input(&en_lflow_output, &en_port_groups,
                      lflow_output_port_groups_handler);
+    engine_add_input(&en_lflow_output, &en_template_vars,
+                     lflow_output_template_vars_handler);
     engine_add_input(&en_lflow_output, &en_runtime_data,
                      lflow_output_runtime_data_handler);
     engine_add_input(&en_lflow_output, &en_non_vif_data,
@@ -3921,6 +4212,8 @@ main(int argc, char *argv[])
         engine_get_internal_data(&en_ct_zones);
     struct ed_type_runtime_data *runtime_data =
         engine_get_internal_data(&en_runtime_data);
+    struct ed_type_template_vars *template_vars_data =
+        engine_get_internal_data(&en_template_vars);
 
     ofctrl_init(&lflow_output_data->group_table,
                 &lflow_output_data->meter_table,
@@ -3981,6 +4274,10 @@ main(int argc, char *argv[])
     unixctl_command_register("debug/dump-lflow-conj-ids", "", 0, 0,
                              debug_dump_lflow_conj_ids,
                              &lflow_output_data->conj_ids);
+
+    unixctl_command_register("debug/dump-local-template-vars", "", 0, 0,
+                             debug_dump_local_template_vars,
+                             &template_vars_data->var_table);
 
     unixctl_command_register("debug/ignore-startup-delay", "", 0, 0,
                              debug_ignore_startup_delay, NULL);
@@ -4358,9 +4655,12 @@ main(int argc, char *argv[])
                     engine_get_data(&en_addr_sets);
                 struct ed_type_port_groups *pg_data =
                     engine_get_data(&en_port_groups);
-                if (br_int && chassis && as_data && pg_data) {
+                struct ed_type_template_vars *tv_data =
+                    engine_get_data(&en_template_vars);
+                if (br_int && chassis && as_data && pg_data && tv_data) {
                     char *error = ofctrl_inject_pkt(br_int, pending_pkt.flow_s,
-                        &as_data->addr_sets, &pg_data->port_groups_cs_local);
+                        &as_data->addr_sets, &pg_data->port_groups_cs_local,
+                        &tv_data->var_table.vars);
                     if (error) {
                         unixctl_command_reply_error(pending_pkt.conn, error);
                         free(error);
@@ -4827,6 +5127,17 @@ debug_dump_lflow_conj_ids(struct unixctl_conn *conn, int argc OVS_UNUSED,
     lflow_conj_ids_dump(conj_ids, &conj_ids_dump);
     unixctl_command_reply(conn, ds_cstr(&conj_ids_dump));
     ds_destroy(&conj_ids_dump);
+}
+
+static void
+debug_dump_local_template_vars(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                               const char *argv[] OVS_UNUSED, void *local_vars)
+{
+    struct ds tv_str = DS_EMPTY_INITIALIZER;
+    ds_put_cstr(&tv_str, "Local template vars:\n");
+    local_templates_to_string(local_vars, &tv_str);
+    unixctl_command_reply(conn, ds_cstr(&tv_str));
+    ds_destroy(&tv_str);
 }
 
 static void

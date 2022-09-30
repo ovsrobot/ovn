@@ -259,7 +259,7 @@ fe:x => error("Invalid numeric constant.")
 & => error("`&' is only valid as part of `&&'.")
 | => error("`|' is only valid as part of `||'.")
 
-^ => error("Invalid character `^' in input.")
+^ => error("`^' must be followed by a valid identifier.")
 ])
 AT_CAPTURE_FILE([input.txt])
 sed 's/ =>.*//' test-cases.txt > input.txt

@@ -29,6 +29,7 @@
 #define ROUTE_ORIGIN_STATIC "static"
 
 struct nbrec_logical_router_port;
+struct sbrec_chassis;
 struct sbrec_logical_flow;
 struct svec;
 struct uuid;
@@ -119,6 +120,8 @@ uint32_t ovn_logical_flow_hash(uint8_t table_id, enum ovn_pipeline pipeline,
                                const char *match, const char *actions);
 uint32_t ovn_logical_flow_hash_datapath(const struct uuid *logical_datapath,
                                         uint32_t hash);
+bool chassis_name_equals(const char *chassis_name,
+                         const struct sbrec_chassis *target);
 void ovn_conn_show(struct unixctl_conn *conn, int argc OVS_UNUSED,
                    const char *argv[] OVS_UNUSED, void *idl_);
 
