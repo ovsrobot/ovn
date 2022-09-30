@@ -4436,4 +4436,38 @@
       </column>
     </group>
   </table>
+
+  <table name="Template_Var">
+    <p>
+      Each record represents a template variable instantiation.  A template
+      variable has a <code>name</code> and potentially different values on
+      different hypervisors in the OVN cluster.  The mapping between
+      variable names and their actual values is done through the
+      <code>value</code> and <code>chassis_name</code> fields.  For example,
+      two rows, <code>R1 = (.name=N, .value=V1, .chassis_name=C1)</code> and
+      <code>R2 = (.name=N, .value=V2, .chassis_name=C2)</code> will make
+      <code>ovn-controller</code> running on chassis <code>C1</code> and
+      <code>C2</code> interpret the token <code>N</code> either as
+      <code>V1</code> (on <code>C1</code>) or as <code>V2</code> (on
+      <code>C2</code>).  Records of type <code>Template_Var</code> are
+      indexed by the tuple <code>(name, chassis_name)</code>.  Users can
+      refer to template variables within ACL matches and Load_Balancer VIP
+      and backend definitions.
+    </p>
+    <column name="name">
+      The name of the template variable.
+    </column>
+    <column name="value">
+      The value it should exmpand to on the chassis specified by
+      <code>chassis_name</code>.
+    </column>
+    <column name="chassis_name">
+      The chassis on which this template variable should be expanded.
+    </column>
+    <group title="Common Columns">
+      <column name="external_ids">
+        See <em>External IDs</em> at the beginning of this document.
+      </column>
+    </group>
+  </table>
 </database>

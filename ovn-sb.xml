@@ -4801,4 +4801,24 @@ tcp.flags = RST;
       The logical datapath to which the logical router port belongs.
     </column>
   </table>
+
+  <table name="Template_Var">
+    <p>
+      Each record represents a template variable instantiation and is populated
+      by <code>ovn-northd</code> from the contents of the
+      <code>OVN_Northbound.Template_Var</code> table.  Records of type
+      <code>Template_Var</code> are indexed by the tuple
+      <code>(name, chassis_name)</code>.
+    </p>
+    <column name="name">
+      The name of the template variable.
+    </column>
+    <column name="value">
+      The value it should exmpand to on the chassis specified by
+      <code>chassis_name</code>.
+    </column>
+    <column name="chassis_name">
+      The chassis on which this template variable should be expanded.
+    </column>
+  </table>
 </database>
