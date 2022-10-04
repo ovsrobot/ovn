@@ -1,5 +1,7 @@
 Post v22.09.0
 -------------
+  - ovn-controller: Experimental support for co-hosting multiple controller
+    instances on the same host.
 
 OVN v22.09.0 - 16 Sep 2022
 --------------------------
