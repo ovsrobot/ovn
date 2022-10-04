@@ -355,6 +355,18 @@
     </dl>
 
     <p>
+        Most of configuration options listed above can also be set for a
+        particular chassis name (see <code>external_ids:system-id </code>
+        for more information). This can be achieved by setting
+        <code>external_ids:option-[chassis]</code> instead of
+        <code>external_ids:option</code>. For example, set
+        <code>external_ids:ovn-encap-ip-otherhv</code> to use a particular
+        IP address for the controller instance named <code>otherhv</code>.
+        Name specific configuration options always override any global options
+        set in the database.
+    </p>
+
+    <p>
       <code>ovn-controller</code> reads the following values from the
       <code>Open_vSwitch</code> database of the local OVS instance:
     </p>
