@@ -18,6 +18,8 @@
 
 #include <stdbool.h>
 
+#define CHASSIS_IDX_PREFIX "ovn-chassis-idx-"
+
 struct ovsdb_idl;
 struct ovsdb_idl_txn;
 struct ovsrec_bridge;
