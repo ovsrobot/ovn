@@ -31,6 +31,7 @@ struct sset;
 struct eth_addr;
 struct smap;
 
+extern char *cli_system_id;
 extern char *file_system_id;
 
 void chassis_register_ovs_idl(struct ovsdb_idl *);
