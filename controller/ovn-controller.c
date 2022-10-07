@@ -18,10 +18,14 @@
 #include "ovn-controller.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include "bfd.h"
 #include "binding.h"
@@ -55,6 +59,7 @@
 #include "lib/ip-mcast-index.h"
 #include "lib/mac-binding-index.h"
 #include "lib/mcast-group-index.h"
+#include "lib/ovn-dirs.h"
 #include "lib/ovn-sb-idl.h"
 #include "lib/ovn-util.h"
 #include "patch.h"
@@ -151,6 +156,29 @@ struct pending_pkt {
 
 /* Registered ofctrl seqno type for nb_cfg propagation. */
 static size_t ofctrl_seq_type_nb_cfg;
+
+static char *get_file_system_id(void)
+{
+    char *ret = NULL;
+    char *filename = xasprintf("%s/system-id-override", ovn_sysconfdir());
+    errno = 0;
+    int fd = open(filename, O_RDONLY);
+    if (fd != -1) {
+        char system_id[64];
+        int nread = read(fd, system_id, sizeof system_id);
+        if (nread) {
+            system_id[nread] = '\0';
+            if (system_id[nread - 1] == '\n') {
+                system_id[nread - 1] = '\0';
+            }
+            ret = xstrdup(system_id);
+        }
+        close(fd);
+    }
+
+    free(filename);
+    return ret;
+}
 
 static unsigned int
 update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
@@ -3604,6 +3632,9 @@ main(int argc, char *argv[])
     struct ovn_controller_exit_args exit_args = {&exiting, &restart};
     int retval;
 
+    /* Read from system-id-override file once on startup. */
+    file_system_id = get_file_system_id();
+
     ovs_cmdl_proctitle_init(argc, argv);
     ovn_set_program_name(argv[0]);
     service_start(&argc, &argv);
@@ -4579,6 +4610,9 @@ loop_done:
 
     ovs_feature_support_destroy();
     free(ovs_remote);
+    if (file_system_id) {
+        free(file_system_id);
+    }
     service_stop();
 
     exit(retval);
