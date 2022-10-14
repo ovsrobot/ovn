@@ -121,20 +121,22 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, IN,  ACL,            8, "ls_in_acl")           \
     PIPELINE_STAGE(SWITCH, IN,  QOS_MARK,       9, "ls_in_qos_mark")      \
     PIPELINE_STAGE(SWITCH, IN,  QOS_METER,     10, "ls_in_qos_meter")     \
-    PIPELINE_STAGE(SWITCH, IN,  LB,            11, "ls_in_lb")            \
-    PIPELINE_STAGE(SWITCH, IN,  ACL_AFTER_LB,  12, "ls_in_acl_after_lb")  \
-    PIPELINE_STAGE(SWITCH, IN,  STATEFUL,      13, "ls_in_stateful")      \
-    PIPELINE_STAGE(SWITCH, IN,  PRE_HAIRPIN,   14, "ls_in_pre_hairpin")   \
-    PIPELINE_STAGE(SWITCH, IN,  NAT_HAIRPIN,   15, "ls_in_nat_hairpin")   \
-    PIPELINE_STAGE(SWITCH, IN,  HAIRPIN,       16, "ls_in_hairpin")       \
-    PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    17, "ls_in_arp_rsp")       \
-    PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  18, "ls_in_dhcp_options")  \
-    PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 19, "ls_in_dhcp_response") \
-    PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,    20, "ls_in_dns_lookup")    \
-    PIPELINE_STAGE(SWITCH, IN,  DNS_RESPONSE,  21, "ls_in_dns_response")  \
-    PIPELINE_STAGE(SWITCH, IN,  EXTERNAL_PORT, 22, "ls_in_external_port") \
-    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       23, "ls_in_l2_lkup")       \
-    PIPELINE_STAGE(SWITCH, IN,  L2_UNKNOWN,    24, "ls_in_l2_unknown")    \
+    PIPELINE_STAGE(SWITCH, IN,  LB_AFF_CHECK,  11, "ls_in_lb_aff_check")  \
+    PIPELINE_STAGE(SWITCH, IN,  LB,            12, "ls_in_lb")            \
+    PIPELINE_STAGE(SWITCH, IN,  LB_AFF_LEARN,  13, "ls_in_lb_aff_learn")  \
+    PIPELINE_STAGE(SWITCH, IN,  ACL_AFTER_LB,  14, "ls_in_acl_after_lb")  \
+    PIPELINE_STAGE(SWITCH, IN,  STATEFUL,      15, "ls_in_stateful")      \
+    PIPELINE_STAGE(SWITCH, IN,  PRE_HAIRPIN,   16, "ls_in_pre_hairpin")   \
+    PIPELINE_STAGE(SWITCH, IN,  NAT_HAIRPIN,   17, "ls_in_nat_hairpin")   \
+    PIPELINE_STAGE(SWITCH, IN,  HAIRPIN,       18, "ls_in_hairpin")       \
+    PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    19, "ls_in_arp_rsp")       \
+    PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  20, "ls_in_dhcp_options")  \
+    PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 21, "ls_in_dhcp_response") \
+    PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,    22, "ls_in_dns_lookup")    \
+    PIPELINE_STAGE(SWITCH, IN,  DNS_RESPONSE,  23, "ls_in_dns_response")  \
+    PIPELINE_STAGE(SWITCH, IN,  EXTERNAL_PORT, 24, "ls_in_external_port") \
+    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       25, "ls_in_l2_lkup")       \
+    PIPELINE_STAGE(SWITCH, IN,  L2_UNKNOWN,    26, "ls_in_l2_unknown")    \
                                                                           \
     /* Logical switch egress stages. */                                   \
     PIPELINE_STAGE(SWITCH, OUT, PRE_LB,       0, "ls_out_pre_lb")         \
@@ -155,20 +157,22 @@ enum ovn_stage {
     PIPELINE_STAGE(ROUTER, IN,  IP_INPUT,        3, "lr_in_ip_input")     \
     PIPELINE_STAGE(ROUTER, IN,  UNSNAT,          4, "lr_in_unsnat")       \
     PIPELINE_STAGE(ROUTER, IN,  DEFRAG,          5, "lr_in_defrag")       \
-    PIPELINE_STAGE(ROUTER, IN,  DNAT,            6, "lr_in_dnat")         \
-    PIPELINE_STAGE(ROUTER, IN,  ECMP_STATEFUL,   7, "lr_in_ecmp_stateful") \
-    PIPELINE_STAGE(ROUTER, IN,  ND_RA_OPTIONS,   8, "lr_in_nd_ra_options") \
-    PIPELINE_STAGE(ROUTER, IN,  ND_RA_RESPONSE,  9, "lr_in_nd_ra_response") \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_PRE,  10, "lr_in_ip_routing_pre")  \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      11, "lr_in_ip_routing")      \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 12, "lr_in_ip_routing_ecmp") \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY,          13, "lr_in_policy")          \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     14, "lr_in_policy_ecmp")     \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     15, "lr_in_arp_resolve")     \
-    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     16, "lr_in_chk_pkt_len")     \
-    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     17, "lr_in_larger_pkts")     \
-    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     18, "lr_in_gw_redirect")     \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     19, "lr_in_arp_request")     \
+    PIPELINE_STAGE(ROUTER, IN,  LB_AFF_CHECK,    6, "lr_in_lb_aff_check") \
+    PIPELINE_STAGE(ROUTER, IN,  DNAT,            7, "lr_in_dnat")         \
+    PIPELINE_STAGE(ROUTER, IN,  LB_AFF_LEARN,    8, "lr_in_lb_aff_learn") \
+    PIPELINE_STAGE(ROUTER, IN,  ECMP_STATEFUL,   9, "lr_in_ecmp_stateful") \
+    PIPELINE_STAGE(ROUTER, IN,  ND_RA_OPTIONS,   10, "lr_in_nd_ra_options") \
+    PIPELINE_STAGE(ROUTER, IN,  ND_RA_RESPONSE,  11, "lr_in_nd_ra_response") \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_PRE,  12, "lr_in_ip_routing_pre")  \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      13, "lr_in_ip_routing")      \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 14, "lr_in_ip_routing_ecmp") \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY,          15, "lr_in_policy")          \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     16, "lr_in_policy_ecmp")     \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     17, "lr_in_arp_resolve")     \
+    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     18, "lr_in_chk_pkt_len")     \
+    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     19, "lr_in_larger_pkts")     \
+    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     20, "lr_in_gw_redirect")     \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     21, "lr_in_arp_request")     \
                                                                       \
     /* Logical router egress stages. */                               \
     PIPELINE_STAGE(ROUTER, OUT, CHECK_DNAT_LOCAL,   0,                       \
@@ -228,6 +232,7 @@ enum ovn_stage {
 #define REGBIT_LOOKUP_NEIGHBOR_IP_RESULT "reg9[3]"
 #define REGBIT_DST_NAT_IP_LOCAL "reg9[4]"
 #define REGBIT_KNOWN_ECMP_NH    "reg9[5]"
+#define REGBIT_KNOWN_LB_SESSION "reg9[6]"
 
 /* Register to store the eth address associated to a router port for packets
  * received in S_ROUTER_IN_ADMISSION.
@@ -6953,6 +6958,129 @@ build_lb_rules_pre_stateful(struct hmap *lflows, struct ovn_northd_lb *lb,
 }
 
 static void
+build_lb_affinity_flows(struct hmap *lflows, struct ovn_northd_lb *lb,
+                        struct ovn_lb_vip *lb_vip, char *match,
+                        bool router_pipeline)
+{
+    if (lb->affinity_timeout <= 0) {
+        return;
+    }
+
+    enum ovn_stage stage0 = router_pipeline ?
+        S_ROUTER_IN_LB_AFF_CHECK : S_SWITCH_IN_LB_AFF_CHECK;
+    struct ovn_lflow *lflow_ref_aff_check = NULL;
+    /* Check if we have already a enstablished connection for this
+     * tuple and we are in affinity timeslot. */
+    uint32_t hash_aff_check = ovn_logical_flow_hash(
+            ovn_stage_get_table(stage0), ovn_stage_get_pipeline(stage0), 100,
+            match, REGBIT_KNOWN_LB_SESSION" = chk_lb_aff(); next;");
+
+    size_t n_dp = router_pipeline ? lb->n_nb_lr : lb->n_nb_ls;
+    for (size_t i = 0; i < n_dp; i++) {
+        struct ovn_datapath *od = router_pipeline
+            ? lb->nb_lr[i] : lb->nb_ls[i];
+        if (!ovn_dp_group_add_with_reference(lflow_ref_aff_check, od)) {
+            lflow_ref_aff_check = ovn_lflow_add_at_with_hash(
+                    lflows, od, stage0, 100, match,
+                    REGBIT_KNOWN_LB_SESSION" = chk_lb_aff(); next;",
+                    NULL, NULL, &lb->nlb->header_,
+                    OVS_SOURCE_LOCATOR, hash_aff_check);
+        }
+    }
+
+    struct ds aff_action_learn = DS_EMPTY_INITIALIZER;
+    struct ds aff_action_lb = DS_EMPTY_INITIALIZER;
+    struct ds aff_match = DS_EMPTY_INITIALIZER;
+
+    stage0 = router_pipeline
+        ? S_ROUTER_IN_LB_AFF_LEARN : S_SWITCH_IN_LB_AFF_LEARN;
+    enum ovn_stage stage1 = router_pipeline
+        ? S_ROUTER_IN_DNAT : S_SWITCH_IN_LB;
+    for (size_t i = 0; i < lb_vip->n_backends; i++) {
+        struct ovn_lb_backend *backend = &lb_vip->backends[i];
+
+        /* Forward to OFTABLE_CHK_LB_AFFINITY table to store flow tuple. */
+        ds_put_format(&aff_action_learn, "commit_lb_aff(vip = \"%s",
+                      lb_vip->vip_str);
+        if (lb_vip->vip_port) {
+            ds_put_format(&aff_action_learn, ":%d", lb_vip->vip_port);
+        }
+
+        ds_put_format(&aff_action_learn,"\", backend = \"%s", backend->ip_str);
+        if (backend->port) {
+            ds_put_format(&aff_action_learn, ":%d", backend->port);
+        }
+
+        ds_put_format(&aff_action_learn, "\"");
+
+        if (lb_vip->vip_port) {
+            ds_put_format(&aff_action_learn, ", proto = %s", lb->proto);
+        }
+
+        ds_put_format(&aff_action_learn, ", timeout = %d); next;",
+                      lb->affinity_timeout);
+
+        struct ovn_lflow *lflow_ref_aff_learn = NULL;
+        uint32_t hash_aff_learn = ovn_logical_flow_hash(
+                ovn_stage_get_table(stage0), ovn_stage_get_pipeline(stage0),
+                100, match, ds_cstr(&aff_action_learn));
+
+        /* Use already selected backend within affinity
+         * timeslot. */
+        if (backend->port) {
+            ds_put_format(&aff_match,
+                REGBIT_KNOWN_LB_SESSION" == 1 && %s && %s == %s "
+                "&& reg8[0..15] == %d",
+                IN6_IS_ADDR_V4MAPPED(&lb_vip->vip) ? "ip4" : "ip6",
+                IN6_IS_ADDR_V4MAPPED(&lb_vip->vip) ? "reg4" : "xxreg1",
+                backend->ip_str, backend->port);
+            ds_put_format(&aff_action_lb, "ct_lb_mark(backends=%s:%d);",
+                          backend->ip_str, backend->port);
+        } else {
+            ds_put_format(&aff_match,
+                REGBIT_KNOWN_LB_SESSION" == 1 && %s && %s == %s",
+                IN6_IS_ADDR_V4MAPPED(&lb_vip->vip) ? "ip4" : "ip6",
+                IN6_IS_ADDR_V4MAPPED(&lb_vip->vip) ? "reg4" : "xxreg1",
+                backend->ip_str);
+            ds_put_format(&aff_action_lb, "ct_lb_mark(backends=%s);",
+                          backend->ip_str);
+        }
+
+        struct ovn_lflow *lflow_ref_aff_lb = NULL;
+        uint32_t hash_aff_lb = ovn_logical_flow_hash(
+                ovn_stage_get_table(stage1), ovn_stage_get_pipeline(stage1),
+                150, ds_cstr(&aff_match), ds_cstr(&aff_action_lb));
+
+        for (size_t j = 0; j < n_dp; j++) {
+            struct ovn_datapath *od = router_pipeline
+                ? lb->nb_lr[j] : lb->nb_ls[j];
+            if (!ovn_dp_group_add_with_reference(lflow_ref_aff_learn, od)) {
+                lflow_ref_aff_learn = ovn_lflow_add_at_with_hash(
+                        lflows, od, stage0, 100, match,
+                        ds_cstr(&aff_action_learn), NULL, NULL,
+                        &lb->nlb->header_, OVS_SOURCE_LOCATOR,
+                        hash_aff_learn);
+            }
+            if (!ovn_dp_group_add_with_reference(lflow_ref_aff_lb, od)) {
+                lflow_ref_aff_lb = ovn_lflow_add_at_with_hash(
+                        lflows, od, stage1, 150, ds_cstr(&aff_match),
+                        ds_cstr(&aff_action_lb), NULL, NULL,
+                        &lb->nlb->header_, OVS_SOURCE_LOCATOR,
+                        hash_aff_lb);
+            }
+        }
+
+        ds_clear(&aff_action_learn);
+        ds_clear(&aff_action_lb);
+        ds_clear(&aff_match);
+    }
+
+    ds_destroy(&aff_action_learn);
+    ds_destroy(&aff_action_lb);
+    ds_destroy(&aff_match);
+}
+
+static void
 build_lb_rules(struct hmap *lflows, struct ovn_northd_lb *lb, bool ct_lb_mark,
                struct ds *match, struct ds *action,
                const struct shash *meter_groups)
@@ -6999,6 +7127,10 @@ build_lb_rules(struct hmap *lflows, struct ovn_northd_lb *lb, bool ct_lb_mark,
         if (lb_vip->vip_port) {
             ds_put_format(match, " && %s.dst == %d", proto, lb_vip->vip_port);
             priority = 120;
+        }
+
+        if (!reject) {
+            build_lb_affinity_flows(lflows, lb, lb_vip, ds_cstr(match), false);
         }
 
         struct ovn_lflow *lflow_ref = NULL;
@@ -10082,6 +10214,10 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
     struct ovn_datapath **distributed_router =
         xcalloc(lb->n_nb_lr, sizeof *distributed_router);
     int n_distributed_router = 0;
+
+    if (!reject) {
+        build_lb_affinity_flows(lflows, lb, lb_vip, new_match, true);
+    }
 
     /* Group gw router since we do not have datapath dependency in
      * lflow generation for them.
@@ -13990,6 +14126,20 @@ build_lswitch_and_lrouter_iterate_by_od(struct ovn_datapath *od,
     build_lrouter_nat_defrag_and_lb(od, lsi->lflows, lsi->ports, &lsi->match,
                                     &lsi->actions, lsi->meter_groups,
                                     lsi->features->ct_no_masked_label);
+
+    /* Default rule for affinity stages. */
+    if (od->nbs) {
+        ovn_lflow_add(lsi->lflows, od, S_SWITCH_IN_LB_AFF_CHECK, 0,
+                      "1", "next;");
+        ovn_lflow_add(lsi->lflows, od, S_SWITCH_IN_LB_AFF_LEARN, 0,
+                      "1", "next;");
+    }
+    if (od->nbr) {
+        ovn_lflow_add(lsi->lflows, od, S_ROUTER_IN_LB_AFF_CHECK, 0,
+                      "1", "next;");
+        ovn_lflow_add(lsi->lflows, od, S_ROUTER_IN_LB_AFF_LEARN, 0,
+                      "1", "next;");
+    }
 }
 
 /* Helper function to combine all lflow generation which is iterated by port.
