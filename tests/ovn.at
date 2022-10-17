@@ -32975,3 +32975,109 @@ check ovn-nbctl --wait=hv sync
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller: Multiple OVS interfaces bound to same logical port])
+ovn_start
+net_add n1
+
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovn-appctl vlog/set dbg
+
+get_flows()
+{
+    cookie=$1
+    ovs-ofctl dump-flows br-int | grep $cookie |
+        sed -e 's/duration=[[0-9.]]*s, //g' |
+        sed -e 's/idle_age=[[0-9]]*, //g' |
+        sed -e 's/n_packets=[[0-9]]*, //g' |
+        sed -e 's/n_bytes=[[0-9]]*, //g'
+}
+
+check ovn-nbctl ls-add ls
+check ovn-nbctl lsp-add ls lp
+check ovn-nbctl lsp-set-type lp localport
+check ovn-nbctl lsp-set-addresses lp "00:00:00:01:01:02 192.168.1.2"
+
+check ovn-nbctl lsp-add ls vm1
+check ovn-nbctl lsp-set-addresses vm1 "00:00:00:01:01:11 192.168.1.11"
+check ovs-vsctl add-port br-int vm1 -- set interface vm1 type=internal external_ids:iface-id=vm1
+
+check ovn-nbctl --wait=hv sync
+
+check ovs-vsctl add-port br-int lpold -- set interface lpold type=internal
+check ovs-vsctl set interface lpold external_ids:iface-id=lp
+
+OVS_WAIT_UNTIL([test x$(ovn-sbctl --bare --columns _uuid find port_binding logical_port=lp) != x])
+echo ======================================================
+echo === Flows after iface-id set for the old interface ===
+echo ======================================================
+COOKIE=$(ovn-sbctl find port_binding logical_port=lp|grep uuid|cut -d: -f2| cut -c1-8 | sed 's/^\s*0\{0,8\}//')
+
+OVS_WAIT_UNTIL([
+    ofport=$(ovs-vsctl --bare --columns ofport find Interface name=lpold)
+    ovs-ofctl dump-flows br-int | grep $COOKIE | grep "actions=output:$ofport"
+])
+nb_flows=`ovs-ofctl dump-flows br-int | grep $COOKIE | wc -l`
+echo $nb_flows "flows after iface-id set for old interface"
+
+echo ======================================================
+echo === Flows after iface-id set for the new interface ===
+echo ======================================================
+check ovs-vsctl add-port br-int lpnew -- set interface lpnew type=internal
+check ovs-vsctl set interface lpnew external_ids:iface-id=lp
+OVS_WAIT_UNTIL([
+    ofport=$(ovs-vsctl --bare --columns ofport find Interface name=lpnew)
+    ovs-ofctl dump-flows br-int | grep $COOKIE | grep "actions=output:$ofport"
+])
+check test "$nb_flows" = $(ovs-ofctl dump-flows br-int | grep $COOKIE | wc -l)
+flows_lpnew=$(get_flows $COOKIE)
+
+echo ======================================================
+echo ======= Flows after old interface is deleted =========
+echo ======================================================
+check ovs-vsctl del-port br-int lpold
+# We do not expect changes, so let's wait a few seconds to check nothing changed
+sleep 2
+check test "$nb_flows" = $(ovs-ofctl dump-flows br-int | grep $COOKIE | wc -l)
+flows_after_deletion=$(get_flows $COOKIE)
+check test "$flows_lpnew" = "$flows_after_deletion"
+
+echo ======================================================
+echo ======= Flows after lptemp interface is created ====
+echo ======================================================
+check ovs-vsctl add-port br-int lptemp -- set Interface lptemp type=internal
+check ovs-vsctl set Interface lptemp external_ids:iface-id=lp
+OVS_WAIT_UNTIL([
+    ofport=$(ovs-vsctl --bare --columns ofport find Interface name=lptemp)
+    ovs-ofctl dump-flows br-int | grep $COOKIE | grep "actions=output:$ofport"
+])
+check test "$nb_flows" = $(ovs-ofctl dump-flows br-int | grep $COOKIE | wc -l)
+
+echo ======================================================
+echo ======= Flows after lptemp interface is deleted ======
+echo ======================================================
+check ovs-vsctl del-port br-int lptemp
+OVS_WAIT_UNTIL([
+    ofport=$(ovs-vsctl --bare --columns ofport find Interface name=lpnew)
+    ovs-ofctl dump-flows br-int | grep $COOKIE | grep "actions=output:$ofport"
+])
+check test "$nb_flows" = $(ovs-ofctl dump-flows br-int | grep $COOKIE | wc -l)
+flows_after_deletion=$(get_flows $COOKIE)
+check test "$flows_lpnew" = "$flows_after_deletion"
+
+echo ======================================================
+echo ======= Flows after new interface is deleted =========
+echo ======================================================
+check ovs-vsctl del-port br-int lpnew
+OVS_WAIT_UNTIL([
+    nb_flows=`ovs-ofctl dump-flows br-int | grep $COOKIE | wc -l`
+    test "${nb_flows}" = 0
+])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
