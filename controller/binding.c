@@ -2155,8 +2155,12 @@ consider_iface_claim(const struct ovsrec_interface *iface_rec,
     if (!lbinding) {
         lbinding = local_binding_create(iface_id, iface_rec);
         local_binding_add(local_bindings, lbinding);
-    } else {
+    } else if (!lbinding->iface) {
         lbinding->iface = iface_rec;
+    } else if (lbinding->iface != iface_rec) {
+        lbinding->iface = iface_rec;
+        lbinding->multiple_bindings = true;
+        b_ctx_out->local_lports_changed = true;
     }
 
     struct binding_lport *b_lport =
@@ -2219,13 +2223,23 @@ static bool
 consider_iface_release(const struct ovsrec_interface *iface_rec,
                        const char *iface_id,
                        struct binding_ctx_in *b_ctx_in,
-                       struct binding_ctx_out *b_ctx_out)
+                       struct binding_ctx_out *b_ctx_out,
+                       bool *multiple_bindings)
 {
     struct local_binding *lbinding;
     struct shash *local_bindings = &b_ctx_out->lbinding_data->bindings;
     struct shash *binding_lports = &b_ctx_out->lbinding_data->lports;
+    int64_t ofport = iface_rec->n_ofport ? *iface_rec->ofport : 0;
 
     lbinding = local_binding_find(local_bindings, iface_id);
+    if (lbinding && !lbinding->multiple_bindings &&
+        lbinding->iface != iface_rec && !ofport) {
+        VLOG_DBG("Not releasing lport %s as %s was claimed "
+                 "and %s was never bound)",
+                 iface_id, lbinding->iface ? lbinding->iface->name:"",
+                 iface_rec->name);
+        return true;
+    }
     struct binding_lport *b_lport =
         local_binding_get_primary_or_localport_lport(lbinding);
     if (is_binding_lport_this_chassis(b_lport, b_ctx_in->chassis_rec)) {
@@ -2254,8 +2268,10 @@ consider_iface_release(const struct ovsrec_interface *iface_rec,
     }
 
     if (lbinding) {
+        *multiple_bindings = lbinding->multiple_bindings;
         /* Clear the iface of the local binding. */
         lbinding->iface = NULL;
+        lbinding->multiple_bindings = false;
     }
 
     /* Check if the lbinding has children of type PB_CONTAINER.
@@ -2266,8 +2282,6 @@ consider_iface_release(const struct ovsrec_interface *iface_rec,
     }
 
     remove_local_lports(iface_id, b_ctx_out);
-    smap_remove(b_ctx_out->local_iface_ids, iface_rec->name);
-
     return true;
 }
 
@@ -2375,6 +2389,10 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
 
     bool handled = true;
 
+    struct hmap qos_map = HMAP_INITIALIZER(&qos_map);
+    struct hmap *qos_map_ptr =
+        sset_is_empty(b_ctx_out->egress_ifaces) ? NULL : &qos_map;
+
     /* Run the tracked interfaces loop twice. One to handle deleted
      * changes. And another to handle add/update changes.
      * This will ensure correctness.
@@ -2435,8 +2453,59 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
         }
 
         if (cleared_iface_id) {
+            bool multiple_bindings = false;
             handled = consider_iface_release(iface_rec, cleared_iface_id,
-                                             b_ctx_in, b_ctx_out);
+                                             b_ctx_in, b_ctx_out,
+                                             &multiple_bindings);
+            if (!handled) {
+                break;
+            }
+            if (!multiple_bindings) {
+                smap_remove(b_ctx_out->local_iface_ids, iface_rec->name);
+                continue;
+            }
+            /* There is another OVS interface bound to this port.
+             * First find its name
+             */
+            VLOG_DBG("binding remaining for %s", cleared_iface_id);
+            struct smap_node *node;
+            bool found = false;
+            SMAP_FOR_EACH (node, b_ctx_out->local_iface_ids) {
+                if (strcmp(node->value, cleared_iface_id) ||
+                    !strcmp(node->key, iface_rec->name)) {
+                    continue;
+                }
+                /* Then find its iface_rec */
+                char *other_iface_rec_name = node->key;
+                const struct ovsrec_interface *other_iface_rec;
+                OVSREC_INTERFACE_TABLE_FOR_EACH (other_iface_rec,
+                                                 b_ctx_in->iface_table) {
+                    if (!strcmp(other_iface_rec->name, other_iface_rec_name)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) {
+                    int64_t ofport = other_iface_rec->n_ofport ?
+                                     *other_iface_rec->ofport : 0;
+                    if (cleared_iface_id && ofport > 0 &&
+                            is_iface_in_int_bridge(other_iface_rec,
+                                                   b_ctx_in->br_int)) {
+                        handled = consider_iface_claim(other_iface_rec,
+                                                       cleared_iface_id,
+                                                       b_ctx_in,
+                                                       b_ctx_out, qos_map_ptr);
+                    }
+                }
+                break;
+            }
+            if (!found) {
+                /* This is unexpected. Recompute to clean up */
+                VLOG_WARN("Did not find which OVS interface still bound to %s",
+                          cleared_iface_id);
+                handled = false;
+            }
+            smap_remove(b_ctx_out->local_iface_ids, iface_rec->name);
         }
 
         if (!handled) {
@@ -2448,12 +2517,9 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
         /* This can happen if any non vif OVS interface is in the tracked
          * list or if consider_iface_release() returned false.
          * There is no need to process further. */
+        destroy_qos_map(&qos_map);
         return false;
     }
-
-    struct hmap qos_map = HMAP_INITIALIZER(&qos_map);
-    struct hmap *qos_map_ptr =
-        sset_is_empty(b_ctx_out->egress_ifaces) ? NULL : &qos_map;
 
     /*
      * We consider an OVS interface for claiming if the following
@@ -3034,6 +3100,7 @@ local_binding_create(const char *name, const struct ovsrec_interface *iface)
     struct local_binding *lbinding = xzalloc(sizeof *lbinding);
     lbinding->name = xstrdup(name);
     lbinding->iface = iface;
+    lbinding->multiple_bindings = false;
     ovs_list_init(&lbinding->binding_lports);
 
     return lbinding;
