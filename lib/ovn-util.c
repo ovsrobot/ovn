@@ -788,7 +788,8 @@ ovn_smap_get_uint(const struct smap *smap, const char *key, unsigned int def)
  */
 bool
 ip_address_and_port_from_lb_key(const char *key, char **ip_address,
-                                uint16_t *port, int *addr_family)
+                                struct in6_addr *ip, uint16_t *port,
+                                int *addr_family)
 {
     struct sockaddr_storage ss;
     if (!inet_parse_active(key, 0, &ss, false, NULL)) {
@@ -798,12 +799,14 @@ ip_address_and_port_from_lb_key(const char *key, char **ip_address,
         *ip_address = NULL;
         *port = 0;
         *addr_family = 0;
+        memset(ip, 0, sizeof(*ip));
         return false;
     }
 
     struct ds s = DS_EMPTY_INITIALIZER;
     ss_format_address_nobracks(&ss, &s);
     *ip_address = ds_steal_cstr(&s);
+    *ip = ss_get_address(&ss);
     *port = ss_get_port(&ss);
     *addr_family = ss.ss_family;
     return true;
