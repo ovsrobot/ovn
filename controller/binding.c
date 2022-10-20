@@ -1866,6 +1866,7 @@ build_local_bindings(struct binding_ctx_in *b_ctx_in,
                     lbinding = local_binding_create(iface_id, iface_rec);
                     local_binding_add(local_bindings, lbinding);
                 } else {
+                    lbinding->multiple_bindings = true;
                     static struct vlog_rate_limit rl =
                         VLOG_RATE_LIMIT_INIT(1, 5);
                     VLOG_WARN_RL(
@@ -2156,6 +2157,10 @@ consider_iface_claim(const struct ovsrec_interface *iface_rec,
         lbinding = local_binding_create(iface_id, iface_rec);
         local_binding_add(local_bindings, lbinding);
     } else {
+        if (lbinding->iface && lbinding->iface != iface_rec) {
+            lbinding->multiple_bindings = true;
+            b_ctx_out->local_lports_changed = true;
+        }
         lbinding->iface = iface_rec;
     }
 
@@ -2226,6 +2231,24 @@ consider_iface_release(const struct ovsrec_interface *iface_rec,
     struct shash *binding_lports = &b_ctx_out->lbinding_data->lports;
 
     lbinding = local_binding_find(local_bindings, iface_id);
+
+    if (lbinding) {
+        if (lbinding->multiple_bindings) {
+            VLOG_INFO("Multiple bindings for %s: force recompute to clean up",
+                      iface_id);
+            return false;
+        } else {
+            int64_t ofport = iface_rec->n_ofport ? *iface_rec->ofport : 0;
+            if (lbinding->iface != iface_rec && !ofport) {
+                VLOG_DBG("Not releasing lport %s as %s was claimed "
+                         "and %s was never bound)",
+                         iface_id, lbinding->iface ? lbinding->iface->name:"",
+                         iface_rec->name);
+                return true;
+            }
+        }
+    }
+
     struct binding_lport *b_lport =
         local_binding_get_primary_or_localport_lport(lbinding);
     if (is_binding_lport_this_chassis(b_lport, b_ctx_in->chassis_rec)) {
@@ -3034,6 +3057,7 @@ local_binding_create(const char *name, const struct ovsrec_interface *iface)
     struct local_binding *lbinding = xzalloc(sizeof *lbinding);
     lbinding->name = xstrdup(name);
     lbinding->iface = iface;
+    lbinding->multiple_bindings = false;
     ovs_list_init(&lbinding->binding_lports);
 
     return lbinding;
