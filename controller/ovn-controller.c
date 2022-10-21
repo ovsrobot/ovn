@@ -659,7 +659,8 @@ update_ct_zones(const struct shash *binding_lports,
     const char *user;
     struct sset all_users = SSET_INITIALIZER(&all_users);
     struct simap req_snat_zones = SIMAP_INITIALIZER(&req_snat_zones);
-    unsigned long unreq_snat_zones[BITMAP_N_LONGS(MAX_CT_ZONES)];
+    unsigned long unreq_snat_zones_map[BITMAP_N_LONGS(MAX_CT_ZONES)];
+    struct simap unreq_snat_zones = SIMAP_INITIALIZER(&unreq_snat_zones);
 
     struct shash_node *shash_node;
     SHASH_FOR_EACH (shash_node, binding_lports) {
@@ -696,49 +697,46 @@ update_ct_zones(const struct shash *binding_lports,
             bitmap_set0(ct_zone_bitmap, ct_zone->data);
             simap_delete(ct_zones, ct_zone);
         } else if (!simap_find(&req_snat_zones, ct_zone->name)) {
-            bitmap_set1(unreq_snat_zones, ct_zone->data);
+            bitmap_set1(unreq_snat_zones_map, ct_zone->data);
+            simap_put(&unreq_snat_zones, ct_zone->name, ct_zone->data);
         }
     }
 
     /* Prioritize requested CT zones */
     struct simap_node *snat_req_node;
     SIMAP_FOR_EACH (snat_req_node, &req_snat_zones) {
-        struct simap_node *node = simap_find(ct_zones, snat_req_node->name);
-        if (node) {
-            if (node->data == snat_req_node->data) {
-                /* No change to this request, so no action needed */
-                continue;
-            } else {
-                /* Zone request has changed for this node. delete old entry */
-                bitmap_set0(ct_zone_bitmap, node->data);
-                simap_delete(ct_zones, node);
-            }
-        }
-
         /* Determine if someone already had this zone auto-assigned.
          * If so, then they need to give up their assignment since
          * that zone is being explicitly requested now.
          */
-        if (bitmap_is_set(unreq_snat_zones, snat_req_node->data)) {
-            struct simap_node *dup;
-            SIMAP_FOR_EACH_SAFE (dup, ct_zones) {
-                if (dup != snat_req_node && dup->data == snat_req_node->data) {
-                    simap_delete(ct_zones, dup);
+        if (bitmap_is_set(unreq_snat_zones_map, snat_req_node->data)) {
+            struct simap_node *unreq_node;
+            SIMAP_FOR_EACH (unreq_node, &unreq_snat_zones) {
+                if (unreq_node->data == snat_req_node->data) {
                     break;
                 }
             }
+            ovs_assert(unreq_node);
+
+            simap_find_and_delete(ct_zones, unreq_node->name);
+
             /* Set this bit to 0 so that if multiple datapaths have requested
              * this zone, we don't needlessly double-detect this condition.
              */
-            bitmap_set0(unreq_snat_zones, snat_req_node->data);
+            bitmap_set0(unreq_snat_zones_map, snat_req_node->data);
         }
 
-        add_pending_ct_zone_entry(pending_ct_zones, CT_ZONE_OF_QUEUED,
-                                  snat_req_node->data, true,
-                                  snat_req_node->name);
-
-        bitmap_set1(ct_zone_bitmap, snat_req_node->data);
-        simap_put(ct_zones, snat_req_node->name, snat_req_node->data);
+        struct simap_node *node = simap_find(ct_zones, snat_req_node->name);
+        if (node && node->data != snat_req_node->data) {
+            /* Zone request has changed for this node. delete old entry and
+             * create new one*/
+            add_pending_ct_zone_entry(pending_ct_zones, CT_ZONE_OF_QUEUED,
+                                      snat_req_node->data, true,
+                                      snat_req_node->name);
+            bitmap_set0(ct_zone_bitmap, node->data);
+            bitmap_set1(ct_zone_bitmap, snat_req_node->data);
+            node->data = snat_req_node->data;
+        }
     }
 
     /* xxx This is wasteful to assign a zone to each port--even if no
@@ -756,6 +754,7 @@ update_ct_zones(const struct shash *binding_lports,
     }
 
     simap_destroy(&req_snat_zones);
+    simap_destroy(&unreq_snat_zones);
     sset_destroy(&all_users);
 }
 
@@ -2178,7 +2177,7 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
 
     struct hmap *tracked_dp_bindings = &rt_data->tracked_dp_bindings;
     struct tracked_datapath *tdp;
-    int scan_start = 0;
+    int scan_start = 1;
 
     bool updated = false;
 
