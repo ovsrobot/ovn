@@ -1535,6 +1535,7 @@ remove_flows_from_sb_to_flow(struct ovn_desired_flow_table *flow_table,
             free(sfr);
         }
         ovs_list_remove(&f->list_node);
+        ovs_list_init(&f->list_node);
         if (log_msg) {
             ovn_flow_log(&f->flow, log_msg);
         }
