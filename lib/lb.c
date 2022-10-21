@@ -208,6 +208,9 @@ ovn_northd_lb_create(const struct nbrec_load_balancer *nbrec_lb)
         smap_get_def(&nbrec_lb->options, "neighbor_responder", "reachable");
     lb->neigh_mode = strcmp(mode, "all") ? LB_NEIGH_RESPOND_REACHABLE
                                          : LB_NEIGH_RESPOND_ALL;
+    lb->affinity_timeout =
+        smap_get_int(&nbrec_lb->options, "affinity_timeout", 0);
+
     sset_init(&lb->ips_v4);
     sset_init(&lb->ips_v6);
     struct smap_node *node;
