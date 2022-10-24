@@ -3534,7 +3534,7 @@ for i in 1 2; do
     as hv-$i
     check ovs-vsctl add-br br-phys
     check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
-    ovn_attach net br-phys 192.168.0.$i 24 vxlan
+    ovn_attach net br-phys 192.168.0.$i 24 4 vxlan
 done
 
 check ovn-nbctl ls-add ls
@@ -3983,7 +3983,7 @@ ovn_start
 net_add net
 check ovs-vsctl add-br br-phys
 check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
-ovn_attach net br-phys 192.168.0.1 24 vxlan
+ovn_attach net br-phys 192.168.0.1 24 4 vxlan
 check ovn-nbctl --wait=sb sync
 OVS_WAIT_UNTIL([ovn-sbctl get chassis main _uuid])
 
@@ -22432,7 +22432,7 @@ m4_define([DVR_N_S_ARP_HANDLING],
        ovs-vsctl add-br br-phys
        ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
        ovs-vsctl set open . external-ids:ovn-chassis-mac-mappings="phys:aa:bb:cc:dd:ee:$i$i"
-       ovn_attach n1 br-phys 192.168.0.$i 24 $encap
+       ovn_attach n1 br-phys 192.168.0.$i 24 4 $encap
 
        ovs-vsctl add-port br-int vif$i$i -- \
            set Interface vif$i$i external-ids:iface-id=lp$i$i \
@@ -22473,14 +22473,14 @@ m4_define([DVR_N_S_ARP_HANDLING],
    as hv3 ovs-vsctl add-br br-phys
    as hv3 ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
    as hv3 ovs-vsctl set open . external-ids:ovn-chassis-mac-mappings="phys:aa:bb:cc:dd:ee:33"
-   as hv3 ovn_attach n1 br-phys 192.168.0.3 24 $encap
+   as hv3 ovn_attach n1 br-phys 192.168.0.3 24 4 $encap
 
    # Add 4th hypervisor
    sim_add hv4
    as hv4 ovs-vsctl add-br br-phys
    as hv4 ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
    as hv4 ovs-vsctl set open . external-ids:ovn-chassis-mac-mappings="phys:aa:bb:cc:dd:ee:44"
-   as hv4 ovn_attach n1 br-phys 192.168.0.4 24 $encap
+   as hv4 ovn_attach n1 br-phys 192.168.0.4 24 4 $encap
 
    as hv4 ovs-vsctl add-port br-int vif-north -- \
            set Interface vif-north external-ids:iface-id=lp-north \
@@ -22704,7 +22704,7 @@ m4_define([DVR_N_S_PING],
        ovs-vsctl add-br br-phys
        ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
        ovs-vsctl set open . external-ids:ovn-chassis-mac-mappings="phys:aa:bb:cc:dd:ee:$i$i"
-       ovn_attach n1 br-phys 192.168.0.$i 24 $encap
+       ovn_attach n1 br-phys 192.168.0.$i 24 4 $encap
 
        ovs-vsctl add-port br-int vif$i$i -- \
            set Interface vif$i$i external-ids:iface-id=lp$i$i \
@@ -22745,14 +22745,14 @@ m4_define([DVR_N_S_PING],
    as hv3 ovs-vsctl add-br br-phys
    as hv3 ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
    as hv3 ovs-vsctl set open . external-ids:ovn-chassis-mac-mappings="phys:aa:bb:cc:dd:ee:33"
-   as hv3 ovn_attach n1 br-phys 192.168.0.3 24 $encap
+   as hv3 ovn_attach n1 br-phys 192.168.0.3 24 4 $encap
 
    # Add 4th hypervisor
    sim_add hv4
    as hv4 ovs-vsctl add-br br-phys
    as hv4 ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
    as hv4 ovs-vsctl set open . external-ids:ovn-chassis-mac-mappings="phys:aa:bb:cc:dd:ee:44"
-   as hv4 ovn_attach n1 br-phys 192.168.0.4 24 $encap
+   as hv4 ovn_attach n1 br-phys 192.168.0.4 24 4 $encap
 
    as hv4 ovs-vsctl add-port br-int vif-north -- \
            set Interface vif-north external-ids:iface-id=lp-north \
@@ -28487,7 +28487,7 @@ as hv1
 
 ovs-vsctl add-br br-phys
 # Just set the encap type to be geneve for this test.
-ovn_attach n1 br-phys 192.168.0.1 24 geneve
+ovn_attach n1 br-phys 192.168.0.1 24 4 geneve
 
 # Get the encap rec, should be just one - with geneve/192.168.0.1
 encap_rec=$(ovn-sbctl --data=bare --no-heading --column encaps list chassis hv1)
@@ -31088,7 +31088,7 @@ for i in 1 2 3 4 5; do
     as hv$i
     ovs-vsctl add-br br-phys
     ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
-    ovn_attach n1 br-phys 192.168.0.$i 24 $encap
+    ovn_attach n1 br-phys 192.168.0.$i 24 4 $encap
 done
 
 # Add a vif on HV1
@@ -32667,7 +32667,7 @@ for i in $(seq 1 $n_hv); do
     as hv$i
     check ovs-vsctl add-br br-phys
     ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
-    ovn_attach n1 br-phys 192.168.0.$i 24 geneve
+    ovn_attach n1 br-phys 192.168.0.$i 24 4 geneve
 done
 
 check ovn-sbctl set connection . inactivity_probe=0
