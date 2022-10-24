@@ -4636,7 +4636,7 @@ Flow(.logical_datapath = sw._uuid,
         eth_src_set
     },
     var eth_src = "{" ++ eth_src_set.to_vec().join(", ") ++ "}",
-    var __match = i"eth.src == ${eth_src} && (arp.op == 1 || nd_ns)",
+    var __match = i"eth.src == ${eth_src} && (arp.op == 1 || rarp.op == 3 || nd_ns)",
     var mc_flood_l2 = json_escape(mC_FLOOD_L2().0),
     var actions = i"outport = ${mc_flood_l2}; output;".
 
