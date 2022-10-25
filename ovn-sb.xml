@@ -1373,7 +1373,9 @@
             which will commit connection tracking state, and then drop the
             packet.  This could be useful for setting <code>ct_mark</code>
             on a connection tracking entry before dropping a packet,
-            for example.
+            for example. In order to allow the packet committed to the ct table
+            to continue the processing in the next pipeline stage
+            <code>next_table</code> option can be used as first nested actions.
           </p>
         </dd>
 

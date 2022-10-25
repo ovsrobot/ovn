@@ -7048,8 +7048,9 @@ build_stateful(struct ovn_datapath *od,
      * We always set ct_mark.blocked to 0 here as
      * any packet that makes it this far is part of a connection we
      * want to allow to continue. */
-    ds_put_format(&actions, "ct_commit { %s = 0; "
-                            "ct_label.label = " REG_LABEL "; }; next;",
+    ds_put_format(&actions,
+                  "ct_commit { next_table; %s = 0; "
+                  "ct_label.label = " REG_LABEL "; };",
                   ct_block_action);
     ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 100,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
@@ -7065,7 +7066,8 @@ build_stateful(struct ovn_datapath *od,
      * any packet that makes it this far is part of a connection we
      * want to allow to continue. */
     ds_clear(&actions);
-    ds_put_format(&actions, "ct_commit { %s = 0; }; next;", ct_block_action);
+    ds_put_format(&actions, "ct_commit { next_table; %s = 0; };",
+                  ct_block_action);
     ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 100,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 0",

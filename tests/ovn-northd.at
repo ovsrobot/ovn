@@ -2961,21 +2961,13 @@ lsp1_inport=$(fetch_column Port_Binding tunnel_key logical_port=lsp1)
 # TCP packets should go to conntrack.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
 AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new --minimal ls "${flow}"], [0], [dnl
-ct_next(ct_state=new|trk) {
-    ct_next(ct_state=new|trk) {
-        output("lsp2");
-    };
-};
+ct_next(ct_state=new|trk);
 ])
 
 # UDP packets should go to conntrack.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_udp}"
 AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new --minimal ls "${flow}"], [0], [dnl
-ct_next(ct_state=new|trk) {
-    ct_next(ct_state=new|trk) {
-        output("lsp2");
-    };
-};
+ct_next(ct_state=new|trk);
 ])
 
 # Allow stateless for TCP.
@@ -2993,11 +2985,7 @@ output("lsp2");
 # UDP packets still go to conntrack.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_udp}"
 AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new --minimal ls "${flow}"], [0], [dnl
-ct_next(ct_state=new|trk) {
-    ct_next(ct_state=new|trk) {
-        output("lsp2");
-    };
-};
+ct_next(ct_state=new|trk);
 ])
 
 # Add a load balancer.
@@ -3105,21 +3093,13 @@ flow_udp='udp && udp.dst == 80'
 # TCP packets should go to conntrack.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
 AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new --minimal ls "${flow}"], [0], [dnl
-ct_next(ct_state=new|trk) {
-    ct_next(ct_state=new|trk) {
-        output("lsp2");
-    };
-};
+ct_next(ct_state=new|trk);
 ])
 
 # UDP packets should go to conntrack.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_udp}"
 AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new --minimal ls "${flow}"], [0], [dnl
-ct_next(ct_state=new|trk) {
-    ct_next(ct_state=new|trk) {
-        output("lsp2");
-    };
-};
+ct_next(ct_state=new|trk);
 ])
 
 # Allow stateless for TCP.
@@ -3137,11 +3117,7 @@ output("lsp2");
 # UDP packets still go to conntrack.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_udp}"
 AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new --minimal ls "${flow}"], [0], [dnl
-ct_next(ct_state=new|trk) {
-    ct_next(ct_state=new|trk) {
-        output("lsp2");
-    };
-};
+ct_next(ct_state=new|trk);
 ])
 
 # Add a load balancer.
@@ -3245,11 +3221,7 @@ lsp1_inport=$(fetch_column Port_Binding tunnel_key logical_port=lsp1)
 # TCP packets should go to conntrack.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
 AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new --minimal ls "${flow}"], [0], [dnl
-ct_next(ct_state=new|trk) {
-    ct_next(ct_state=new|trk) {
-        output("lsp2");
-    };
-};
+ct_next(ct_state=new|trk);
 ])
 
 # Allow stateless with *lower* priority. It always beats stateful rules.
@@ -4027,8 +3999,8 @@ check_stateful_flows() {
 
     AT_CHECK([grep "ls_in_stateful" sw0flows | sort | sed 's/table=../table=??/'], [0], [dnl
   table=??(ls_in_stateful     ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
     AT_CHECK([grep "ls_out_pre_lb" sw0flows | sort], [0], [dnl
@@ -4050,8 +4022,8 @@ check_stateful_flows() {
 
     AT_CHECK([grep "ls_out_stateful" sw0flows | sort], [0], [dnl
   table=7 (ls_out_stateful    ), priority=0    , match=(1), action=(next;)
-  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 }
 
@@ -4091,8 +4063,8 @@ AT_CHECK([grep "ls_in_lb" sw0flows | sort | sed 's/table=../table=??/'], [0], [d
 
 AT_CHECK([grep "ls_in_stateful" sw0flows | sort | sed 's/table=../table=??/'], [0], [dnl
   table=??(ls_in_stateful     ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
 AT_CHECK([grep "ls_out_pre_lb" sw0flows | sort], [0], [dnl
@@ -4111,8 +4083,8 @@ AT_CHECK([grep "ls_out_pre_stateful" sw0flows | sort], [0], [dnl
 
 AT_CHECK([grep "ls_out_stateful" sw0flows | sort], [0], [dnl
   table=7 (ls_out_stateful    ), priority=0    , match=(1), action=(next;)
-  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
 AT_CLEANUP
@@ -4137,8 +4109,8 @@ AT_CHECK([grep -w "ls_in_acl" sw0flows | grep 2002 | sort | sed 's/table=./table
 ])
 AT_CHECK([grep "ls_in_stateful" sw0flows | sort | sed 's/table=../table=??/'], [0], [dnl
   table=??(ls_in_stateful     ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
 AT_CHECK([grep -w "ls_out_acl" sw0flows | grep 2002 | sort], [0], [dnl
@@ -4147,8 +4119,8 @@ AT_CHECK([grep -w "ls_out_acl" sw0flows | grep 2002 | sort], [0], [dnl
 ])
 AT_CHECK([grep "ls_out_stateful" sw0flows | sort], [0], [dnl
   table=7 (ls_out_stateful    ), priority=0    , match=(1), action=(next;)
-  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
 # Add new ACL without label
@@ -4166,8 +4138,8 @@ AT_CHECK([grep -w "ls_in_acl" sw0flows | grep 2002 | sort | sed 's/table=./table
 ])
 AT_CHECK([grep "ls_in_stateful" sw0flows | sort | sed 's/table=../table=??/'], [0], [dnl
   table=??(ls_in_stateful     ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
 AT_CHECK([grep -w "ls_out_acl" sw0flows | grep 2002 | sort], [0], [dnl
@@ -4178,8 +4150,8 @@ AT_CHECK([grep -w "ls_out_acl" sw0flows | grep 2002 | sort], [0], [dnl
 ])
 AT_CHECK([grep "ls_out_stateful" sw0flows | sort], [0], [dnl
   table=7 (ls_out_stateful    ), priority=0    , match=(1), action=(next;)
-  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
 # Delete new ACL with label
@@ -4195,8 +4167,8 @@ AT_CHECK([grep -w "ls_in_acl" sw0flows | grep 2002 | sort | sed 's/table=./table
 ])
 AT_CHECK([grep "ls_in_stateful" sw0flows | sort | sed 's/table=../table=??/'], [0], [dnl
   table=??(ls_in_stateful     ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
 AT_CHECK([grep -w "ls_out_acl" sw0flows | grep 2002 | sort], [0], [dnl
@@ -4205,8 +4177,8 @@ AT_CHECK([grep -w "ls_out_acl" sw0flows | grep 2002 | sort], [0], [dnl
 ])
 AT_CHECK([grep "ls_out_stateful" sw0flows | sort], [0], [dnl
   table=7 (ls_out_stateful    ), priority=0    , match=(1), action=(next;)
-  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=7 (ls_out_stateful    ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 AT_CLEANUP
 ])
@@ -6544,8 +6516,8 @@ AT_CHECK([grep -e "ls_in_lb" lsflows | sed 's/table=../table=??/' | sort], [0], 
 
 AT_CHECK([grep -e "ls_in_stateful" lsflows | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(ls_in_stateful     ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
 AS_BOX([Remove and add the ACLs back with the apply-after-lb option])
@@ -6597,8 +6569,8 @@ AT_CHECK([grep -e "ls_in_lb" lsflows | sed 's/table=../table=??/' | sort], [0], 
 
 AT_CHECK([grep -e "ls_in_stateful" lsflows | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(ls_in_stateful     ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
 AS_BOX([Remove and add the ACLs back with a few ACLs with apply-after-lb option])
@@ -6650,8 +6622,8 @@ AT_CHECK([grep -e "ls_in_lb" lsflows | sed 's/table=../table=??/' | sort], [0], 
 
 AT_CHECK([grep -e "ls_in_stateful" lsflows | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(ls_in_stateful     ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { next_table; ct_mark.blocked = 0; };)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { next_table; ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
 AT_CLEANUP

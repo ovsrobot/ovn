@@ -315,6 +315,7 @@ struct ovnact_nest {
     struct ovnact ovnact;
     struct ovnact *nested;
     size_t nested_len;
+    uint8_t ltable;             /* Logical table ID of next table. */
 };
 
 /* OVNACT_GET_ARP, OVNACT_GET_ND. */

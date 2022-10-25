@@ -207,6 +207,10 @@ struct action_context {
 
 static void parse_actions(struct action_context *, enum lex_type sentinel);
 
+static void __parse_nested_action(struct action_context *ctx,
+                                  enum ovnact_type type,
+                                  const char *prereq,
+                                  enum expr_write_scope scope);
 static void parse_nested_action(struct action_context *ctx,
                                 enum ovnact_type type,
                                 const char *prereq,
@@ -764,8 +768,23 @@ static void
 parse_CT_COMMIT(struct action_context *ctx)
 {
     if (ctx->lexer->token.type == LEX_T_LCURLY) {
-        parse_nested_action(ctx, OVNACT_CT_COMMIT_V2, "ip",
-                            WR_CT_COMMIT);
+        int table = 0;
+        lexer_force_match(ctx->lexer, LEX_T_LCURLY); /* Skip '{'. */
+        if (lexer_match_id(ctx->lexer, "next_table")) {
+            lexer_match(ctx->lexer, LEX_T_SEMICOLON);
+            table = ctx->pp->cur_ltable + 1;
+            if (table >= ctx->pp->n_tables) {
+               table = 0;
+            }
+        }
+        __parse_nested_action(ctx, OVNACT_CT_COMMIT_V2, "ip",
+                              WR_CT_COMMIT);
+        if (ctx->lexer->error) {
+            return;
+        }
+
+        struct ovnact_nest *on = ctx->ovnacts->header;
+        on->ltable = table;
     } else if (ctx->lexer->token.type == LEX_T_LPAREN) {
         parse_CT_COMMIT_V1(ctx);
     } else {
@@ -775,6 +794,7 @@ parse_CT_COMMIT(struct action_context *ctx)
                                             OVNACT_ALIGN(sizeof *on));
         on->nested_len = 0;
         on->nested = NULL;
+        on->ltable = 0;
     }
 }
 
@@ -872,12 +892,16 @@ format_CT_COMMIT_V2(const struct ovnact_nest *on, struct ds *s)
 
 static void
 encode_CT_COMMIT_V2(const struct ovnact_nest *on,
-                    const struct ovnact_encode_params *ep OVS_UNUSED,
+                    const struct ovnact_encode_params *ep,
                     struct ofpbuf *ofpacts)
 {
     struct ofpact_conntrack *ct = ofpact_put_CT(ofpacts);
     ct->flags = NX_CT_F_COMMIT;
-    ct->recirc_table = NX_CT_RECIRC_NONE;
+    if (on->ltable > 0) {
+        ct->recirc_table = first_ptable(ep, ep->pipeline) + on->ltable;
+    } else {
+        ct->recirc_table = NX_CT_RECIRC_NONE;
+    }
     ct->zone_src.field = ep->is_switch
         ? mf_from_id(MFF_LOG_CT_ZONE)
         : mf_from_id(MFF_LOG_DNAT_ZONE);
@@ -1586,13 +1610,9 @@ encode_CT_CLEAR(const struct ovnact_null *null OVS_UNUSED,
 /* Implements the "arp", "nd_na", and "clone" actions, which execute nested
  * actions on a packet derived from the one being processed. */
 static void
-parse_nested_action(struct action_context *ctx, enum ovnact_type type,
-                    const char *prereq, enum expr_write_scope scope)
+__parse_nested_action(struct action_context *ctx, enum ovnact_type type,
+                      const char *prereq, enum expr_write_scope scope)
 {
-    if (!lexer_force_match(ctx->lexer, LEX_T_LCURLY)) {
-        return;
-    }
-
     if (ctx->depth + 1 == MAX_NESTED_ACTION_DEPTH) {
         lexer_error(ctx->lexer, "maximum depth of nested actions reached");
         return;
@@ -1633,6 +1653,16 @@ parse_nested_action(struct action_context *ctx, enum ovnact_type type,
                                         OVNACT_ALIGN(sizeof *on));
     on->nested_len = nested.size;
     on->nested = ofpbuf_steal_data(&nested);
+}
+
+static void
+parse_nested_action(struct action_context *ctx, enum ovnact_type type,
+                    const char *prereq, enum expr_write_scope scope)
+{
+    if (!lexer_force_match(ctx->lexer, LEX_T_LCURLY)) {
+        return;
+    }
+    __parse_nested_action(ctx, type, prereq, scope);
 }
 
 static void
