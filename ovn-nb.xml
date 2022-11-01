@@ -1908,6 +1908,12 @@
         requests only for VIPs that are part of a router's subnet.  The default
         value of this option, if not specified, is <code>reachable</code>.
       </column>
+
+      <column name="options" key="affinity_timeout">
+        If the CMS provide a positive value for <code>affinity_timeout</code>,
+        OVN will dnat connections received from the same client to this lb to
+        he same backend if received in the affinity timeslot.
+      </column>
     </group>
   </table>
 
