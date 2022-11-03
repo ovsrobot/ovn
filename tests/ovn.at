@@ -14888,6 +14888,258 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([localnet connectivity with multiple requested-chassis, path mtu discovery])
+AT_KEYWORDS([multi-chassis])
+ovn_start
+
+net_add n1
+for i in 1 2; do
+    sim_add hv$i
+    as hv$i
+    check ovs-vsctl add-br br-phys
+    ovn_attach n1 br-phys 192.168.0.$i
+    check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+done
+
+check ovn-nbctl ls-add ls0 -- add Logical_Switch ls0 other_config vlan-passthru=true
+check ovn-nbctl lsp-add ls0 first
+check ovn-nbctl lsp-add ls0 second
+check ovn-nbctl lsp-add ls0 migrator
+check ovn-nbctl lsp-set-addresses first "00:00:00:00:00:01 10.0.0.1 ff::01"
+check ovn-nbctl lsp-set-addresses second "00:00:00:00:00:02 10.0.0.2 ff::02"
+check ovn-nbctl lsp-set-addresses migrator "00:00:00:00:00:ff 10.0.0.100 ff::ff"
+
+check ovn-nbctl lsp-add ls0 public
+check ovn-nbctl lsp-set-type public localnet
+check ovn-nbctl lsp-set-addresses public unknown
+check ovn-nbctl lsp-set-options public network_name=phys
+
+# TODO: do we need mtu request here?
+check ovn-nbctl lsp-set-options first requested-chassis=hv1 vif-plug-mtu-request=1500
+check ovn-nbctl lsp-set-options second requested-chassis=hv2 vif-plug-mtu-request=1500
+check ovn-nbctl lsp-set-options migrator requested-chassis=hv1,hv2 vif-plug-mtu-request=1500
+
+as hv1 check ovs-vsctl -- add-port br-int first -- \
+    set Interface first external-ids:iface-id=first \
+    options:tx_pcap=hv1/first-tx.pcap \
+    options:rxq_pcap=hv1/first-rx.pcap \
+    ofport-request=1
+as hv2 check ovs-vsctl -- add-port br-int second -- \
+    set Interface second external-ids:iface-id=second \
+    options:tx_pcap=hv2/second-tx.pcap \
+    options:rxq_pcap=hv2/second-rx.pcap \
+    ofport-request=2
+
+# Create Migrator interfaces on both hv1 and hv2
+for hv in hv1 hv2; do
+    as $hv check ovs-vsctl -- add-port br-int migrator -- \
+        set Interface migrator external-ids:iface-id=migrator \
+        options:tx_pcap=$hv/migrator-tx.pcap \
+        options:rxq_pcap=$hv/migrator-rx.pcap \
+        ofport-request=100
+done
+
+send_ip_packet() {
+    local inport=$1 hv=$2 eth_src=$3 eth_dst=$4 ipv4_src=$5 ipv4_dst=$6 ip_chksum=$7 data=$8 ip_len=$9
+    local ip_ttl=ff
+    local packet=${eth_dst}${eth_src}08004500${ip_len}00004000${ip_ttl}fd${ip_chksum}${ipv4_src}${ipv4_dst}${data}
+    as hv$hv ovs-appctl netdev-dummy/receive $inport $packet
+    echo $packet
+}
+
+send_ip6_packet() {
+    local inport=$1 hv=$2 eth_src=$3 eth_dst=$4 ipv6_src=$5 ipv6_dst=$6 data=$7 ip_len=$8
+    local ip_ttl=ff
+    local packet=${eth_dst}${eth_src}86dd60000000${ip_len}fd${ip_ttl}${ipv6_src}${ipv6_dst}${data}
+    as hv$hv ovs-appctl netdev-dummy/receive $inport $packet
+    echo $packet
+}
+
+reset_env() {
+    as hv1 reset_pcap_file first hv1/first
+    as hv2 reset_pcap_file second hv2/second
+    as hv1 reset_pcap_file migrator hv1/migrator
+    as hv2 reset_pcap_file migrator hv2/migrator
+
+    for port in hv1/migrator hv2/migrator hv1/first hv2/second; do
+        : > $port.expected
+    done
+}
+
+first_mac=000000000001
+second_mac=000000000002
+migrator_mac=0000000000ff
+first_ip=$(ip_to_hex 10 0 0 1)
+second_ip=$(ip_to_hex 10 0 0 2)
+migrator_ip=$(ip_to_hex 10 0 0 100)
+first_ip6=ff000000000000000000000000000001
+second_ip6=ff000000000000000000000000000002
+migrator_ip6=ff0000000000000000000000000000ff
+
+OVN_POPULATE_ARP
+
+reset_env
+
+# Check that packets of proper size are delivered from multichassis to intended ports
+ip_len=058c
+len=1400
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip_packet migrator 1 $migrator_mac $first_mac $migrator_ip $first_ip 0000 $data $ip_len)
+echo $packet >> hv1/first.expected
+
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip_packet migrator 1 $migrator_mac $second_mac $migrator_ip $second_ip 0000 $data $ip_len)
+echo $packet >> hv2/second.expected
+
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip6_packet migrator 1 $migrator_mac $first_mac $migrator_ip6 $first_ip6 $data $ip_len)
+echo $packet >> hv1/first.expected
+
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip6_packet migrator 1 $migrator_mac $second_mac $migrator_ip6 $second_ip6 $data $ip_len)
+echo $packet >> hv2/second.expected
+
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/first-tx.pcap], [hv1/first.expected])
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv2/second-tx.pcap], [hv2/second.expected])
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/migrator-tx.pcap], [hv1/migrator.expected])
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv2/migrator-tx.pcap], [hv2/migrator.expected])
+
+reset_env
+
+# Now check that oversized packets are not delivered to the intended ports, and
+# that the originating port receives an ICMP error suggesting fragmentation
+
+ip_len=0bcc
+len=3000
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip_packet migrator 1 $migrator_mac $first_mac $migrator_ip $first_ip 0000 $data $ip_len)
+echo $packet >> hv1/migrator.expected
+
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip_packet migrator 1 $migrator_mac $second_mac $migrator_ip $second_ip 0000 $data $ip_len)
+echo $packet >> hv1/migrator.expected
+
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip6_packet migrator 1 $migrator_mac $first_mac $migrator_ip6 $first_ip6 $data $ip_len)
+echo $packet >> hv1/migrator.expected
+
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip6_packet migrator 1 $migrator_mac $second_mac $migrator_ip6 $second_ip6 $data $ip_len)
+echo $packet >> hv1/migrator.expected
+
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/first-tx.pcap], [hv1/first.expected])
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv2/second-tx.pcap], [hv2/second.expected])
+
+# it's harder to construct the original packet that includes geneve headers
+# etc. so check manually
+$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/migrator-tx.pcap > hv1/migrator.packets
+sed -i '/ffffffffffff/d' hv1/migrator.packets
+$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv2/migrator-tx.pcap > hv2/migrator.packets
+sed -i '/ffffffffffff/d' hv2/migrator.packets
+
+# icmp errors are delivered only to the port binding that originated the offending packet
+AT_CHECK([wc -l hv1/migrator.packets | cut -c 1], [0], [4
+])
+AT_CHECK([wc -l hv2/migrator.packets | cut -c 1], [0], [0
+])
+
+for line in $(cat hv1/migrator.expected); do
+    trimmed=$(echo $line | cut -c 125-225)
+    echo "checking if packet $trimmed... generated an icmp error"
+    AT_CHECK([grep ${trimmed} hv1/migrator.packets | wc -l | cut -c 1], [0], [1
+])
+done
+
+reset_env
+
+# Check that packets of proper size are delivered from regular to multichassis ports
+ip_len=058c
+len=1400
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip_packet first 1 $first_mac $migrator_mac $first_ip $migrator_ip 0000 $data $ip_len)
+echo $packet >> hv1/migrator.expected
+echo $packet >> hv2/migrator.expected
+
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip_packet second 2 $second_mac $migrator_mac $second_ip $migrator_ip 0000 $data $ip_len)
+echo $packet >> hv1/migrator.expected
+echo $packet >> hv2/migrator.expected
+
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip6_packet first 1 $first_mac $migrator_mac $first_ip6 $migrator_ip6 $data $ip_len)
+echo $packet >> hv1/migrator.expected
+echo $packet >> hv2/migrator.expected
+
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip6_packet second 2 $second_mac $migrator_mac $second_ip6 $migrator_ip6 $data $ip_len)
+echo $packet >> hv1/migrator.expected
+echo $packet >> hv2/migrator.expected
+
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/first-tx.pcap], [hv1/first.expected])
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv2/second-tx.pcap], [hv2/second.expected])
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/migrator-tx.pcap], [hv1/migrator.expected])
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv2/migrator-tx.pcap], [hv2/migrator.expected])
+
+reset_env
+
+# Now check that oversized packets are not delivered to multichassis ports, and
+# that the originating ports receive an ICMP error suggesting fragmentation
+
+ip_len=0bcc
+len=3000
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip_packet first 1 $first_mac $migrator_mac $first_ip $migrator_ip 0000 $data $ip_len)
+echo $packet >> hv1/first.expected
+
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip_packet second 2 $second_mac $migrator_mac $second_ip $migrator_ip 0000 $data $ip_len)
+echo $packet >> hv2/second.expected
+
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip6_packet first 1 $first_mac $migrator_mac $first_ip6 $migrator_ip6 $data $ip_len)
+echo $packet >> hv1/first.expected
+
+data=$(xxd -l $len -c $len -p < /dev/urandom)
+packet=$(send_ip6_packet second 2 $second_mac $migrator_mac $second_ip6 $migrator_ip6 $data $ip_len)
+echo $packet >> hv2/second.expected
+
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv1/migrator-tx.pcap], [hv1/migrator.expected])
+OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv2/migrator-tx.pcap], [hv2/migrator.expected])
+
+# it's harder to construct the original packet that includes geneve headers
+# etc. so check manually
+$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/first-tx.pcap > hv1/first.packets
+sed -i '/ffffffffffff/d' hv1/first.packets
+$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv2/second-tx.pcap > hv2/second.packets
+sed -i '/ffffffffffff/d' hv2/second.packets
+
+AT_CHECK([wc -l hv1/first.packets | cut -c 1], [0], [2
+])
+AT_CHECK([wc -l hv2/second.packets | cut -c 1], [0], [2
+])
+
+for line in $(cat hv1/first.expected); do
+    trimmed=$(echo $line | cut -c 125-225)
+    echo "checking if packet $trimmed... generated an icmp error"
+    AT_CHECK([grep ${trimmed} hv1/first.packets | wc -l | cut -c 1], [0], [1
+])
+done
+
+for line in $(cat hv2/second.expected); do
+    trimmed=$(echo $line | cut -c 125-225)
+    echo "checking if packet $trimmed... generated an icmp error"
+    AT_CHECK([grep ${trimmed} hv2/second.packets | wc -l | cut -c 1], [0], [1
+])
+done
+
+# todo: test multichassis to multichassis
+
+OVN_CLEANUP([hv1],[hv2])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([options:activation-strategy for logical port])
 AT_KEYWORDS([multi-chassis])
 ovn_start
