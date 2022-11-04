@@ -51,6 +51,7 @@
 #include "lib/stopwatch-names.h"
 #include "stream.h"
 #include "timeval.h"
+#include "template-var.h"
 #include "util.h"
 #include "uuid.h"
 #include "ovs-thread.h"
@@ -15129,6 +15130,44 @@ sync_dns_entries(struct northd_input *input_data,
     }
     hmap_destroy(&dns_map);
 }
+
+static void
+sync_template_vars(struct northd_input *input_data,
+                   struct ovsdb_idl_txn *ovnsb_txn)
+{
+    struct template_var_table nb_tvs = TEMPLATE_VAR_TABLE_INITIALIZER(&nb_tvs);
+
+    const struct nbrec_chassis_template_var *nb_tv;
+    const struct sbrec_chassis_template_var *sb_tv;
+    struct template_var *tv;
+
+    NBREC_CHASSIS_TEMPLATE_VAR_TABLE_FOR_EACH (
+            nb_tv, input_data->nbrec_chassis_template_var_table) {
+        template_var_insert(&nb_tvs, nb_tv);
+    }
+
+    SBREC_CHASSIS_TEMPLATE_VAR_TABLE_FOR_EACH_SAFE (
+            sb_tv, input_data->sbrec_chassis_template_var_table) {
+        tv = template_var_find(&nb_tvs, sb_tv->chassis);
+        if (!tv) {
+            sbrec_chassis_template_var_delete(sb_tv);
+            continue;
+        }
+        if (!smap_equal(&sb_tv->variables, &tv->nb->variables)) {
+            sbrec_chassis_template_var_set_variables(sb_tv,
+                                                     &tv->nb->variables);
+        }
+        template_var_remove(&nb_tvs, tv);
+        template_var_destroy(tv);
+    }
+
+    TEMPLATE_VAR_TABLE_FOR_EACH (tv, &nb_tvs) {
+        sb_tv = sbrec_chassis_template_var_insert(ovnsb_txn);
+        sbrec_chassis_template_var_set_chassis(sb_tv, tv->nb->chassis);
+        sbrec_chassis_template_var_set_variables(sb_tv, &tv->nb->variables);
+    }
+    template_var_table_destroy(&nb_tvs);
+}
 
 static void
 destroy_datapaths_and_ports(struct hmap *datapaths, struct hmap *ports,
@@ -15645,6 +15684,8 @@ ovnnb_db_run(struct northd_input *input_data,
     sync_port_groups(input_data, ovnsb_txn, &data->port_groups);
     sync_meters(input_data, ovnsb_txn, &data->meter_groups);
     sync_dns_entries(input_data, ovnsb_txn, &data->datapaths);
+    sync_template_vars(input_data, ovnsb_txn);
+
     cleanup_stale_fdb_entries(input_data, &data->datapaths);
     stopwatch_stop(CLEAR_LFLOWS_CTX_STOPWATCH_NAME, time_msec());
 
