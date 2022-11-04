@@ -13,7 +13,9 @@ northd_ovn_northd_SOURCES = \
 	northd/inc-proc-northd.c \
 	northd/inc-proc-northd.h \
 	northd/ipam.c \
-	northd/ipam.h
+	northd/ipam.h \
+	northd/template-var.c \
+	northd/template-var.h
 northd_ovn_northd_LDADD = \
 	lib/libovn.la \
 	$(OVSDB_LIBDIR)/libovsdb.la \
