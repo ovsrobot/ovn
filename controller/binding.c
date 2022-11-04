@@ -115,6 +115,7 @@ struct qos_queue {
     uint32_t min_rate;
     uint32_t max_rate;
     uint32_t burst;
+    char *port_name;
 };
 
 void
@@ -147,6 +148,8 @@ static void update_lport_tracking(const struct sbrec_port_binding *pb,
                                   struct hmap *tracked_dp_bindings,
                                   bool claimed);
 
+static bool is_lport_vif(const struct sbrec_port_binding *pb);
+
 static void
 get_qos_params(const struct sbrec_port_binding *pb, struct hmap *queue_map)
 {
@@ -166,6 +169,7 @@ get_qos_params(const struct sbrec_port_binding *pb, struct hmap *queue_map)
     node->max_rate = max_rate;
     node->burst = burst;
     node->queue_id = queue_id;
+    node->port_name = xstrdup(pb->logical_port);
 }
 
 static const struct ovsrec_qos *
@@ -191,7 +195,7 @@ static bool
 set_noop_qos(struct ovsdb_idl_txn *ovs_idl_txn,
              const struct ovsrec_port_table *port_table,
              const struct ovsrec_qos_table *qos_table,
-             struct sset *egress_ifaces)
+             struct shash *egress_ifaces)
 {
     if (!ovs_idl_txn) {
         return false;
@@ -206,11 +210,11 @@ set_noop_qos(struct ovsdb_idl_txn *ovs_idl_txn,
     size_t count = 0;
 
     OVSREC_PORT_TABLE_FOR_EACH (port, port_table) {
-        if (sset_contains(egress_ifaces, port->name)) {
+        if (shash_find(egress_ifaces, port->name)) {
             ovsrec_port_set_qos(port, noop_qos);
             count++;
         }
-        if (sset_count(egress_ifaces) == count) {
+        if (shash_count(egress_ifaces) == count) {
             break;
         }
     }
@@ -229,9 +233,10 @@ set_qos_type(struct netdev *netdev, const char *type)
 }
 
 static void
-setup_qos(const char *egress_iface, struct hmap *queue_map)
+setup_qos(struct shash_node *entry, struct hmap *queue_map)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+    const char *egress_iface = entry->name;
     struct netdev *netdev_phy;
 
     if (!egress_iface) {
@@ -331,6 +336,10 @@ setup_qos(const char *egress_iface, struct hmap *queue_map)
             continue;
         }
 
+        if (strcmp(sb_info->port_name, entry->data)) {
+            continue;
+        }
+
         smap_clear(&queue_details);
         smap_add_format(&queue_details, "min-rate", "%d", sb_info->min_rate);
         smap_add_format(&queue_details, "max-rate", "%d", sb_info->max_rate);
@@ -352,6 +361,7 @@ destroy_qos_map(struct hmap *qos_map)
 {
     struct qos_queue *qos_queue;
     HMAP_FOR_EACH_POP (qos_queue, node, qos_map) {
+        free(qos_queue->port_name);
         free(qos_queue);
     }
 
@@ -397,7 +407,7 @@ sbrec_get_port_encap(const struct sbrec_chassis *chassis_rec,
 static void
 add_localnet_egress_interface_mappings(
         const struct sbrec_port_binding *port_binding,
-        struct shash *bridge_mappings, struct sset *egress_ifaces)
+        struct shash *bridge_mappings, struct shash *egress_ifaces)
 {
     const char *network = smap_get(&port_binding->options, "network_name");
     if (!network) {
@@ -422,7 +432,8 @@ add_localnet_egress_interface_mappings(
             if (!is_egress_iface) {
                 continue;
             }
-            sset_add(egress_ifaces, iface_rec->name);
+            shash_add(egress_ifaces, iface_rec->name,
+                      port_binding->logical_port);
         }
     }
 }
@@ -467,7 +478,7 @@ update_ld_multichassis_ports(const struct sbrec_port_binding *binding_rec,
 static void
 update_ld_localnet_port(const struct sbrec_port_binding *binding_rec,
                         struct shash *bridge_mappings,
-                        struct sset *egress_ifaces,
+                        struct shash *egress_ifaces,
                         struct hmap *local_datapaths)
 {
     /* Ignore localnet ports for unplugged networks. */
@@ -1512,6 +1523,28 @@ consider_vif_lport(const struct sbrec_port_binding *pb,
             b_lport = local_binding_add_lport(binding_lports, lbinding, pb,
                                               LP_VIF);
         }
+
+        for (size_t i = 0; i < b_ctx_in->br_int->n_ports; i++) {
+            const struct ovsrec_port *port_rec = b_ctx_in->br_int->ports[i];
+            if (!strcmp(port_rec->name, b_ctx_in->br_int->name)) {
+                continue;
+            }
+
+            for (size_t j = 0; j < port_rec->n_interfaces; j++) {
+                const struct ovsrec_interface *iface_rec
+                    = port_rec->interfaces[j];
+                if (!smap_get(&iface_rec->external_ids, "ovn-egress-iface")) {
+                    continue;
+                }
+
+                const char *iface_id =
+                    smap_get(&iface_rec->external_ids, "iface-id");
+                if (iface_id) {
+                    shash_add(b_ctx_out->egress_ifaces, iface_rec->name,
+                              iface_id);
+                }
+            }
+        }
     }
 
     return consider_vif_lport_(pb, can_bind, b_ctx_in, b_ctx_out,
@@ -1854,14 +1887,14 @@ build_local_bindings(struct binding_ctx_in *b_ctx_in,
             &b_ctx_out->lbinding_data->bindings;
         for (j = 0; j < port_rec->n_interfaces; j++) {
             const struct ovsrec_interface *iface_rec;
+            struct local_binding *lbinding = NULL;
 
             iface_rec = port_rec->interfaces[j];
             iface_id = smap_get(&iface_rec->external_ids, "iface-id");
             int64_t ofport = iface_rec->n_ofport ? *iface_rec->ofport : 0;
 
             if (iface_id && ofport > 0) {
-                struct local_binding *lbinding =
-                    local_binding_find(local_bindings, iface_id);
+                lbinding = local_binding_find(local_bindings, iface_id);
                 if (!lbinding) {
                     lbinding = local_binding_create(iface_id, iface_rec);
                     local_binding_add(local_bindings, lbinding);
@@ -1887,8 +1920,11 @@ build_local_bindings(struct binding_ctx_in *b_ctx_in,
                 const char *tunnel_iface
                     = smap_get(&iface_rec->status, "tunnel_egress_iface");
                 if (tunnel_iface) {
-                    sset_add(b_ctx_out->egress_ifaces, tunnel_iface);
+                    shash_add(b_ctx_out->egress_ifaces, tunnel_iface, "");
                 }
+            } else if (lbinding && smap_get(&iface_rec->external_ids,
+                                            "ovn-egress-iface")) {
+                shash_add(b_ctx_out->egress_ifaces, iface_rec->name, iface_id);
             }
         }
     }
@@ -1910,7 +1946,7 @@ binding_run(struct binding_ctx_in *b_ctx_in, struct binding_ctx_out *b_ctx_out)
     }
 
     struct hmap *qos_map_ptr =
-        !sset_is_empty(b_ctx_out->egress_ifaces) ? &qos_map : NULL;
+        !shash_is_empty(b_ctx_out->egress_ifaces) ? &qos_map : NULL;
 
     struct ovs_list localnet_lports = OVS_LIST_INITIALIZER(&localnet_lports);
     struct ovs_list external_lports = OVS_LIST_INITIALIZER(&external_lports);
@@ -2043,11 +2079,11 @@ binding_run(struct binding_ctx_in *b_ctx_in, struct binding_ctx_out *b_ctx_out)
 
     shash_destroy(&bridge_mappings);
 
-    if (!sset_is_empty(b_ctx_out->egress_ifaces)
+    if (!shash_is_empty(b_ctx_out->egress_ifaces)
         && set_noop_qos(b_ctx_in->ovs_idl_txn, b_ctx_in->port_table,
                         b_ctx_in->qos_table, b_ctx_out->egress_ifaces)) {
-        const char *entry;
-        SSET_FOR_EACH (entry, b_ctx_out->egress_ifaces) {
+        struct shash_node *entry;
+        SHASH_FOR_EACH (entry, b_ctx_out->egress_ifaces) {
             setup_qos(entry, &qos_map);
         }
     }
@@ -2405,7 +2441,7 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
         }
 
         if (smap_get(&iface_rec->external_ids, "ovn-egress-iface") ||
-            sset_contains(b_ctx_out->egress_ifaces, iface_rec->name)) {
+            shash_find(b_ctx_out->egress_ifaces, iface_rec->name)) {
             handled = false;
             break;
         }
@@ -2453,7 +2489,7 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
 
     struct hmap qos_map = HMAP_INITIALIZER(&qos_map);
     struct hmap *qos_map_ptr =
-        sset_is_empty(b_ctx_out->egress_ifaces) ? NULL : &qos_map;
+        shash_is_empty(b_ctx_out->egress_ifaces) ? NULL : &qos_map;
 
     /*
      * We consider an OVS interface for claiming if the following
@@ -2494,8 +2530,8 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
                                                b_ctx_in->port_table,
                                                b_ctx_in->qos_table,
                                                b_ctx_out->egress_ifaces)) {
-        const char *entry;
-        SSET_FOR_EACH (entry, b_ctx_out->egress_ifaces) {
+        struct shash_node *entry;
+        SHASH_FOR_EACH (entry, b_ctx_out->egress_ifaces) {
             setup_qos(entry, &qos_map);
         }
     }
@@ -2937,7 +2973,7 @@ delete_done:
 
     struct hmap qos_map = HMAP_INITIALIZER(&qos_map);
     struct hmap *qos_map_ptr =
-        sset_is_empty(b_ctx_out->egress_ifaces) ? NULL : &qos_map;
+        shash_is_empty(b_ctx_out->egress_ifaces) ? NULL : &qos_map;
 
     SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (pb,
                                                b_ctx_in->port_binding_table) {
@@ -3017,8 +3053,8 @@ delete_done:
                                                b_ctx_in->port_table,
                                                b_ctx_in->qos_table,
                                                b_ctx_out->egress_ifaces)) {
-        const char *entry;
-        SSET_FOR_EACH (entry, b_ctx_out->egress_ifaces) {
+        struct shash_node *entry;
+        SHASH_FOR_EACH (entry, b_ctx_out->egress_ifaces) {
             setup_qos(entry, &qos_map);
         }
     }

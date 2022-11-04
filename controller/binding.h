@@ -91,7 +91,7 @@ struct binding_ctx_out {
      */
     bool non_vif_ports_changed;
 
-    struct sset *egress_ifaces;
+    struct shash *egress_ifaces;
     /* smap of OVS interface name as key and
      * OVS interface external_ids:iface-id as value. */
     struct smap *local_iface_ids;
