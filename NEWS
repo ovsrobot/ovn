@@ -5,6 +5,9 @@ OVN v22.03.2 - xx xxx xxxx
   - Bump python version required for building OVN to 3.6.
   - Added support for setting the Next server IP in the DHCP header
     using the private DHCP option - 253 in native OVN DHCPv4 responder.
+  - Added MAC binding aging mechanism, that is disabled by default.
+    It can be enabled per logical router with option
+    "mac_binding_age_threshold".
 
 OVN v22.03.1 - 03 Jun 2022
 --------------------------
