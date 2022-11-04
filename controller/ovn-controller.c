@@ -53,6 +53,7 @@
 #include "lib/chassis-index.h"
 #include "lib/extend-table.h"
 #include "lib/ip-mcast-index.h"
+#include "lib/mac-binding-index.h"
 #include "lib/mcast-group-index.h"
 #include "lib/ovn-sb-idl.h"
 #include "lib/ovn-util.h"
@@ -3363,9 +3364,7 @@ main(int argc, char *argv[])
         = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
                                   &sbrec_datapath_binding_col_tunnel_key);
     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip
-        = ovsdb_idl_index_create2(ovnsb_idl_loop.idl,
-                                  &sbrec_mac_binding_col_logical_port,
-                                  &sbrec_mac_binding_col_ip);
+        = mac_binding_by_lport_ip_index_create(ovnsb_idl_loop.idl);
     struct ovsdb_idl_index *sbrec_ip_multicast
         = ip_mcast_index_create(ovnsb_idl_loop.idl);
     struct ovsdb_idl_index *sbrec_igmp_group
@@ -3378,8 +3377,7 @@ main(int argc, char *argv[])
                                   &sbrec_fdb_col_mac,
                                   &sbrec_fdb_col_dp_key);
     struct ovsdb_idl_index *sbrec_mac_binding_by_datapath
-        = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
-                                  &sbrec_mac_binding_col_datapath);
+        = mac_binding_by_datapath_index_create(ovnsb_idl_loop.idl);
 
     ovsdb_idl_track_add_all(ovnsb_idl_loop.idl);
     ovsdb_idl_omit_alert(ovnsb_idl_loop.idl,
