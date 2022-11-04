@@ -5,6 +5,9 @@ OVN v22.06.1 - xx xxx xxxx
     NAT-T UDP encapsulation. Requires OVS support for IPsec custom tunnel
     options (which is available in OVS 3.0).
   - Bump python version required for building OVN to 3.6.
+  - Added MAC binding aging mechanism, that is disabled by default.
+    It can be enabled per logical router with option
+    "mac_binding_age_threshold".
 
 OVN v22.06.0 - 03 Jun 2022
 --------------------------
