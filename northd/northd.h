@@ -281,4 +281,5 @@ void bfd_cleanup_connections(struct lflow_input *input_data,
                              struct hmap *bfd_map);
 void run_update_worker_pool(int n_threads);
 
+const char *northd_get_svc_monitor_mac(void);
 #endif /* NORTHD_H */
