@@ -1979,15 +1979,15 @@ expr_annotate_cmp(struct expr *expr, const struct shash *symtab,
         }
     }
 
-    struct annotation_nesting an;
-    an.symbol = symbol;
-    ovs_list_push_back(nesting, &an.node);
+    struct annotation_nesting *an = xmalloc(sizeof *an);
+    an->symbol = symbol;
+    ovs_list_push_back(nesting, &an->node);
 
     struct expr *prereqs = NULL;
     if (append_prereqs && symbol->prereqs) {
         prereqs = parse_and_annotate(symbol->prereqs, symtab, nesting, errorp);
         if (!prereqs) {
-            goto error;
+            goto out;
         }
     }
 
@@ -2001,7 +2001,7 @@ expr_annotate_cmp(struct expr *expr, const struct shash *symtab,
         predicate = parse_and_annotate(symbol->predicate, symtab,
                                        nesting, errorp);
         if (!predicate) {
-            goto error;
+            goto out;
         }
 
         bool positive = (expr->cmp.value.integer & htonll(1)) != 0;
@@ -2015,14 +2015,17 @@ expr_annotate_cmp(struct expr *expr, const struct shash *symtab,
     }
 
     *errorp = NULL;
-    ovs_list_remove(&an.node);
-    return prereqs ? expr_combine(EXPR_T_AND, expr, prereqs) : expr;
 
-error:
-    expr_destroy(expr);
-    expr_destroy(prereqs);
-    ovs_list_remove(&an.node);
-    return NULL;
+out:
+    ovs_list_remove(&an->node);
+    free(an);
+    if (*errorp) {
+        expr_destroy(expr);
+        expr_destroy(prereqs);
+        return NULL;
+    }
+
+    return prereqs ? expr_combine(EXPR_T_AND, expr, prereqs) : expr;
 }
 
 /* Append (logical AND) prerequisites for given symbol to the expression. */
