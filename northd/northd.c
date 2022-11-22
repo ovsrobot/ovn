@@ -446,6 +446,12 @@ build_chassis_features(const struct northd_input *input_data,
             chassis_features->mac_binding_timestamp) {
             chassis_features->mac_binding_timestamp = false;
         }
+
+        bool ct_commit_nat = smap_get_bool(&chassis->other_config,
+                                           OVN_FEATURE_CT_COMMIT_NAT, false);
+        if (!ct_commit_nat && chassis_features->ct_commit_nat) {
+            chassis_features->ct_commit_nat = false;
+        }
     }
 }
 
@@ -6597,6 +6603,9 @@ build_acls(struct ovn_datapath *od, const struct chassis_features *features,
     const char *ct_blocked_match = features->ct_no_masked_label
                                    ? "ct_mark.blocked"
                                    : "ct_label.blocked";
+    const char *ct_rel_action = features->ct_commit_nat
+                                ? "ct_commit_nat;"
+                                : "next;";
     struct ds match   = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
 
@@ -6707,7 +6716,8 @@ build_acls(struct ovn_datapath *od, const struct chassis_features *features,
         /* Ingress and Egress ACL Table (Priority 65535).
          *
          * Allow traffic that is related to an existing conntrack entry that
-         * has not been marked for deletion (ct_mark.blocked).
+         * has not been marked for deletion (ct_mark.blocked). At the same
+         * time apply NAT on this traffic.
          *
          * This is enforced at a higher priority than ACLs can be defined.
          *
@@ -6720,9 +6730,9 @@ build_acls(struct ovn_datapath *od, const struct chassis_features *features,
                       use_ct_inv_match ? " && !ct.inv" : "",
                       ct_blocked_match);
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX - 3,
-                      ds_cstr(&match), "next;");
+                      ds_cstr(&match), ct_rel_action);
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX - 3,
-                      ds_cstr(&match), "next;");
+                      ds_cstr(&match), ct_rel_action);
 
         /* Ingress and Egress ACL Table (Priority 65532).
          *
@@ -10249,16 +10259,16 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
     int prio = 110;
     if (lb_vip->vip_port) {
         prio = 120;
-        new_match = xasprintf("ct.new && %s && %s && "
+        new_match = xasprintf("ct.new && !ct.rel && %s && %s && "
                               REG_ORIG_TP_DPORT_ROUTER" == %d",
                               ds_cstr(match), lb->proto, lb_vip->vip_port);
-        est_match = xasprintf("ct.est && %s && %s && "
+        est_match = xasprintf("ct.est && !ct.rel && %s && %s && "
                               REG_ORIG_TP_DPORT_ROUTER" == %d && %s == 1",
                               ds_cstr(match), lb->proto, lb_vip->vip_port,
                               ct_natted);
     } else {
-        new_match = xasprintf("ct.new && %s", ds_cstr(match));
-        est_match = xasprintf("ct.est && %s && %s == 1",
+        new_match = xasprintf("ct.new && !ct.rel && %s", ds_cstr(match));
+        est_match = xasprintf("ct.est && !ct.rel && %s && %s == 1",
                           ds_cstr(match), ct_natted);
     }
 
@@ -13921,7 +13931,7 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
                                 const struct hmap *ports, struct ds *match,
                                 struct ds *actions,
                                 const struct shash *meter_groups,
-                                bool ct_lb_mark)
+                                const struct chassis_features *features)
 {
     if (!od->nbr) {
         return;
@@ -13939,6 +13949,20 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_EGR_LOOP, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_IN_ECMP_STATEFUL, 0, "1", "next;");
+
+    /* Ingress DNAT Table (Priority 50).
+     *
+     * Allow traffic that is related to an existing conntrack entry.
+     * At the same time apply NAT for this traffic.
+     *
+     * NOTE: This does not support related data sessions (eg,
+     * a dynamically negotiated FTP data channel), but will allow
+     * related traffic such as an ICMP Port Unreachable through
+     * that's generated from a non-listening UDP port.  */
+    if (od->has_lb_vip && features->ct_commit_nat) {
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 50,
+                      "ct.rel && !ct.est && !ct.new", "ct_commit_nat;");
+    }
 
     /* If the router has load balancer or DNAT rules, re-circulate every packet
      * through the DNAT zone so that packets that need to be unDNATed in the
@@ -14139,7 +14163,7 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
 
     if (od->nbr->n_nat) {
         ds_clear(match);
-        const char *ct_natted = ct_lb_mark ?
+        const char *ct_natted = features->ct_no_masked_label ?
                                 "ct_mark.natted" :
                                 "ct_label.natted";
         ds_put_format(match, "ip && %s == 1", ct_natted);
@@ -14256,7 +14280,7 @@ build_lswitch_and_lrouter_iterate_by_od(struct ovn_datapath *od,
     build_lrouter_arp_nd_for_datapath(od, lsi->lflows, lsi->meter_groups);
     build_lrouter_nat_defrag_and_lb(od, lsi->lflows, lsi->ports, &lsi->match,
                                     &lsi->actions, lsi->meter_groups,
-                                    lsi->features->ct_no_masked_label);
+                                    lsi->features);
     build_lb_affinity_default_flows(od, lsi->lflows);
 }
 
@@ -15772,6 +15796,7 @@ northd_init(struct northd_data *data)
     data->features = (struct chassis_features) {
         .ct_no_masked_label = true,
         .mac_binding_timestamp = true,
+        .ct_commit_nat = true,
     };
     data->ovn_internal_version_changed = false;
 }

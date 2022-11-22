@@ -67,6 +67,7 @@ struct northd_input {
 struct chassis_features {
     bool ct_no_masked_label;
     bool mac_binding_timestamp;
+    bool ct_commit_nat;
 };
 
 struct northd_data {
