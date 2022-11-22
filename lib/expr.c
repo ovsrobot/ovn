@@ -1981,7 +1981,14 @@ expr_annotate_cmp(struct expr *expr, const struct shash *symtab,
 
     struct annotation_nesting an;
     an.symbol = symbol;
+#if defined(__GNUC__) && __GNUC__ == 12
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wdangling-pointer"
+#endif
     ovs_list_push_back(nesting, &an.node);
+#if defined(__GNUC__) && __GNUC__ == 12
+    #pragma GCC diagnostic pop
+#endif
 
     struct expr *prereqs = NULL;
     if (append_prereqs && symbol->prereqs) {
