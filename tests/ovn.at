@@ -33069,3 +33069,21 @@ check ovn-nbctl --wait=hv sync
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([feature inactivity probe])
+ovn_start
+net_add n1
+
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+# Wait for more than 2x 60 seconds
+sleep 125
+
+AT_CHECK([test -z "`grep disconnecting hv1/ovs-vswitchd.log`"])
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
