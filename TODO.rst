@@ -183,3 +183,10 @@ OVN To-do List
 * Chassis_Template_Var
 
   * Support template variables when tracing packets with ovn-trace.
+
+* Load Balancer templates
+
+  * Support combining the VIP (or backend) IP and port into a single
+    template variable.
+
+  * Support combining all backends into a single template variable.
