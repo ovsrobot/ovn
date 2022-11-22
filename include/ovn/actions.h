@@ -74,6 +74,7 @@ struct ovn_extend_table;
     OVNACT(CT_LB_MARK,        ovnact_ct_lb)           \
     OVNACT(SELECT,            ovnact_select)          \
     OVNACT(CT_CLEAR,          ovnact_null)            \
+    OVNACT(CT_COMMIT_NAT,     ovnact_ct_nat)          \
     OVNACT(CLONE,             ovnact_nest)            \
     OVNACT(ARP,               ovnact_nest)            \
     OVNACT(ICMP4,             ovnact_nest)            \
@@ -276,6 +277,8 @@ struct ovnact_ct_nat {
        uint16_t port_lo;
        uint16_t port_hi;
     } port_range;
+
+    bool commit;                /* Explicit commit action. */
 
     uint8_t ltable;             /* Logical table ID of next table. */
 };
