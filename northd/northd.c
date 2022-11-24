@@ -243,7 +243,6 @@ enum ovn_stage {
 #define REGBIT_DST_NAT_IP_LOCAL "reg9[4]"
 #define REGBIT_KNOWN_ECMP_NH    "reg9[5]"
 #define REGBIT_KNOWN_LB_SESSION "reg9[6]"
-#define REG
 
 /* Register to store the eth address associated to a router port for packets
  * received in S_ROUTER_IN_ADMISSION.
@@ -6963,6 +6962,7 @@ build_lb_affinity_flows(struct hmap *lflows, struct ovn_northd_lb *lb,
         return;
     }
 
+    static char *aff_check = REGBIT_KNOWN_LB_SESSION" = chk_lb_aff(); next;";
     enum ovn_stage stage0 = router_pipeline ?
         S_ROUTER_IN_LB_AFF_CHECK : S_SWITCH_IN_LB_AFF_CHECK;
     struct ovn_lflow *lflow_ref_aff_check = NULL;
@@ -6970,80 +6970,102 @@ build_lb_affinity_flows(struct hmap *lflows, struct ovn_northd_lb *lb,
      * tuple and we are in affinity timeslot. */
     uint32_t hash_aff_check = ovn_logical_flow_hash(
             ovn_stage_get_table(stage0), ovn_stage_get_pipeline(stage0), 100,
-            check_lb_match, REGBIT_KNOWN_LB_SESSION" = chk_lb_aff(); next;");
+            check_lb_match, aff_check);
 
     for (size_t i = 0; i < n_dplist; i++) {
         if (!ovn_dp_group_add_with_reference(lflow_ref_aff_check, dplist[i])) {
             lflow_ref_aff_check = ovn_lflow_add_at_with_hash(
                     lflows, dplist[i], stage0, 100, check_lb_match,
-                    REGBIT_KNOWN_LB_SESSION" = chk_lb_aff(); next;",
-                    NULL, NULL, &lb->nlb->header_,
+                    aff_check, NULL, NULL, &lb->nlb->header_,
                     OVS_SOURCE_LOCATOR, hash_aff_check);
         }
     }
 
+    const char *reg_vip;
+    const char *reg_backend;
+
+    struct ds aff_action = DS_EMPTY_INITIALIZER;
     struct ds aff_action_learn = DS_EMPTY_INITIALIZER;
-    struct ds aff_match_learn = DS_EMPTY_INITIALIZER;
-    struct ds aff_action_lb_common = DS_EMPTY_INITIALIZER;
-    struct ds aff_action_lb = DS_EMPTY_INITIALIZER;
     struct ds aff_match = DS_EMPTY_INITIALIZER;
+    struct ds aff_match_learn = DS_EMPTY_INITIALIZER;
 
     bool ipv6 = !IN6_IS_ADDR_V4MAPPED(&lb_vip->vip);
-    const char *reg_vip;
+    const char *ip_match = ipv6 ? "ip6" : "ip4";
+
+    stage0 =
+        router_pipeline ? S_ROUTER_IN_LB_AFF_LEARN : S_SWITCH_IN_LB_AFF_LEARN;
+    enum ovn_stage stage1 =
+        router_pipeline ? S_ROUTER_IN_DNAT : S_SWITCH_IN_LB;
+
     if (router_pipeline) {
         reg_vip = ipv6 ? REG_NEXT_HOP_IPV6 : REG_NEXT_HOP_IPV4;
+        reg_backend =
+            ipv6 ? REG_LB_L3_AFF_BACKEND_IP6 : REG_LB_AFF_BACKEND_IP4;
     } else {
         reg_vip = ipv6 ? REG_ORIG_DIP_IPV6 : REG_ORIG_DIP_IPV4;
+        reg_backend =
+            ipv6 ? REG_LB_L2_AFF_BACKEND_IP6 : REG_LB_AFF_BACKEND_IP4;
     }
 
-    ds_put_format(&aff_action_lb_common,
-                  REGBIT_CONNTRACK_COMMIT" = 0; %s = %s; ",
+    /* Prepare common part of affinity LB and affinity learn action. */
+    ds_put_format(&aff_action, REGBIT_CONNTRACK_COMMIT" = 0; %s = %s; ",
                   reg_vip, lb_vip->vip_str);
+    ds_put_cstr(&aff_action_learn, "commit_lb_aff(vip = \"");
+
     if (lb_vip->vip_port) {
-        ds_put_format(&aff_action_lb_common, REG_ORIG_TP_DPORT" = %d; ",
+        ds_put_format(&aff_action, REG_ORIG_TP_DPORT" = %d; ",
                       lb_vip->vip_port);
+        ds_put_format(&aff_action_learn, ipv6 ? "[%s]:%d" : "%s:%d",
+                      lb_vip->vip_str, lb_vip->vip_port);
+    } else {
+        ds_put_cstr(&aff_action_learn, lb_vip->vip_str);
     }
 
     if (lb_action) {
-        ds_put_format(&aff_action_lb_common, "%s;", lb_action);
+        ds_put_cstr(&aff_action, lb_action);
     }
+    ds_put_cstr(&aff_action, "ct_lb_mark(backends=");
+    ds_put_cstr(&aff_action_learn, "\", backend = \"");
 
-    stage0 = router_pipeline
-        ? S_ROUTER_IN_LB_AFF_LEARN : S_SWITCH_IN_LB_AFF_LEARN;
-    enum ovn_stage stage1 = router_pipeline
-        ? S_ROUTER_IN_DNAT : S_SWITCH_IN_LB;
+    /* Prepare common part of affinity learn match. */
+    ds_put_format(&aff_match_learn, REGBIT_KNOWN_LB_SESSION" == 0 && "
+                  "ct.new && %s && %s == %s && %s.dst == ", ip_match,
+                  reg_vip, lb_vip->vip_str, ip_match);
+
+    /* Prepare common part of affinity match. */
+    ds_put_format(&aff_match, REGBIT_KNOWN_LB_SESSION" == 1 && "
+                  "ct.new && %s && %s == ", ip_match, reg_backend);
+
+    /* Store the common part length. */
+    size_t aff_action_len = aff_action.length;
+    size_t aff_action_learn_len = aff_action_learn.length;
+    size_t aff_match_len = aff_match.length;
+    size_t aff_match_learn_len = aff_match_learn.length;
+
+
     for (size_t i = 0; i < lb_vip->n_backends; i++) {
         struct ovn_lb_backend *backend = &lb_vip->backends[i];
 
-        /* Forward to OFTABLE_CHK_LB_AFFINITY table to store flow tuple. */
-        ds_put_format(&aff_match_learn,
-                      REGBIT_KNOWN_LB_SESSION" == 0 && "
-                      "ct.new && %s && %s.dst == %s && %s == %s",
-                      ipv6 ? "ip6" : "ip4", ipv6 ? "ip6" : "ip4",
-                      backend->ip_str, reg_vip, lb_vip->vip_str);
+        ds_put_cstr(&aff_match_learn, backend->ip_str);
+        ds_put_cstr(&aff_match, backend->ip_str);
+
         if (backend->port) {
+            ds_put_format(&aff_action, ipv6 ? "[%s]:%d" : "%s:%d",
+                          backend->ip_str, backend->port);
+            ds_put_format(&aff_action_learn, ipv6 ? "[%s]:%d" : "%s:%d",
+                          backend->ip_str, backend->port);
+
             ds_put_format(&aff_match_learn, " && %s.dst == %d",
                           lb->proto, backend->port);
+            ds_put_format(&aff_match, " && "REG_LB_AFF_MATCH_PORT" == %d",
+                          backend->port);
+        } else {
+            ds_put_cstr(&aff_action, backend->ip_str);
+            ds_put_cstr(&aff_action_learn, backend->ip_str);
         }
 
-        if (lb_vip->vip_port) {
-            ds_put_format(&aff_action_learn,
-                          "commit_lb_aff(vip = \"%s%s%s:%d\"",
-                          ipv6 ? "[" : "", lb_vip->vip_str, ipv6 ? "]" : "",
-                          lb_vip->vip_port);
-        } else {
-            ds_put_format(&aff_action_learn, "commit_lb_aff(vip = \"%s\"",
-                          lb_vip->vip_str);
-        }
-
-        if (backend->port) {
-            ds_put_format(&aff_action_learn,", backend = \"%s%s%s:%d\"",
-                          ipv6 ? "[" : "", backend->ip_str,
-                          ipv6 ? "]" : "", backend->port);
-        } else {
-            ds_put_format(&aff_action_learn,", backend = \"%s\"",
-                          backend->ip_str);
-        }
+        ds_put_cstr(&aff_action, ");");
+        ds_put_char(&aff_action_learn, '"');
 
         if (lb_vip->vip_port) {
             ds_put_format(&aff_action_learn, ", proto = %s", lb->proto);
@@ -7057,41 +7079,13 @@ build_lb_affinity_flows(struct hmap *lflows, struct ovn_northd_lb *lb,
                 ovn_stage_get_table(stage0), ovn_stage_get_pipeline(stage0),
                 100, ds_cstr(&aff_match_learn), ds_cstr(&aff_action_learn));
 
-        const char *reg_backend;
-        if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
-            reg_backend = REG_LB_AFF_BACKEND_IP4;
-        } else {
-            reg_backend = router_pipeline
-                ? REG_LB_L3_AFF_BACKEND_IP6 : REG_LB_L2_AFF_BACKEND_IP6;
-        }
-
-        /* Use already selected backend within affinity
-         * timeslot. */
-        if (backend->port) {
-            ds_put_format(&aff_match,
-                REGBIT_KNOWN_LB_SESSION" == 1 && %s && %s == %s "
-                "&& "REG_LB_AFF_MATCH_PORT" == %d",
-                IN6_IS_ADDR_V4MAPPED(&lb_vip->vip) ? "ip4" : "ip6",
-                reg_backend, backend->ip_str, backend->port);
-            ds_put_format(&aff_action_lb, "%s ct_lb_mark(backends=%s%s%s:%d);",
-                          ds_cstr(&aff_action_lb_common),
-                          ipv6 ? "[" : "", backend->ip_str,
-                          ipv6 ? "]" : "", backend->port);
-        } else {
-            ds_put_format(&aff_match,
-                REGBIT_KNOWN_LB_SESSION" == 1 && %s && %s == %s",
-                IN6_IS_ADDR_V4MAPPED(&lb_vip->vip) ? "ip4" : "ip6",
-                reg_backend, backend->ip_str);
-            ds_put_format(&aff_action_lb, "%s ct_lb_mark(backends=%s);",
-                          ds_cstr(&aff_action_lb_common), backend->ip_str);
-        }
-
         struct ovn_lflow *lflow_ref_aff_lb = NULL;
         uint32_t hash_aff_lb = ovn_logical_flow_hash(
                 ovn_stage_get_table(stage1), ovn_stage_get_pipeline(stage1),
-                150, ds_cstr(&aff_match), ds_cstr(&aff_action_lb));
+                150, ds_cstr(&aff_match), ds_cstr(&aff_action));
 
         for (size_t j = 0; j < n_dplist; j++) {
+            /* Forward to OFTABLE_CHK_LB_AFFINITY table to store flow tuple. */
             if (!ovn_dp_group_add_with_reference(lflow_ref_aff_learn,
                                                  dplist[j])) {
                 lflow_ref_aff_learn = ovn_lflow_add_at_with_hash(
@@ -7100,35 +7094,27 @@ build_lb_affinity_flows(struct hmap *lflows, struct ovn_northd_lb *lb,
                         NULL, NULL, &lb->nlb->header_, OVS_SOURCE_LOCATOR,
                         hash_aff_learn);
             }
-            if (!ovn_dp_group_add_with_reference(lflow_ref_aff_learn,
-                                                 dplist[j])) {
-                lflow_ref_aff_learn = ovn_lflow_add_at_with_hash(
-                        lflows, dplist[j], stage0, 100,
-                        ds_cstr(&aff_match_learn), ds_cstr(&aff_action_learn),
-                        NULL, NULL, &lb->nlb->header_, OVS_SOURCE_LOCATOR,
-                        hash_aff_learn);
-            }
+            /* Use already selected backend within affinity timeslot. */
             if (!ovn_dp_group_add_with_reference(lflow_ref_aff_lb,
                                                  dplist[j])) {
                 lflow_ref_aff_lb = ovn_lflow_add_at_with_hash(
-                        lflows, dplist[j], stage1, 150, ds_cstr(&aff_match),
-                        ds_cstr(&aff_action_lb), NULL, NULL,
-                        &lb->nlb->header_, OVS_SOURCE_LOCATOR,
-                        hash_aff_lb);
+                    lflows, dplist[j], stage1, 150, ds_cstr(&aff_match),
+                    ds_cstr(&aff_action), NULL, NULL,
+                    &lb->nlb->header_, OVS_SOURCE_LOCATOR,
+                    hash_aff_lb);
             }
         }
 
-        ds_clear(&aff_action_learn);
-        ds_clear(&aff_match_learn);
-        ds_clear(&aff_action_lb);
-        ds_clear(&aff_match);
+        ds_truncate(&aff_action, aff_action_len);
+        ds_truncate(&aff_action_learn, aff_action_learn_len);
+        ds_truncate(&aff_match, aff_match_len);
+        ds_truncate(&aff_match_learn, aff_match_learn_len);
     }
 
+    ds_destroy(&aff_action);
     ds_destroy(&aff_action_learn);
-    ds_destroy(&aff_match_learn);
-    ds_destroy(&aff_action_lb_common);
-    ds_destroy(&aff_action_lb);
     ds_destroy(&aff_match);
+    ds_destroy(&aff_match_learn);
 }
 
 static void
