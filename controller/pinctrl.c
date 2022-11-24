@@ -182,6 +182,7 @@ static void destroy_buffered_packets_map(void);
 static void
 run_buffered_binding(struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
                      struct ovsdb_idl_index *sbrec_port_binding_by_datapath,
+                     struct ovsdb_idl_index *sbrec_port_binding_by_name,
                      const struct hmap *local_datapaths)
     OVS_REQUIRES(pinctrl_mutex);
 
@@ -1430,6 +1431,9 @@ struct buffered_packets {
     struct in6_addr ip;
     struct eth_addr ea;
 
+    uint64_t dp_key;
+    uint64_t port_key;
+
     long long int timestamp;
 
     struct buffer_info data[BUFFER_QUEUE_DEPTH];
@@ -1556,17 +1560,28 @@ buffered_packets_map_gc(void)
 }
 
 static struct buffered_packets *
-pinctrl_find_buffered_packets(const struct in6_addr *ip, uint32_t hash)
+pinctrl_find_buffered_packets(uint64_t dp_key, uint64_t port_key,
+                              const struct in6_addr *ip, uint32_t hash)
 {
     struct buffered_packets *qp;
-
-    HMAP_FOR_EACH_WITH_HASH (qp, hmap_node, hash,
-                             &buffered_packets_map) {
-        if (IN6_ARE_ADDR_EQUAL(&qp->ip, ip)) {
+    HMAP_FOR_EACH_WITH_HASH (qp, hmap_node, hash, &buffered_packets_map) {
+        if (qp->dp_key == dp_key && qp->port_key == port_key &&
+            IN6_ARE_ADDR_EQUAL(&qp->ip, ip)) {
             return qp;
         }
     }
     return NULL;
+}
+
+static uint32_t
+pinctrl_buffer_packet_hash(uint64_t dp_key, uint64_t port_key,
+                           struct in6_addr *addr)
+{
+    uint32_t hash = 0;
+    hash = hash_add64(hash, port_key);
+    hash = hash_add64(hash, dp_key);
+    hash = hash_bytes(&addr, sizeof addr, hash);
+    return hash_finish(hash, 16);
 }
 
 /* Called with in the pinctrl_handler thread context. */
@@ -1578,6 +1593,8 @@ pinctrl_handle_buffered_packets(struct dp_packet *pkt_in,
     struct buffered_packets *bp;
     struct dp_packet *clone;
     struct in6_addr addr;
+    uint64_t dp_key = ntohll(md->flow.metadata);
+    uint64_t oport_key = md->flow.regs[MFF_LOG_OUTPORT - MFF_REG0];
 
     if (is_arp) {
         addr = in6_addr_mapped_ipv4(htonl(md->flow.regs[0]));
@@ -1586,8 +1603,8 @@ pinctrl_handle_buffered_packets(struct dp_packet *pkt_in,
         memcpy(&addr, &ip6, sizeof addr);
     }
 
-    uint32_t hash = hash_bytes(&addr, sizeof addr, 0);
-    bp = pinctrl_find_buffered_packets(&addr, hash);
+    uint32_t hash = pinctrl_buffer_packet_hash(dp_key, oport_key, &addr);
+    bp = pinctrl_find_buffered_packets(dp_key, oport_key, &addr, hash);
     if (!bp) {
         if (hmap_count(&buffered_packets_map) >= 1000) {
             COVERAGE_INC(pinctrl_drop_buffered_packets_map);
@@ -1598,6 +1615,8 @@ pinctrl_handle_buffered_packets(struct dp_packet *pkt_in,
         hmap_insert(&buffered_packets_map, &bp->hmap_node, hash);
         bp->head = bp->tail = 0;
         bp->ip = addr;
+        bp->dp_key = dp_key;
+        bp->port_key = oport_key;
     }
     bp->timestamp = time_msec();
     /* clone the packet to send it later with correct L2 address */
@@ -3586,6 +3605,7 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                   sbrec_ip_multicast_opts);
     run_buffered_binding(sbrec_mac_binding_by_lport_ip,
                          sbrec_port_binding_by_datapath,
+                         sbrec_port_binding_by_name,
                          local_datapaths);
     sync_svc_monitors(ovnsb_idl_txn, svc_mon_table, sbrec_port_binding_by_name,
                       chassis);
@@ -4357,47 +4377,75 @@ run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
 static void
 run_buffered_binding(struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
                      struct ovsdb_idl_index *sbrec_port_binding_by_datapath,
+                     struct ovsdb_idl_index *sbrec_port_binding_by_name,
                      const struct hmap *local_datapaths)
     OVS_REQUIRES(pinctrl_mutex)
 {
     const struct local_datapath *ld;
+    struct buffered_packets *qp;
     bool notify = false;
 
-    HMAP_FOR_EACH (ld, hmap_node, local_datapaths) {
-        /* MAC_Binding.logical_port will always belong to a
-         * a router datapath. Hence we can skip logical switch
-         * datapaths.
-         * */
-        if (ld->is_switch) {
-            continue;
-        }
-
-        struct sbrec_port_binding *target =
-            sbrec_port_binding_index_init_row(sbrec_port_binding_by_datapath);
-        sbrec_port_binding_index_set_datapath(target, ld->datapath);
-        const struct sbrec_port_binding *pb;
-        SBREC_PORT_BINDING_FOR_EACH_EQUAL (pb, target,
-                                           sbrec_port_binding_by_datapath) {
-            if (strcmp(pb->type, "patch") && strcmp(pb->type, "l3gateway")) {
+    HMAP_FOR_EACH_SAFE (qp, hmap_node, &buffered_packets_map) {
+        bool found = false;
+        HMAP_FOR_EACH (ld, hmap_node, local_datapaths) {
+            /* MAC_Binding.logical_port will always belong to a
+             * a router datapath. Hence we can skip logical switch
+             * datapaths.
+             */
+            if (ld->is_switch) {
                 continue;
             }
-            struct buffered_packets *cur_qp;
-            HMAP_FOR_EACH_SAFE (cur_qp, hmap_node, &buffered_packets_map) {
-                struct ds ip_s = DS_EMPTY_INITIALIZER;
-                ipv6_format_mapped(&cur_qp->ip, &ip_s);
-                const struct sbrec_mac_binding *b = mac_binding_lookup(
-                        sbrec_mac_binding_by_lport_ip, pb->logical_port,
-                        ds_cstr(&ip_s));
-                if (b && ovs_scan(b->mac, ETH_ADDR_SCAN_FMT,
-                                  ETH_ADDR_SCAN_ARGS(cur_qp->ea))) {
-                    hmap_remove(&buffered_packets_map, &cur_qp->hmap_node);
-                    ovs_list_push_back(&buffered_mac_bindings, &cur_qp->list);
-                    notify = true;
+
+            if (ld->datapath->tunnel_key != qp->dp_key) {
+                continue;
+            }
+
+            struct sbrec_port_binding *target =
+                sbrec_port_binding_index_init_row(
+                        sbrec_port_binding_by_datapath);
+            sbrec_port_binding_index_set_datapath(target, ld->datapath);
+            const struct sbrec_port_binding *pb;
+            SBREC_PORT_BINDING_FOR_EACH_EQUAL (pb, target,
+                    sbrec_port_binding_by_datapath) {
+                if (pb->tunnel_key != qp->port_key) {
+                    continue;
                 }
+
+                const struct sbrec_port_binding *port = pb;
+                if (!strcmp(pb->type, "chassisredirect")) {
+                    const char *name = smap_get(&pb->options,
+                                                "distributed-port");
+                    if (name) {
+                        port = lport_lookup_by_name(sbrec_port_binding_by_name,
+                                                    name);
+                    }
+                }
+
+                if (!port) {
+                    continue;
+                }
+
+                struct ds ip_s = DS_EMPTY_INITIALIZER;
+                ipv6_format_mapped(&qp->ip, &ip_s);
+                const struct sbrec_mac_binding *b = mac_binding_lookup(
+                        sbrec_mac_binding_by_lport_ip, port->logical_port,
+                        ds_cstr(&ip_s));
                 ds_destroy(&ip_s);
+
+                if (b && ovs_scan(b->mac, ETH_ADDR_SCAN_FMT,
+                                  ETH_ADDR_SCAN_ARGS(qp->ea))) {
+                    hmap_remove(&buffered_packets_map, &qp->hmap_node);
+                    ovs_list_push_back(&buffered_mac_bindings, &qp->list);
+                    found = true;
+                    break;
+                }
+            }
+            sbrec_port_binding_index_destroy_row(target);
+            if (found) {
+                notify = true;
+                break;
             }
         }
-        sbrec_port_binding_index_destroy_row(target);
     }
     buffered_packets_map_gc();
 
