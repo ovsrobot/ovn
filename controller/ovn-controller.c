@@ -78,6 +78,7 @@
 #include "lib/inc-proc-eng.h"
 #include "lib/ovn-l7.h"
 #include "hmapx.h"
+#include "mirror.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
 
@@ -994,6 +995,7 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_port_col_name);
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_port_col_interfaces);
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_port_col_external_ids);
+    mirror_register_ovs_idl(ovs_idl);
 }
 
 #define SB_NODES \
@@ -3619,6 +3621,7 @@ main(int argc, char *argv[])
     patch_init();
     pinctrl_init();
     lflow_init();
+    mirror_init();
     vif_plug_provider_initialize();
 
     /* Connect to OVS OVSDB instance. */
@@ -4195,34 +4198,35 @@ main(int argc, char *argv[])
 
                     stopwatch_start(CONTROLLER_LOOP_STOPWATCH_NAME,
                                     time_msec());
-                    if (ovnsb_idl_txn) {
-                        if (ofctrl_has_backlog()) {
-                            /* When there are in-flight messages pending to
-                             * ovs-vswitchd, we should hold on recomputing so
-                             * that the previous flow installations won't be
-                             * delayed.  However, we still want to try if
-                             * recompute is not needed and we can quickly
-                             * incrementally process the new changes, to avoid
-                             * unnecessarily forced recomputes later on.  This
-                             * is because the OVSDB change tracker cannot
-                             * preserve tracked changes across iterations.  If
-                             * change tracking is improved, we can simply skip
-                             * this round of engine_run and continue processing
-                             * acculated changes incrementally later when
-                             * ofctrl_has_backlog() returns false. */
-                            engine_run(false);
-                        } else {
-                            engine_run(true);
-                        }
-                    } else {
-                        /* Even if there's no SB DB transaction available,
+
+                    bool allow_engine_recompute = true;
+
+                    if (!ovnsb_idl_txn || ofctrl_has_backlog()) {
+                        /* When there are in-flight messages pending to
+                         * ovs-vswitchd, we should hold on recomputing so
+                         * that the previous flow installations won't be
+                         * delayed.  However, we still want to try if
+                         * recompute is not needed and we can quickly
+                         * incrementally process the new changes, to avoid
+                         * unnecessarily forced recomputes later on.  This
+                         * is because the OVSDB change tracker cannot
+                         * preserve tracked changes across iterations.  If
+                         * change tracking is improved, we can simply skip
+                         * this round of engine_run and continue processing
+                         * acculated changes incrementally later when
+                         * ofctrl_has_backlog() returns false. */
+
+                        /* Even if there's no SB/OVS DB transaction available,
                          * try to run the engine so that we can handle any
                          * incremental changes that don't require a recompute.
                          * If a recompute is required, the engine will abort,
                          * triggerring a full run in the next iteration.
                          */
-                        engine_run(false);
+                        allow_engine_recompute = false;
                     }
+
+                    engine_run(allow_engine_recompute);
+
                     stopwatch_stop(CONTROLLER_LOOP_STOPWATCH_NAME,
                                    time_msec());
                     if (engine_has_updated()) {
@@ -4312,6 +4316,11 @@ main(int argc, char *argv[])
                                     &runtime_data->local_active_ports_ras);
                         stopwatch_stop(PINCTRL_RUN_STOPWATCH_NAME,
                                        time_msec());
+                        mirror_run(ovs_idl_txn,
+                                   ovsrec_mirror_table_get(ovs_idl_loop.idl),
+                                   sbrec_mirror_table_get(ovnsb_idl_loop.idl),
+                                   br_int,
+                                   &runtime_data->lbinding_data.bindings);
                         /* Updating monitor conditions if runtime data or
                          * logical datapath goups changed. */
                         if (engine_node_changed(&en_runtime_data)
@@ -4555,6 +4564,7 @@ loop_done:
     pinctrl_destroy();
     binding_destroy();
     patch_destroy();
+    mirror_destroy();
     if_status_mgr_destroy(if_mgr);
     shash_destroy(&vif_plug_deleted_iface_ids);
     shash_destroy(&vif_plug_changed_iface_ids);
