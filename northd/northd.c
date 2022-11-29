@@ -10323,50 +10323,125 @@ get_force_snat_ip(struct ovn_datapath *od, const char *key_type,
     return true;
 }
 
+#define LROUTER_NAT_LB_FLOW_INIT(MATCH, ACTION, PRIO) \
+        (struct lrouter_nat_lb_flow)                  \
+        { .action = (ACTION), .lflow_ref = NULL,      \
+          .hash = ovn_logical_flow_hash(              \
+          ovn_stage_get_table(S_ROUTER_IN_DNAT),      \
+          ovn_stage_get_pipeline(S_ROUTER_IN_DNAT),   \
+          (PRIO), ds_cstr(MATCH), (ACTION)) }
+
+enum lrouter_nat_lb_flow_type {
+    LROUTER_NAT_LB_FLOW_NORMAL = 0,
+    LROUTER_NAT_LB_FLOW_SKIP_SNAT,
+    LROUTER_NAT_LB_FLOW_FORCE_SNAT,
+    LROUTER_NAT_LB_FLOW_MAX,
+};
+
+struct lrouter_nat_lb_flow {
+    char *action;
+    struct ovn_lflow *lflow_ref;
+
+    uint32_t hash;
+};
+
+struct lrouter_nat_lb_flows_ctx {
+    struct lrouter_nat_lb_flow new[LROUTER_NAT_LB_FLOW_MAX];
+    struct lrouter_nat_lb_flow est[LROUTER_NAT_LB_FLOW_MAX];
+
+    struct ds *new_match;
+    struct ds *est_match;
+    struct ds *undnat_match;
+
+    struct ovn_lb_vip *lb_vip;
+    struct ovn_northd_lb *lb;
+    bool reject;
+
+    int prio;
+
+    struct hmap *lflows;
+    const struct shash *meter_groups;
+};
+
 static void
-build_gw_lrouter_nat_flows_for_lb(struct ovn_northd_lb *lb,
-                                  struct ovn_datapath **dplist, int n_dplist,
-                                  bool reject, char *new_match,
-                                  char *new_action, char *est_match,
-                                  char *est_action, struct hmap *lflows,
-                                  int prio, const struct shash *meter_groups)
+build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
+                                     enum lrouter_nat_lb_flow_type type,
+                                     struct ovn_datapath *od)
 {
-    if (!n_dplist) {
+    char *gw_action = od->is_gw_router ? "ct_dnat;" : "ct_dnat_in_czone;";
+    /* Store the match lengths, so we can reuse the ds buffer. */
+    size_t new_match_len = ctx->new_match->length;
+    size_t est_match_len = ctx->est_match->length;
+    size_t undnat_match_len = ctx->undnat_match->length;
+
+
+    const char *meter = NULL;
+
+    if (ctx->reject) {
+        meter = copp_meter_get(COPP_REJECT, od->nbr->copp, ctx->meter_groups);
+    }
+
+    if (ctx->lb_vip->n_backends || !ctx->lb_vip->empty_backend_rej) {
+        ds_put_format(ctx->new_match, " && is_chassis_resident(%s)",
+                      od->l3dgw_ports[0]->cr_port->json_key);
+        ds_put_format(ctx->est_match, " && is_chassis_resident(%s)",
+                      od->l3dgw_ports[0]->cr_port->json_key);
+    }
+
+    ovn_lflow_add_with_hint__(ctx->lflows, od, S_ROUTER_IN_DNAT, ctx->prio,
+                              ds_cstr(ctx->new_match), ctx->new[type].action,
+                              NULL, meter, &ctx->lb->nlb->header_);
+    ovn_lflow_add_with_hint(ctx->lflows, od, S_ROUTER_IN_DNAT, ctx->prio,
+                            ds_cstr(ctx->est_match), ctx->est[type].action,
+                            &ctx->lb->nlb->header_);
+
+    ds_truncate(ctx->new_match, new_match_len);
+    ds_truncate(ctx->est_match, est_match_len);
+
+    if (!ctx->lb_vip->n_backends) {
         return;
     }
 
-    struct ovn_lflow *lflow_ref_new = NULL, *lflow_ref_est = NULL;
-    uint32_t hash_new = ovn_logical_flow_hash(
-            ovn_stage_get_table(S_ROUTER_IN_DNAT),
-            ovn_stage_get_pipeline(S_ROUTER_IN_DNAT),
-            prio, new_match, new_action);
-    uint32_t hash_est = ovn_logical_flow_hash(
-            ovn_stage_get_table(S_ROUTER_IN_DNAT),
-            ovn_stage_get_pipeline(S_ROUTER_IN_DNAT),
-            prio, est_match, est_action);
+    char *action = type == LROUTER_NAT_LB_FLOW_NORMAL
+                   ? gw_action : ctx->est[type].action;
 
-    for (size_t i = 0; i < n_dplist; i++) {
-        struct ovn_datapath *od = dplist[i];
-        const char *meter = NULL;
+    ds_put_format(ctx->undnat_match,
+                  ") && outport == %s && is_chassis_resident(%s)",
+                  od->l3dgw_ports[0]->json_key,
+                  od->l3dgw_ports[0]->cr_port->json_key);
+    ovn_lflow_add_with_hint(ctx->lflows, od, S_ROUTER_OUT_UNDNAT, 120,
+                            ds_cstr(ctx->undnat_match), action,
+                            &ctx->lb->nlb->header_);
+    ds_truncate(ctx->undnat_match, undnat_match_len);
+}
 
-        if (reject) {
-            meter = copp_meter_get(COPP_REJECT, od->nbr->copp, meter_groups);
-        }
-        if (meter || !ovn_dp_group_add_with_reference(lflow_ref_new, od)) {
-            struct ovn_lflow *lflow = ovn_lflow_add_at_with_hash(lflows, od,
-                    S_ROUTER_IN_DNAT, prio, new_match, new_action,
-                    NULL, meter, &lb->nlb->header_, OVS_SOURCE_LOCATOR,
-                    hash_new);
-            lflow_ref_new = meter ? NULL : lflow;
-        }
+static void
+build_gw_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
+                                  enum lrouter_nat_lb_flow_type type,
+                                  struct ovn_datapath *od)
+{
+    const char *meter = NULL;
+    struct lrouter_nat_lb_flow *new_flow = &ctx->new[type];
+    struct lrouter_nat_lb_flow *est_flow = &ctx->est[type];
 
-        if (!ovn_dp_group_add_with_reference(lflow_ref_est, od)) {
-            lflow_ref_est = ovn_lflow_add_at_with_hash(lflows, od,
-                    S_ROUTER_IN_DNAT, prio, est_match, est_action,
-                    NULL, NULL, &lb->nlb->header_,
-                    OVS_SOURCE_LOCATOR, hash_est);
-        }
+    if (ctx->reject) {
+        meter = copp_meter_get(COPP_REJECT, od->nbr->copp, ctx->meter_groups);
     }
+    if (meter || !ovn_dp_group_add_with_reference(new_flow->lflow_ref, od)) {
+        struct ovn_lflow *lflow = ovn_lflow_add_at_with_hash(ctx->lflows, od,
+                S_ROUTER_IN_DNAT, ctx->prio, ds_cstr(ctx->new_match),
+                new_flow->action, NULL, meter, &ctx->lb->nlb->header_,
+                OVS_SOURCE_LOCATOR, new_flow->hash);
+        new_flow->lflow_ref = meter ? NULL : lflow;
+    }
+
+    if (!ovn_dp_group_add_with_reference(est_flow->lflow_ref, od)) {
+        est_flow->lflow_ref = ovn_lflow_add_at_with_hash(ctx->lflows, od,
+                S_ROUTER_IN_DNAT, ctx->prio, ds_cstr(ctx->est_match),
+                est_flow->action, NULL, NULL, &ctx->lb->nlb->header_,
+                OVS_SOURCE_LOCATOR, est_flow->hash);
+    }
+
 }
 
 static void
@@ -10379,10 +10454,16 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
                                bool ct_lb_mark)
 {
     const char *ct_natted = ct_lb_mark ? "ct_mark.natted" : "ct_label.natted";
-    char *skip_snat_new_action = NULL;
-    char *skip_snat_est_action = NULL;
-    char *new_match;
-    char *est_match;
+
+    bool ipv6 = !IN6_IS_ADDR_V4MAPPED(&lb_vip->vip);
+    const char *ip_match = ipv6 ? "ip6" : "ip4";
+    const char *ip_reg = ipv6 ? REG_NEXT_HOP_IPV6 : REG_NEXT_HOP_IPV4;
+
+    int prio = 110;
+
+    struct ds est_match = DS_EMPTY_INITIALIZER;
+    struct ds undnat_match = DS_EMPTY_INITIALIZER;
+    struct ds unsnat_match = DS_EMPTY_INITIALIZER;
 
     ds_clear(match);
     ds_clear(action);
@@ -10397,49 +10478,23 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
      * of "ct_lb_mark($targets);". The other flow is for ct.est with
      * an action of "next;".
      */
-    if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
-        ds_put_format(match, "ip4 && "REG_NEXT_HOP_IPV4" == %s",
-                      lb_vip->vip_str);
-    } else {
-        ds_put_format(match, "ip6 && "REG_NEXT_HOP_IPV6" == %s",
-                      lb_vip->vip_str);
-    }
-
-    if (lb->skip_snat) {
-        skip_snat_new_action = xasprintf("flags.skip_snat_for_lb = 1; %s",
-                                         ds_cstr(action));
-        skip_snat_est_action = xasprintf("flags.skip_snat_for_lb = 1; "
-                                         "next;");
-    }
-
-    int prio = 110;
+    ds_put_format(match, "ct.new && !ct.rel && %s && %s == %s",
+                  ip_match, ip_reg, lb_vip->vip_str);
     if (lb_vip->vip_port) {
         prio = 120;
-        new_match = xasprintf("ct.new && !ct.rel && %s && %s && "
-                              REG_ORIG_TP_DPORT_ROUTER" == %d",
-                              ds_cstr(match), lb->proto, lb_vip->vip_port);
-        est_match = xasprintf("ct.est && !ct.rel && %s && %s && "
-                              REG_ORIG_TP_DPORT_ROUTER" == %d && %s == 1",
-                              ds_cstr(match), lb->proto, lb_vip->vip_port,
-                              ct_natted);
-    } else {
-        new_match = xasprintf("ct.new && !ct.rel && %s", ds_cstr(match));
-        est_match = xasprintf("ct.est && !ct.rel && %s && %s == 1",
-                          ds_cstr(match), ct_natted);
+        ds_put_format(match, " && %s && "REG_ORIG_TP_DPORT_ROUTER" == %d",
+                      lb->proto, lb_vip->vip_port);
     }
 
-    const char *ip_match = NULL;
-    if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
-        ip_match = "ip4";
-    } else {
-        ip_match = "ip6";
-    }
+    ds_put_cstr(&est_match, "ct.est");
+    /* Clone the match after initial "ct.new" (6 bytes). */
+    ds_put_cstr(&est_match, ds_cstr(match) + 6);
+    ds_put_format(&est_match, " && %s == 1", ct_natted);
 
     /* Add logical flows to UNDNAT the load balanced reverse traffic in
      * the router egress pipleine stage - S_ROUTER_OUT_UNDNAT if the logical
      * router has a gateway router port associated.
      */
-    struct ds undnat_match = DS_EMPTY_INITIALIZER;
     ds_put_format(&undnat_match, "%s && (", ip_match);
 
     for (size_t i = 0; i < lb_vip->n_backends; i++) {
@@ -10454,12 +10509,9 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
             ds_put_cstr(&undnat_match, ") || ");
         }
     }
-    ds_chomp(&undnat_match, ' ');
-    ds_chomp(&undnat_match, '|');
-    ds_chomp(&undnat_match, '|');
-    ds_chomp(&undnat_match, ' ');
+    /* Remove the trailing " || ". */
+    ds_truncate(&undnat_match, undnat_match.length - 4);
 
-    struct ds unsnat_match = DS_EMPTY_INITIALIZER;
     ds_put_format(&unsnat_match, "%s && %s.dst == %s && %s",
                   ip_match, ip_match, lb_vip->vip_str, lb->proto);
     if (lb_vip->vip_port) {
@@ -10467,21 +10519,38 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
                       lb_vip->vip_port);
     }
 
-    struct ovn_datapath **gw_router_skip_snat =
-        xcalloc(lb->n_nb_lr, sizeof *gw_router_skip_snat);
-    int n_gw_router_skip_snat = 0;
+    struct lrouter_nat_lb_flows_ctx ctx = {
+        .lb_vip = lb_vip,
+        .lb = lb,
+        .reject = reject,
+        .prio = prio,
+        .lflows = lflows,
+        .meter_groups = meter_groups,
+        .new_match = match,
+        .est_match = &est_match,
+        .undnat_match = &undnat_match
+    };
 
-    struct ovn_datapath **gw_router_force_snat =
-        xcalloc(lb->n_nb_lr, sizeof *gw_router_force_snat);
-    int n_gw_router_force_snat = 0;
+    VLOG_INFO("action=%s", ds_cstr(action));
+    char *act = ds_cstr(action);
+    ctx.new[LROUTER_NAT_LB_FLOW_NORMAL] =
+        LROUTER_NAT_LB_FLOW_INIT(match, act, prio);
+    ctx.est[LROUTER_NAT_LB_FLOW_NORMAL] =
+        LROUTER_NAT_LB_FLOW_INIT(&est_match, "next;", prio);
 
-    struct ovn_datapath **gw_router =
-        xcalloc(lb->n_nb_lr, sizeof *gw_router);
-    int n_gw_router = 0;
+    act = xasprintf("flags.force_snat_for_lb = 1; %s", ds_cstr(action));
+    ctx.new[LROUTER_NAT_LB_FLOW_FORCE_SNAT] =
+        LROUTER_NAT_LB_FLOW_INIT(match, act, prio);
+    ctx.est[LROUTER_NAT_LB_FLOW_FORCE_SNAT] =
+        LROUTER_NAT_LB_FLOW_INIT(&est_match,
+                                 "flags.force_snat_for_lb = 1; next;", prio);
 
-    struct ovn_datapath **distributed_router =
-        xcalloc(lb->n_nb_lr, sizeof *distributed_router);
-    int n_distributed_router = 0;
+    act = xasprintf("flags.skip_snat_for_lb = 1; %s", ds_cstr(action));
+    ctx.new[LROUTER_NAT_LB_FLOW_SKIP_SNAT] =
+        LROUTER_NAT_LB_FLOW_INIT(match, act, prio);
+    ctx.est[LROUTER_NAT_LB_FLOW_SKIP_SNAT] =
+        LROUTER_NAT_LB_FLOW_INIT(&est_match,
+                                 "flags.skip_snat_for_lb = 1; next;", prio);
 
     struct ovn_datapath **lb_aff_force_snat_router =
         xcalloc(lb->n_nb_lr, sizeof *lb_aff_force_snat_router);
@@ -10495,18 +10564,22 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
      * lflow generation for them.
      */
     for (size_t i = 0; i < lb->n_nb_lr; i++) {
+        enum lrouter_nat_lb_flow_type type;
         struct ovn_datapath *od = lb->nb_lr[i];
-        if (!od->n_l3dgw_ports) {
-            if (lb->skip_snat) {
-                gw_router_skip_snat[n_gw_router_skip_snat++] = od;
-            } else if (!lport_addresses_is_empty(&od->lb_force_snat_addrs) ||
-                       od->lb_force_snat_router_ip) {
-                gw_router_force_snat[n_gw_router_force_snat++] = od;
-            } else {
-                gw_router[n_gw_router++] = od;
-            }
+
+        if (lb->skip_snat) {
+            type = LROUTER_NAT_LB_FLOW_SKIP_SNAT;
+        } else if (!lport_addresses_is_empty(&od->lb_force_snat_addrs) ||
+                   od->lb_force_snat_router_ip) {
+            type = LROUTER_NAT_LB_FLOW_FORCE_SNAT;
         } else {
-            distributed_router[n_distributed_router++] = od;
+            type = LROUTER_NAT_LB_FLOW_NORMAL;
+        }
+
+        if (!od->n_l3dgw_ports) {
+            build_gw_lrouter_nat_flows_for_lb(&ctx, type, od);
+        } else {
+            build_distr_lrouter_nat_flows_for_lb(&ctx, type, od);
         }
 
         if (!lport_addresses_is_empty(&od->lb_force_snat_addrs) ||
@@ -10534,136 +10607,30 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
         }
     }
 
-    /* GW router logic */
-    build_gw_lrouter_nat_flows_for_lb(lb, gw_router_skip_snat,
-            n_gw_router_skip_snat, reject, new_match,
-            skip_snat_new_action, est_match,
-            skip_snat_est_action, lflows, prio, meter_groups);
-
-    char *new_actions = xasprintf("flags.force_snat_for_lb = 1; %s",
-                                  ds_cstr(action));
-    build_gw_lrouter_nat_flows_for_lb(lb, gw_router_force_snat,
-            n_gw_router_force_snat, reject, new_match,
-            new_actions, est_match,
-            "flags.force_snat_for_lb = 1; next;",
-            lflows, prio, meter_groups);
-
     /* LB affinity flows for datapaths where CMS has specified
-     * force_snat_for_lb floag option.
-     */
-    build_lb_affinity_lr_flows(lflows, lb, lb_vip, new_match,
+    * force_snat_for_lb floag option.
+    */
+    build_lb_affinity_lr_flows(lflows, lb, lb_vip, ds_cstr(match),
                                "flags.force_snat_for_lb = 1; ",
                                lb_aff_force_snat_router,
                                n_lb_aff_force_snat_router);
-
-    build_gw_lrouter_nat_flows_for_lb(lb, gw_router, n_gw_router,
-            reject, new_match, ds_cstr(action), est_match,
-            "next;", lflows, prio, meter_groups);
 
     /* LB affinity flows for datapaths where CMS has specified
      * skip_snat_for_lb floag option or regular datapaths.
      */
     char *lb_aff_action =
         lb->skip_snat ? "flags.skip_snat_for_lb = 1; " : NULL;
-    build_lb_affinity_lr_flows(lflows, lb, lb_vip, new_match, lb_aff_action,
-                               lb_aff_router, n_lb_aff_router);
-
-    /* Distributed router logic */
-    for (size_t i = 0; i < n_distributed_router; i++) {
-        struct ovn_datapath *od = distributed_router[i];
-        char *new_match_p = new_match;
-        char *est_match_p = est_match;
-        const char *meter = NULL;
-        bool is_dp_lb_force_snat =
-            !lport_addresses_is_empty(&od->lb_force_snat_addrs) ||
-            od->lb_force_snat_router_ip;
-
-        if (reject) {
-            meter = copp_meter_get(COPP_REJECT, od->nbr->copp, meter_groups);
-        }
-
-        if (lb_vip->n_backends || !lb_vip->empty_backend_rej) {
-            new_match_p = xasprintf("%s && is_chassis_resident(%s)",
-                                    new_match,
-                                    od->l3dgw_ports[0]->cr_port->json_key);
-            est_match_p = xasprintf("%s && is_chassis_resident(%s)",
-                                    est_match,
-                                    od->l3dgw_ports[0]->cr_port->json_key);
-        }
-
-        if (lb->skip_snat) {
-            ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_DNAT, prio,
-                                      new_match_p, skip_snat_new_action,
-                                      NULL, meter, &lb->nlb->header_);
-            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
-                                    est_match_p, skip_snat_est_action,
-                                    &lb->nlb->header_);
-        } else if (is_dp_lb_force_snat) {
-            ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_DNAT, prio,
-                                      new_match_p, new_actions, NULL,
-                                      meter, &lb->nlb->header_);
-            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
-                                    est_match_p,
-                                    "flags.force_snat_for_lb = 1; next;",
-                                    &lb->nlb->header_);
-        } else {
-            ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_DNAT, prio,
-                                      new_match_p, ds_cstr(action), NULL,
-                                      meter, &lb->nlb->header_);
-            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, prio,
-                                    est_match_p, "next;",
-                                    &lb->nlb->header_);
-        }
-
-        if (new_match_p != new_match) {
-            free(new_match_p);
-        }
-        if (est_match_p != est_match) {
-            free(est_match_p);
-        }
-
-        if (!lb_vip->n_backends) {
-            continue;
-        }
-
-        char *undnat_match_p = xasprintf(
-            "%s) && outport == %s && is_chassis_resident(%s)",
-            ds_cstr(&undnat_match),
-            od->l3dgw_ports[0]->json_key,
-            od->l3dgw_ports[0]->cr_port->json_key);
-        if (lb->skip_snat) {
-            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_UNDNAT, 120,
-                                    undnat_match_p, skip_snat_est_action,
-                                    &lb->nlb->header_);
-        } else if (is_dp_lb_force_snat) {
-            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_UNDNAT, 120,
-                                    undnat_match_p,
-                                    "flags.force_snat_for_lb = 1; next;",
-                                    &lb->nlb->header_);
-        } else {
-            ovn_lflow_add_with_hint(
-                lflows, od, S_ROUTER_OUT_UNDNAT, 120, undnat_match_p,
-                od->is_gw_router ? "ct_dnat;" : "ct_dnat_in_czone;",
-                &lb->nlb->header_);
-        }
-        free(undnat_match_p);
-    }
+    build_lb_affinity_lr_flows(lflows, lb, lb_vip, ds_cstr(match),
+                               lb_aff_action, lb_aff_router, n_lb_aff_router);
 
     ds_destroy(&unsnat_match);
     ds_destroy(&undnat_match);
+    ds_destroy(&est_match);
 
-    free(skip_snat_new_action);
-    free(skip_snat_est_action);
-    free(est_match);
-    free(new_match);
-    free(new_actions);
-
-    free(gw_router_force_snat);
-    free(gw_router_skip_snat);
-    free(distributed_router);
     free(lb_aff_force_snat_router);
     free(lb_aff_router);
-    free(gw_router);
+    free(ctx.new[LROUTER_NAT_LB_FLOW_FORCE_SNAT].action);
+    free(ctx.new[LROUTER_NAT_LB_FLOW_SKIP_SNAT].action);
 }
 
 static void
