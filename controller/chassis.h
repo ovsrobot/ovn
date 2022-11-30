@@ -19,6 +19,8 @@
 #include <stdbool.h>
 #include "lib/ovn-sb-idl.h"
 
+#define CHASSIS_IDX_PREFIX "ovn-chassis-idx-"
+
 struct ovsdb_idl;
 struct ovsdb_idl_index;
 struct ovsdb_idl_txn;
@@ -41,12 +43,16 @@ const struct sbrec_chassis *chassis_run(
     const struct sset *transport_zones,
     const struct sbrec_chassis_private **chassis_private);
 bool chassis_cleanup(struct ovsdb_idl_txn *ovnsb_idl_txn,
+                     const struct ovsrec_open_vswitch_table *,
                      const struct sbrec_chassis *,
                      const struct sbrec_chassis_private *);
 bool chassis_get_mac(const struct sbrec_chassis *chassis,
                      const char *bridge_mapping,
                      struct eth_addr *chassis_mac);
 const char * get_chassis_mac_mappings(const struct smap *ext_ids);
+const char *get_ovs_chassis_id(const struct ovsrec_open_vswitch_table *);
+const char *get_chassis_idx(const struct ovsrec_open_vswitch_table *);
+void store_chassis_index_if_needed(const struct ovsrec_open_vswitch_table *);
 
 
 #endif /* controller/chassis.h */
