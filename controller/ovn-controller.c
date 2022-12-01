@@ -4955,6 +4955,9 @@ loop_done:
     if (file_system_id) {
         free(file_system_id);
     }
+    if (cli_system_id) {
+        free(cli_system_id);
+    }
     service_stop();
 
     exit(retval);
@@ -4980,6 +4983,7 @@ parse_options(int argc, char *argv[])
         STREAM_SSL_LONG_OPTIONS,
         {"peer-ca-cert", required_argument, NULL, OPT_PEER_CA_CERT},
         {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
+        {"chassis", required_argument, NULL, 'n'},
         {"enable-dummy-vif-plug", no_argument, NULL,
          OPT_ENABLE_DUMMY_VIF_PLUG},
         {NULL, 0, NULL, 0}
@@ -5031,6 +5035,10 @@ parse_options(int argc, char *argv[])
             vif_plug_dummy_enable();
             break;
 
+        case 'n':
+            cli_system_id = xstrdup(optarg);
+            break;
+
         case '?':
             exit(EXIT_FAILURE);
 
@@ -5066,6 +5074,7 @@ usage(void)
     daemon_usage();
     vlog_usage();
     printf("\nOther options:\n"
+           "  -n                      custom chassis name\n"
            "  -h, --help              display this help message\n"
            "  -V, --version           display version information\n");
     exit(EXIT_SUCCESS);
