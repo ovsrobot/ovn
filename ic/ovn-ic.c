@@ -1096,11 +1096,22 @@ route_need_advertise(const char *policy,
 static void
 add_to_routes_ad(struct hmap *routes_ad, struct ic_route_info *ic_route)
 {
+    const char *route_table = ic_route->route_table ? ic_route->route_table
+                                                    : "";
     uint hash = ic_route_hash(&ic_route->prefix, ic_route->plen,
                               &ic_route->nexthop, ic_route->origin,
-                              ic_route->route_table ? ic_route->route_table
-                                                    : "");
-    hmap_insert(routes_ad, &ic_route->node, hash);
+                              route_table);
+
+    if (!ic_route_find(routes_ad, &ic_route->prefix, ic_route->plen,
+                       &ic_route->nexthop, ic_route->origin, route_table,
+                       hash)) {
+        hmap_insert(routes_ad, &ic_route->node, hash);
+    }
+    else {
+        VLOG_WARN("Duplicate route advertisement was suppressed! NB route "
+                  "uuid: "UUID_FMT,
+                  UUID_ARGS(&ic_route->nb_route->header_.uuid));
+    }
 }
 
 static void
