@@ -1734,46 +1734,53 @@ OVS_START_L7([bar2], [http6])
 OVS_START_L7([bar3], [http6])
 
 dnl Should work with the virtual IP fd03::1 address through NAT
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([foo1], [wget http://[[fd03::1]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log || (ovs-ofctl -O OpenFlow13 dump-flows br-int && false)])
+j=0
+OVS_WAIT_FOR_OUTPUT([
+for i in `seq 1 10`; do
+    NS_EXEC([foo1], [wget http://[[fd03::1]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log || (ovs-ofctl -O OpenFlow13 dump-flows br-int && false)])
 done
-
-dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd03::1) | grep -v fe80 | \
+j=$((j + 1))
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd03::1) | grep -v fe80 | \
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=fd01::2,dst=fd03::1,sport=<cleared>,dport=<cleared>),reply=(src=fd02::2,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd01::2,dst=fd03::1,sport=<cleared>,dport=<cleared>),reply=(src=fd02::3,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd01::2,dst=fd03::1,sport=<cleared>,dport=<cleared>),reply=(src=fd02::4,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
 
-dnl Should work with the virtual IP fd03::3 address through NAT
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([foo1], [wget http://[[fd03::3]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
-done
+echo "Succeeded after $j iterations"
 
+dnl Should work with the virtual IP fd03::3 address through NAT
+j=0
+OVS_WAIT_FOR_OUTPUT([
+for i in `seq 1 10`; do
+    NS_EXEC([foo1], [wget http://[[fd03::3]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+done
+j=$((j + 1))
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd03::3) | grep -v fe80 | \
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd03::3) | grep -v fe80 | \
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=fd01::2,dst=fd03::3,sport=<cleared>,dport=<cleared>),reply=(src=fd02::2,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd01::2,dst=fd03::3,sport=<cleared>,dport=<cleared>),reply=(src=fd02::3,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd01::2,dst=fd03::3,sport=<cleared>,dport=<cleared>),reply=(src=fd02::4,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
 
-dnl Test load-balancing that includes L4 ports in NAT.
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([foo1], [wget http://[[fd03::2]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
-done
+echo "Succeeded after $j iterations"
 
+j=0
+OVS_WAIT_FOR_OUTPUT([
+dnl Test load-balancing that includes L4 ports in NAT.
+for i in `seq 1 10`; do
+    NS_EXEC([foo1], [wget http://[[fd03::2]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+done
+j=$((j + 1))
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd03::2) | grep -v fe80 | \
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd03::2) | grep -v fe80 | \
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=fd01::2,dst=fd03::2,sport=<cleared>,dport=<cleared>),reply=(src=fd02::2,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd01::2,dst=fd03::2,sport=<cleared>,dport=<cleared>),reply=(src=fd02::3,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd01::2,dst=fd03::2,sport=<cleared>,dport=<cleared>),reply=(src=fd02::4,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
+echo "Succeeded after $j iterations"
 
 # Configure selection_fields.
 ovn-nbctl set load_balancer $lb2_uuid selection_fields="ip_src,ip_dst,tp_src,tp_dst"
@@ -1784,19 +1791,22 @@ OVS_WAIT_UNTIL([
 
 AT_CHECK([ovs-appctl dpctl/flush-conntrack])
 
+j=0
+OVS_WAIT_FOR_OUTPUT([
 dnl Test load-balancing that includes L4 ports in NAT.
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([foo1], [wget http://[[fd03::2]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+for i in `seq 1 10`; do
+    NS_EXEC([foo1], [wget http://[[fd03::2]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd03::2) | grep -v fe80 | \
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd03::2) | grep -v fe80 | \
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=fd01::2,dst=fd03::2,sport=<cleared>,dport=<cleared>),reply=(src=fd02::2,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd01::2,dst=fd03::2,sport=<cleared>,dport=<cleared>),reply=(src=fd02::3,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd01::2,dst=fd03::2,sport=<cleared>,dport=<cleared>),reply=(src=fd02::4,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
+echo "Succeeded after $j iterations"
 
 AT_CHECK([ovs-appctl dpctl/flush-conntrack])
 
@@ -1933,13 +1943,15 @@ OVS_START_L7([foo3], [http])
 OVS_START_L7([foo4], [http])
 
 dnl Should work with the virtual IP address through NAT
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([foo1], [wget 30.0.0.1 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+j=0
+OVS_WAIT_FOR_OUTPUT([
+for i in `seq 1 10`; do
+    NS_EXEC([foo1], [wget 30.0.0.1 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) | \
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) | \
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=192.168.1.2,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.3,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=192.168.1.2,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.4,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
@@ -1947,19 +1959,21 @@ tcp,orig=(src=192.168.1.2,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(s
 ])
 
 dnl Test load-balancing that includes L4 ports in NAT.
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([foo1], [wget 30.0.0.2:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+j=0
+OVS_WAIT_FOR_OUTPUT([
+for i in `seq 1 10`; do
+    NS_EXEC([foo1], [wget 30.0.0.2:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.2) | \
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.2) | \
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=192.168.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.3,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=192.168.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.4,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=192.168.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.5,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
-
+echo "Succeeded after $j iterations"
 
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
 
@@ -2044,32 +2058,38 @@ OVS_START_L7([foo3], [http6])
 OVS_START_L7([foo4], [http6])
 
 dnl Should work with the virtual IP address through NAT
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([foo1], [wget http://[[fd03::1]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+j=0
+OVS_WAIT_FOR_OUTPUT([
+for i in `seq 1 10`; do
+    NS_EXEC([foo1], [wget http://[[fd03::1]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd03::1) | grep -v fe80 | \
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd03::1) | grep -v fe80 | \
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=fd01::2,dst=fd03::1,sport=<cleared>,dport=<cleared>),reply=(src=fd01::3,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd01::2,dst=fd03::1,sport=<cleared>,dport=<cleared>),reply=(src=fd01::4,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd01::2,dst=fd03::1,sport=<cleared>,dport=<cleared>),reply=(src=fd01::5,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
+echo "Succeeded after $j iterations"
 
 dnl Test load-balancing that includes L4 ports in NAT.
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([foo1], [wget http://[[fd03::2]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+j=0
+OVS_WAIT_FOR_OUTPUT([
+for i in `seq 1 10`; do
+    NS_EXEC([foo1], [wget http://[[fd03::2]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd03::2) | grep -v fe80 | \
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd03::2) | grep -v fe80 | \
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=fd01::2,dst=fd03::2,sport=<cleared>,dport=<cleared>),reply=(src=fd01::3,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd01::2,dst=fd03::2,sport=<cleared>,dport=<cleared>),reply=(src=fd01::4,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd01::2,dst=fd03::2,sport=<cleared>,dport=<cleared>),reply=(src=fd01::5,dst=fd01::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
+echo "Succeeded after $j iterations"
 
 
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
@@ -2198,30 +2218,36 @@ OVS_START_L7([foo1], [http])
 OVS_START_L7([bar1], [http])
 
 dnl Should work with the virtual IP address through NAT
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget 30.0.0.1 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+j=0
+OVS_WAIT_FOR_OUTPUT([
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget 30.0.0.1 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) |
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) |
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=172.16.1.2,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=172.16.1.2,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
+echo "Succeeded after $j iterations"
 
+j=0
+OVS_WAIT_FOR_OUTPUT([
 dnl Test load-balancing that includes L4 ports in NAT.
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget 30.0.0.2:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget 30.0.0.2:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.2) |
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.2) |
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
+echo "Succeeded after $j iterations"
 
 check_est_flows () {
     n=$(ovs-ofctl dump-flows br-int table=13 | grep \
@@ -2253,24 +2279,27 @@ ovn-sbctl dump-flows R2
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-flows br-int table=43 | \
 grep 'nat(src=20.0.0.2)'])
 
+exp_ct1="tcp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
+tcp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)"
+exp_ct2="tcp,orig=(src=172.16.1.2,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+tcp,orig=(src=172.16.1.2,dst=192.168.2.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)"
+
 dnl Test load-balancing that includes L4 ports in NAT.
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget 30.0.0.2:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+j=0
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget 30.0.0.2:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.2) |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
-tcp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
-tcp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
-])
+ct1=$(ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.2) | sed -e 's/zone=[[0-9]]*/zone=<cleared>/')
+ct2=$(ovs-appctl dpctl/dump-conntrack | FORMAT_CT(20.0.0.2) | sed -e 's/zone=[[0-9]]*/zone=<cleared>/')
 
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(20.0.0.2) |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
-tcp,orig=(src=172.16.1.2,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
-tcp,orig=(src=172.16.1.2,dst=192.168.2.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+test "x$ct1 = x$exp_ct1" && test "x$ct2 = x$exp_ct2"
+], [0], [dnl
 ])
+echo "Succeeded after $j iterations"
 
 OVS_WAIT_UNTIL([check_est_flows], [check established flows])
 
@@ -2294,22 +2323,23 @@ grep 'nat(src=20.0.0.2)'])
 rm -f wget*.log
 
 dnl Test load-balancing that includes L4 ports in NAT.
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget 30.0.0.2:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+exp_ct1="tcp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
+tcp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)"
+exp_ct2="tcp,orig=(src=172.16.1.2,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+tcp,orig=(src=172.16.1.2,dst=192.168.2.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)"
+
+j=0
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget 30.0.0.2:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.2) |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
-tcp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
-tcp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
-])
-
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(20.0.0.2) |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
-tcp,orig=(src=172.16.1.2,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
-tcp,orig=(src=172.16.1.2,dst=192.168.2.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+ct1=$(ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.2) | sed -e 's/zone=[[0-9]]*/zone=<cleared>/')
+ct2=$(ovs-appctl dpctl/dump-conntrack | FORMAT_CT(20.0.0.2) | sed -e 's/zone=[[0-9]]*/zone=<cleared>/')
+test "x$ct1 = x$exp_ct1" && test "x$ct2 = x$exp_ct2"
+], [0], [dnl
 ])
 
 OVS_WAIT_UNTIL([check_est_flows], [check established flows])
@@ -2545,26 +2575,31 @@ OVS_START_L7([foo1], [http6])
 OVS_START_L7([bar1], [http6])
 
 dnl Should work with the virtual IP address through NAT
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget http://[[fd30::1]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+j=0
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget http://[[fd30::1]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd30::1) | grep -v fe80 |
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd30::1) | grep -v fe80 |
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=fd72::2,dst=fd30::1,sport=<cleared>,dport=<cleared>),reply=(src=fd11::2,dst=fd72::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd72::2,dst=fd30::1,sport=<cleared>,dport=<cleared>),reply=(src=fd12::2,dst=fd72::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
+echo "Succeeded after $j iterations"
 
 dnl Test load-balancing that includes L4 ports in NAT.
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget http://[[fd30::2]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+j=0
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget http://[[fd30::2]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd30::2) | grep -v fe80 |
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd30::2) | grep -v fe80 |
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=fd72::2,dst=fd30::2,sport=<cleared>,dport=<cleared>),reply=(src=fd11::2,dst=fd72::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd72::2,dst=fd30::2,sport=<cleared>,dport=<cleared>),reply=(src=fd12::2,dst=fd72::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
@@ -2723,24 +2758,27 @@ OVS_START_L7([foo1], [http])
 OVS_START_L7([bar1], [http])
 
 dnl Should work with the virtual IP address through NAT
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget 30.0.0.1 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+exp_ct1="tcp,orig=(src=172.16.1.3,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
+tcp,orig=(src=172.16.1.3,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)"
+exp_ct2="tcp,orig=(src=172.16.1.3,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+tcp,orig=(src=172.16.1.3,dst=192.168.2.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)"
+
+j=0
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget 30.0.0.1 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
-tcp,orig=(src=172.16.1.3,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
-tcp,orig=(src=172.16.1.3,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
-])
-
+ct1=$(ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) | sed -e 's/zone=[[0-9]]*/zone=<cleared>/')
 dnl Force SNAT should have worked.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(20.0.0) |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
-tcp,orig=(src=172.16.1.3,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
-tcp,orig=(src=172.16.1.3,dst=192.168.2.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+ct2=$(ovs-appctl dpctl/dump-conntrack | FORMAT_CT(20.0.0) | sed -e 's/zone=[[0-9]]*/zone=<cleared>/')
+test "x$ct1 = x$exp_ct1" && test "x$ct2 = x$exp_ct2"
+], [0], [dnl
 ])
+echo "Succeeded after $j iterations"
+
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
 
 as ovn-sb
@@ -2896,24 +2934,27 @@ OVS_START_L7([foo1], [http6])
 OVS_START_L7([bar1], [http6])
 
 dnl Should work with the virtual IP address through NAT
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget http://[[fd30::1]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+exp_ct1="tcp,orig=(src=fd72::3,dst=fd30::1,sport=<cleared>,dport=<cleared>),reply=(src=fd11::2,dst=fd72::3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
+tcp,orig=(src=fd72::3,dst=fd30::1,sport=<cleared>,dport=<cleared>),reply=(src=fd12::2,dst=fd72::3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
+exp_ct2=tcp,orig=(src=fd72::3,dst=fd11::2,sport=<cleared>,dport=<cleared>),reply=(src=fd11::2,dst=fd20::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+tcp,orig=(src=fd72::3,dst=fd12::2,sport=<cleared>,dport=<cleared>),reply=(src=fd12::2,dst=fd20::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)"
+
+j=0
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget http://[[fd30::1]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd30::1) | grep -v fe80 |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
-tcp,orig=(src=fd72::3,dst=fd30::1,sport=<cleared>,dport=<cleared>),reply=(src=fd11::2,dst=fd72::3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
-tcp,orig=(src=fd72::3,dst=fd30::1,sport=<cleared>,dport=<cleared>),reply=(src=fd12::2,dst=fd72::3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
-])
-
+ct1=$(ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd30::1) | grep -v fe80 | sed -e 's/zone=[[0-9]]*/zone=<cleared>/')
 dnl Force SNAT should have worked.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd20::2) | grep -v fe80 |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
-tcp,orig=(src=fd72::3,dst=fd11::2,sport=<cleared>,dport=<cleared>),reply=(src=fd11::2,dst=fd20::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
-tcp,orig=(src=fd72::3,dst=fd12::2,sport=<cleared>,dport=<cleared>),reply=(src=fd12::2,dst=fd20::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+ct2=$(ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd20::2) | grep -v fe80 | sed -e 's/zone=[[0-9]]*/zone=<cleared>/')
+test "x$ct1 = x$exp_ct1" && test "x$ct2 = x$exp_ct2"
+], [0], [dnl
 ])
+echo "Succeeded after $j iterations"
+
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
 
 as ovn-sb
@@ -3107,39 +3148,35 @@ OVS_START_L7([foo16], [http6])
 OVS_START_L7([bar16], [http6])
 
 dnl Should work with the virtual IP address through NAT
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget 30.0.0.1 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+exp_ct1="tcp,orig=(src=172.16.1.3,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
+tcp,orig=(src=172.16.1.3,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)"
+exp_ct2="tcp,orig=(src=fd72::3,dst=fd30::1,sport=<cleared>,dport=<cleared>),reply=(src=fd11::2,dst=fd72::3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
+tcp,orig=(src=fd72::3,dst=fd30::1,sport=<cleared>,dport=<cleared>),reply=(src=fd12::2,dst=fd72::3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)"
+exp_ct3="tcp,orig=(src=172.16.1.3,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+tcp,orig=(src=172.16.1.3,dst=192.168.2.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)"
+exp_ct4="tcp,orig=(src=fd72::3,dst=fd11::2,sport=<cleared>,dport=<cleared>),reply=(src=fd11::2,dst=fd20::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+tcp,orig=(src=fd72::3,dst=fd12::2,sport=<cleared>,dport=<cleared>),reply=(src=fd12::2,dst=fd20::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)"
+
+j=0
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget 30.0.0.1 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+    NS_EXEC([alice16], [wget http://[[fd30::1]] -t 5 -T 1 --retry-connrefused -v -o wget${i}_6.log])
 done
 
-for i in `seq 1 20`; do
-    echo Request ${i}_6
-    NS_CHECK_EXEC([alice16], [wget http://[[fd30::1]] -t 5 -T 1 --retry-connrefused -v -o wget${i}_6.log])
-done
-
+j=$((j + 1))
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
-tcp,orig=(src=172.16.1.3,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
-tcp,orig=(src=172.16.1.3,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
-])
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd30::1) | grep -v fe80 |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
-tcp,orig=(src=fd72::3,dst=fd30::1,sport=<cleared>,dport=<cleared>),reply=(src=fd11::2,dst=fd72::3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
-tcp,orig=(src=fd72::3,dst=fd30::1,sport=<cleared>,dport=<cleared>),reply=(src=fd12::2,dst=fd72::3,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
-])
+ct1=$(ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) | sed -e 's/zone=[[0-9]]*/zone=<cleared>/')
+ct2=$(ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd30::1) | grep -v fe80 | sed -e 's/zone=[[0-9]]*/zone=<cleared>/')
 
 dnl Force SNAT should have worked.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(20.0.0) |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
-tcp,orig=(src=172.16.1.3,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
-tcp,orig=(src=172.16.1.3,dst=192.168.2.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+ct3=$(ovs-appctl dpctl/dump-conntrack | FORMAT_CT(20.0.0) | sed -e 's/zone=[[0-9]]*/zone=<cleared>/')
+ct4=$(ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd20::2) | grep -v fe80 | sed -e 's/zone=[[0-9]]*/zone=<cleared>/')
+test "x$ct1 = x$exp_ct1" && test "x$ct2 = x$exp_ct2" && test "x$ct3 = x$exp_ct3" && test "x$ct4 = x$exp_ct4"
+], [0], [dnl
 ])
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd20::2) | grep -v fe80 |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
-tcp,orig=(src=fd72::3,dst=fd11::2,sport=<cleared>,dport=<cleared>),reply=(src=fd11::2,dst=fd20::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
-tcp,orig=(src=fd72::3,dst=fd12::2,sport=<cleared>,dport=<cleared>),reply=(src=fd12::2,dst=fd20::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
-])
+echo "Succeeded after $j iterations"
+
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
 
 as ovn-sb
@@ -3258,30 +3295,36 @@ OVS_START_L7([foo1], [http])
 OVS_START_L7([bar1], [http])
 
 dnl Should work with the virtual IP address through NAT
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget 172.16.1.10 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+j=0
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget 172.16.1.10 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(172.16.1.10) |
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(172.16.1.10) |
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=172.16.1.2,dst=172.16.1.10,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=172.16.1.2,dst=172.16.1.10,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
+echo "Succeeded after $j iterations"
 
 dnl Test load-balancing that includes L4 ports in NAT.
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget 172.16.1.11:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+j=0
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget 172.16.1.11:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(172.16.1.11) |
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(172.16.1.11) |
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=172.16.1.2,dst=172.16.1.11,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=172.16.1.2,dst=172.16.1.11,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
+echo "Succeeded after $j iterations"
 
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
 
@@ -3401,30 +3444,36 @@ OVS_START_L7([foo1], [http6])
 OVS_START_L7([bar1], [http6])
 
 dnl Should work with the virtual IP address through NAT
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget http://[[fd72::10]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+j=0
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget http://[[fd72::10]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd72::10) | grep -v fe80 |
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd72::10) | grep -v fe80 |
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=fd72::2,dst=fd72::10,sport=<cleared>,dport=<cleared>),reply=(src=fd01::2,dst=fd72::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd72::2,dst=fd72::10,sport=<cleared>,dport=<cleared>),reply=(src=fd02::2,dst=fd72::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
+echo "Succeeded after $j iterations"
 
 dnl Test load-balancing that includes L4 ports in NAT.
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [wget http://[[fd72::11]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+j=0
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([
+for i in `seq 1 10`; do
+    NS_EXEC([alice1], [wget http://[[fd72::11]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
 done
+j=$((j + 1))
 
 dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd72::11) | grep -v fe80 |
+ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd72::11) | grep -v fe80 |
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=fd72::2,dst=fd72::11,sport=<cleared>,dport=<cleared>),reply=(src=fd01::2,dst=fd72::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=fd72::2,dst=fd72::11,sport=<cleared>,dport=<cleared>),reply=(src=fd02::2,dst=fd72::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
+echo "Succeeded after $j iterations"
 
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
 
