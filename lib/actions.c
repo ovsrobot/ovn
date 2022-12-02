@@ -44,6 +44,9 @@
 #include "controller/lflow.h"
 
 VLOG_DEFINE_THIS_MODULE(actions);
+
+#define MAX_BUCKETS_PER_GROUP 1024
+
 
 /* Prototypes for functions to be defined by each action. */
 #define OVNACT(ENUM, STRUCT)                                        \
@@ -1409,7 +1412,18 @@ encode_ct_lb(const struct ovnact_ct_lb *cl,
     BUILD_ASSERT(MFF_LOG_CT_ZONE < MFF_REG0 + FLOW_N_REGS);
     BUILD_ASSERT(MFF_LOG_DNAT_ZONE >= MFF_REG0);
     BUILD_ASSERT(MFF_LOG_DNAT_ZONE < MFF_REG0 + FLOW_N_REGS);
-    for (size_t bucket_id = 0; bucket_id < cl->n_dsts; bucket_id++) {
+
+    int n_buckets;
+    bool group_overflow = false;
+    if (cl->n_dsts > MAX_BUCKETS_PER_GROUP) {
+        n_buckets = MAX_BUCKETS_PER_GROUP;
+        group_overflow = true;
+    }
+    else {
+        n_buckets = cl->n_dsts;
+    }
+
+    for (size_t bucket_id = 0; bucket_id < n_buckets; bucket_id++) {
         const struct ovnact_ct_lb_dst *dst = &cl->dsts[bucket_id];
         char ip_addr[INET6_ADDRSTRLEN];
         if (dst->family == AF_INET) {
@@ -1443,6 +1457,12 @@ encode_ct_lb(const struct ovnact_ct_lb *cl,
     /* Create an action to set the group. */
     og = ofpact_put_GROUP(ofpacts);
     og->group_id = table_id;
+
+    if (group_overflow) {
+        VLOG_WARN("OF group id '%d' is desired to have more than "
+                  "MAX_BUCKETS_PER_GROUP (%d) buckets. Limited to maximum.",
+                  table_id, MAX_BUCKETS_PER_GROUP);
+    }
 }
 
 static void
@@ -1580,7 +1600,17 @@ encode_SELECT(const struct ovnact_select *select,
 
     struct mf_subfield sf = expr_resolve_field(&select->res_field);
 
-    for (size_t bucket_id = 0; bucket_id < select->n_dsts; bucket_id++) {
+    int n_buckets;
+    bool group_overflow = false;
+    if (select->n_dsts > MAX_BUCKETS_PER_GROUP) {
+        n_buckets = MAX_BUCKETS_PER_GROUP;
+        group_overflow = true;
+    }
+    else {
+        n_buckets = select->n_dsts;
+    }
+
+    for (size_t bucket_id = 0; bucket_id < n_buckets; bucket_id++) {
         const struct ovnact_select_dst *dst = &select->dsts[bucket_id];
         ds_put_format(&ds, ",bucket=bucket_id=%"PRIuSIZE",weight:%"PRIu16
                       ",actions=", bucket_id, dst->weight);
@@ -1599,6 +1629,12 @@ encode_SELECT(const struct ovnact_select *select,
     /* Create an action to set the group. */
     og = ofpact_put_GROUP(ofpacts);
     og->group_id = table_id;
+
+    if (group_overflow) {
+        VLOG_WARN("OF group id '%d' is desired to have more than "
+                  "MAX_BUCKETS_PER_GROUP (%d) buckets. Limited to maximum.",
+                  table_id, MAX_BUCKETS_PER_GROUP);
+    }
 }
 
 static void
