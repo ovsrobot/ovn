@@ -9680,7 +9680,7 @@ static void
 ecmp_groups_add_route(struct ecmp_groups_node *group,
                       const struct parsed_route *route)
 {
-    if (group->route_count == UINT16_MAX) {
+    if (group->route_count == 1024) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
         VLOG_WARN_RL(&rl, "too many routes in a single ecmp group.");
         return;
