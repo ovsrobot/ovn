@@ -881,10 +881,12 @@ ic_route_hash(const struct in6_addr *prefix, unsigned int plen,
 static struct ic_route_info *
 ic_route_find(struct hmap *routes, const struct in6_addr *prefix,
               unsigned int plen, const struct in6_addr *nexthop,
-              const char *origin, char *route_table)
+              const char *origin, const char *route_table, uint32_t hash)
 {
     struct ic_route_info *r;
-    uint32_t hash = ic_route_hash(prefix, plen, nexthop, origin, route_table);
+    if (!hash) {
+        hash = ic_route_hash(prefix, plen, nexthop, origin, route_table);
+    }
     HMAP_FOR_EACH_WITH_HASH (r, node, hash, routes) {
         if (ipv6_addr_equals(&r->prefix, prefix) &&
             r->plen == plen &&
@@ -942,8 +944,8 @@ add_to_routes_learned(struct hmap *routes_learned,
     }
     const char *origin = smap_get_def(&nb_route->options, "origin", "");
     if (ic_route_find(routes_learned, &prefix, plen, &nexthop, origin,
-                      nb_route->route_table)) {
-        /* Route is already added to learned in previous iteration. */
+                      nb_route->route_table, 0)) {
+        /* Route was added to learned on previous iteration. */
         return true;
     }
 
@@ -1090,10 +1092,21 @@ route_need_advertise(const char *policy,
 }
 
 static void
-add_to_routes_ad(struct hmap *routes_ad,
-                 const struct nbrec_logical_router_static_route *nb_route,
-                 const struct lport_addresses *nexthop_addresses,
-                 const struct smap *nb_options, const char *route_table)
+add_to_routes_ad(struct hmap *routes_ad, struct ic_route_info *ic_route)
+{
+    uint hash = ic_route_hash(&ic_route->prefix, ic_route->plen,
+                              &ic_route->nexthop, ic_route->origin,
+                              ic_route->route_table ? ic_route->route_table
+                                                    : "");
+    hmap_insert(routes_ad, &ic_route->node, hash);
+}
+
+static void
+add_static_to_routes_ad(
+    struct hmap *routes_ad,
+    const struct nbrec_logical_router_static_route *nb_route,
+    const struct lport_addresses *nexthop_addresses,
+    const struct smap *nb_options, const char *route_table)
 {
     if (strcmp(route_table, nb_route->route_table)) {
         if (VLOG_IS_DBG_ENABLED()) {
@@ -1149,9 +1162,7 @@ add_to_routes_ad(struct hmap *routes_ad,
     ic_route->nb_route = nb_route;
     ic_route->origin = ROUTE_ORIGIN_STATIC;
     ic_route->route_table = nb_route->route_table;
-    hmap_insert(routes_ad, &ic_route->node,
-                ic_route_hash(&prefix, plen, &nexthop, ROUTE_ORIGIN_STATIC,
-                              nb_route->route_table));
+    add_to_routes_ad(routes_ad, ic_route);
 }
 
 static void
@@ -1204,9 +1215,7 @@ add_network_to_routes_ad(struct hmap *routes_ad, const char *network,
 
     /* directly-connected routes go to <main> route table */
     ic_route->route_table = NULL;
-    hmap_insert(routes_ad, &ic_route->node,
-                ic_route_hash(&prefix, plen, &nexthop,
-                              ROUTE_ORIGIN_CONNECTED, ""));
+    add_to_routes_ad(routes_ad, ic_route);
 }
 
 static bool
@@ -1366,7 +1375,7 @@ sync_learned_routes(struct ic_context *ctx,
             struct ic_route_info *route_learned
                 = ic_route_find(&ic_lr->routes_learned, &prefix, plen,
                                 &nexthop, isb_route->origin,
-                                isb_route->route_table);
+                                isb_route->route_table, 0);
             if (route_learned) {
                 /* Sync external-ids */
                 struct uuid ext_id;
@@ -1465,7 +1474,7 @@ advertise_routes(struct ic_context *ctx,
         }
         struct ic_route_info *route_adv =
             ic_route_find(routes_ad, &prefix, plen, &nexthop,
-                          isb_route->origin, isb_route->route_table);
+                          isb_route->origin, isb_route->route_table, 0);
         if (!route_adv) {
             /* Delete the extra route from IC-SB. */
             VLOG_DBG("Delete route %s -> %s from IC-SB, which is not found"
@@ -1547,8 +1556,8 @@ build_ts_routes_to_adv(struct ic_context *ctx,
             }
         } else {
             /* It may be a route to be advertised */
-            add_to_routes_ad(routes_ad, nb_route, ts_port_addrs,
-                             &nb_global->options, ts_route_table);
+            add_static_to_routes_ad(routes_ad, nb_route, ts_port_addrs,
+                                    &nb_global->options, ts_route_table);
         }
     }
 
