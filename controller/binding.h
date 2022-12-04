@@ -91,7 +91,8 @@ struct binding_ctx_out {
      */
     bool non_vif_ports_changed;
 
-    struct sset *egress_ifaces;
+    struct shash *egress_ifaces;
+    struct hmap *qos_map;
     /* smap of OVS interface name as key and
      * OVS interface external_ids:iface-id as value. */
     struct smap *local_iface_ids;
@@ -194,6 +195,8 @@ bool is_additional_chassis(const struct sbrec_port_binding *pb,
 void set_pb_chassis_in_sbrec(const struct sbrec_port_binding *pb,
                              const struct sbrec_chassis *chassis_rec,
                              bool is_set);
+
+void destroy_qos_map(struct hmap *qos_map);
 
 /* Corresponds to each Port_Binding.type. */
 enum en_lport_type {

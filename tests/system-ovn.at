@@ -6335,6 +6335,10 @@ ADD_NAMESPACES(sw01)
 ADD_VETH(sw01, sw01, br-int, "192.168.1.2/24", "f0:00:00:01:02:03")
 ovn-nbctl lsp-add sw0 sw01 \
     -- lsp-set-addresses sw01 "f0:00:00:01:02:03 192.168.1.2"
+ADD_NAMESPACES(sw02)
+ADD_VETH(sw02, sw02, br-int, "192.168.1.3/24", "f2:00:00:01:02:03")
+ovn-nbctl lsp-add sw0 sw02 \
+    -- lsp-set-addresses sw02 "f2:00:00:01:02:03 192.168.1.3"
 
 ADD_NAMESPACES(public)
 ADD_VETH(public, public, br-ext, "192.168.2.2/24", "f0:00:00:01:02:05")
@@ -6345,6 +6349,7 @@ ovn-nbctl lsp-add sw0 public \
         -- lsp-set-type public localnet \
         -- lsp-set-options public network_name=phynet
 
+# Setup QoS on a localnet port
 AT_CHECK([ovn-nbctl set Logical_Switch_Port public options:qos_min_rate=200000])
 AT_CHECK([ovn-nbctl set Logical_Switch_Port public options:qos_max_rate=300000])
 AT_CHECK([ovn-nbctl set Logical_Switch_Port public options:qos_burst=3000000])
@@ -6353,14 +6358,57 @@ OVS_WAIT_UNTIL([tc qdisc show | grep -q 'htb 1: dev ovs-public'])
 OVS_WAIT_UNTIL([tc class show dev ovs-public | \
                 grep -q 'class htb .* rate 200Kbit ceil 300Kbit burst 375000b cburst 375000b'])
 
+# Setup QoS on a logical switch ports
+AT_CHECK([ovn-nbctl set Logical_Switch_Port sw01 options:qos_min_rate=400000])
+AT_CHECK([ovn-nbctl set Logical_Switch_Port sw01 options:qos_max_rate=800000])
+AT_CHECK([ovn-nbctl set Logical_Switch_Port sw01 options:qos_burst=5000000])
+AT_CHECK([ovs-vsctl set interface ovs-sw01 external-ids:ovn-egress-iface=true])
+OVS_WAIT_UNTIL([tc qdisc show | grep -q 'htb 1: dev ovs-sw01'])
+OVS_WAIT_UNTIL([tc class show dev ovs-sw01 | \
+                grep -q 'class htb .* rate 400Kbit ceil 800Kbit burst 625000b cburst 625000b'])
+
+AT_CHECK([ovn-nbctl set Logical_Switch_Port sw02 options:qos_min_rate=600000])
+AT_CHECK([ovn-nbctl set Logical_Switch_Port sw02 options:qos_max_rate=6000000])
+AT_CHECK([ovn-nbctl set Logical_Switch_Port sw02 options:qos_burst=6000000])
+AT_CHECK([ovs-vsctl set interface ovs-sw02 external-ids:ovn-egress-iface=true])
+OVS_WAIT_UNTIL([tc qdisc show | grep -q 'htb 1: dev ovs-sw02'])
+OVS_WAIT_UNTIL([tc class show dev ovs-sw02 | \
+                grep -q 'class htb .* rate 600Kbit ceil 6Mbit burst 750000b cburst 750000b'])
+
+AT_CHECK([ovn-appctl -t ovn-controller exit --restart])
+OVS_WAIT_UNTIL([test "$(pidof ovn-controller)" = ""])
+start_daemon ovn-controller
+OVS_WAIT_UNTIL([test "$(pidof ovn-controller)" != ""])
+
+OVS_WAIT_UNTIL([tc qdisc show | grep -q 'htb 1: dev ovs-public'])
+OVS_WAIT_UNTIL([tc class show dev ovs-public | \
+                grep -q 'class htb .* rate 200Kbit ceil 300Kbit burst 375000b cburst 375000b'])
+OVS_WAIT_UNTIL([tc qdisc show | grep -q 'htb 1: dev ovs-sw01'])
+OVS_WAIT_UNTIL([tc class show dev ovs-sw01 | \
+                grep -q 'class htb .* rate 400Kbit ceil 800Kbit burst 625000b cburst 625000b'])
+OVS_WAIT_UNTIL([tc qdisc show | grep -q 'htb 1: dev ovs-sw02'])
+OVS_WAIT_UNTIL([tc class show dev ovs-sw02 | \
+                grep -q 'class htb .* rate 600Kbit ceil 6Mbit burst 750000b cburst 750000b'])
 
 AT_CHECK([ovn-nbctl remove Logical_Switch_Port public options qos_max_rate=300000])
 OVS_WAIT_UNTIL([tc class show dev ovs-public | \
                 grep -q 'class htb .* rate 200Kbit ceil 34359Mbit burst 375000b .*'])
 
 AT_CHECK([ovn-nbctl remove Logical_Switch_Port public options qos_min_rate=200000])
+AT_CHECK([ovn-nbctl remove Logical_Switch_Port public options qos_max_rate=300000])
 AT_CHECK([ovn-nbctl remove Logical_Switch_Port public options qos_burst=3000000])
 OVS_WAIT_UNTIL([test "$(tc qdisc show | grep 'htb 1: dev ovs-public')" = ""])
+
+AT_CHECK([ovn-nbctl set Logical_Switch_Port sw01 options:qos_min_rate=200000])
+OVS_WAIT_UNTIL([tc qdisc show | grep -q 'htb 1: dev ovs-sw01'])
+OVS_WAIT_UNTIL([tc class show dev ovs-sw01 | \
+                grep -q 'class htb .* rate 200Kbit ceil 800Kbit burst 625000b cburst 625000b'])
+
+# Disable QoS rules from logical switch ports
+AT_CHECK([ovn-nbctl set Logical_Switch_Port sw01 options:qdisc_queue_id=0])
+AT_CHECK([ovn-nbctl set Logical_Switch_Port sw02 options:qdisc_queue_id=0])
+OVS_WAIT_UNTIL([test "$(tc qdisc show | grep 'htb 1: dev ovs-sw01')" = ""])
+OVS_WAIT_UNTIL([test "$(tc qdisc show | grep 'htb 1: dev ovs-sw02')" = ""])
 
 kill $(pidof ovn-controller)
 
