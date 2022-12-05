@@ -6984,13 +6984,15 @@ build_lb_rules_pre_stateful(struct hmap *lflows, struct ovn_northd_lb *lb,
  *   table=lr_in_lb_aff_learn, priority=100
  *      match=(REGBIT_KNOWN_LB_SESSION == 0
  *             && ct.new && ip4
- *             && REG_ORIG_DIP_IPV4 == V && ip4.dst == B1 && tcp.dst == BP1)
+ *             && REG_NEXT_HOP_IPV4 == V && REG_ORIG_TP_DPORT_ROUTER = VP
+ *             && ip4.dst == B1 && tcp.dst == BP1)
  *      action=(commit_lb_aff(vip = "V:VP", backend = "B1:BP1",
  *                            proto = tcp, timeout = T));
  *   table=lr_in_lb_aff_learn, priority=100
  *      match=(REGBIT_KNOWN_LB_SESSION == 0
  *             && ct.new && ip4
- *             && REG_ORIG_DIP_IPV4 == V && ip4.dst == B2 && tcp.dst == BP2)
+ *             && REG_NEXT_HOP_IPV4 == V && REG_ORIG_TP_DPORT_ROUTER = VP
+ *             && ip4.dst == B2 && tcp.dst == BP2)
  *      action=(commit_lb_aff(vip = "V:VP", backend = "B2:BP2",
  *                            proto = tcp, timeout = T));
  *
@@ -7032,6 +7034,7 @@ build_lb_affinity_lr_flows(struct hmap *lflows, struct ovn_northd_lb *lb,
     const char *ip_match = ipv6 ? "ip6" : "ip4";
 
     const char *reg_vip = ipv6 ? REG_NEXT_HOP_IPV6 : REG_NEXT_HOP_IPV4;
+    const char *reg_port = REG_ORIG_TP_DPORT_ROUTER;
     const char *reg_backend =
         ipv6 ? REG_LB_L3_AFF_BACKEND_IP6 : REG_LB_AFF_BACKEND_IP4;
 
@@ -7040,7 +7043,7 @@ build_lb_affinity_lr_flows(struct hmap *lflows, struct ovn_northd_lb *lb,
     ds_put_cstr(&aff_action_learn, "commit_lb_aff(vip = \"");
 
     if (lb_vip->vip_port) {
-        ds_put_format(&aff_action_learn, ipv6 ? "[%s]:%d" : "%s:%d",
+        ds_put_format(&aff_action_learn, ipv6 ? "[%s]:%"PRIu16 : "%s:%"PRIu16,
                       lb_vip->vip_str, lb_vip->vip_port);
     } else {
         ds_put_cstr(&aff_action_learn, lb_vip->vip_str);
@@ -7053,9 +7056,17 @@ build_lb_affinity_lr_flows(struct hmap *lflows, struct ovn_northd_lb *lb,
     ds_put_cstr(&aff_action_learn, "\", backend = \"");
 
     /* Prepare common part of affinity learn match. */
-    ds_put_format(&aff_match_learn, REGBIT_KNOWN_LB_SESSION" == 0 && "
-                  "ct.new && %s && %s == %s && %s.dst == ", ip_match,
-                  reg_vip, lb_vip->vip_str, ip_match);
+    if (lb_vip->vip_port) {
+        ds_put_format(&aff_match_learn, REGBIT_KNOWN_LB_SESSION" == 0 && "
+                      "ct.new && %s && %s == %s && "
+                      "%s == %"PRIu16" && %s.dst == ", ip_match,
+                      reg_vip, lb_vip->vip_str,
+                      reg_port, lb_vip->vip_port, ip_match);
+    } else {
+        ds_put_format(&aff_match_learn, REGBIT_KNOWN_LB_SESSION" == 0 && "
+                      "ct.new && %s && %s == %s && %s.dst == ", ip_match,
+                      reg_vip, lb_vip->vip_str, ip_match);
+    }
 
     /* Prepare common part of affinity match. */
     ds_put_format(&aff_match, REGBIT_KNOWN_LB_SESSION" == 1 && "
@@ -7172,13 +7183,15 @@ build_lb_affinity_lr_flows(struct hmap *lflows, struct ovn_northd_lb *lb,
  *   table=ls_in_lb_aff_learn, priority=100
  *      match=(REGBIT_KNOWN_LB_SESSION == 0
  *             && ct.new && ip4
- *             && REG_ORIG_DIP_IPV4 == V && ip4.dst == B1 && tcp.dst == BP1)
+ *             && REG_ORIG_DIP_IPV4 == V && REG_ORIG_TP_DPORT == VP
+ *             && ip4.dst == B1 && tcp.dst == BP1)
  *      action=(commit_lb_aff(vip = "V:VP", backend = "B1:BP1",
  *                            proto = tcp, timeout = T));
  *   table=ls_in_lb_aff_learn, priority=100
  *      match=(REGBIT_KNOWN_LB_SESSION == 0
  *             && ct.new && ip4
- *             && REG_ORIG_DIP_IPV4 == V && ip4.dst == B2 && tcp.dst == BP2)
+ *             && REG_ORIG_DIP_IPV4 == V && REG_ORIG_TP_DPORT == VP
+ *             && ip4.dst == B2 && tcp.dst == BP2)
  *      action=(commit_lb_aff(vip = "V:VP", backend = "B2:BP2",
  *                            proto = tcp, timeout = T));
  *
@@ -7236,6 +7249,7 @@ build_lb_affinity_ls_flows(struct hmap *lflows, struct ovn_northd_lb *lb,
     const char *ip_match = ipv6 ? "ip6" : "ip4";
 
     const char *reg_vip = ipv6 ? REG_ORIG_DIP_IPV6 : REG_ORIG_DIP_IPV4;
+    const char *reg_port = REG_ORIG_TP_DPORT;
     const char *reg_backend =
         ipv6 ? REG_LB_L2_AFF_BACKEND_IP6 : REG_LB_AFF_BACKEND_IP4;
 
@@ -7245,9 +7259,9 @@ build_lb_affinity_ls_flows(struct hmap *lflows, struct ovn_northd_lb *lb,
     ds_put_cstr(&aff_action_learn, "commit_lb_aff(vip = \"");
 
     if (lb_vip->vip_port) {
-        ds_put_format(&aff_action, REG_ORIG_TP_DPORT" = %d; ",
+        ds_put_format(&aff_action, REG_ORIG_TP_DPORT" = %"PRIu16"; ",
                       lb_vip->vip_port);
-        ds_put_format(&aff_action_learn, ipv6 ? "[%s]:%d" : "%s:%d",
+        ds_put_format(&aff_action_learn, ipv6 ? "[%s]:%"PRIu16 : "%s:%"PRIu16,
                       lb_vip->vip_str, lb_vip->vip_port);
     } else {
         ds_put_cstr(&aff_action_learn, lb_vip->vip_str);
@@ -7257,9 +7271,17 @@ build_lb_affinity_ls_flows(struct hmap *lflows, struct ovn_northd_lb *lb,
     ds_put_cstr(&aff_action_learn, "\", backend = \"");
 
     /* Prepare common part of affinity learn match. */
-    ds_put_format(&aff_match_learn, REGBIT_KNOWN_LB_SESSION" == 0 && "
-                  "ct.new && %s && %s == %s && %s.dst == ", ip_match,
-                  reg_vip, lb_vip->vip_str, ip_match);
+    if (lb_vip->vip_port) {
+        ds_put_format(&aff_match_learn, REGBIT_KNOWN_LB_SESSION" == 0 && "
+                      "ct.new && %s && %s == %s && "
+                      "%s == %"PRIu16" && %s.dst == ",
+                      ip_match, reg_vip, lb_vip->vip_str,
+                      reg_port, lb_vip->vip_port, ip_match);
+    } else {
+        ds_put_format(&aff_match_learn, REGBIT_KNOWN_LB_SESSION" == 0 && "
+                      "ct.new && %s && %s == %s && %s.dst == ",
+                      ip_match, reg_vip, lb_vip->vip_str, ip_match);
+    }
 
     /* Prepare common part of affinity match. */
     ds_put_format(&aff_match, REGBIT_KNOWN_LB_SESSION" == 1 && "
