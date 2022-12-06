@@ -4245,12 +4245,18 @@ mac_binding_add_to_sb(struct ovsdb_idl_txn *ovnsb_idl_txn,
         b = sbrec_mac_binding_insert(ovnsb_idl_txn);
         sbrec_mac_binding_set_logical_port(b, logical_port);
         sbrec_mac_binding_set_ip(b, ip);
-        sbrec_mac_binding_set_mac(b, mac_string);
         sbrec_mac_binding_set_datapath(b, dp);
-        sbrec_mac_binding_set_timestamp(b, time_wall_msec());
-    } else if (strcmp(b->mac, mac_string)) {
+    }
+
+    if (strcmp(b->mac, mac_string)) {
         sbrec_mac_binding_set_mac(b, mac_string);
-        sbrec_mac_binding_set_timestamp(b, time_wall_msec());
+
+        /* For backward compatibility check if timestamp column is available
+         * in SB DB. */
+        struct ovsdb_idl *idl = ovsdb_idl_txn_get_idl(ovnsb_idl_txn);
+        if (sbrec_server_has_mac_binding_table_col_timestamp(idl)) {
+            sbrec_mac_binding_set_timestamp(b, time_wall_msec());
+        }
     }
 }
 
