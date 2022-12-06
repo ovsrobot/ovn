@@ -1408,6 +1408,21 @@
           </p>
         </dd>
 
+        <dt><code>ct_commit_continue { };</code></dt>
+        <dt><code>ct_commit_continue { ct_mark=<var>value[/mask]</var>; };</code></dt>
+        <dt><code>ct_commit_continue { ct_label=<var>value[/mask]</var>; };</code></dt>
+        <dt><code>ct_commit_continue { ct_mark=<var>value[/mask]</var>; ct_label=<var>value[/mask]</var>; };</code></dt>
+
+        <dd>
+          <p>
+            <code>ct_commit_continue</code> action exports the same features
+            supported by <code>ct_commit</code> but allow the packet committed
+            to the ct table to continue the processing in the next pipeline
+            stage. This is useful to maintain ct metadata of the processed
+            packet.
+          </p>
+        </dd>
+
         <dt><code>ct_dnat;</code></dt>
         <dt><code>ct_dnat(<var>IP</var>);</code></dt>
         <dd>

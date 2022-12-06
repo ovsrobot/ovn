@@ -69,6 +69,7 @@ struct northd_input {
 struct chassis_features {
     bool ct_no_masked_label;
     bool mac_binding_timestamp;
+    bool ct_commit_continue;
 };
 
 struct northd_data {
@@ -211,6 +212,7 @@ struct ovn_datapath {
     bool has_unknown;
     bool has_acls;
     bool has_vtep_lports;
+    bool has_apply_after_lb_acls;
 
     /* IPAM data. */
     struct ipam_info ipam_info;

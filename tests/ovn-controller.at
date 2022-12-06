@@ -2499,3 +2499,45 @@ AT_CHECK([GET_LOCAL_TEMPLATE_VARS], [1], [])
 
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller - ct_commit_continue])
+AT_KEYWORDS([ct_commit_continue])
+
+ovn_start
+
+net_add n1
+sim_add hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+check ovn-nbctl ls-add sw0 \
+    -- lsp-add sw0 sw0-p0  \
+    -- lsp-set-addresses sw0-p0 "00:00:00:00:00:01 192.168.1.1"
+
+as hv1
+ovs-vsctl \
+    -- add-port br-int vif0 \
+    -- set Interface vif0 external_ids:iface-id=sw0-p0
+
+check ovn-nbctl pg-add pg0 sw0-p0
+check ovn-nbctl --apply-after-lb acl-add pg0 from-lport 1004 "ip4 && ip4.dst == 192.168.1.2" drop
+check ovn-nbctl --apply-after-lb acl-add pg0 from-lport 1002 "ip4 && tcp" allow-related
+check ovn-nbctl --apply-after-lb acl-add pg0 from-lport 1003 "ip4 && icmp" allow-related
+check ovn-nbctl --apply-after-lb acl-add pg0 from-lport 1001 "ip4" drop
+
+check ovn-nbctl lb-add lb0 192.168.1.10 192.168.1.2
+check ovn-nbctl ls-lb-add sw0 lb0
+
+check ovn-nbctl --wait=hv sync
+wait_for_ports_up
+
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=23 | grep table=24 | sed -e 's/cookie=0x[[a-z,0-9]]*/cookie=0x0/; s/duration=[[0-9]]*.[[0-9]]*s/duration=<cleared>/' |sort], [0], [dnl
+ cookie=0x0 duration=<cleared>, table=23, n_packets=0, n_bytes=0, idle_age=0, priority=100,ip,reg0=0x2/0x2002,metadata=0x1 actions=ct(commit,table=24,zone=NXM_NX_REG13[[0..15]],nat(src),exec(load:0->NXM_NX_CT_MARK[[0]]))
+ cookie=0x0 duration=<cleared>, table=23, n_packets=0, n_bytes=0, idle_age=0, priority=100,ip,reg0=0x2002/0x2002,metadata=0x1 actions=ct(commit,table=24,zone=NXM_NX_REG13[[0..15]],nat(src),exec(load:0->NXM_NX_CT_MARK[[0]],move:NXM_NX_XXREG0[[0..31]]->NXM_NX_CT_LABEL[[96..127]]))
+ cookie=0x0 duration=<cleared>, table=23, n_packets=0, n_bytes=0, idle_age=0, priority=100,ipv6,reg0=0x2/0x2002,metadata=0x1 actions=ct(commit,table=24,zone=NXM_NX_REG13[[0..15]],nat(src),exec(load:0->NXM_NX_CT_MARK[[0]]))
+ cookie=0x0 duration=<cleared>, table=23, n_packets=0, n_bytes=0, idle_age=0, priority=100,ipv6,reg0=0x2002/0x2002,metadata=0x1 actions=ct(commit,table=24,zone=NXM_NX_REG13[[0..15]],nat(src),exec(load:0->NXM_NX_CT_MARK[[0]],move:NXM_NX_XXREG0[[0..31]]->NXM_NX_CT_LABEL[[96..127]]))
+])
+
+AT_CLEANUP
+])
