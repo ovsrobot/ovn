@@ -173,6 +173,7 @@ struct pinctrl {
     pthread_t pinctrl_thread;
     /* Latch to destroy the 'pinctrl_thread' */
     struct latch pinctrl_thread_exit;
+    bool mac_binding_has_timestamp_column;
 };
 
 static struct pinctrl pinctrl;
@@ -544,6 +545,7 @@ pinctrl_init(void)
     bfd_monitor_init();
     init_fdb_entries();
     pinctrl.br_int_name = NULL;
+    pinctrl.mac_binding_has_timestamp_column = false;
     pinctrl_handler_seq = seq_create();
     pinctrl_main_seq = seq_create();
 
@@ -3532,6 +3534,26 @@ pinctrl_set_br_int_name_(char *br_int_name)
     }
 }
 
+static void
+pinctrl_set_sb_mac_binding_has_timestamp_column(struct ovsdb_idl_txn *txn)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    if (!txn) {
+        return;
+    }
+
+    struct ovsdb_idl *idl = ovsdb_idl_txn_get_idl(txn);
+    bool current = sbrec_server_has_mac_binding_table_col_timestamp(idl);
+
+    if (current != pinctrl.mac_binding_has_timestamp_column) {
+        pinctrl.mac_binding_has_timestamp_column = current;
+
+        /* Notify pinctrl_handler that mac binding timestamp column
+         * availability has changed. */
+        notify_pinctrl_handler();
+    }
+}
+
 void
 pinctrl_set_br_int_name(char *br_int_name)
 {
@@ -3563,6 +3585,7 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             const struct shash *local_active_ports_ras)
 {
     ovs_mutex_lock(&pinctrl_mutex);
+    pinctrl_set_sb_mac_binding_has_timestamp_column(ovnsb_idl_txn);
     pinctrl_set_br_int_name_(br_int->name);
     run_put_mac_bindings(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
                          sbrec_port_binding_by_key,
@@ -4245,12 +4268,17 @@ mac_binding_add_to_sb(struct ovsdb_idl_txn *ovnsb_idl_txn,
         b = sbrec_mac_binding_insert(ovnsb_idl_txn);
         sbrec_mac_binding_set_logical_port(b, logical_port);
         sbrec_mac_binding_set_ip(b, ip);
-        sbrec_mac_binding_set_mac(b, mac_string);
         sbrec_mac_binding_set_datapath(b, dp);
-        sbrec_mac_binding_set_timestamp(b, time_wall_msec());
-    } else if (strcmp(b->mac, mac_string)) {
+    }
+
+    if (strcmp(b->mac, mac_string)) {
         sbrec_mac_binding_set_mac(b, mac_string);
-        sbrec_mac_binding_set_timestamp(b, time_wall_msec());
+
+        /* For backward compatibility check if timestamp column is available
+         * in SB DB. */
+        if (pinctrl.mac_binding_has_timestamp_column) {
+            sbrec_mac_binding_set_timestamp(b, time_wall_msec());
+        }
     }
 }
 
