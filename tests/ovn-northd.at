@@ -6623,8 +6623,8 @@ AT_CHECK([grep -e "ls_in_lb " lsflows | sed 's/table=../table=??/' | sort], [0],
 
 AT_CHECK([grep -e "ls_in_stateful" lsflows | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(ls_in_stateful     ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit_continue { ct_mark.blocked = 0; };)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit_continue { ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
 AS_BOX([Remove and add the ACLs back with a few ACLs with apply-after-lb option])
@@ -6676,8 +6676,8 @@ AT_CHECK([grep -e "ls_in_lb " lsflows | sed 's/table=../table=??/' | sort], [0],
 
 AT_CHECK([grep -e "ls_in_stateful" lsflows | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(ls_in_stateful     ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit { ct_mark.blocked = 0; }; next;)
-  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit { ct_mark.blocked = 0; ct_label.label = reg3; }; next;)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 0), action=(ct_commit_continue { ct_mark.blocked = 0; };)
+  table=??(ls_in_stateful     ), priority=100  , match=(reg0[[1]] == 1 && reg0[[13]] == 1), action=(ct_commit_continue { ct_mark.blocked = 0; ct_label.label = reg3; };)
 ])
 
 AT_CLEANUP

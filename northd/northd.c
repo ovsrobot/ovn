@@ -446,6 +446,14 @@ build_chassis_features(const struct northd_input *input_data,
             chassis_features->mac_binding_timestamp) {
             chassis_features->mac_binding_timestamp = false;
         }
+
+        bool ct_commit_continue =
+            smap_get_bool(&chassis->other_config,
+                          OVN_FEATURE_CT_COMMIT_CONTINUE,
+                          false);
+        if (!ct_commit_continue && chassis_features->ct_commit_continue) {
+            chassis_features->ct_commit_continue = false;
+        }
     }
 }
 
@@ -5494,6 +5502,7 @@ ls_get_acl_flags(struct ovn_datapath *od)
 {
     od->has_acls = false;
     od->has_stateful_acl = false;
+    od->has_apply_after_lb_acls = false;
 
     if (od->nbs->n_acls) {
         od->has_acls = true;
@@ -5502,7 +5511,9 @@ ls_get_acl_flags(struct ovn_datapath *od)
             struct nbrec_acl *acl = od->nbs->acls[i];
             if (!strcmp(acl->action, "allow-related")) {
                 od->has_stateful_acl = true;
-                return;
+            }
+            if (smap_get_bool(&acl->options, "apply-after-lb", false)) {
+                od->has_apply_after_lb_acls = true;
             }
         }
     }
@@ -5516,7 +5527,9 @@ ls_get_acl_flags(struct ovn_datapath *od)
                 struct nbrec_acl *acl = ls_pg->nb_pg->acls[i];
                 if (!strcmp(acl->action, "allow-related")) {
                     od->has_stateful_acl = true;
-                    return;
+                }
+                if (smap_get_bool(&acl->options, "apply-after-lb", false)) {
+                    od->has_apply_after_lb_acls = true;
                 }
             }
         }
@@ -7467,9 +7480,17 @@ build_stateful(struct ovn_datapath *od,
      * We always set ct_mark.blocked to 0 here as
      * any packet that makes it this far is part of a connection we
      * want to allow to continue. */
-    ds_put_format(&actions, "ct_commit { %s = 0; "
-                            "ct_label.label = " REG_LABEL "; }; next;",
-                  ct_block_action);
+    if (features->ct_commit_continue && od->has_apply_after_lb_acls) {
+        ds_put_format(&actions,
+                      "ct_commit_continue { %s = 0; "
+                      "ct_label.label = " REG_LABEL "; };",
+                      ct_block_action);
+    } else {
+        ds_put_format(&actions,
+                      "ct_commit { %s = 0; "
+                      "ct_label.label = " REG_LABEL "; }; next;",
+                      ct_block_action);
+    }
     ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 100,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 1",
@@ -7484,7 +7505,13 @@ build_stateful(struct ovn_datapath *od,
      * any packet that makes it this far is part of a connection we
      * want to allow to continue. */
     ds_clear(&actions);
-    ds_put_format(&actions, "ct_commit { %s = 0; }; next;", ct_block_action);
+    if (features->ct_commit_continue && od->has_apply_after_lb_acls) {
+        ds_put_format(&actions, "ct_commit_continue { %s = 0; };",
+                      ct_block_action);
+    } else {
+        ds_put_format(&actions, "ct_commit { %s = 0; }; next;",
+                      ct_block_action);
+    }
     ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 100,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 0",
@@ -15895,6 +15922,7 @@ northd_init(struct northd_data *data)
     data->features = (struct chassis_features) {
         .ct_no_masked_label = true,
         .mac_binding_timestamp = true,
+        .ct_commit_continue = true,
     };
     data->ovn_internal_version_changed = false;
 }

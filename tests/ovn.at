@@ -1187,6 +1187,10 @@ ct_commit { ct_mark=1; };
     formats as ct_commit { ct_mark = 1; };
     encodes as ct(commit,zone=NXM_NX_REG13[0..15],exec(set_field:0x1->ct_mark))
     has prereqs ip
+ct_commit_continue { ct_mark=1; };
+    formats as ct_commit_continue { ct_mark = 1; };
+    encodes as ct(commit,table=19,zone=NXM_NX_REG13[0..15],exec(set_field:0x1->ct_mark))
+    has prereqs ip
 ct_commit { ct_mark=1/1; };
     formats as ct_commit { ct_mark = 1/1; };
     encodes as ct(commit,zone=NXM_NX_REG13[0..15],exec(set_field:0x1/0x1->ct_mark))

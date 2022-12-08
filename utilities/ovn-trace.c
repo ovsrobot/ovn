@@ -3098,6 +3098,8 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
         case OVNACT_CT_COMMIT_V2:
             /* Nothing to do. */
             break;
+        case OVNACT_CT_COMMIT_CONTINUE:
+            break;
 
         case OVNACT_CT_DNAT:
             execute_ct_nat(ovnact_get_CT_DNAT(a), dp, uflow, pipeline, super);

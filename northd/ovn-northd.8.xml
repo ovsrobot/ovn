@@ -1108,6 +1108,13 @@
         action based on a hint provided by the previous tables (with a match
         for <code>reg0[1] == 1 &amp;&amp; reg0[13] == 0</code>).
       </li>
+
+      <li>
+        If the ACL is configured with <code>apply-after-lb</code> option,
+        <code>ct_commit_continue</code> action will be used instead of
+        <code>ct_commit</code> in order to preserve ct_state metadata.
+      </li>
+
       <li>
         A priority-0 flow that simply moves traffic to the next table.
       </li>

@@ -66,6 +66,7 @@ struct ovn_extend_table;
     OVNACT(CT_NEXT,           ovnact_ct_next)         \
     OVNACT(CT_COMMIT_V1,      ovnact_ct_commit_v1)    \
     OVNACT(CT_COMMIT_V2,      ovnact_nest)            \
+    OVNACT(CT_COMMIT_CONTINUE, ovnact_nest)           \
     OVNACT(CT_DNAT,           ovnact_ct_nat)          \
     OVNACT(CT_SNAT,           ovnact_ct_nat)          \
     OVNACT(CT_DNAT_IN_CZONE,  ovnact_ct_nat)          \
@@ -321,6 +322,7 @@ struct ovnact_nest {
     struct ovnact ovnact;
     struct ovnact *nested;
     size_t nested_len;
+    uint8_t ltable;             /* Logical table ID of next table. */
 };
 
 /* OVNACT_GET_ARP, OVNACT_GET_ND. */
