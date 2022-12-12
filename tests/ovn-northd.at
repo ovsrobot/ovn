@@ -8193,20 +8193,6 @@ OVN_FOR_EACH_NORTHD([
 AT_SETUP([Check default drop])
 AT_KEYWORDS([drop])
 
-# Check that there is an explicit drop lflow in all tables.
-check_default_lflow() {
-    dps=$(ovn-sbctl --bare  --columns=_uuid list Datapath_Binding | xargs)
-    for dp in $dps; do
-        for pipeline in ingress egress; do
-            for table in $(ovn-sbctl --bare --columns=table_id find Logical_Flow logical_datapath="$dp" pipeline="$pipeline" | xargs | sort | uniq); do
-               echo "Checking if datapath $dp pipeline $pipeline table $table has a default action"
-               AT_CHECK([ovn-sbctl --columns=_uuid find Logical_Flow logical_datapath="$dp" pipeline="$pipeline" table_id=$table match="1" priority">="0 | wc -l | tr -d "\n\r" ], [0], [1], [ignore],
-               [echo "Datapath $dp pipeline $pipeline table $table does not have a default action"])
-            done
-        done
-    done
-}
-
 ovn_start
 
 # Create LS + LR
@@ -8221,13 +8207,84 @@ check ovn-nbctl --wait=sb \
                 -- lsp-add S1 p1 \
                 -- lsp-set-addresses p1 "02:ac:10:01:00:0a 172.16.1.100"
 
-check_default_lflow
+AT_CHECK([ovn-sbctl dump-flows | grep "match=(1)"  | sed 's/table=../table=??/' | sort], [0], [dnl
+  table=??(lr_in_admission    ), priority=0    , match=(1), action=(drop;)
+  table=??(lr_in_arp_request  ), priority=0    , match=(1), action=(output;)
+  table=??(lr_in_arp_resolve  ), priority=0    , match=(1), action=(drop;)
+  table=??(lr_in_chk_pkt_len  ), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_defrag       ), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_dnat         ), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_ecmp_stateful), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_gw_redirect  ), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_ip_input     ), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_ip_routing   ), priority=0    , match=(1), action=(drop;)
+  table=??(lr_in_ip_routing_ecmp), priority=0    , match=(1), action=(drop;)
+  table=??(lr_in_ip_routing_pre), priority=0    , match=(1), action=(reg7 = 0; next;)
+  table=??(lr_in_larger_pkts  ), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_lb_aff_check ), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_lb_aff_learn ), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_learn_neighbor), priority=0    , match=(1), action=(drop;)
+  table=??(lr_in_lookup_neighbor), priority=0    , match=(1), action=(reg9[[2]] = 1; next;)
+  table=??(lr_in_nd_ra_options), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_nd_ra_response), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_policy       ), priority=0    , match=(1), action=(reg8[[0..15]] = 0; next;)
+  table=??(lr_in_policy_ecmp  ), priority=0    , match=(1), action=(drop;)
+  table=??(lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
+  table=??(lr_out_chk_dnat_local), priority=0    , match=(1), action=(reg9[[4]] = 0; next;)
+  table=??(lr_out_delivery    ), priority=0    , match=(1), action=(drop;)
+  table=??(lr_out_egr_loop    ), priority=0    , match=(1), action=(next;)
+  table=??(lr_out_post_snat   ), priority=0    , match=(1), action=(next;)
+  table=??(lr_out_post_undnat ), priority=0    , match=(1), action=(next;)
+  table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
+  table=??(lr_out_undnat      ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_acl          ), priority=65535, match=(1), action=(next;)
+  table=??(ls_in_acl_after_lb ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_acl_hint     ), priority=65535, match=(1), action=(next;)
+  table=??(ls_in_apply_port_sec), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_arp_rsp      ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_check_port_sec), priority=50   , match=(1), action=(reg0[[15]] = check_in_port_sec(); next;)
+  table=??(ls_in_dhcp_options ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_dhcp_response), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_dns_lookup   ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_dns_response ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_external_port), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_hairpin      ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_l2_lkup      ), priority=0    , match=(1), action=(outport = get_fdb(eth.dst); next;)
+  table=??(ls_in_l2_unknown   ), priority=0    , match=(1), action=(output;)
+  table=??(ls_in_lb           ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_lb_aff_check ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_lb_aff_learn ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_lookup_fdb   ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_nat_hairpin  ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_pre_acl      ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_pre_hairpin  ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_pre_lb       ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_pre_stateful ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_put_fdb      ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_qos_mark     ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_qos_meter    ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_stateful     ), priority=0    , match=(1), action=(next;)
+  table=??(ls_out_acl         ), priority=65535, match=(1), action=(next;)
+  table=??(ls_out_acl_hint    ), priority=65535, match=(1), action=(next;)
+  table=??(ls_out_apply_port_sec), priority=0    , match=(1), action=(output;)
+  table=??(ls_out_check_port_sec), priority=0    , match=(1), action=(reg0[[15]] = check_out_port_sec(); next;)
+  table=??(ls_out_pre_acl     ), priority=0    , match=(1), action=(next;)
+  table=??(ls_out_pre_lb      ), priority=0    , match=(1), action=(next;)
+  table=??(ls_out_pre_stateful), priority=0    , match=(1), action=(next;)
+  table=??(ls_out_qos_mark    ), priority=0    , match=(1), action=(next;)
+  table=??(ls_out_qos_meter   ), priority=0    , match=(1), action=(next;)
+  table=??(ls_out_stateful    ), priority=0    , match=(1), action=(next;)
+])
 
 # Add stateless ACL
 check ovn-nbctl --wait=sb \
                 -- acl-add S1 from-lport 100 'inport=p1 && ip4' allow-stateless
 
-check_default_lflow
+AT_CHECK([ovn-sbctl dump-flows | grep "ls_in_acl" | grep "match=(1)"  | sed 's/table=../table=??/' | sort], [0], [dnl
+  table=??(ls_in_acl          ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_acl_after_lb ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_acl_hint     ), priority=0    , match=(1), action=(next;)
+])
 
 check ovn-nbctl --wait=sb acl-del S1
 
@@ -8236,7 +8293,11 @@ check ovn-nbctl --wait=sb acl-del S1
 check ovn-nbctl --wait=sb \
                 -- acl-add S1 from-lport 2 "udp" allow-related
 
-check_default_lflow
+AT_CHECK([ovn-sbctl dump-flows | grep "ls_in_acl" | grep "match=(1)"  | sed 's/table=../table=??/' | sort], [0], [dnl
+  table=??(ls_in_acl          ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_acl_after_lb ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_acl_hint     ), priority=0    , match=(1), action=(next;)
+])
 
 check ovn-nbctl --wait=sb acl-del S1
 
@@ -8245,12 +8306,22 @@ check ovn-nbctl --wait=sb \
     -- lb-add lb "10.0.0.1" "10.0.0.2" \
     -- ls-lb-add S1 lb
 
-check_default_lflow
+AT_CHECK([ovn-sbctl dump-flows | grep "ls_in_acl" | grep "match=(1)"  | sed 's/table=../table=??/' | sort], [0], [dnl
+  table=??(ls_in_acl          ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_acl_after_lb ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_acl_hint     ), priority=0    , match=(1), action=(next;)
+])
+
 
 # Check LB + stateless ACL
 check ovn-nbctl --wait=sb \
                 -- acl-add S1 from-lport 100 'inport=p1 && ip4' allow-stateless
-check_default_lflow
+
+AT_CHECK([ovn-sbctl dump-flows | grep "ls_in_acl" | grep "match=(1)"  | sed 's/table=../table=??/' | sort], [0], [dnl
+  table=??(ls_in_acl          ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_acl_after_lb ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_acl_hint     ), priority=0    , match=(1), action=(next;)
+])
 
 check ovn-nbctl --wait=sb acl-del S1
 
@@ -8258,7 +8329,11 @@ check ovn-nbctl --wait=sb acl-del S1
 check ovn-nbctl --wait=sb \
                 -- acl-add S1 from-lport 2 "udp" allow-related
 
-check_default_lflow
+AT_CHECK([ovn-sbctl dump-flows | grep "ls_in_acl" | grep "match=(1)"  | sed 's/table=../table=??/' | sort], [0], [dnl
+  table=??(ls_in_acl          ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_acl_after_lb ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_acl_hint     ), priority=0    , match=(1), action=(next;)
+])
 
 AT_CLEANUP
 ])
