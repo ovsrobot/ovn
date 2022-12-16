@@ -3788,8 +3788,15 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn, struct ovn_northd_lb *lb,
 
             struct ovn_port *op = NULL;
             char *svc_mon_src_ip = NULL;
+
+            bool ipv6 = !IN6_IS_ADDR_V4MAPPED(&lb_vip->vip);
+            struct ds key = DS_EMPTY_INITIALIZER;
+            ds_put_format(&key, "%s%s%s",
+                          ipv6 ? "[" : "", backend->ip_str,
+                          ipv6 ? "]" : "");
+
             const char *s = smap_get(&lb->nlb->ip_port_mappings,
-                                     backend->ip_str);
+                                     ds_cstr(&key));
             if (s) {
                 char *port_name = xstrdup(s);
                 char *p = strstr(port_name, ":");
@@ -3797,10 +3804,21 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn, struct ovn_northd_lb *lb,
                     *p = 0;
                     p++;
                     op = ovn_port_find(ports, port_name);
-                    svc_mon_src_ip = xstrdup(p);
+                    if (ipv6) {
+                        char *t, *q = strstr(p, "[");
+                        p = NULL;
+                        if (q && (t = strstr(q + 1, "]"))) {
+                            p = q + 1;
+                            *t = 0;
+                        }
+                    }
+                    if (p) {
+                        svc_mon_src_ip = xstrdup(p);
+                    }
                 }
                 free(port_name);
             }
+            ds_destroy(&key);
 
             backend_nb->op = op;
             backend_nb->svc_mon_src_ip = svc_mon_src_ip;
@@ -3878,8 +3896,10 @@ build_lb_vip_actions(struct ovn_lb_vip *lb_vip,
             }
 
             n_active_backends++;
-            ds_put_format(action, "%s:%"PRIu16",",
-                          backend->ip_str, backend->port);
+            bool ipv6 = !IN6_IS_ADDR_V4MAPPED(&backend->ip);
+            ds_put_format(action, "%s%s%s:%"PRIu16",",
+                          ipv6 ? "[" : "", backend->ip_str,
+                          ipv6 ? "]" : "", backend->port);
         }
 
         if (!n_active_backends) {
@@ -8709,6 +8729,7 @@ build_lswitch_arp_nd_service_monitor(struct ovn_northd_lb *lb,
             continue;
         }
 
+        struct ovn_lb_vip *lb_vip = &lb->vips[i];
         for (size_t j = 0; j < lb_vip_nb->n_backends; j++) {
             struct ovn_northd_lb_backend *backend_nb =
                 &lb_vip_nb->backends_nb[j];
@@ -8717,22 +8738,42 @@ build_lswitch_arp_nd_service_monitor(struct ovn_northd_lb *lb,
             }
 
             ds_clear(match);
-            ds_put_format(match, "arp.tpa == %s && arp.op == 1",
-                          backend_nb->svc_mon_src_ip);
             ds_clear(actions);
-            ds_put_format(actions,
-                "eth.dst = eth.src; "
-                "eth.src = %s; "
-                "arp.op = 2; /* ARP reply */ "
-                "arp.tha = arp.sha; "
-                "arp.sha = %s; "
-                "arp.tpa = arp.spa; "
-                "arp.spa = %s; "
-                "outport = inport; "
-                "flags.loopback = 1; "
-                "output;",
-                svc_monitor_mac, svc_monitor_mac,
-                backend_nb->svc_mon_src_ip);
+            if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
+                ds_put_format(match, "arp.tpa == %s && arp.op == 1",
+                              backend_nb->svc_mon_src_ip);
+                ds_put_format(actions,
+                    "eth.dst = eth.src; "
+                    "eth.src = %s; "
+                    "arp.op = 2; /* ARP reply */ "
+                    "arp.tha = arp.sha; "
+                    "arp.sha = %s; "
+                    "arp.tpa = arp.spa; "
+                    "arp.spa = %s; "
+                    "outport = inport; "
+                    "flags.loopback = 1; "
+                    "output;",
+                    svc_monitor_mac, svc_monitor_mac,
+                    backend_nb->svc_mon_src_ip);
+            } else {
+                ds_put_format(match, "nd_ns && nd.target == %s",
+                              backend_nb->svc_mon_src_ip);
+                ds_put_format(actions,
+                        "nd_na { "
+                        "eth.dst = eth.src; "
+                        "eth.src = %s; "
+                        "ip6.src = %s; "
+                        "nd.target = %s; "
+                        "nd.tll = %s; "
+                        "outport = inport; "
+                        "flags.loopback = 1; "
+                        "output; "
+                        "};",
+                        svc_monitor_mac,
+                        backend_nb->svc_mon_src_ip,
+                        backend_nb->svc_mon_src_ip,
+                        svc_monitor_mac);
+            }
             ovn_lflow_add_with_hint(lflows,
                                     backend_nb->op->od,
                                     S_SWITCH_IN_ARP_ND_RSP, 110,
