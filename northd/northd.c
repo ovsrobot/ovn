@@ -11612,7 +11612,7 @@ build_gateway_mtu_flow(struct hmap *lflows, struct ovn_port *op,
 }
 
 static bool
-consider_l3dwg_port_is_centralized(struct ovn_port *op)
+consider_l3dgw_port_is_centralized(struct ovn_port *op)
 {
     if (op->peer && op->peer->od->has_vtep_lports) {
         return false;
@@ -11663,7 +11663,7 @@ build_adm_ctrl_flows_for_lrouter_port(
         ds_clear(match);
         ds_put_format(match, "eth.dst == %s && inport == %s",
                       op->lrp_networks.ea_s, op->json_key);
-        if (consider_l3dwg_port_is_centralized(op)) {
+        if (consider_l3dgw_port_is_centralized(op)) {
             ds_put_format(match, " && is_chassis_resident(%s)",
                           op->cr_port->json_key);
         }
