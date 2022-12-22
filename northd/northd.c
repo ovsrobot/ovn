@@ -3362,7 +3362,12 @@ ovn_port_update_sbrec(struct northd_input *input_data,
             }
             smap_add(&new, "distributed-port", op->nbrp->name);
 
-            bool always_redirect = !op->od->has_distributed_nat;
+            bool always_redirect = !(
+                op->od->has_distributed_nat ||
+                (op->l3dgw_port->peer &&
+                 op->l3dgw_port->peer->od->has_vtep_lports)
+            );
+
             if (redirect_type) {
                 smap_add(&new, "redirect-type", redirect_type);
                 /* XXX Why can't we enable always-redirect when redirect-type
@@ -12815,6 +12820,15 @@ build_gateway_redirect_flows_for_lrouter(
         return;
     }
     for (size_t i = 0; i < od->n_l3dgw_ports; i++) {
+        if (od->l3dgw_ports[i]->peer &&
+            od->l3dgw_ports[i]->peer->od->has_vtep_lports) {
+            /* Skip adding redirect rule for vtep-enabled l3dgw ports.
+               Traffic from hypervisor to VTEP (ramp) switch should go in
+               distributed manner. Only returning routed traffic must go
+               through centralized gateway (or ha-chassis-group). */
+            continue;
+        }
+
         const struct ovsdb_idl_row *stage_hint = NULL;
         bool add_def_flow = true;
 
