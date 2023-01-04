@@ -747,6 +747,19 @@ local_binding_get_lport_ofport(const struct shash *local_bindings,
 }
 
 bool
+local_binding_is_ovn_installed(struct shash *local_bindings,
+                               const char *pb_name)
+{
+    struct local_binding *lbinding =
+        local_binding_find(local_bindings, pb_name);
+    if (lbinding && lbinding->iface) {
+        return smap_get_bool(&lbinding->iface->external_ids,
+                             OVN_INSTALLED_EXT_ID, false);
+    }
+    return false;
+}
+
+bool
 local_binding_is_up(struct shash *local_bindings, const char *pb_name,
                     const struct sbrec_chassis *chassis_rec)
 {
@@ -783,6 +796,7 @@ local_binding_is_down(struct shash *local_bindings, const char *pb_name,
         } else if (b_lport->pb->chassis) {
             VLOG_DBG("lport %s already claimed by other chassis",
                      b_lport->pb->logical_port);
+            return true;
         }
     }
 
@@ -832,6 +846,33 @@ local_binding_set_up(struct shash *local_bindings, const char *pb_name,
             binding_lport_set_up(b_lport, sb_readonly);
         }
     }
+}
+
+static void
+remove_ovn_installed(struct local_binding *lbinding, const char *pb_name)
+{
+    if (lbinding && lbinding->iface &&
+        smap_get_bool(&lbinding->iface->external_ids,
+                             OVN_INSTALLED_EXT_ID, false)) {
+        /* If iface has been deleted, do not try to delete a key from it */
+        if (!ovsrec_interface_is_deleted(lbinding->iface)) {
+            VLOG_INFO("Removing lport %s ovn-installed in OVS", pb_name);
+            ovsrec_interface_update_external_ids_delkey(lbinding->iface,
+                                                        OVN_INSTALLED_EXT_ID);
+        }
+    }
+}
+
+void
+local_binding_remove_ovn_installed(struct shash *local_bindings,
+                                   const char *pb_name, bool ovs_readonly)
+{
+    if (ovs_readonly) {
+        return;
+    }
+    struct local_binding *lbinding =
+        local_binding_find(local_bindings, pb_name);
+    remove_ovn_installed(lbinding, pb_name);
 }
 
 void
@@ -1239,7 +1280,9 @@ claim_lport(const struct sbrec_port_binding *pb,
                     return false;
                 }
             } else {
-                if (pb->n_up && !pb->up[0]) {
+                if ((pb->n_up && !pb->up[0]) ||
+                    !smap_get_bool(&iface_rec->external_ids,
+                                   OVN_INSTALLED_EXT_ID, false)) {
                     if_status_mgr_claim_iface(if_mgr, pb, chassis_rec,
                                               sb_readonly);
                 }
@@ -1464,9 +1507,11 @@ consider_vif_lport_(const struct sbrec_port_binding *pb,
             const char *requested_chassis_option = smap_get(
                 &pb->options, "requested-chassis");
             VLOG_INFO_RL(&rl,
-                "Not claiming lport %s, chassis %s requested-chassis %s",
+                "Not claiming lport %s, chassis %s requested-chassis %s "
+                "pb->chassis %s",
                 pb->logical_port, b_ctx_in->chassis_rec->name,
-                requested_chassis_option ? requested_chassis_option : "[]");
+                requested_chassis_option ? requested_chassis_option : "[]",
+                pb->chassis ? pb->chassis->name: "");
         }
     }
 
@@ -2288,6 +2333,9 @@ consider_iface_release(const struct ovsrec_interface *iface_rec,
                 return false;
             }
         }
+        if (b_ctx_in->ovs_idl_txn) {
+            remove_ovn_installed(lbinding, iface_id);
+        }
 
     } else if (lbinding && b_lport && b_lport->type == LP_LOCALPORT) {
         /* lbinding is associated with a localport.  Remove it from the
@@ -2558,6 +2606,7 @@ handle_deleted_lport(const struct sbrec_port_binding *pb,
     if (ld) {
         remove_pb_from_local_datapath(pb,
                                       b_ctx_out, ld);
+        if_status_mgr_release_iface(b_ctx_out->if_mgr, pb->logical_port);
         return;
     }
 
@@ -2581,6 +2630,7 @@ handle_deleted_lport(const struct sbrec_port_binding *pb,
             remove_pb_from_local_datapath(pb, b_ctx_out,
                                           ld);
         }
+        if_status_mgr_release_iface(b_ctx_out->if_mgr, pb->logical_port);
     }
 }
 
@@ -2627,6 +2677,9 @@ handle_deleted_vif_lport(const struct sbrec_port_binding *pb,
     }
 
     handle_deleted_lport(pb, b_ctx_in, b_ctx_out);
+    if (b_ctx_in->ovs_idl_txn) {
+        remove_ovn_installed(lbinding, pb->logical_port);
+    }
     return true;
 }
 
