@@ -48,5 +48,9 @@ bool if_status_handle_claims(struct if_status_mgr *mgr,
                              const struct sbrec_chassis *chassis_rec,
                              struct hmap *tracked_datapath,
                              bool sb_readonly);
+void if_status_handle_lports(struct if_status_mgr *mgr,
+                           const struct sbrec_chassis *chassis_rec,
+                           struct ovsdb_idl_index *sbrec_port_binding_by_name,
+                           bool sb_readonly);
 
 # endif /* controller/if-status.h */

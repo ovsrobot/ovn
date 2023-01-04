@@ -16,6 +16,7 @@
 #include <config.h>
 
 #include "binding.h"
+#include "lport.h"
 #include "if-status.h"
 #include "ofctrl-seqno.h"
 #include "simap.h"
@@ -75,6 +76,9 @@ enum if_state {
     OIF_INSTALLED,       /* Interface flows programmed in OVS and binding
                           * marked "up" in the binding module.
                           */
+    OIF_UPDATE_PORT,     /* Logical ports need to be set down, and pb->chassis
+                          * removed.
+                          */
     OIF_MAX,
 };
 
@@ -85,6 +89,7 @@ static const char *if_state_names[] = {
     [OIF_MARK_UP]         = "MARK_UP",
     [OIF_MARK_DOWN]       = "MARK_DOWN",
     [OIF_INSTALLED]       = "INSTALLED",
+    [OIF_UPDATE_PORT]     = "UPDATE_PORT",
 };
 
 /*
@@ -264,6 +269,7 @@ if_status_mgr_claim_iface(struct if_status_mgr *mgr,
         break;
     case OIF_INSTALLED:
     case OIF_MARK_DOWN:
+    case OIF_UPDATE_PORT:
         ovs_iface_set_state(mgr, iface, OIF_CLAIMED);
         break;
     case OIF_MAX:
@@ -304,6 +310,7 @@ if_status_mgr_release_iface(struct if_status_mgr *mgr, const char *iface_id)
         ovs_iface_set_state(mgr, iface, OIF_MARK_DOWN);
         break;
     case OIF_MARK_DOWN:
+    case OIF_UPDATE_PORT:
         /* Nothing to do here. */
         break;
     case OIF_MAX:
@@ -336,11 +343,42 @@ if_status_mgr_delete_iface(struct if_status_mgr *mgr, const char *iface_id)
         ovs_iface_set_state(mgr, iface, OIF_MARK_DOWN);
         break;
     case OIF_MARK_DOWN:
+    case OIF_UPDATE_PORT:
         /* Nothing to do here. */
         break;
     case OIF_MAX:
         OVS_NOT_REACHED();
         break;
+    }
+}
+
+void
+if_status_handle_lports(struct if_status_mgr *mgr,
+                      const struct sbrec_chassis *chassis_rec,
+                      struct ovsdb_idl_index *sbrec_port_binding_by_name,
+                      bool sb_readonly)
+{
+    if (sb_readonly) {
+        return;
+    }
+
+    struct hmapx_node *node;
+
+    HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_UPDATE_PORT]) {
+        struct ovs_iface *iface = node->data;
+        const struct sbrec_port_binding *pb = lport_lookup_by_name(
+            sbrec_port_binding_by_name, iface->id);
+
+        if ((pb == NULL) || sbrec_port_binding_is_deleted(pb)) {
+            VLOG_DBG("Removing lport %s from list of ports to set down",
+                     iface->id);
+        } else {
+            bool up = false;
+            sbrec_port_binding_set_up(pb, &up, 1);
+            VLOG_INFO("Setting lport %s down in Southbound", iface->id);
+            set_pb_chassis_in_sbrec(pb, chassis_rec, false);
+        }
+        ovs_iface_destroy(mgr, node->data);
     }
 }
 
@@ -424,6 +462,12 @@ if_status_mgr_update(struct if_status_mgr *mgr,
     HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_MARK_DOWN]) {
         struct ovs_iface *iface = node->data;
 
+        if (!local_binding_find(bindings, iface->id) && sb_readonly) {
+            VLOG_DBG("%s not found in local_bindings and sb read only => "
+                     "port down delayed", iface->id);
+            ovs_iface_set_state(mgr, iface, OIF_UPDATE_PORT);
+            continue;
+        }
         if (!sb_readonly) {
             local_binding_set_pb(bindings, iface->id, chassis_rec,
                                  NULL, false);

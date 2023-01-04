@@ -1603,6 +1603,11 @@ runtime_data_sb_ro_handler(struct engine_node *node, void *data)
                 engine_get_input("SB_chassis", node),
                 "name");
 
+    struct ovsdb_idl_index *sbrec_port_binding_by_name =
+        engine_ovsdb_node_get_index(
+                engine_get_input("SB_port_binding", node),
+                "name");
+
     if (chassis_id) {
         chassis = chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id);
     }
@@ -1619,6 +1624,13 @@ runtime_data_sb_ro_handler(struct engine_node *node, void *data)
                                     sb_readonly)) {
             engine_set_node_state(node, EN_UPDATED);
             rt_data->tracked = true;
+        }
+
+        if (sbrec_port_binding_by_name) {
+            if_status_handle_lports(ctrl_ctx->if_mgr,
+                                  chassis,
+                                  sbrec_port_binding_by_name,
+                                  sb_readonly);
         }
     }
     return true;

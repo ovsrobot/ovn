@@ -894,7 +894,6 @@ local_binding_set_down(struct shash *local_bindings, const char *pb_name,
 
     if (!sb_readonly && b_lport && b_lport->pb->n_up && b_lport->pb->up[0] &&
             (!b_lport->pb->chassis || b_lport->pb->chassis == chassis_rec)) {
-        VLOG_INFO("Setting lport %s down in Southbound", pb_name);
         binding_lport_set_down(b_lport, sb_readonly);
         LIST_FOR_EACH (b_lport, list_node, &lbinding->binding_lports) {
             binding_lport_set_down(b_lport, sb_readonly);
@@ -3384,6 +3383,7 @@ binding_lport_set_down(struct binding_lport *b_lport, bool sb_readonly)
     if (sb_readonly || !b_lport || !b_lport->pb->n_up || !b_lport->pb->up[0]) {
         return;
     }
+    VLOG_INFO("Setting lport %s down in Southbound", b_lport->name);
 
     bool up = false;
     sbrec_port_binding_set_up(b_lport->pb, &up, 1);
