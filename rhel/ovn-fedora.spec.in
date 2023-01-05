@@ -165,7 +165,7 @@ install -p -D -m 0644 \
         rhel/usr_share_ovn_scripts_systemd_sysconfig.template \
         $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/ovn
 
-for service in ovn-controller ovn-controller-vtep ovn-northd ovn-ic ovn-ic-db; do
+for service in ovn-controller ovn-controller-vtep ovn-northd ovn-ic ovn-ic-db ovn-db@; do
         install -p -D -m 0644 \
                         rhel/usr_lib_systemd_system_${service}.service \
                         $RPM_BUILD_ROOT%{_unitdir}/${service}.service
@@ -492,6 +492,7 @@ fi
 %{_mandir}/man5/ovn-ic-sb.5*
 %{_prefix}/lib/ocf/resource.d/ovn/ovndb-servers
 %config(noreplace) %{_sysconfdir}/logrotate.d/ovn
+%{_unitdir}/ovn-db@.service
 
 %files docker
 %{_bindir}/ovn-docker-overlay-driver
