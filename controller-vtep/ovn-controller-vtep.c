@@ -123,6 +123,7 @@ main(int argc, char *argv[])
     /* Connect to OVN SB database. */
     struct ovsdb_idl_loop ovnsb_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(
         ovsdb_idl_create(ovnsb_remote, &sbrec_idl_class, true, true));
+    ovsdb_idl_set_leader_only(ovnsb_idl_loop.idl, false);
     ovsdb_idl_get_initial_snapshot(ovnsb_idl_loop.idl);
 
     char *ovn_version = ovn_get_internal_version();
