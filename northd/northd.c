@@ -216,6 +216,7 @@ enum ovn_stage {
 #define REGBIT_FROM_RAMP          "reg0[14]"
 #define REGBIT_PORT_SEC_DROP      "reg0[15]"
 #define REGBIT_ACL_STATELESS      "reg0[16]"
+#define REGBIT_ACL_HINT_ALLOW_REL "reg0[17]"
 
 #define REG_ORIG_DIP_IPV4         "reg1"
 #define REG_ORIG_DIP_IPV6         "xxreg1"
@@ -6770,7 +6771,8 @@ build_acls(struct ovn_datapath *od, const struct chassis_features *features,
                       ct_blocked_match);
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX - 3,
                       ds_cstr(&match), REGBIT_ACL_HINT_DROP" = 0; "
-                      REGBIT_ACL_HINT_BLOCK" = 0; next;");
+                      REGBIT_ACL_HINT_BLOCK" = 0; "
+                      REGBIT_ACL_HINT_ALLOW_REL" = 1; next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX - 3,
                       ds_cstr(&match), "next;");
 
@@ -6791,7 +6793,8 @@ build_acls(struct ovn_datapath *od, const struct chassis_features *features,
                       use_ct_inv_match ? " && !ct.inv" : "",
                       ct_blocked_match);
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX - 3,
-                      ds_cstr(&match), "ct_commit_nat;");
+                      ds_cstr(&match),
+                      REGBIT_ACL_HINT_ALLOW_REL" = 1; ct_commit_nat;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX - 3,
                       ds_cstr(&match), "ct_commit_nat;");
 
@@ -6802,6 +6805,11 @@ build_acls(struct ovn_datapath *od, const struct chassis_features *features,
                       "nd || nd_ra || nd_rs || mldv1 || mldv2", "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX - 3,
                       "nd || nd_ra || nd_rs || mldv1 || mldv2", "next;");
+
+        /* Reply and related traffic matched by an "allow-related" ACL
+         * should be allowed in the ls_in_acl_after_lb stage too. */
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_AFTER_LB, UINT16_MAX - 3,
+                      REGBIT_ACL_HINT_ALLOW_REL" == 1", "next;");
     }
 
     /* Ingress or Egress ACL Table (Various priorities). */
