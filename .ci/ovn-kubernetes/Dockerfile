@@ -23,6 +23,8 @@ RUN mkdir /tmp/ovn
 COPY . /tmp/ovn
 WORKDIR /tmp/ovn/ovs
 
+RUN sed -e 's/@VERSION@/0.0.1/' rhel/openvswitch-fedora.spec.in > /tmp/ovs.spec
+RUN dnf builddep -y /tmp/ovs.spec
 RUN ./boot.sh
 RUN ./configure -v
 RUN make rpm-fedora
@@ -30,6 +32,8 @@ RUN rm rpm/rpmbuild/RPMS/x86_64/*debug*
 RUN rm rpm/rpmbuild/RPMS/x86_64/*devel*
 
 WORKDIR /tmp/ovn
+RUN sed -e 's/@VERSION@/0.0.1/' rhel/ovn-fedora.spec.in > /tmp/ovn.spec
+RUN dnf builddep -y /tmp/ovn.spec
 RUN ./boot.sh
 RUN ./configure
 RUN make rpm-fedora
