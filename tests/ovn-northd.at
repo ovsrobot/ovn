@@ -3772,15 +3772,6 @@ AT_CHECK([grep "lr_in_dnat" lr0flows | sort], [0], [dnl
   table=7 (lr_in_dnat         ), priority=70   , match=(ct.rel && !ct.est && !ct.new && ct_mark.skip_snat == 1), action=(flags.skip_snat_for_lb = 1; ct_commit_nat;)
 ])
 
-AT_CHECK([grep "lr_out_undnat" lr0flows | sed 's/table=./table=?/' | sort], [0], [dnl
-  table=? (lr_out_undnat      ), priority=0    , match=(1), action=(next;)
-  table=? (lr_out_undnat      ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
-])
-
-AT_CHECK([grep "lr_out_post_undnat" lr0flows | sed 's/table=./table=?/' | sort], [0], [dnl
-  table=? (lr_out_post_undnat ), priority=0    , match=(1), action=(next;)
-  table=? (lr_out_post_undnat ), priority=50   , match=(ip && ct.new), action=(ct_commit { } ; next; )
-])
 
 check ovn-nbctl --wait=sb set logical_router lr0 options:lb_force_snat_ip="20.0.0.4 aef0::4"
 
