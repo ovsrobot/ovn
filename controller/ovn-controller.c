@@ -2660,6 +2660,8 @@ load_balancers_by_dp_cleanup(struct hmap *lbs)
 struct ed_type_lb_data {
     /* Locally installed 'struct ovn_controller_lb' by UUID. */
     struct hmap local_lbs;
+    /* 'struct ovn_lb_five_tuple' removed during last run. */
+    struct hmap removed_tuples;
     /* Load balancer <-> resource cross reference */
     struct objdep_mgr deps_mgr;
     /* Objects processed in the current engine execution.
@@ -2685,6 +2687,48 @@ struct lb_data_ctx_in {
 };
 
 static void
+lb_data_removed_five_tuples_add(struct ed_type_lb_data *lb_data,
+                                const struct ovn_controller_lb *lb)
+{
+    if (!ovs_feature_is_supported(OVS_CT_TUPLE_FLUSH_SUPPORT)) {
+        return;
+    }
+
+    for (size_t i = 0; i < lb->n_vips; i++) {
+        struct ovn_lb_vip *vip = &lb->vips[i];
+        for (size_t j = 0; j < vip->n_backends; j++) {
+            struct ovn_lb_backend *backend = &vip->backends[j];
+
+            struct ovn_lb_five_tuple *tuple = xmalloc(sizeof *tuple);
+            ovn_lb_five_tuple_create(tuple, vip, backend, lb->proto);
+            hmap_insert(&lb_data->removed_tuples, &tuple->hmap_node,
+                        ovn_lb_five_tuple_hash(tuple));
+        }
+    }
+}
+
+static void
+lb_data_removed_five_tuples_remove(struct ed_type_lb_data *lb_data,
+                                   const struct ovn_controller_lb *lb)
+{
+    if (!ovs_feature_is_supported(OVS_CT_TUPLE_FLUSH_SUPPORT)) {
+        return;
+    }
+
+    for (size_t i = 0; i < lb->n_vips; i++) {
+        struct ovn_lb_vip *vip = &lb->vips[i];
+        for (size_t j = 0; j < vip->n_backends; j++) {
+            struct ovn_lb_backend *backend = &vip->backends[j];
+
+            struct ovn_lb_five_tuple tuple;
+            ovn_lb_five_tuple_create(&tuple, vip, backend, lb->proto);
+            ovn_lb_five_tuple_find_and_delete(&lb_data->removed_tuples,
+                                              &tuple);
+        }
+    }
+}
+
+static void
 lb_data_local_lb_add(struct ed_type_lb_data *lb_data,
                      const struct sbrec_load_balancer *sbrec_lb,
                      const struct smap *template_vars, bool tracked)
@@ -2703,6 +2747,8 @@ lb_data_local_lb_add(struct ed_type_lb_data *lb_data,
     }
 
     sset_destroy(&template_vars_ref);
+
+    lb_data_removed_five_tuples_remove(lb_data, lb);
 
     if (!tracked) {
         return;
@@ -2724,6 +2770,8 @@ lb_data_local_lb_remove(struct ed_type_lb_data *lb_data,
 
     objdep_mgr_remove_obj(&lb_data->deps_mgr, uuid);
     hmap_remove(&lb_data->local_lbs, &lb->hmap_node);
+
+    lb_data_removed_five_tuples_add(lb_data, lb);
 
     if (tracked) {
         hmap_insert(&lb_data->old_lbs, &lb->hmap_node, uuid_hash(uuid));
@@ -2776,6 +2824,7 @@ en_lb_data_init(struct engine_node *node OVS_UNUSED,
     struct ed_type_lb_data *lb_data = xzalloc(sizeof *lb_data);
 
     hmap_init(&lb_data->local_lbs);
+    hmap_init(&lb_data->removed_tuples);
     objdep_mgr_init(&lb_data->deps_mgr);
     uuidset_init(&lb_data->objs_processed);
     lb_data->change_tracked = false;
@@ -3015,7 +3064,13 @@ en_lb_data_cleanup(void *data)
 {
     struct ed_type_lb_data *lb_data = data;
 
+    struct ovn_lb_five_tuple *tuple;
+    HMAP_FOR_EACH_POP (tuple, hmap_node, &lb_data->removed_tuples) {
+        free(tuple);
+    }
+
     ovn_controller_lbs_destroy(&lb_data->local_lbs);
+    hmap_destroy(&lb_data->removed_tuples);
     objdep_mgr_destroy(&lb_data->deps_mgr);
     uuidset_destroy(&lb_data->objs_processed);
     ovn_controller_lbs_destroy(&lb_data->old_lbs);
@@ -4694,6 +4749,8 @@ main(int argc, char *argv[])
         engine_get_internal_data(&en_runtime_data);
     struct ed_type_template_vars *template_vars_data =
         engine_get_internal_data(&en_template_vars);
+    struct ed_type_lb_data *lb_data =
+        engine_get_internal_data(&en_lb_data);
 
     ofctrl_init(&lflow_output_data->group_table,
                 &lflow_output_data->meter_table,
@@ -5092,13 +5149,15 @@ main(int argc, char *argv[])
 
                     lflow_output_data = engine_get_data(&en_lflow_output);
                     pflow_output_data = engine_get_data(&en_pflow_output);
+                    lb_data = engine_get_data(&en_lb_data);
                     if (lflow_output_data && pflow_output_data &&
-                        ct_zones_data) {
+                        ct_zones_data && lb_data) {
                         stopwatch_start(OFCTRL_PUT_STOPWATCH_NAME,
                                         time_msec());
                         ofctrl_put(&lflow_output_data->flow_table,
                                    &pflow_output_data->flow_table,
                                    &ct_zones_data->pending,
+                                   &lb_data->removed_tuples,
                                    sbrec_meter_table_get(ovnsb_idl_loop.idl),
                                    ofctrl_seqno_get_req_cfg(),
                                    engine_node_changed(&en_lflow_output),

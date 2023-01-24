@@ -494,6 +494,24 @@ ovn_lb_get_health_check(const struct nbrec_load_balancer *nbrec_lb,
     return NULL;
 }
 
+static inline uint32_t
+hash_add_in6_addr(uint32_t hash, const struct in6_addr *addr)
+{
+    for (uint8_t i = 0; i < 4; i++) {
+#ifdef s6_addr32
+        hash = hash_add(hash, addr->s6_addr32[i]);
+#else
+        uint8_t index = i * 4;
+        uint32_t part = (uint32_t) addr->s6_addr[index]
+            | (uint32_t) addr->s6_addr[index + 1] << 8
+            | (uint32_t) addr->s6_addr[index + 2] << 16
+            | (uint32_t) addr->s6_addr[index + 3] << 24;
+        hash = hash_add(hash, part);
+#endif
+    }
+    return hash;
+}
+
 struct ovn_northd_lb *
 ovn_northd_lb_create(const struct nbrec_load_balancer *nbrec_lb)
 {
@@ -794,4 +812,56 @@ ovn_controller_lb_find(const struct hmap *ovn_controller_lbs,
     return (node
             ? CONTAINER_OF(node, struct ovn_controller_lb, hmap_node)
             : NULL);
+}
+
+uint32_t
+ovn_lb_five_tuple_hash(const struct ovn_lb_five_tuple *tuple)
+{
+    uint32_t hash = 0;
+
+    hash = hash_add_in6_addr(hash, &tuple->vip_ip);
+    hash = hash_add_in6_addr(hash, &tuple->backend_ip);
+
+    hash = hash_add(hash, tuple->vip_port);
+    hash = hash_add(hash, tuple->backend_port);
+
+    hash = hash_add(hash, tuple->proto);
+
+    return hash_finish(hash, 0);
+
+}
+
+void
+ovn_lb_five_tuple_create(struct ovn_lb_five_tuple *tuple,
+                         const struct ovn_lb_vip *vip,
+                         const struct ovn_lb_backend *backend, uint8_t proto)
+{
+    tuple->vip_ip = vip->vip;
+    tuple->vip_port = vip->vip_port;
+    tuple->backend_ip = backend->ip;
+    tuple->backend_port = backend->port;
+    tuple->proto = vip->vip_port ? proto : 0;
+}
+
+void
+ovn_lb_five_tuple_find_and_delete(struct hmap *tuples,
+                                  const struct ovn_lb_five_tuple *tuple)
+{
+    uint32_t hash = ovn_lb_five_tuple_hash(tuple);
+
+    struct ovn_lb_five_tuple *node;
+    HMAP_FOR_EACH_WITH_HASH (node, hmap_node, hash, tuples) {
+        if (ipv6_addr_equals(&tuple->vip_ip, &node->vip_ip) &&
+            ipv6_addr_equals(&tuple->backend_ip, &node->backend_ip) &&
+            tuple->vip_port == node->vip_port &&
+            tuple->backend_port == node->backend_port &&
+            tuple->proto == node->proto) {
+            break;
+        }
+    }
+
+    if (node) {
+        hmap_remove(tuples, &node->hmap_node);
+        free(node);
+    }
 }
