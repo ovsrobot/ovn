@@ -645,3 +645,38 @@ datapath_is_transit_switch(const struct sbrec_datapath_binding *ldp)
 {
     return smap_get(&ldp->external_ids, "interconn-ts") != NULL;
 }
+
+bool
+lb_is_local(const struct sbrec_load_balancer *sbrec_lb,
+            const struct hmap *local_datapaths)
+{
+    /* Check if the lb is local or not.  If there is one datapath
+    * in the local_datapaths, it means all the datapaths of the lb
+    * will be in the local_datapaths. */
+    size_t i;
+    for (i = 0; i < sbrec_lb->n_datapaths; i++) {
+        if (get_local_datapath(local_datapaths,
+                               sbrec_lb->datapaths[i]->tunnel_key)) {
+            break;
+        }
+    }
+
+    if (sbrec_lb->n_datapaths && i == sbrec_lb->n_datapaths) {
+        return false;
+    }
+
+    struct sbrec_logical_dp_group *dp_group = sbrec_lb->datapath_group;
+
+    for (i = 0; dp_group && i < dp_group->n_datapaths; i++) {
+        if (get_local_datapath(local_datapaths,
+                               dp_group->datapaths[i]->tunnel_key)) {
+            break;
+        }
+    }
+
+    if (dp_group && i == dp_group->n_datapaths) {
+        return false;
+    }
+
+    return true;
+}
