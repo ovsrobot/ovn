@@ -2527,3 +2527,44 @@ check test "$zone_num" -eq 666
 
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller - Log always false lflow matches])
+ovn_start
+
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+check ovn-nbctl ls-add ls -- lsp-add ls lsp
+as hv1
+check ovs-vsctl \
+    -- add-port br-int vif \
+    -- set Interface vif external_ids:iface-id=lsp
+
+check ovn-nbctl --wait=hv sync
+wait_for_ports_up
+
+check ovn-nbctl pg-add pg
+check ovn-nbctl --wait=hv acl-add ls from-lport 1 \
+    'inport == @pg && ip4.dst == 1.1.1.1 && ip6.dst == 2::2' drop
+
+dnl Should complain about invalid port group name as there's no local 'pg'.
+OVS_WAIT_UNTIL([
+    grep -q 'expecting port group name.' hv1/ovn-controller.log
+])
+AT_CHECK([
+    grep -q 'match always evaluates to false' hv1/ovn-controller.log
+], [1])
+
+check ovn-nbctl --wait=hv pg-set-ports pg lsp
+
+dnl Should complain about match always evaluating to false.
+OVS_WAIT_UNTIL([
+    grep -q 'match always evaluates to false' hv1/ovn-controller.log
+])
+
+AT_CLEANUP
+])

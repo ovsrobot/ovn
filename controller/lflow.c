@@ -320,6 +320,15 @@ store_lflow_template_refs(struct objdep_mgr *lflow_deps_mgr,
     }
 }
 
+static void
+log_lflow_empty_matches(const struct sbrec_logical_flow *lflow)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+    VLOG_WARN_RL(&rl, "lflow "UUID_FMT" match always evaluates to false: "
+                 "\"%s\"", UUID_ARGS(&lflow->header_.uuid),
+                 lflow->match);
+}
+
 static bool
 lflow_parse_actions(const struct sbrec_logical_flow *lflow,
                     const struct lflow_ctx_in *l_ctx_in,
@@ -499,8 +508,7 @@ consider_lflow_for_added_as_ips__(
     uint32_t n_conjs = 0;
     n_conjs = expr_to_matches(expr, lookup_port_cb, &aux, &matches);
     if (hmap_is_empty(&matches)) {
-        VLOG_DBG("lflow "UUID_FMT" matches are empty, skip",
-                 UUID_ARGS(&lflow->header_.uuid));
+        log_lflow_empty_matches(lflow);
         goto done;
     }
 
@@ -1222,8 +1230,7 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
         matches = xmalloc(sizeof *matches);
         n_conjs = expr_to_matches(expr, lookup_port_cb, &aux, matches);
         if (hmap_is_empty(matches)) {
-            VLOG_DBG("lflow "UUID_FMT" matches are empty, skip",
-                     UUID_ARGS(&lflow->header_.uuid));
+            log_lflow_empty_matches(lflow);
             goto done;
         }
         if (n_conjs) {
