@@ -5103,8 +5103,28 @@ lflow_hash_lock_destroy(void)
     lflow_hash_lock_initialized = false;
 }
 
+/* Full thread safety analysis is not possible with hash locks, because
+ * they are taken conditionally based on the 'parallelization_state' and
+ * a flow hash.  Also, the order in which two hash locks are taken is not
+ * predictable during the static analysis.
+ *
+ * Since the order of taking two locks depends on a random hash, to avoid
+ * ABBA deadlocks, no two hash locks can be nested.  In that sense an array
+ * of hash locks is similar to a single mutex.
+ *
+ * Using a fake mutex to partially simulate thread safety restrictions, as
+ * if it were actually a single mutex.
+ *
+ * OVS_NO_THREAD_SAFETY_ANALYSIS below allows us to ignore conditional
+ * nature of the lock.  Unlike other attributes, it applies to the
+ * implementation and not to the interface.  So, we can define a function
+ * that acquires the lock without analysing the way it does that.
+ */
+extern struct ovs_mutex fake_hash_mutex;
+
 static struct ovs_mutex *
 lflow_hash_lock(const struct hmap *lflow_map, uint32_t hash)
+    OVS_ACQUIRES(fake_hash_mutex)
     OVS_NO_THREAD_SAFETY_ANALYSIS
 {
     struct ovs_mutex *hash_lock = NULL;
@@ -5119,6 +5139,7 @@ lflow_hash_lock(const struct hmap *lflow_map, uint32_t hash)
 
 static void
 lflow_hash_unlock(struct ovs_mutex *hash_lock)
+    OVS_RELEASES(fake_hash_mutex)
     OVS_NO_THREAD_SAFETY_ANALYSIS
 {
     if (hash_lock) {
@@ -5145,7 +5166,7 @@ static thread_local size_t thread_lflow_counter = 0;
 static bool
 ovn_dp_group_add_with_reference(struct ovn_lflow *lflow_ref,
                                 struct ovn_datapath *od)
-    OVS_NO_THREAD_SAFETY_ANALYSIS
+    OVS_REQUIRES(fake_hash_mutex)
 {
     if (!lflow_ref) {
         return false;
@@ -5164,6 +5185,7 @@ do_ovn_lflow_add(struct hmap *lflow_map, struct ovn_datapath *od,
                  const char *match, const char *actions, const char *io_port,
                  const struct ovsdb_idl_row *stage_hint,
                  const char *where, const char *ctrl_meter)
+    OVS_REQUIRES(fake_hash_mutex)
 {
 
     struct ovn_lflow *old_lflow;
@@ -5205,6 +5227,7 @@ ovn_lflow_add_at_with_hash(struct hmap *lflow_map, struct ovn_datapath *od,
                            const char *io_port, const char *ctrl_meter,
                            const struct ovsdb_idl_row *stage_hint,
                            const char *where, uint32_t hash)
+    OVS_REQUIRES(fake_hash_mutex)
 {
     struct ovn_lflow *lflow;
 
@@ -5222,6 +5245,7 @@ ovn_lflow_add_at(struct hmap *lflow_map, struct ovn_datapath *od,
                  const char *match, const char *actions, const char *io_port,
                  const char *ctrl_meter,
                  const struct ovsdb_idl_row *stage_hint, const char *where)
+    OVS_EXCLUDED(fake_hash_mutex)
 {
     struct ovs_mutex *hash_lock;
     uint32_t hash;
