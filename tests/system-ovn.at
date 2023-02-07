@@ -9189,28 +9189,78 @@ ADD_VETH(vm2, vm2, br-int, "173.0.2.2/24", "00:de:ad:01:00:02", \
 check ovn-nbctl lr-nat-add r1 dnat_and_snat 172.16.0.101 173.0.1.2 vm1 00:00:00:01:02:03
 check ovn-nbctl --wait=hv sync
 
-# Next, make sure that a ping works as expected
-NS_CHECK_EXEC([vm1], [ping -q -c 3 -i 0.3 -w 2 30.0.0.1 | FORMAT_PING], \
-[0], [dnl
+# Create service that listens for TCP and UDP
+NETNS_DAEMONIZE([vm2], [nc -lku 1234], [nc0.pid])
+NETNS_DAEMONIZE([vm2], [nc -lk 1235], [nc1.pid])
+
+test_icmp() {
+    # Make sure that a ping works as expected
+    NS_CHECK_EXEC([vm1], [ping -q -c 3 -i 0.3 -w 2 30.0.0.1 | FORMAT_PING], \
+    [0], [dnl
 3 packets transmitted, 3 received, 0% packet loss, time 0ms
 ])
 
-# Finally, make sure that conntrack shows two separate zones being used for
-# DNAT and SNAT
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) | \
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
+    # Finally, make sure that conntrack shows two separate zones being used for
+    # DNAT and SNAT
+    AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) | \
+    sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 icmp,orig=(src=173.0.1.2,dst=30.0.0.1,id=<cleared>,type=8,code=0),reply=(src=172.16.0.102,dst=173.0.1.2,id=<cleared>,type=0,code=0),zone=<cleared>,mark=2
 ])
 
-# The final two entries appear identical here. That is because FORMAT_CT
-# scrubs the zone numbers. In actuality, the zone numbers are different,
-# which is why there are two entries.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(172.16.0.102) | \
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
+    AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(172.16.0.102) | \
+    sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 icmp,orig=(src=172.16.0.101,dst=172.16.0.102,id=<cleared>,type=8,code=0),reply=(src=173.0.2.2,dst=172.16.0.101,id=<cleared>,type=0,code=0),zone=<cleared>
 icmp,orig=(src=173.0.1.2,dst=172.16.0.102,id=<cleared>,type=8,code=0),reply=(src=172.16.0.102,dst=172.16.0.101,id=<cleared>,type=0,code=0),zone=<cleared>
-icmp,orig=(src=173.0.1.2,dst=172.16.0.102,id=<cleared>,type=8,code=0),reply=(src=172.16.0.102,dst=172.16.0.101,id=<cleared>,type=0,code=0),zone=<cleared>
 ])
+}
+
+test_udp() {
+    NS_CHECK_EXEC([vm1], [echo "udp" | nc -u 30.0.0.1 1234])
+
+    ovs-appctl dpctl/dump-conntrack
+
+    AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) | \
+    sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
+udp,orig=(src=173.0.1.2,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=172.16.0.102,dst=173.0.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2
+])
+
+    AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(172.16.0.102) | \
+    sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
+udp,orig=(src=172.16.0.101,dst=172.16.0.102,sport=<cleared>,dport=<cleared>),reply=(src=173.0.2.2,dst=172.16.0.101,sport=<cleared>,dport=<cleared>),zone=<cleared>
+udp,orig=(src=173.0.1.2,dst=172.16.0.102,sport=<cleared>,dport=<cleared>),reply=(src=172.16.0.102,dst=172.16.0.101,sport=<cleared>,dport=<cleared>),zone=<cleared>
+])
+}
+
+test_tcp() {
+    NS_CHECK_EXEC([vm1], [echo "tcp" | nc 30.0.0.1 1235])
+
+    ovs-appctl dpctl/dump-conntrack
+
+    AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) | \
+    sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
+tcp,orig=(src=173.0.1.2,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=172.16.0.102,dst=173.0.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
+])
+
+    AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(172.16.0.102) | \
+    sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
+tcp,orig=(src=172.16.0.101,dst=172.16.0.102,sport=<cleared>,dport=<cleared>),reply=(src=173.0.2.2,dst=172.16.0.101,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+tcp,orig=(src=173.0.1.2,dst=172.16.0.102,sport=<cleared>,dport=<cleared>),reply=(src=172.16.0.102,dst=172.16.0.101,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+])
+}
+
+for type in icmp udp tcp; do
+    AS_BOX([Testing $type])
+    # First time, when the packet needs to pass through pinctrl buffering
+    check ovs-appctl dpctl/flush-conntrack
+    ovn-sbctl --all destroy mac_binding
+    wait_row_count mac_binding 0
+    test_$type
+
+    # Second time with MAC binding being already set
+    check ovs-appctl dpctl/flush-conntrack
+    wait_row_count mac_binding 1 ip="172.16.0.102"
+    test_$type
+done
 
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
 
