@@ -7507,6 +7507,10 @@ build_lb_affinity_default_flows(struct ovn_datapath *od, struct hmap *lflows)
     if (od->nbr) {
         ovn_lflow_add(lflows, od, S_ROUTER_IN_LB_AFF_CHECK, 0, "1", "next;");
         ovn_lflow_add(lflows, od, S_ROUTER_IN_LB_AFF_LEARN, 0, "1", "next;");
+        if (use_ct_inv_match) {
+            ovn_lflow_add(lflows, od, S_ROUTER_IN_LB_AFF_LEARN, 200,
+                          "ip && ct.trk && ct.inv", debug_drop_action());
+        }
     }
 }
 
@@ -11402,7 +11406,29 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
                                   struct hmap *lflows,
                                   struct ds *match, struct ds *actions)
 {
-    if (!op->nbrp || !op->peer || !op->od->lb_force_snat_router_ip) {
+    if (!op->nbrp || !op->peer) {
+        return;
+    }
+
+    if (op->od->is_gw_router && op->lrp_networks.n_ipv4_addrs) {
+        ds_clear(match);
+        ds_put_format(match,
+                      "ip4.src == %s && icmp4.type == 3 && icmp4.code == 4",
+                      op->lrp_networks.ipv4_addrs[0].addr_s);
+        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 200,
+                      ds_cstr(match), "next;");
+    }
+
+    if (op->od->is_gw_router && op->lrp_networks.n_ipv6_addrs > 1) {
+        ds_clear(match);
+        ds_put_format(match,
+                      "ip6.src == %s && icmp6.type == 2 && icmp6.code == 0",
+                      op->lrp_networks.ipv6_addrs[0].addr_s);
+        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 200,
+                      ds_cstr(match), "next;");
+    }
+
+    if (!op->od->lb_force_snat_router_ip) {
         return;
     }
 
@@ -13857,6 +13883,21 @@ build_lrouter_out_is_dnat_local(struct hmap *lflows, struct ovn_datapath *od,
 }
 
 static void
+build_lrouter_out_post_snat_flow(struct ovn_datapath *od, struct hmap *lflows)
+{
+    if (!od->nbr) {
+        return;
+    }
+
+    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT, 0, "1", "next;");
+
+    if (use_ct_inv_match) {
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT, 100,
+                      "ip && ct.trk && ct.inv", debug_drop_action());
+    }
+}
+
+static void
 build_lrouter_out_snat_flow(struct hmap *lflows, struct ovn_datapath *od,
                             const struct nbrec_nat *nat, struct ds *match,
                             struct ds *actions, bool distributed,
@@ -14244,7 +14285,6 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
     ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 0, "1", "next;");
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_EGR_LOOP, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_IN_ECMP_STATEFUL, 0, "1", "next;");
 
@@ -14298,6 +14338,13 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
      * flag set. Some NICs are unable to offload these flows.
      */
     if (od->is_gw_router && (od->nbr->n_nat || od->has_lb_vip)) {
+        /* Do not send ND or ICMP packets to connection tracking. */
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 100,
+                      "nd || nd_rs || nd_ra", "next;");
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 100,
+                "(ip4 && icmp4.type == 3 && icmp4.code == 4) ||"
+                "(ip6 && icmp6.type == 2 && icmp6.code == 0)",
+                "next;");
         ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 50,
                       "ip", "flags.loopback = 1; ct_dnat;");
         ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 50,
@@ -14622,6 +14669,7 @@ build_lswitch_and_lrouter_iterate_by_od(struct ovn_datapath *od,
     build_lrouter_nat_defrag_and_lb(od, lsi->lflows, lsi->ports, &lsi->match,
                                     &lsi->actions, lsi->meter_groups,
                                     lsi->features);
+    build_lrouter_out_post_snat_flow(od, lsi->lflows);
     build_lb_affinity_default_flows(od, lsi->lflows);
 }
 

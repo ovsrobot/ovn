@@ -1033,6 +1033,7 @@ AT_CHECK([grep -e "lr_out_snat" drflows | sed 's/table=../table=??/' | sort], [0
 AT_CHECK([grep -e "lr_out_snat" crflows | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=200  , match=(ip4.src == 172.16.1.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
   table=??(lr_out_snat        ), priority=33   , match=(ip && ip4.src == 50.0.0.11 && ip4.dst == $allowed_range && (!ct.trk || !ct.rpl)), action=(ct_snat(172.16.1.1);)
 ])
 
@@ -1065,6 +1066,7 @@ AT_CHECK([grep -e "lr_out_snat" drflows2 | sed 's/table=../table=??/' | sort], [
 AT_CHECK([grep -e "lr_out_snat" crflows2 | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=200  , match=(ip4.src == 172.16.1.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
   table=??(lr_out_snat        ), priority=33   , match=(ip && ip4.src == 50.0.0.11 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.16.1.1);)
   table=??(lr_out_snat        ), priority=35   , match=(ip && ip4.src == 50.0.0.11 && ip4.dst == $disallowed_range), action=(next;)
 ])
@@ -1094,6 +1096,7 @@ AT_CHECK([grep -e "lr_out_snat" drflows3 | sed 's/table=../table=??/' | sort], [
 AT_CHECK([grep -e "lr_out_snat" crflows3 | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=200  , match=(ip4.src == 172.16.1.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
   table=??(lr_out_snat        ), priority=33   , match=(ip && ip4.src == 50.0.0.11 && ip4.dst == $allowed_range && (!ct.trk || !ct.rpl)), action=(ct_snat(172.16.1.2);)
 ])
 
@@ -1123,6 +1126,7 @@ AT_CHECK([grep -e "lr_out_snat" drflows4 | sed 's/table=../table=??/' | sort], [
 AT_CHECK([grep -e "lr_out_snat" crflows4 | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=200  , match=(ip4.src == 172.16.1.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
   table=??(lr_out_snat        ), priority=33   , match=(ip && ip4.src == 50.0.0.11 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.16.1.2);)
   table=??(lr_out_snat        ), priority=35   , match=(ip && ip4.src == 50.0.0.11 && ip4.dst == $disallowed_range), action=(next;)
 ])
@@ -1151,6 +1155,7 @@ AT_CHECK([grep -e "lr_out_snat" drflows5 | sed 's/table=../table=??/' | sort], [
 AT_CHECK([grep -e "lr_out_snat" crflows5 | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=200  , match=(ip4.src == 172.16.1.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
   table=??(lr_out_snat        ), priority=33   , match=(ip && ip4.src == 50.0.0.11 && ip4.dst == $allowed_range), action=(ip4.src=172.16.1.2; next;)
 ])
 
@@ -1181,6 +1186,7 @@ AT_CHECK([grep -e "lr_out_snat" drflows6 | sed 's/table=../table=??/' | sort], [
 AT_CHECK([grep -e "lr_out_snat" crflows6 | sed 's/table=../table=??/' | sort], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=200  , match=(ip4.src == 172.16.1.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
   table=??(lr_out_snat        ), priority=33   , match=(ip && ip4.src == 50.0.0.11), action=(ip4.src=172.16.1.2; next;)
   table=??(lr_out_snat        ), priority=35   , match=(ip && ip4.src == 50.0.0.11 && ip4.dst == $disallowed_range), action=(next;)
 ])
@@ -3773,7 +3779,6 @@ AT_CHECK([grep "lr_in_dnat" lr0flows | sort], [0], [dnl
   table=7 (lr_in_dnat         ), priority=70   , match=(ct.rel && !ct.est && !ct.new && ct_mark.skip_snat == 1), action=(flags.skip_snat_for_lb = 1; ct_commit_nat;)
 ])
 
-
 check ovn-nbctl --wait=sb set logical_router lr0 options:lb_force_snat_ip="20.0.0.4 aef0::4"
 
 ovn-sbctl dump-flows lr0 > lr0flows
@@ -3809,10 +3814,15 @@ AT_CHECK([grep "lr_out_snat" lr0flows | sed 's/table=./table=?/' | sort], [0], [
   table=? (lr_out_snat        ), priority=100  , match=(flags.force_snat_for_lb == 1 && ip4), action=(ct_snat(20.0.0.4);)
   table=? (lr_out_snat        ), priority=100  , match=(flags.force_snat_for_lb == 1 && ip6), action=(ct_snat(aef0::4);)
   table=? (lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 10.0.0.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 172.168.0.100 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 20.0.0.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
 ])
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | sed 's/table=./table=?/' | sort], [0], [dnl
   table=? (lr_out_undnat      ), priority=0    , match=(1), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=((ip4 && icmp4.type == 3 && icmp4.code == 4) ||(ip6 && icmp6.type == 2 && icmp6.code == 0)), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=(nd || nd_rs || nd_ra), action=(next;)
   table=? (lr_out_undnat      ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
@@ -3860,10 +3870,15 @@ AT_CHECK([grep "lr_out_snat" lr0flows | sed 's/table=./table=?/' | sort], [0], [
   table=? (lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
   table=? (lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw1"), action=(ct_snat(20.0.0.1);)
   table=? (lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 10.0.0.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 172.168.0.100 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 20.0.0.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
 ])
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | sed 's/table=./table=?/' | sort], [0], [dnl
   table=? (lr_out_undnat      ), priority=0    , match=(1), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=((ip4 && icmp4.type == 3 && icmp4.code == 4) ||(ip6 && icmp6.type == 2 && icmp6.code == 0)), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=(nd || nd_rs || nd_ra), action=(next;)
   table=? (lr_out_undnat      ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
@@ -3925,10 +3940,16 @@ AT_CHECK([grep "lr_out_snat" lr0flows | sed 's/table=./table=?/' | sort], [0], [
   table=? (lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw1"), action=(ct_snat(20.0.0.1);)
   table=? (lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-sw1"), action=(ct_snat(bef0::1);)
   table=? (lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 10.0.0.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 172.168.0.100 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 20.0.0.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip6.src == bef0::1 && icmp6.type == 2 && icmp6.code == 0), action=(next;)
 ])
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | sed 's/table=./table=?/' | sort], [0], [dnl
   table=? (lr_out_undnat      ), priority=0    , match=(1), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=((ip4 && icmp4.type == 3 && icmp4.code == 4) ||(ip6 && icmp6.type == 2 && icmp6.code == 0)), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=(nd || nd_rs || nd_ra), action=(next;)
   table=? (lr_out_undnat      ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
@@ -3970,6 +3991,8 @@ AT_CHECK([grep "lr_out_snat" lr0flows | grep skip_snat_for_lb | sed 's/table=./t
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | sed 's/table=./table=?/' | sort], [0], [dnl
   table=? (lr_out_undnat      ), priority=0    , match=(1), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=((ip4 && icmp4.type == 3 && icmp4.code == 4) ||(ip6 && icmp6.type == 2 && icmp6.code == 0)), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=(nd || nd_rs || nd_ra), action=(next;)
   table=? (lr_out_undnat      ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
@@ -5314,6 +5337,8 @@ AT_CHECK([grep "lr_out_chk_dnat_local" lr0flows | sed 's/table=./table=?/' | sor
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | sed 's/table=./table=?/' | sort], [0], [dnl
   table=? (lr_out_undnat      ), priority=0    , match=(1), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=((ip4 && icmp4.type == 3 && icmp4.code == 4) ||(ip6 && icmp6.type == 2 && icmp6.code == 0)), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=(nd || nd_rs || nd_ra), action=(next;)
   table=? (lr_out_undnat      ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
@@ -5325,6 +5350,8 @@ AT_CHECK([grep "lr_out_post_undnat" lr0flows | sed 's/table=./table=?/' | sort],
 AT_CHECK([grep "lr_out_snat" lr0flows | sed 's/table=./table=?/' | sort], [0], [dnl
   table=? (lr_out_snat        ), priority=0    , match=(1), action=(next;)
   table=? (lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 10.0.0.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 172.168.0.10 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
   table=? (lr_out_snat        ), priority=25   , match=(ip && ip4.src == 10.0.0.0/24 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.10);)
   table=? (lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.10 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.30);)
   table=? (lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.3 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.20);)
@@ -5379,6 +5406,8 @@ AT_CHECK([grep "lr_out_chk_dnat_local" lr0flows | sed 's/table=./table=?/' | sor
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | sed 's/table=./table=?/' | sort], [0], [dnl
   table=? (lr_out_undnat      ), priority=0    , match=(1), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=((ip4 && icmp4.type == 3 && icmp4.code == 4) ||(ip6 && icmp6.type == 2 && icmp6.code == 0)), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=(nd || nd_rs || nd_ra), action=(next;)
   table=? (lr_out_undnat      ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
@@ -5392,6 +5421,8 @@ AT_CHECK([grep "lr_out_snat" lr0flows | sed 's/table=./table=?/' | sort], [0], [
   table=? (lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
   table=? (lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
   table=? (lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 10.0.0.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 172.168.0.10 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
   table=? (lr_out_snat        ), priority=25   , match=(ip && ip4.src == 10.0.0.0/24 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.10);)
   table=? (lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.10 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.30);)
   table=? (lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.3 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.20);)
@@ -5449,6 +5480,8 @@ AT_CHECK([grep "lr_out_chk_dnat_local" lr0flows | sed 's/table=./table=?/' | sor
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | sed 's/table=./table=?/' | sort], [0], [dnl
   table=? (lr_out_undnat      ), priority=0    , match=(1), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=((ip4 && icmp4.type == 3 && icmp4.code == 4) ||(ip6 && icmp6.type == 2 && icmp6.code == 0)), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=(nd || nd_rs || nd_ra), action=(next;)
   table=? (lr_out_undnat      ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
@@ -5462,6 +5495,8 @@ AT_CHECK([grep "lr_out_snat" lr0flows | sed 's/table=./table=?/' | sort], [0], [
   table=? (lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
   table=? (lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
   table=? (lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 10.0.0.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 172.168.0.10 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
   table=? (lr_out_snat        ), priority=25   , match=(ip && ip4.src == 10.0.0.0/24 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.10);)
   table=? (lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.10 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.30);)
   table=? (lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.3 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.20);)
@@ -5532,6 +5567,8 @@ AT_CHECK([grep "lr_out_chk_dnat_local" lr0flows | sed 's/table=./table=?/' | sor
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | sed 's/table=./table=?/' | sort], [0], [dnl
   table=? (lr_out_undnat      ), priority=0    , match=(1), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=((ip4 && icmp4.type == 3 && icmp4.code == 4) ||(ip6 && icmp6.type == 2 && icmp6.code == 0)), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=(nd || nd_rs || nd_ra), action=(next;)
   table=? (lr_out_undnat      ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
@@ -5547,6 +5584,10 @@ AT_CHECK([grep "lr_out_snat" lr0flows | sed 's/table=./table=?/' | sort], [0], [
   table=? (lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-public"), action=(ct_snat(def0::10);)
   table=? (lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-sw0"), action=(ct_snat(aef0::1);)
   table=? (lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 10.0.0.1 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip4.src == 172.168.0.10 && icmp4.type == 3 && icmp4.code == 4), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip6.src == aef0::1 && icmp6.type == 2 && icmp6.code == 0), action=(next;)
+  table=? (lr_out_snat        ), priority=200  , match=(ip6.src == def0::10 && icmp6.type == 2 && icmp6.code == 0), action=(next;)
   table=? (lr_out_snat        ), priority=25   , match=(ip && ip4.src == 10.0.0.0/24 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.10);)
   table=? (lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.10 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.30);)
   table=? (lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.3 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.20);)
@@ -5594,6 +5635,8 @@ AT_CHECK([grep "lr_out_chk_dnat_local" lr0flows | sed 's/table=./table=?/' | sor
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | sed 's/table=./table=?/' | sort], [0], [dnl
   table=? (lr_out_undnat      ), priority=0    , match=(1), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=((ip4 && icmp4.type == 3 && icmp4.code == 4) ||(ip6 && icmp6.type == 2 && icmp6.code == 0)), action=(next;)
+  table=? (lr_out_undnat      ), priority=100  , match=(nd || nd_rs || nd_ra), action=(next;)
   table=? (lr_out_undnat      ), priority=50   , match=(ip), action=(flags.loopback = 1; ct_dnat;)
 ])
 
@@ -8214,6 +8257,7 @@ AT_CHECK([grep "lr_in_lb_aff_check" R1flows | sort], [0], [dnl
 ])
 AT_CHECK([grep "lr_in_lb_aff_learn" R1flows | sort], [0], [dnl
   table=8 (lr_in_lb_aff_learn ), priority=0    , match=(1), action=(next;)
+  table=8 (lr_in_lb_aff_learn ), priority=200  , match=(ip && ct.trk && ct.inv), action=(drop;)
 ])
 
 ovn-nbctl --wait=sb set load_balancer lb0 options:affinity_timeout=60
@@ -8260,6 +8304,7 @@ AT_CHECK([grep "lr_in_lb_aff_learn" R1flows | sort], [0], [dnl
   table=8 (lr_in_lb_aff_learn ), priority=0    , match=(1), action=(next;)
   table=8 (lr_in_lb_aff_learn ), priority=100  , match=(reg9[[6]] == 0 && ct.new && ip4 && reg0 == 172.16.0.10 && reg9[[16..31]] == 80 && ip4.dst == 10.0.0.2 && tcp.dst == 80), action=(commit_lb_aff(vip = "172.16.0.10:80", backend = "10.0.0.2:80", proto = tcp, timeout = 60); /* drop */)
   table=8 (lr_in_lb_aff_learn ), priority=100  , match=(reg9[[6]] == 0 && ct.new && ip4 && reg0 == 172.16.0.10 && reg9[[16..31]] == 80 && ip4.dst == 20.0.0.2 && tcp.dst == 80), action=(commit_lb_aff(vip = "172.16.0.10:80", backend = "20.0.0.2:80", proto = tcp, timeout = 60); /* drop */)
+  table=8 (lr_in_lb_aff_learn ), priority=200  , match=(ip && ct.trk && ct.inv), action=(drop;)
 ])
 
 AS_BOX([Test LR flows - skip_snat=true])
