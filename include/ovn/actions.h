@@ -126,6 +126,7 @@ struct collector_set_ids;
     OVNACT(COMMIT_LB_AFF,     ovnact_commit_lb_aff)   \
     OVNACT(CHK_LB_AFF,        ovnact_result)          \
     OVNACT(SAMPLE,            ovnact_sample)          \
+    OVNACT(CT_COMMIT_DROP,    ovnact_nest)            \
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
