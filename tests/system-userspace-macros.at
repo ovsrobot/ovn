@@ -294,3 +294,12 @@ m4_define([OVS_CHECK_KERNEL_EXCL],
 [
     AT_SKIP_IF([:])
 ])
+
+# CHECK_USERSPACE_DATAPATH()
+#
+# Perform requirements checks for running with OvS userspace datapath.
+# Some tests are failing for userspace datapath.
+m4_define([CHECK_USERSPACE_DATAPATH],
+[
+    AT_SKIP_IF([:])
+])
