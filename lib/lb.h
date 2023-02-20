@@ -74,6 +74,7 @@ struct ovn_northd_lb {
     bool skip_snat;
     bool template;
     uint16_t affinity_timeout;
+    const char *hairpin_snat_ip;
 
     struct sset ips_v4;
     struct sset ips_v6;

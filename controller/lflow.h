@@ -117,6 +117,7 @@ struct lflow_ctx_in {
     const struct flow_collector_ids *collector_ids;
     const struct hmap *local_lbs;
     bool lb_hairpin_use_ct_mark;
+    bool lb_same_hairpin_snat_ips;
 };
 
 struct lflow_ctx_out {

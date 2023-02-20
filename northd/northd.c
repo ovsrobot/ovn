@@ -3983,13 +3983,14 @@ build_lrouter_lb_ips(struct ovn_lb_ip_set *lb_ips,
     }
 }
 
-static void
+static bool
 build_lbs(struct northd_input *input_data, struct hmap *datapaths,
           struct hmap *lbs, struct hmap *lb_groups)
 {
     const struct nbrec_load_balancer_group *nbrec_lb_group;
+    bool lb_same_hairpin_snat_ips = true;
+    struct ovn_northd_lb *lb = NULL;
     struct ovn_lb_group *lb_group;
-    struct ovn_northd_lb *lb;
 
     hmap_init(lbs);
     hmap_init(lb_groups);
@@ -4001,6 +4002,14 @@ build_lbs(struct northd_input *input_data, struct hmap *datapaths,
                                                            n_datapaths);
         hmap_insert(lbs, &lb_nb->hmap_node,
                     uuid_hash(&nbrec_lb->header_.uuid));
+        if (!lb) {
+            lb = lb_nb;
+        }
+        if (lb_same_hairpin_snat_ips &&
+            !nullable_string_is_equal(lb->hairpin_snat_ip,
+                                      lb_nb->hairpin_snat_ip)) {
+            lb_same_hairpin_snat_ips = false;
+        }
     }
 
     NBREC_LOAD_BALANCER_GROUP_TABLE_FOR_EACH (nbrec_lb_group,
@@ -4096,6 +4105,8 @@ build_lbs(struct northd_input *input_data, struct hmap *datapaths,
                                  lb_group->lr);
         }
     }
+
+    return lb_same_hairpin_snat_ips;
 }
 
 static void
@@ -16234,7 +16245,8 @@ ovnnb_db_run(struct northd_input *input_data,
     init_debug_config(nb);
 
     build_datapaths(input_data, ovnsb_txn, &data->datapaths, &data->lr_list);
-    build_lbs(input_data, &data->datapaths, &data->lbs, &data->lb_groups);
+    bool lb_same_hairpin_snat_ips =
+        build_lbs(input_data, &data->datapaths, &data->lbs, &data->lb_groups);
     build_ports(input_data, ovnsb_txn, sbrec_chassis_by_name,
                 sbrec_chassis_by_hostname,
                 &data->datapaths, &data->ports);
@@ -16281,6 +16293,15 @@ ovnnb_db_run(struct northd_input *input_data,
     } else {
         smap_remove(&options, "lb_hairpin_use_ct_mark");
     }
+    /* Inform ovn-controller that all Load Balancers either don't have
+     * 'hairpin_snat_ip' configured, or have exactly the same value there.
+     * If not set, IPs considered to be different. */
+    if (lb_same_hairpin_snat_ips) {
+        smap_replace(&options, "lb_same_hairpin_snat_ips", "true");
+    } else {
+        smap_remove(&options, "lb_same_hairpin_snat_ips");
+    }
+
     if (!smap_equal(&sb->options, &options)) {
         sbrec_sb_global_set_options(sb, &options);
     }

@@ -246,6 +246,17 @@
           knows that it should check <code>ct_label.natted</code> to detect
           load balanced traffic.
         </column>
+
+        <column name="options" key="lb_same_hairpin_snat_ips"
+                type='{"type": "boolean"}'>
+          By default this option is turned off (<code>false</code>) unless its
+          value is explicitly set to <code>true</code>.
+
+          This value is automatically set to <code>true</code> by
+          <code>ovn-northd</code> when all the configured Load Balancers
+          have exactly the same value in <ref table="Load_Balancer"
+          column="options" key="hairpin_snat_ip"/>.
+        </column>
       </group>
 
     </group>

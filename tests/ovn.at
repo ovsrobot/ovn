@@ -26825,7 +26825,14 @@ OVS_WAIT_FOR_OUTPUT([as hv1 ovs-ofctl dump-flows br-int table=69 | ofctl_strip_a
 # Also flush conntrack to avoid reusing an existing entry.
 as hv1 ovs-appctl dpctl/flush-conntrack
 
+# XXX: The first change will keep the old learned flow for 88.88.88.88, because
+# ovn-controller currently generates MOD_STRICT instead of DEL + ADD for the
+# learning flow in table 68.  And MOD doesn't trigger 'delete_learned'.
+# The second update will go via different node in the I-P engine and will
+# generate correct DEL + ADD clearing the learned flow.
+ovn-nbctl --wait=hv set load_balancer lb-ipv4-tcp options:hairpin_snat_ip="88.88.88.85"
 ovn-nbctl --wait=hv set load_balancer lb-ipv4-tcp options:hairpin_snat_ip="88.88.88.87"
+
 # Inject IPv4 TCP packets from lsp.
 tcp_payload=$(build_tcp_syn 84d0 1f90 05a7)
 hp_tcp_payload=$(build_tcp_syn 84d0 0fc9 156f)

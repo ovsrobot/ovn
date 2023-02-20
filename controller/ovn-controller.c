@@ -3152,6 +3152,7 @@ non_vif_data_ovs_iface_handler(struct engine_node *node, void *data OVS_UNUSED)
 
 struct ed_type_northd_options {
     bool lb_hairpin_use_ct_mark;
+    bool lb_same_hairpin_snat_ips;
 };
 
 
@@ -3182,6 +3183,10 @@ en_northd_options_run(struct engine_node *node, void *data)
         ? smap_get_bool(&sb_global->options, "lb_hairpin_use_ct_mark",
                         DEFAULT_SB_GLOBAL_LB_HAIRPIN_USE_CT_MARK)
         : DEFAULT_SB_GLOBAL_LB_HAIRPIN_USE_CT_MARK;
+    n_opts->lb_same_hairpin_snat_ips =
+        sb_global ? smap_get_bool(&sb_global->options,
+                                  "lb_same_hairpin_snat_ips", false)
+                  : false;
     engine_set_node_state(node, EN_UPDATED);
 }
 
@@ -3204,6 +3209,17 @@ en_northd_options_sb_sb_global_handler(struct engine_node *node, void *data)
         n_opts->lb_hairpin_use_ct_mark = lb_hairpin_use_ct_mark;
         engine_set_node_state(node, EN_UPDATED);
     }
+
+    bool lb_same_hairpin_snat_ips =
+        sb_global ? smap_get_bool(&sb_global->options,
+                                  "lb_same_hairpin_snat_ips", false)
+                  : false;
+
+    if (lb_same_hairpin_snat_ips != n_opts->lb_same_hairpin_snat_ips) {
+        n_opts->lb_same_hairpin_snat_ips = lb_same_hairpin_snat_ips;
+        engine_set_node_state(node, EN_UPDATED);
+    }
+
     return true;
 }
 
@@ -3433,6 +3449,7 @@ init_lflow_ctx(struct engine_node *node,
     l_ctx_in->binding_lports = &rt_data->lbinding_data.lports;
     l_ctx_in->chassis_tunnels = &non_vif_data->chassis_tunnels;
     l_ctx_in->lb_hairpin_use_ct_mark = n_opts->lb_hairpin_use_ct_mark;
+    l_ctx_in->lb_same_hairpin_snat_ips = n_opts->lb_same_hairpin_snat_ips;
     l_ctx_in->nd_ra_opts = &fo->nd_ra_opts;
     l_ctx_in->dhcp_opts = &dhcp_opts->v4_opts;
     l_ctx_in->dhcpv6_opts = &dhcp_opts->v6_opts;

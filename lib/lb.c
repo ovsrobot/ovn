@@ -560,6 +560,8 @@ ovn_northd_lb_create(const struct nbrec_load_balancer *nbrec_lb,
     }
     lb->affinity_timeout = affinity_timeout;
 
+    lb->hairpin_snat_ip = smap_get(&nbrec_lb->options, "hairpin_snat_ip");
+
     lb->nb_ls_map = bitmap_allocate(n_datapaths);
     lb->nb_lr_map = bitmap_allocate(n_datapaths);
 
