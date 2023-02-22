@@ -3277,9 +3277,20 @@ icmp6 {
 
     <p>
       This is to send packets to connection tracker for tracking and
-      defragmentation.  It contains a priority-0 flow that simply moves traffic
-      to the next table.
+      defragmentation.
     </p>
+
+    <ul>
+      <li>
+        A priority 100 flow is added with match <code>ip &amp;&amp;
+        ip.is_frag</code> and action <code>ct_next;</code>
+      </li>
+
+      <li>
+        A priority 0 flow is added which matches on all packets and applies
+        the action <code>next;</code>.
+      </li>
+    </ul>
 
     <h3>Ingress Table 6: POST_DEFRAG</h3>
 

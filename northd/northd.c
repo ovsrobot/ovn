@@ -14238,6 +14238,10 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_EGR_LOOP, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_IN_ECMP_STATEFUL, 0, "1", "next;");
 
+    /* Add flow for defrag ip traffic. */
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_DEFRAG, 100,
+                  "ip && ip.is_frag", "ct_next;");
+
     /* Ingress DNAT and DEFRAG Table (Priority 50/70).
      *
      * The defrag stage needs to have flows for ICMP in order to get
