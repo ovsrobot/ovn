@@ -158,22 +158,23 @@ enum ovn_stage {
     PIPELINE_STAGE(ROUTER, IN,  IP_INPUT,        3, "lr_in_ip_input")     \
     PIPELINE_STAGE(ROUTER, IN,  UNSNAT,          4, "lr_in_unsnat")       \
     PIPELINE_STAGE(ROUTER, IN,  DEFRAG,          5, "lr_in_defrag")       \
-    PIPELINE_STAGE(ROUTER, IN,  LB_AFF_CHECK,    6, "lr_in_lb_aff_check") \
-    PIPELINE_STAGE(ROUTER, IN,  DNAT,            7, "lr_in_dnat")         \
-    PIPELINE_STAGE(ROUTER, IN,  LB_AFF_LEARN,    8, "lr_in_lb_aff_learn") \
-    PIPELINE_STAGE(ROUTER, IN,  ECMP_STATEFUL,   9, "lr_in_ecmp_stateful") \
-    PIPELINE_STAGE(ROUTER, IN,  ND_RA_OPTIONS,   10, "lr_in_nd_ra_options") \
-    PIPELINE_STAGE(ROUTER, IN,  ND_RA_RESPONSE,  11, "lr_in_nd_ra_response") \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_PRE,  12, "lr_in_ip_routing_pre")  \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      13, "lr_in_ip_routing")      \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 14, "lr_in_ip_routing_ecmp") \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY,          15, "lr_in_policy")          \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     16, "lr_in_policy_ecmp")     \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     17, "lr_in_arp_resolve")     \
-    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     18, "lr_in_chk_pkt_len")     \
-    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     19, "lr_in_larger_pkts")     \
-    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     20, "lr_in_gw_redirect")     \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     21, "lr_in_arp_request")     \
+    PIPELINE_STAGE(ROUTER, IN,  POST_DEFRAG,     6, "lr_in_post_defrag")  \
+    PIPELINE_STAGE(ROUTER, IN,  LB_AFF_CHECK,    7, "lr_in_lb_aff_check") \
+    PIPELINE_STAGE(ROUTER, IN,  DNAT,            8, "lr_in_dnat")         \
+    PIPELINE_STAGE(ROUTER, IN,  LB_AFF_LEARN,    9, "lr_in_lb_aff_learn") \
+    PIPELINE_STAGE(ROUTER, IN,  ECMP_STATEFUL,   10, "lr_in_ecmp_stateful") \
+    PIPELINE_STAGE(ROUTER, IN,  ND_RA_OPTIONS,   11, "lr_in_nd_ra_options") \
+    PIPELINE_STAGE(ROUTER, IN,  ND_RA_RESPONSE,  12, "lr_in_nd_ra_response") \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_PRE,  13, "lr_in_ip_routing_pre")  \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      14, "lr_in_ip_routing")      \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 15, "lr_in_ip_routing_ecmp") \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY,          16, "lr_in_policy")          \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     17, "lr_in_policy_ecmp")     \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     18, "lr_in_arp_resolve")     \
+    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     19, "lr_in_chk_pkt_len")     \
+    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     20, "lr_in_larger_pkts")     \
+    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     21, "lr_in_gw_redirect")     \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     22, "lr_in_arp_request")     \
                                                                       \
     /* Logical router egress stages. */                               \
     PIPELINE_STAGE(ROUTER, OUT, CHECK_DNAT_LOCAL,   0,                       \
@@ -322,7 +323,7 @@ enum ovn_stage {
  * |     |      (>= IP_INPUT)        | E | INPORT_ETH_ADDR | X |                                    |
  * +-----+---------------------------+ G |   (< IP_INPUT)  | X |                                    |
  * | R1  |   SRC_IPV4 for ARP-REQ    | 0 |                 | R |                                    |
- * |     |      (>= IP_INPUT)        |   |                 | E |     NEXT_HOP_IPV6 (>= DEFRAG )     |
+ * |     |      (>= IP_INPUT)        |   |                 | E |    NEXT_HOP_IPV6 (>= POST_DEFRAG ) |
  * +-----+---------------------------+---+-----------------+ G |                                    |
  * | R2  |        UNUSED             | X |                 | 0 |                                    |
  * |     |                           | R |                 |   |                                    |
@@ -10074,13 +10075,13 @@ add_ecmp_symmetric_reply_flows(struct hmap *lflows,
                   route->is_src_route ? "dst" : "src",
                   cidr);
     free(cidr);
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DEFRAG, 100,
+    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_POST_DEFRAG, 100,
             ds_cstr(&base_match),
             REGBIT_KNOWN_ECMP_NH" = chk_ecmp_nh_mac(); ct_next;",
             &st_route->header_);
 
     /* And packets that go out over an ECMP route need conntrack */
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DEFRAG, 100,
+    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_POST_DEFRAG, 100,
             ds_cstr(route_match),
             REGBIT_KNOWN_ECMP_NH" = chk_ecmp_nh(); ct_next;",
             &st_route->header_);
@@ -10868,7 +10869,7 @@ build_lrouter_defrag_flows_for_lb(struct ovn_northd_lb *lb,
         ds_put_format(&defrag_actions, "ct_dnat;");
 
         ovn_lflow_add_with_dp_group(
-            lflows, lb->nb_lr_map, S_ROUTER_IN_DEFRAG, prio,
+            lflows, lb->nb_lr_map, S_ROUTER_IN_POST_DEFRAG, prio,
             ds_cstr(match), ds_cstr(&defrag_actions), &lb->nlb->header_);
     }
     ds_destroy(&defrag_actions);
@@ -14225,6 +14226,7 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
 
     /* Packets are allowed by default. */
     ovn_lflow_add(lflows, od, S_ROUTER_IN_DEFRAG, 0, "1", "next;");
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_DEFRAG, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_IN_UNSNAT, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_CHECK_DNAT_LOCAL, 0, "1",
                   REGBIT_DST_NAT_IP_LOCAL" = 0; next;");
@@ -14257,8 +14259,8 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od, struct hmap *lflows,
         ds_put_cstr(match, "ct.rel && !ct.est && !ct.new");
         size_t match_len = match->length;
 
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_DEFRAG, 50, "icmp || icmp6",
-                      "ct_dnat;");
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_DEFRAG, 50,
+                      "icmp || icmp6", "ct_dnat;");
 
         ds_put_format(match, " && %s.skip_snat == 1", ct_flag_reg);
         ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 70, ds_cstr(match),

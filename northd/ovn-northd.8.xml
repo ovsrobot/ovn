@@ -3281,6 +3281,8 @@ icmp6 {
       to the next table.
     </p>
 
+    <h3>Ingress Table 6: POST_DEFRAG</h3>
+
     <p>
       If load balancing rules with only virtual IP addresses are configured in
       <code>OVN_Northbound</code> database for a Gateway router,
@@ -3335,7 +3337,12 @@ icmp6 {
       this allows potentially related ICMP traffic to pass through CT.
     </p>
 
-    <h3>Ingress Table 6: Load balancing affinity check</h3>
+    <p>
+      A priority 0 flow is added which matches on all packets and applies
+      the action <code>next;</code>.
+    </p>
+
+    <h3>Ingress Table 7: Load balancing affinity check</h3>
 
     <p>
       Load balancing affinity check table contains the following
@@ -3361,7 +3368,7 @@ icmp6 {
       </li>
     </ul>
 
-    <h3>Ingress Table 7: DNAT</h3>
+    <h3>Ingress Table 8: DNAT</h3>
 
     <p>
       Packets enter the pipeline with destination IP address that needs to
@@ -3369,7 +3376,7 @@ icmp6 {
       in the reverse direction needs to be unDNATed.
     </p>
 
-    <p>Ingress Table 7: Load balancing DNAT rules</p>
+    <p>Ingress Table 8: Load balancing DNAT rules</p>
 
     <p>
       Following load balancing DNAT flows are added for Gateway router or
@@ -3534,7 +3541,7 @@ icmp6 {
       </li>
     </ul>
 
-    <p>Ingress Table 7: DNAT on Gateway Routers</p>
+    <p>Ingress Table 8: DNAT on Gateway Routers</p>
 
     <ul>
       <li>
@@ -3576,7 +3583,7 @@ icmp6 {
       </li>
     </ul>
 
-    <p>Ingress Table 7: DNAT on Distributed Routers</p>
+    <p>Ingress Table 8: DNAT on Distributed Routers</p>
 
     <p>
       On distributed routers, the DNAT table only handles packets
@@ -3631,7 +3638,7 @@ icmp6 {
       </li>
     </ul>
 
-    <h3>Ingress Table 8: Load balancing affinity learn</h3>
+    <h3>Ingress Table 9: Load balancing affinity learn</h3>
 
     <p>
       Load balancing affinity learn table contains the following
@@ -3659,7 +3666,7 @@ icmp6 {
       </li>
     </ul>
 
-    <h3>Ingress Table 9: ECMP symmetric reply processing</h3>
+    <h3>Ingress Table 10: ECMP symmetric reply processing</h3>
     <ul>
       <li>
         If ECMP routes with symmetric reply are configured in the
@@ -3678,7 +3685,7 @@ icmp6 {
       </li>
     </ul>
 
-    <h3>Ingress Table 10: IPv6 ND RA option processing</h3>
+    <h3>Ingress Table 11: IPv6 ND RA option processing</h3>
 
     <ul>
       <li>
@@ -3708,7 +3715,7 @@ reg0[5] = put_nd_ra_opts(<var>options</var>);next;
       </li>
     </ul>
 
-    <h3>Ingress Table 11: IPv6 ND RA responder</h3>
+    <h3>Ingress Table 12: IPv6 ND RA responder</h3>
 
     <p>
       This table implements IPv6 ND RA responder for the IPv6 ND RA replies
@@ -3753,7 +3760,7 @@ output;
       </li>
     </ul>
 
-    <h3>Ingress Table 12: IP Routing Pre</h3>
+    <h3>Ingress Table 13: IP Routing Pre</h3>
 
     <p>
       If a packet arrived at this table from Logical Router Port <var>P</var>
@@ -3783,7 +3790,7 @@ output;
       </li>
     </ul>
 
-    <h3>Ingress Table 13: IP Routing</h3>
+    <h3>Ingress Table 14: IP Routing</h3>
 
     <p>
       A packet that arrives at this table is an IP packet that should be
@@ -3989,7 +3996,7 @@ select(reg8[16..31], <var>MID1</var>, <var>MID2</var>, ...);
       </li>
     </ul>
 
-    <h3>Ingress Table 14: IP_ROUTING_ECMP</h3>
+    <h3>Ingress Table 15: IP_ROUTING_ECMP</h3>
 
     <p>
       This table implements the second part of IP routing for ECMP routes
@@ -4046,7 +4053,7 @@ outport = <var>P</var>;
       </li>
     </ul>
 
-    <h3>Ingress Table 15: Router policies</h3>
+    <h3>Ingress Table 16: Router policies</h3>
     <p>
       This table adds flows for the logical router policies configured
       on the logical router. Please see the
@@ -4118,7 +4125,7 @@ next;
       </li>
     </ul>
 
-    <h3>Ingress Table 16: ECMP handling for router policies</h3>
+    <h3>Ingress Table 17: ECMP handling for router policies</h3>
     <p>
       This table handles the ECMP for the router policies configured
       with multiple nexthops.
@@ -4167,7 +4174,7 @@ outport = <var>P</var>
       </li>
     </ul>
 
-    <h3>Ingress Table 17: ARP/ND Resolution</h3>
+    <h3>Ingress Table 18: ARP/ND Resolution</h3>
 
     <p>
       Any packet that reaches this table is an IP packet whose next-hop
@@ -4404,7 +4411,7 @@ outport = <var>P</var>
 
     </ul>
 
-    <h3>Ingress Table 18: Check packet length</h3>
+    <h3>Ingress Table 19: Check packet length</h3>
 
     <p>
       For distributed logical routers or gateway routers with gateway
@@ -4441,7 +4448,7 @@ REGBIT_PKT_LARGER = check_pkt_larger(<var>L</var>); next;
       and advances to the next table.
     </p>
 
-    <h3>Ingress Table 19: Handle larger packets</h3>
+    <h3>Ingress Table 20: Handle larger packets</h3>
 
     <p>
       For distributed logical routers or gateway routers with gateway port
@@ -4504,7 +4511,7 @@ icmp6 {
       and advances to the next table.
     </p>
 
-    <h3>Ingress Table 20: Gateway Redirect</h3>
+    <h3>Ingress Table 21: Gateway Redirect</h3>
 
     <p>
       For distributed logical routers where one or more of the logical router
@@ -4572,7 +4579,7 @@ icmp6 {
       </li>
     </ul>
 
-    <h3>Ingress Table 21: ARP Request</h3>
+    <h3>Ingress Table 22: ARP Request</h3>
 
     <p>
       In the common case where the Ethernet destination has been resolved, this

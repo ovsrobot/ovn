@@ -13274,10 +13274,10 @@ grep active_backup | grep slaves:$hv2_gw1_ofport,$hv2_gw2_ofport \
 ])
 
 # make sure that flows for handling the outside router port reside on gw1
-OVS_WAIT_UNTIL([as gw1 ovs-ofctl dump-flows br-int table=25 | \
+OVS_WAIT_UNTIL([as gw1 ovs-ofctl dump-flows br-int table=26 | \
 grep 00:00:02:01:02:04 | wc -l], [0], [[1
 ]])
-OVS_WAIT_UNTIL([as gw2 ovs-ofctl dump-flows br-int table=25 | \
+OVS_WAIT_UNTIL([as gw2 ovs-ofctl dump-flows br-int table=26 | \
 grep 00:00:02:01:02:04 | wc -l], [0], [[0
 ]])
 
@@ -13367,10 +13367,10 @@ AT_CHECK([ovs-vsctl --bare --columns bfd find Interface name=ovn-hv1-0],[0],
 ]])
 
 # make sure that flows for handling the outside router port reside on gw2 now
-OVS_WAIT_UNTIL([as gw2 ovs-ofctl dump-flows br-int table=25 | \
+OVS_WAIT_UNTIL([as gw2 ovs-ofctl dump-flows br-int table=26 | \
 grep 00:00:02:01:02:04 | wc -l], [0], [[1
 ]])
-OVS_WAIT_UNTIL([as gw1 ovs-ofctl dump-flows br-int table=25 | \
+OVS_WAIT_UNTIL([as gw1 ovs-ofctl dump-flows br-int table=26 | \
 grep 00:00:02:01:02:04 | wc -l], [0], [[0
 ]])
 
@@ -13382,10 +13382,10 @@ as main ovs-vsctl del-port n1 $port
 bfd_dump
 
 # make sure that flows for handling the outside router port reside on gw2 now
-OVS_WAIT_UNTIL([as gw1 ovs-ofctl dump-flows br-int table=25 | \
+OVS_WAIT_UNTIL([as gw1 ovs-ofctl dump-flows br-int table=26 | \
 grep 00:00:02:01:02:04 | wc -l], [0], [[1
 ]])
-OVS_WAIT_UNTIL([as gw2 ovs-ofctl dump-flows br-int table=25 | \
+OVS_WAIT_UNTIL([as gw2 ovs-ofctl dump-flows br-int table=26 | \
 grep 00:00:02:01:02:04 | wc -l], [0], [[0
 ]])
 
@@ -21096,7 +21096,7 @@ eth_dst=00000000ff01
 ip_src=$(ip_to_hex 10 0 0 10)
 ip_dst=$(ip_to_hex 172 168 0 101)
 send_icmp_packet 1 1 $eth_src $eth_dst $ip_src $ip_dst c4c9 0000000000000000000000
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int metadata=0x$lr0_dp_key | awk '/table=28, n_packets=1, n_bytes=45/{print $7" "$8}'],[0],[dnl
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int metadata=0x$lr0_dp_key | awk '/table=29, n_packets=1, n_bytes=45/{print $7" "$8}'],[0],[dnl
 priority=80,ip,reg15=0x3,metadata=0x3,nw_src=10.0.0.10 actions=drop
 ])
 
@@ -27301,7 +27301,7 @@ ovn-sbctl dump-flows > sbflows
 AT_CAPTURE_FILE([sbflows])
 AT_CAPTURE_FILE([offlows])
 OVS_WAIT_UNTIL([
-    as hv1 ovs-ofctl dump-flows br-int table=23 > offlows
+    as hv1 ovs-ofctl dump-flows br-int table=24 > offlows
     test $(grep -c "load:0x64->NXM_NX_PKT_MARK" offlows) = 1 && \
     test $(grep -c "load:0x3->NXM_NX_PKT_MARK" offlows) = 1 && \
     test $(grep -c "load:0x4->NXM_NX_PKT_MARK" offlows) = 1 && \
@@ -27394,12 +27394,12 @@ send_ipv4_pkt hv1 hv1-vif1 505400000003 00000000ff01 \
     $(ip_to_hex 10 0 0 3) $(ip_to_hex 172 168 0 120)
 
 OVS_WAIT_UNTIL([
-    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=23 | \
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=24 | \
     grep "load:0x2->NXM_NX_PKT_MARK" -c)
 ])
 
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=23 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=24 | \
     grep "load:0x64->NXM_NX_PKT_MARK" -c)
 ])
 
@@ -28091,23 +28091,23 @@ check ovn-nbctl --wait=hv sync
 
 # Ensure ECMP symmetric reply flows are not present on any hypervisor.
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=17 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=18 | \
     grep "priority=100" | \
     grep "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_LABEL\\[[80..95\\]]))" -c)
 ])
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=25 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=26 | \
     grep "priority=200" | \
     grep "actions=move:NXM_NX_CT_LABEL\\[[32..79\\]]->NXM_OF_ETH_DST\\[[\\]]" -c)
 ])
 
 AT_CHECK([
-    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=17 | \
+    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=18 | \
     grep "priority=100" | \
     grep "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_LABEL\\[[80..95\\]]))" -c)
 ])
 AT_CHECK([
-    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=25 | \
+    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=26 | \
     grep "priority=200" | \
     grep "actions=move:NXM_NX_CT_LABEL\\[[32..79\\]]->NXM_OF_ETH_DST\\[[\\]]" -c)
 ])
@@ -28125,11 +28125,11 @@ AT_CAPTURE_FILE([hv2flows])
 
 AT_CHECK([
     for hv in 1 2; do
-        grep table=17 hv${hv}flows | \
+        grep table=18 hv${hv}flows | \
         grep "priority=100" | \
         grep -c "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],.*exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_MARK\\[[16..31\\]]))"
 
-        grep table=25 hv${hv}flows | \
+        grep table=26 hv${hv}flows | \
         grep "priority=200" | \
         grep -c "move:NXM_NX_CT_LABEL\\[[\\]]->NXM_NX_XXREG1\\[[\\]],move:NXM_NX_XXREG1\\[[32..79\\]]->NXM_OF_ETH_DST"
     done; :], [0], [dnl
@@ -28217,23 +28217,23 @@ check ovn-nbctl --wait=hv sync
 
 # Ensure ECMP symmetric reply flows are not present on any hypervisor.
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=17 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=18 | \
     grep "priority=100" | \
     grep "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_LABEL\\[[80..95\\]]))" -c)
 ])
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=25 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=26 | \
     grep "priority=200" | \
     grep "actions=move:NXM_NX_CT_LABEL\\[[32..79\\]]->NXM_OF_ETH_DST\\[[\\]]" -c)
 ])
 
 AT_CHECK([
-    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=17 | \
+    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=18 | \
     grep "priority=100" | \
     grep "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_MARK\\[[16..31\\]]))" -c)
 ])
 AT_CHECK([
-    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=25 | \
+    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=26 | \
     grep "priority=200" | \
     grep "actions=move:NXM_NX_CT_LABEL\\[[\\]]->NXM_OF_ETH_DST\\[[\\]]" -c)
 ])
@@ -28250,11 +28250,11 @@ AT_CAPTURE_FILE([hv2flows])
 
 AT_CHECK([
     for hv in 1 2; do
-        grep table=17 hv${hv}flows | \
+        grep table=18 hv${hv}flows | \
         grep "priority=100" | \
         grep -c "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],.*exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_MARK\\[[16..31\\]]))"
 
-        grep table=25 hv${hv}flows | \
+        grep table=26 hv${hv}flows | \
         grep "priority=200" | \
         grep -c "move:NXM_NX_CT_LABEL\\[[\\]]->NXM_NX_XXREG1\\[[\\]],move:NXM_NX_XXREG1\\[[32..79\\]]->NXM_OF_ETH_DST"
     done; :], [0], [dnl
@@ -28747,7 +28747,7 @@ if test X"$1" = X"DGP"; then
 else
     prio=2
 fi
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=25, n_packets=1,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=26, n_packets=1,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
 1
 ])
 
@@ -28766,13 +28766,13 @@ AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep "actions=controller" | grep 
 
 if test X"$1" = X"DGP"; then
     # The packet dst should be resolved once for E/W centralized NAT purpose.
-    AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=25, n_packets=1,.* priority=100,reg0=0xa000101,reg15=.*metadata=0x${sw_key} actions=mod_dl_dst:00:00:00:00:01:01,resubmit" -c], [0], [dnl
+    AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=26, n_packets=1,.* priority=100,reg0=0xa000101,reg15=.*metadata=0x${sw_key} actions=mod_dl_dst:00:00:00:00:01:01,resubmit" -c], [0], [dnl
 1
 ])
 fi
 
 # The packet should've been finally dropped in the lr_in_arp_resolve stage.
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=25, n_packets=2,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=26, n_packets=2,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
 1
 ])
 OVN_CLEANUP([hv1])
@@ -33376,7 +33376,7 @@ check ovn-nbctl lr-nat-add lr0 dnat 172.16.0.2 10.0.0.2
 check ovn-nbctl --wait=hv sync
 # Use constants so that if tables or registers change, this test can
 # be updated easily.
-DNAT_TABLE=15
+DNAT_TABLE=16
 SNAT_TABLE=43
 DNAT_ZONE_REG="NXM_NX_REG11[[0..15]]"
 SNAT_ZONE_REG="NXM_NX_REG12[[0..15]]"
