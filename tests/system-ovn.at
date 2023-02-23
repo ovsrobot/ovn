@@ -10694,7 +10694,6 @@ start_daemon ovn-controller
 
 # Add routers
 check ovn-nbctl lr-add lr1
-check ovn-nbctl set logical_router lr1 options:always_learn_from_arp_request=false
 
 # Add switches
 check ovn-nbctl ls-add public1
