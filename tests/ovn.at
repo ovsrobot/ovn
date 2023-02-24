@@ -5048,6 +5048,120 @@ OVN_CLEANUP([hv1], [hv2], [hv3])
 AT_CLEANUP
 ])
 
+# 1 hypervisor, 1 logical switch with 1 logical port, 300 logical router
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([1 HVs, 1 LS, 2 lports/LS, 300 LR])
+AT_KEYWORDS([slowtest])
+ovn_start
+
+# Logical network:
+#
+# One logical switch ls1.
+# 300 logical routers lr001 - lr299. All connected to ls1
+# with one subnet:
+#    lrp001 on ls1 for subnet 192.168.0.1/20
+#    lrp002 on ls1 for subnet 192.168.0.2/20
+#    ...
+#    lrp101 on ls1 for subnet 192.168.1.1/20
+#    ...
+#    lrp299 on ls1 for subnet 192.168.2.99/20
+#
+# also 2 VIF on the first hypervisor.
+#    lp-vif1 on ls1 for subnet 192.168.3.1/20
+#    lp-vif2 on ls1 without ip
+ovn-nbctl \
+    -- ls-add ls1 \
+    -- lsp-add ls1 lp-vif1 \
+    -- lsp-set-addresses lp-vif1 \
+        "f0:00:00:00:00:01 192.168.3.1" \
+    -- lsp-add ls1 lp-vif2 \
+    -- lsp-set-addresses lp-vif2 \
+        "f0:00:00:00:00:02 unknown"
+
+for i in 0 1 2; do
+    for j in `seq 1 99`; do
+        hex=$(printf '%02x' $j)
+        ovn-nbctl \
+            -- lr-add lr$i$j \
+            -- lrp-add lr$i$j lrp$i$j 00:00:00:00:f$i:$hex 192.168.$i.$j/20 \
+            -- lsp-add ls1 lrp$i$j-attachment \
+            -- set Logical_Switch_Port lrp$i$j-attachment type=router \
+                             options:router-port=lrp$i$j \
+                             addresses='"00:00:00:00:f'$i':'$hex'"'
+    done
+done
+
+# Physical network:
+#
+# One hypervisors hv1.
+# lp-vif1 on hv1.
+# lp-vif2 on hv1.
+
+net_add n1
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.255.1
+ovs-vsctl \
+    -- add-port br-int vif1 \
+    -- set Interface vif1 \
+        external-ids:iface-id=lp-vif1 \
+        options:tx_pcap=hv1/vif1-tx.pcap \
+        options:rxq_pcap=hv1/vif1-rx.pcap \
+        ofport-request=1 \
+    -- add-port br-int vif2 \
+    -- set Interface vif2 \
+        external-ids:iface-id=lp-vif2 \
+        options:tx_pcap=hv1/vif2-tx.pcap \
+        options:rxq_pcap=hv1/vif2-rx.pcap \
+        ofport-request=2
+
+ovs-vsctl show
+ovs-vsctl list Interface
+
+# This might take longer than normally
+export OVS_CTL_TIMEOUT=120
+wait_for_ports_up
+check ovn-nbctl --wait=hv --timeout=$OVS_CTL_TIMEOUT sync
+
+# now back to normal timeouts
+export OVS_CTL_TIMEOUT=30
+
+# Pre-populate the hypervisors' ARP tables so that we don't lose any
+# packets for ARP resolution (native tunneling doesn't queue packets
+# for ARP resolution).
+OVN_POPULATE_ARP
+
+send_arp() {
+    ovs-appctl ofproto/trace br-int \
+        arp,in_port=1,vlan_tci=0x0000,dl_src=f0:00:00:00:00:01,dl_dst=ff:ff:ff:ff:ff:ff,arp_spa=192.168.3.1,arp_tpa=1.2.3.4,arp_op=1,arp_sha=f0:00:00:00:00:01,arp_tha=ff:ff:ff:ff:ff:ff
+}
+
+is_arp_dropped_on_recirc() {
+    send_arp | grep "Too many resubmits"
+}
+
+is_arp_received_by_vif2() {
+    send_arp | grep "output:2"
+}
+
+# we now send a test arp request that the routers can not answer.
+# without the later setting this will die because of the recirc limit
+
+OVS_WAIT_UNTIL(is_arp_dropped_on_recirc)
+
+# now we reconfigure the logical switch to not forward these arp packets to
+# the routers
+ovn-nbctl set Logical_Switch ls1 other_config:broadcast-arps-to-all-routers=false
+
+OVS_WAIT_UNTIL(is_arp_received_by_vif2)
+
+# Gracefully terminate daemons
+OVN_CLEANUP([hv1])
+
+AT_CLEANUP
+])
+
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([IP relocation using GARP request])
 ovn_start
