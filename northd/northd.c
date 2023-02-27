@@ -8644,29 +8644,43 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                 }
             }
         }
-
-        if (op->peer) {
-            const char *arp_proxy = smap_get(&op->nbsp->options,"arp_proxy");
-
+        const char *arp_proxy = smap_get(&op->nbsp->options,"arp_proxy");
+        if (arp_proxy) {
             struct lport_addresses proxy_arp_addrs;
-            int i = 0;
+            int i, ofs = 0;
+            /* Either takes "MAC IP1 IP2" or "IP1 IP2" */
+            if (!extract_addresses(arp_proxy, &proxy_arp_addrs, &ofs) &&
+                !extract_ip_addresses(arp_proxy, &proxy_arp_addrs)) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+                VLOG_WARN_RL(&rl, "Invalid arp_proxy option: '%s' at lsp '%s'",
+                             arp_proxy, op->nbsp->name);
+                return;
+            }
 
-            /* Add responses for ARP proxies. */
-            if (arp_proxy && extract_ip_addresses(arp_proxy,
-                                                  &proxy_arp_addrs) &&
-                proxy_arp_addrs.n_ipv4_addrs) {
+            /* Select the mac address to answer the proxy ARP/NDP */
+            char *ea_s = NULL;
+            if (!eth_addr_is_zero(proxy_arp_addrs.ea)) {
+                ea_s = proxy_arp_addrs.ea_s;
+            } else if (op->peer) {
+                ea_s = op->peer->lrp_networks.ea_s;
+            } else {
+                return;
+            }
+
+            /* Add IPv4 responses for ARP proxies. */
+            if (proxy_arp_addrs.n_ipv4_addrs) {
                 /* Match rule on all proxy ARP IPs. */
                 ds_clear(match);
                 ds_put_cstr(match, "arp.op == 1 && arp.tpa == {");
 
                 for (i = 0; i < proxy_arp_addrs.n_ipv4_addrs; i++) {
-                    ds_put_format(match, "%s,",
-                                  proxy_arp_addrs.ipv4_addrs[i].addr_s);
+                    ds_put_format(match, "%s/%u,",
+                                  proxy_arp_addrs.ipv4_addrs[i].addr_s,
+                                  proxy_arp_addrs.ipv4_addrs[i].plen);
                 }
 
                 ds_chomp(match, ',');
                 ds_put_cstr(match, "}");
-                destroy_lport_addresses(&proxy_arp_addrs);
 
                 ds_clear(actions);
                 ds_put_format(actions,
@@ -8679,12 +8693,69 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                     "outport = inport; "
                     "flags.loopback = 1; "
                     "output;",
-                    op->peer->lrp_networks.ea_s,
-                    op->peer->lrp_networks.ea_s);
+                    ea_s,
+                    ea_s);
 
                 ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_IN_ARP_ND_RSP,
                     50, ds_cstr(match), ds_cstr(actions), &op->nbsp->header_);
             }
+
+            /* Add IPv6 NDP responses.
+             * For ND solicitations, we need to listen for both the
+             * unicast IPv6 address and its all-nodes multicast address,
+             * but always respond with the unicast IPv6 address. */
+            if (proxy_arp_addrs.n_ipv6_addrs) {
+                struct ds ip6_dst_match = DS_EMPTY_INITIALIZER;
+                struct ds nd_target_match = DS_EMPTY_INITIALIZER;
+                for (size_t j = 0; j < proxy_arp_addrs.n_ipv6_addrs; j++) {
+                    ds_put_format(&ip6_dst_match, "%s/%u, %s/%u",
+                            proxy_arp_addrs.ipv6_addrs[j].addr_s,
+                            proxy_arp_addrs.ipv6_addrs[j].plen,
+                            proxy_arp_addrs.ipv6_addrs[j].sn_addr_s,
+                            proxy_arp_addrs.ipv6_addrs[j].plen);
+                    ds_put_format(&nd_target_match,
+                            "%s/%u",
+                            proxy_arp_addrs.ipv6_addrs[j].addr_s,
+                            proxy_arp_addrs.ipv6_addrs[j].plen);
+                    if (j+1 < proxy_arp_addrs.n_ipv6_addrs) {
+                        ds_put_cstr(&ip6_dst_match, ", ");
+                        ds_put_cstr(&nd_target_match, ", ");
+                    }
+                }
+                ds_clear(match);
+                ds_put_format(match,
+                              "nd_ns "
+                              "&& ip6.dst == { %s } "
+                              "&& nd.target == { %s }",
+                              ds_cstr(&ip6_dst_match),
+                              ds_cstr(&nd_target_match));
+                ds_clear(actions);
+                ds_put_format(actions,
+                        "%s { "
+                        "eth.src = %s; "
+                        "ip6.src = nd.target; "
+                        "nd.target = nd.target; "
+                        "nd.tll = %s; "
+                        "outport = inport; "
+                        "flags.loopback = 1; "
+                        "output; "
+                        "};",
+                        lsp_is_router(op->nbsp) ? "nd_na_router" : "nd_na",
+                        ea_s,
+                        ea_s);
+                ovn_lflow_add_with_hint__(lflows, op->od,
+                                          S_SWITCH_IN_ARP_ND_RSP, 50,
+                                          ds_cstr(match),
+                                          ds_cstr(actions),
+                                          NULL,
+                                          copp_meter_get(COPP_ND_NA,
+                                              op->od->nbs->copp,
+                                              meter_groups),
+                                          &op->nbsp->header_);
+                ds_destroy(&ip6_dst_match);
+                ds_destroy(&nd_target_match);
+            }
+            destroy_lport_addresses(&proxy_arp_addrs);
         }
     }
 }
@@ -9063,7 +9134,6 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
                                 struct ds *match)
 {
     if (op->nbsp && (!lsp_is_external(op->nbsp))) {
-
         /* For ports connected to logical routers add flows to bypass the
          * broadcast flooding of ARP/ND requests in table 19. We direct the
          * requests only to the router port that owns the IP address.
@@ -9122,9 +9192,24 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
                             ETH_ADDR_SCAN_FMT, ETH_ADDR_SCAN_ARGS(mac))) {
                     continue;
                 }
+                char * mac_s = xasprintf(ETH_ADDR_FMT, ETH_ADDR_ARGS(mac));
+                struct lport_addresses proxy_arp_addrs;
+                const char *arp_proxy =
+                    smap_get(&op->nbsp->options,"arp_proxy");
+                int ofs = 0;
                 ds_clear(match);
-                ds_put_format(match, "eth.dst == "ETH_ADDR_FMT,
-                              ETH_ADDR_ARGS(mac));
+                ds_put_cstr(match, "eth.dst == ");
+                if (arp_proxy &&
+                    extract_addresses(arp_proxy, &proxy_arp_addrs, &ofs)) {
+                    ds_put_format(match,
+                                  "{ %s, %s }",
+                                  proxy_arp_addrs.ea_s,
+                                  mac_s);
+                    destroy_lport_addresses(&proxy_arp_addrs);
+                } else {
+                    ds_put_format(match, "%s", mac_s);
+                }
+                free(mac_s);
                 if (op->peer->od->n_l3dgw_ports
                     && op->od->n_localnet_ports) {
                     bool add_chassis_resident_check = false;
@@ -9157,7 +9242,6 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
                                       json_key);
                     }
                 }
-
                 ds_clear(actions);
                 ds_put_format(actions, action, op->json_key);
                 ovn_lflow_add_with_hint(lflows, op->od,
@@ -11640,8 +11724,25 @@ build_adm_ctrl_flows_for_lrouter_port(
                                op->lrp_networks.ea_s);
 
         ds_clear(match);
-        ds_put_format(match, "eth.dst == %s && inport == %s",
-                      op->lrp_networks.ea_s, op->json_key);
+        ds_put_cstr(match, "eth.dst == ");
+        struct lport_addresses proxy_arp_addrs;
+        if (op->peer && op->peer->nbsp) {
+            const char *arp_proxy =
+                smap_get(&op->peer->nbsp->options,"arp_proxy");
+            int ofs = 0;
+            if (arp_proxy &&
+                extract_addresses(arp_proxy, &proxy_arp_addrs, &ofs)) {
+                ds_put_format(match,
+                              "{ %s, %s }",
+                              proxy_arp_addrs.ea_s,
+                              op->lrp_networks.ea_s);
+                destroy_lport_addresses(&proxy_arp_addrs);
+            }
+        }
+        if (eth_addr_is_zero(proxy_arp_addrs.ea)) {
+            ds_put_format(match, "%s", op->lrp_networks.ea_s);
+        }
+        ds_put_format(match, " && inport == %s", op->json_key);
         if (consider_l3dgw_port_is_centralized(op)) {
             ds_put_format(match, " && is_chassis_resident(%s)",
                           op->cr_port->json_key);
