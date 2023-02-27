@@ -10841,19 +10841,26 @@ build_lrouter_defrag_flows_for_lb(struct ovn_northd_lb *lb,
     }
 
     struct ds defrag_actions = DS_EMPTY_INITIALIZER;
+    struct ds defrag_match = DS_EMPTY_INITIALIZER;
+
     for (size_t i = 0; i < lb->n_vips; i++) {
         struct ovn_lb_vip *lb_vip = &lb->vips[i];
         int prio = 100;
 
         ds_clear(&defrag_actions);
+        ds_clear(&defrag_match);
         ds_clear(match);
 
         if (lb_vip->address_family == AF_INET) {
             ds_put_format(match, "ip && ip4.dst == %s", lb_vip->vip_str);
+            ds_put_format(&defrag_match, "ip && ip4.dst == %s && ip.is_frag",
+                          lb_vip->vip_str);
             ds_put_format(&defrag_actions, REG_NEXT_HOP_IPV4" = %s; ",
                           lb_vip->vip_str);
         } else {
             ds_put_format(match, "ip && ip6.dst == %s", lb_vip->vip_str);
+            ds_put_format(&defrag_match, "ip && ip6.dst == %s && ip.is_frag",
+                          lb_vip->vip_str);
             ds_put_format(&defrag_actions, REG_NEXT_HOP_IPV6" = %s; ",
                           lb_vip->vip_str);
         }
@@ -10868,11 +10875,17 @@ build_lrouter_defrag_flows_for_lb(struct ovn_northd_lb *lb,
 
         ds_put_format(&defrag_actions, "ct_dnat;");
 
+        /* Add flow for defrag ip traffic. */
+        ovn_lflow_add_with_dp_group(
+            lflows, lb->nb_lr_map, S_ROUTER_IN_DEFRAG, 100,
+            ds_cstr(&defrag_match), "ct_next;", &lb->nlb->header_);
+
         ovn_lflow_add_with_dp_group(
             lflows, lb->nb_lr_map, S_ROUTER_IN_POST_DEFRAG, prio,
             ds_cstr(match), ds_cstr(&defrag_actions), &lb->nlb->header_);
     }
     ds_destroy(&defrag_actions);
+    ds_destroy(&defrag_match);
 }
 
 static void
