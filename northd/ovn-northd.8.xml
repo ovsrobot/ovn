@@ -1400,7 +1400,16 @@ nd_na_router {
           column of <code>NB_Global</code> table of the <code>Northbound</code>
           database), for logical ports of type <code>virtual</code> and for
           logical ports with 'unknown' address set.
-        </p>
+      </p>
+
+      <p>
+        The above NDP responder flows are added for the list of IPv6 addresses
+        if defined in <code>options:arp_proxy</code> column of
+        <code>Logical_Switch_Port</code> table for logical switch ports of
+        type <code>router</code>.
+      </p>
+
+
       </li>
 
       <li>
@@ -1414,7 +1423,6 @@ nd_na_router {
           IP address assignment, so sending a reply will prevent the VM from
           accepting the IP address that it owns.
         </p>
-
         <p>
           In place of <code>next;</code>, it would be reasonable to use
           <code>drop;</code> for the flows' actions.  If everything is working
