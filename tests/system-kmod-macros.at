@@ -183,3 +183,9 @@ m4_define([OVS_CHECK_KERNEL_EXCL],
     sublevel=$(uname -r | sed -e 's/\./ /g' | awk '{print $ 2}')
     AT_SKIP_IF([ ! ( test $version -lt $1 || ( test $version -eq $1 && test $sublevel -lt $2 ) || test $version -gt $3 || ( test $version -eq $3 && test $sublevel -gt $4 ) ) ])
 ])
+
+# CHECK_USERSPACE_DATAPATH()
+#
+# Perform requirements checks for running with OvS userspace datapath.
+# Some tests are failing for userspace datapath.
+m4_define([CHECK_USERSPACE_DATAPATH])
