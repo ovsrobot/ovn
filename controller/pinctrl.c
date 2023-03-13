@@ -178,11 +178,9 @@ struct pinctrl {
 
 static struct pinctrl pinctrl;
 
-static void init_buffered_packets_map(void);
-static void destroy_buffered_packets_map(void);
-static void
-run_buffered_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                     const struct sbrec_mac_binding_table *mac_binding_table)
+static void init_buffered_packets_data(void);
+static void destroy_buffered_packets_data(void);
+static void run_buffered_binding(const struct hmap *recent_mac_bidnings)
     OVS_REQUIRES(pinctrl_mutex);
 
 static void pinctrl_handle_put_mac_binding(const struct flow *md,
@@ -535,7 +533,7 @@ pinctrl_init(void)
     init_send_garps_rarps();
     init_ipv6_ras();
     init_ipv6_prefixd();
-    init_buffered_packets_map();
+    init_buffered_packets_data();
     init_activated_ports();
     init_event_table();
     ip_mcast_snoop_init();
@@ -1416,221 +1414,72 @@ prepare_ipv6_prefixd(struct ovsdb_idl_txn *ovnsb_idl_txn,
     }
 }
 
-struct buffer_info {
-    struct ofpbuf ofpacts;
-    struct dp_packet *p;
-};
-
-#define BUFFER_QUEUE_DEPTH     4
-struct buffered_packets {
-    struct hmap_node hmap_node;
-    struct ovs_list list;
-
-    /* key */
-    struct in6_addr ip;
-    struct eth_addr ea;
-
-    uint64_t dp_key;
-    uint64_t port_key;
-
-    long long int timestamp;
-
-    struct buffer_info data[BUFFER_QUEUE_DEPTH];
-    uint32_t head, tail;
-};
-
 static struct hmap buffered_packets_map;
-static struct ovs_list buffered_mac_bindings;
+/* List of 'struct packet_data' that is ready to be sent. */
+static struct ovs_list ready_packets_data;
 
 static void
-init_buffered_packets_map(void)
+init_buffered_packets_data(void)
 {
     hmap_init(&buffered_packets_map);
-    ovs_list_init(&buffered_mac_bindings);
+    ovs_list_init(&ready_packets_data);
 }
 
 static void
-destroy_buffered_packets(struct buffered_packets *bp)
+destroy_buffered_packets_data(void)
 {
-    struct buffer_info *bi;
-
-    while (bp->head != bp->tail) {
-        bi = &bp->data[bp->head];
-        dp_packet_delete(bi->p);
-        ofpbuf_uninit(&bi->ofpacts);
-
-        bp->head = (bp->head + 1) % BUFFER_QUEUE_DEPTH;
-    }
-}
-
-static void
-destroy_buffered_packets_map(void)
-{
-    struct buffered_packets *bp;
-    HMAP_FOR_EACH_SAFE (bp, hmap_node, &buffered_packets_map) {
-        destroy_buffered_packets(bp);
-        hmap_remove(&buffered_packets_map, &bp->hmap_node);
-        free(bp);
-    }
-    hmap_destroy(&buffered_packets_map);
-
-    LIST_FOR_EACH_POP (bp, list, &buffered_mac_bindings) {
-        destroy_buffered_packets(bp);
-        free(bp);
-    }
-}
-
-static void
-buffered_push_packet(struct buffered_packets *bp,
-                     struct dp_packet *packet,
-                     const struct match *md)
-{
-    uint32_t next = (bp->tail + 1) % BUFFER_QUEUE_DEPTH;
-    struct buffer_info *bi = &bp->data[bp->tail];
-
-    ofpbuf_init(&bi->ofpacts, 4096);
-
-    reload_metadata(&bi->ofpacts, md);
-    /* reload pkt_mark field */
-    const struct mf_field *pkt_mark_field = mf_from_id(MFF_PKT_MARK);
-    union mf_value pkt_mark_value;
-    mf_get_value(pkt_mark_field, &md->flow, &pkt_mark_value);
-    ofpact_put_set_field(&bi->ofpacts, pkt_mark_field, &pkt_mark_value, NULL);
-
-    struct ofpact_resubmit *resubmit = ofpact_put_RESUBMIT(&bi->ofpacts);
-    resubmit->in_port = OFPP_CONTROLLER;
-    resubmit->table_id = OFTABLE_REMOTE_OUTPUT;
-
-    bi->p = packet;
-
-    if (next == bp->head) {
-        bi = &bp->data[bp->head];
-        dp_packet_delete(bi->p);
-        ofpbuf_uninit(&bi->ofpacts);
-        bp->head = (bp->head + 1) % BUFFER_QUEUE_DEPTH;
-    }
-    bp->tail = next;
-}
-
-static void
-buffered_send_packets(struct rconn *swconn, struct buffered_packets *bp,
-                      struct eth_addr *addr)
-{
-    enum ofp_version version = rconn_get_version(swconn);
-    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
-
-    while (bp->head != bp->tail) {
-        struct buffer_info *bi = &bp->data[bp->head];
-        struct eth_header *eth = dp_packet_data(bi->p);
-
-        eth->eth_dst = *addr;
-        struct ofputil_packet_out po = {
-            .packet = dp_packet_data(bi->p),
-            .packet_len = dp_packet_size(bi->p),
-            .buffer_id = UINT32_MAX,
-            .ofpacts = bi->ofpacts.data,
-            .ofpacts_len = bi->ofpacts.size,
-        };
-        match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
-        queue_msg(swconn, ofputil_encode_packet_out(&po, proto));
-
-        ofpbuf_uninit(&bi->ofpacts);
-        dp_packet_delete(bi->p);
-
-        bp->head = (bp->head + 1) % BUFFER_QUEUE_DEPTH;
-    }
-}
-
-static void
-buffered_packets_map_gc(void)
-{
-    struct buffered_packets *cur_qp;
-    long long int now = time_msec();
-
-    HMAP_FOR_EACH_SAFE (cur_qp, hmap_node, &buffered_packets_map) {
-        if (now > cur_qp->timestamp + OVN_BUFFERED_PACKETS_TIMEOUT) {
-            destroy_buffered_packets(cur_qp);
-            hmap_remove(&buffered_packets_map, &cur_qp->hmap_node);
-            free(cur_qp);
-        }
-    }
-}
-
-static uint32_t
-pinctrl_buffer_packet_hash(uint64_t dp_key, uint64_t port_key,
-                           const struct in6_addr *addr)
-{
-    uint32_t hash = 0;
-    hash = hash_add64(hash, port_key);
-    hash = hash_add64(hash, dp_key);
-    hash = hash_bytes(addr, sizeof addr, hash);
-    return hash_finish(hash, 16);
-}
-
-static struct buffered_packets *
-pinctrl_find_buffered_packets(uint64_t dp_key, uint64_t port_key,
-                              const struct in6_addr *ip, uint32_t hash)
-{
-    struct buffered_packets *qp;
-    HMAP_FOR_EACH_WITH_HASH (qp, hmap_node, hash, &buffered_packets_map) {
-        if (qp->dp_key == dp_key && qp->port_key == port_key &&
-            IN6_ARE_ADDR_EQUAL(&qp->ip, ip)) {
-            return qp;
-        }
-    }
-    return NULL;
-}
-
-static struct buffered_packets *
-pinctrl_find_buffered_packets_with_hash(uint64_t dp_key, uint64_t port_key,
-                                        const struct in6_addr *ip)
-{
-    uint32_t hash = pinctrl_buffer_packet_hash(dp_key, port_key, ip);
-
-    return pinctrl_find_buffered_packets(dp_key, port_key, ip, hash);
+    ovn_buffered_packets_hmap_destroy(&buffered_packets_map);
+    ovn_packet_data_list_destroy(&ready_packets_data);
 }
 
 /* Called with in the pinctrl_handler thread context. */
-static int
+static void
 pinctrl_handle_buffered_packets(struct dp_packet *pkt_in,
                                 const struct match *md, bool is_arp)
     OVS_REQUIRES(pinctrl_mutex)
 {
-    struct buffered_packets *bp;
+    struct in6_addr ip;
+    struct ofpbuf ofpacts;
     struct dp_packet *clone;
-    struct in6_addr addr;
+    struct buffered_packets *bp;
     uint64_t dp_key = ntohll(md->flow.metadata);
     uint64_t oport_key = md->flow.regs[MFF_LOG_OUTPORT - MFF_REG0];
 
     if (is_arp) {
-        addr = in6_addr_mapped_ipv4(htonl(md->flow.regs[0]));
+        ip = in6_addr_mapped_ipv4(htonl(md->flow.regs[0]));
     } else {
         ovs_be128 ip6 = hton128(flow_get_xxreg(&md->flow, 0));
-        memcpy(&addr, &ip6, sizeof addr);
+        memcpy(&ip, &ip6, sizeof ip);
     }
 
-    uint32_t hash = pinctrl_buffer_packet_hash(dp_key, oport_key, &addr);
-    bp = pinctrl_find_buffered_packets(dp_key, oport_key, &addr, hash);
+    bp = ovn_buffered_packets_add(&buffered_packets_map, dp_key,
+                                  oport_key, ip);
     if (!bp) {
-        if (hmap_count(&buffered_packets_map) >= 1000) {
-            COVERAGE_INC(pinctrl_drop_buffered_packets_map);
-            return -ENOMEM;
-        }
-
-        bp = xmalloc(sizeof *bp);
-        hmap_insert(&buffered_packets_map, &bp->hmap_node, hash);
-        bp->head = bp->tail = 0;
-        bp->ip = addr;
-        bp->dp_key = dp_key;
-        bp->port_key = oport_key;
+        COVERAGE_INC(pinctrl_drop_buffered_packets_map);
+        return;
     }
-    bp->timestamp = time_msec();
+
     /* clone the packet to send it later with correct L2 address */
     clone = dp_packet_clone_data(dp_packet_data(pkt_in),
                                  dp_packet_size(pkt_in));
-    buffered_push_packet(bp, clone, md);
 
-    return 0;
+
+    ofpbuf_init(&ofpacts, 4096);
+    reload_metadata(&ofpacts, md);
+    /* reload pkt_mark field */
+    const struct mf_field *pkt_mark_field = mf_from_id(MFF_PKT_MARK);
+    union mf_value pkt_mark_value;
+    mf_get_value(pkt_mark_field, &md->flow, &pkt_mark_value);
+    ofpact_put_set_field(&ofpacts, pkt_mark_field, &pkt_mark_value, NULL);
+
+    struct ofpact_resubmit *resubmit = ofpact_put_RESUBMIT(&ofpacts);
+    resubmit->in_port = OFPP_CONTROLLER;
+    resubmit->table_id = OFTABLE_REMOTE_OUTPUT;
+
+    ovn_buffered_packets_add_packet_data(bp, ofpacts, clone);
+
+    /* There is a chance that the MAC binding was already created. */
+    notify_pinctrl_main();
 }
 
 /* Called with in the pinctrl_handler thread context. */
@@ -3597,14 +3446,14 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             const struct sbrec_dns_table *dns_table,
             const struct sbrec_controller_event_table *ce_table,
             const struct sbrec_service_monitor_table *svc_mon_table,
-            const struct sbrec_mac_binding_table *mac_binding_table,
             const struct sbrec_bfd_table *bfd_table,
             const struct ovsrec_bridge *br_int,
             const struct sbrec_chassis *chassis,
             const struct hmap *local_datapaths,
             const struct sset *active_tunnels,
             const struct shash *local_active_ports_ipv6_pd,
-            const struct shash *local_active_ports_ras)
+            const struct shash *local_active_ports_ras,
+            const struct hmap *recent_mac_bindings)
 {
     ovs_mutex_lock(&pinctrl_mutex);
     run_put_mac_bindings(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
@@ -3627,7 +3476,7 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                   sbrec_port_binding_by_key,
                   sbrec_igmp_groups,
                   sbrec_ip_multicast_opts);
-    run_buffered_binding(sbrec_port_binding_by_name, mac_binding_table);
+    run_buffered_binding(recent_mac_bindings);
     sync_svc_monitors(ovnsb_idl_txn, svc_mon_table, sbrec_port_binding_by_name,
                       chassis);
     bfd_monitor_run(ovnsb_idl_txn, bfd_table, sbrec_port_binding_by_name,
@@ -4153,7 +4002,7 @@ pinctrl_destroy(void)
     destroy_send_garps_rarps();
     destroy_ipv6_ras();
     destroy_ipv6_prefixd();
-    destroy_buffered_packets_map();
+    destroy_buffered_packets_data();
     destroy_activated_ports();
     event_table_destroy();
     destroy_put_mac_bindings();
@@ -4240,12 +4089,25 @@ static void
 send_mac_binding_buffered_pkts(struct rconn *swconn)
     OVS_REQUIRES(pinctrl_mutex)
 {
-    struct buffered_packets *bp;
-    LIST_FOR_EACH_POP (bp, list, &buffered_mac_bindings) {
-        buffered_send_packets(swconn, bp, &bp->ea);
-        free(bp);
+    enum ofp_version version = rconn_get_version(swconn);
+    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
+
+    struct packet_data *pd;
+    LIST_FOR_EACH_POP (pd, node, &ready_packets_data) {
+        struct ofputil_packet_out po = {
+            .packet = dp_packet_data(pd->p),
+            .packet_len = dp_packet_size(pd->p),
+            .buffer_id = UINT32_MAX,
+            .ofpacts = pd->ofpacts.data,
+            .ofpacts_len = pd->ofpacts.size,
+        };
+        match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
+        queue_msg(swconn, ofputil_encode_packet_out(&po, proto));
+
+        ovn_packet_data_destroy(pd);
     }
-    ovs_list_init(&buffered_mac_bindings);
+
+    ovs_list_init(&ready_packets_data);
 }
 
 static const struct sbrec_mac_binding *
@@ -4405,68 +4267,19 @@ run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
 }
 
 static void
-run_buffered_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                     const struct sbrec_mac_binding_table *mac_binding_table)
+run_buffered_binding(const struct hmap *recent_mac_bidnings)
     OVS_REQUIRES(pinctrl_mutex)
 {
-    bool notify = false;
-
-    if (!hmap_count(&buffered_packets_map)) {
+    if (!hmap_count(&buffered_packets_map) ||
+        !hmap_count(recent_mac_bidnings)) {
         return;
     }
 
-    const struct sbrec_mac_binding *mb;
-    SBREC_MAC_BINDING_TABLE_FOR_EACH_TRACKED (mb, mac_binding_table) {
-        const struct sbrec_port_binding *pb = lport_lookup_by_name(
-            sbrec_port_binding_by_name, mb->logical_port);
-        if (!pb || !pb->datapath) {
-            continue;
-        }
+    ovn_buffured_packets_prepare_ready(&buffered_packets_map,
+                                       recent_mac_bidnings,
+                                       &ready_packets_data);
 
-        struct in6_addr ip;
-        ovs_be32 ip4;
-        if (ip_parse(mb->ip, &ip4)) {
-            ip = in6_addr_mapped_ipv4(ip4);
-        } else if (!ipv6_parse(mb->ip, &ip)) {
-            continue;
-        }
-
-        struct buffered_packets *bp = pinctrl_find_buffered_packets_with_hash(
-                pb->datapath->tunnel_key, pb->tunnel_key, &ip);
-        if (!bp) {
-            if (!smap_get(&pb->options, "chassis-redirect-port")) {
-                continue;
-            }
-
-            char *redirect_name = xasprintf("cr-%s", pb->logical_port);
-            pb = lport_lookup_by_name(sbrec_port_binding_by_name,
-                                      redirect_name);
-            free(redirect_name);
-
-            if (!pb || !pb->datapath || strcmp(pb->type, "chassisredirect")) {
-                continue;
-            }
-
-            bp = pinctrl_find_buffered_packets_with_hash(
-                    pb->datapath->tunnel_key, pb->tunnel_key, &ip);
-        }
-
-        if (!bp) {
-            continue;
-        }
-
-        if (!ovs_scan(mb->mac, ETH_ADDR_SCAN_FMT,
-                      ETH_ADDR_SCAN_ARGS(bp->ea))) {
-            continue;
-        }
-
-        hmap_remove(&buffered_packets_map, &bp->hmap_node);
-        ovs_list_push_back(&buffered_mac_bindings, &bp->list);
-        notify = true;
-    }
-    buffered_packets_map_gc();
-
-    if (notify) {
+    if (!ovs_list_is_empty(&ready_packets_data)) {
         notify_pinctrl_handler();
     }
 }
@@ -6073,7 +5886,7 @@ may_inject_pkts(void)
             !shash_is_empty(&send_garp_rarp_data) ||
             ipv6_prefixd_should_inject() ||
             !ovs_list_is_empty(&mcast_query_list) ||
-            !ovs_list_is_empty(&buffered_mac_bindings) ||
+            !ovs_list_is_empty(&ready_packets_data) ||
             bfd_monitor_should_inject());
 }
 

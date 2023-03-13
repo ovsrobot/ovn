@@ -18,10 +18,10 @@
 #include "mac-learn.h"
 
 /* OpenvSwitch lib includes. */
+#include "dp-packet.h"
 #include "openvswitch/poll-loop.h"
 #include "openvswitch/vlog.h"
 #include "lib/packets.h"
-#include "lib/random.h"
 #include "lib/smap.h"
 #include "lib/timeval.h"
 
@@ -29,10 +29,11 @@ VLOG_DEFINE_THIS_MODULE(mac_learn);
 
 #define MAX_MAC_BINDINGS 1000
 #define MAX_FDB_ENTRIES  1000
+#define BUFFER_QUEUE_DEPTH 4
 
 static size_t keys_ip_hash(uint32_t dp_key, uint32_t port_key,
                                struct in6_addr *);
-static struct mac_binding *mac_binding_find(struct hmap *mac_bindings,
+static struct mac_binding *mac_binding_find(const struct hmap *mac_bindings,
                                             uint32_t dp_key,
                                             uint32_t port_key,
                                             struct in6_addr *ip, size_t hash);
@@ -165,8 +166,8 @@ keys_ip_hash(uint32_t dp_key, uint32_t port_key, struct in6_addr *ip)
 }
 
 static struct mac_binding *
-mac_binding_find(struct hmap *mac_bindings, uint32_t dp_key,
-                   uint32_t port_key, struct in6_addr *ip, size_t hash)
+mac_binding_find(const struct hmap *mac_bindings, uint32_t dp_key,
+                 uint32_t port_key, struct in6_addr *ip, size_t hash)
 {
     struct mac_binding *mb;
     HMAP_FOR_EACH_WITH_HASH (mb, hmap_node, hash, mac_bindings) {
@@ -200,4 +201,133 @@ fdb_entry_find(struct hmap *fdbs, uint32_t dp_key,
     }
 
     return NULL;
+}
+
+static struct buffered_packets *
+buffered_packets_find(struct hmap *hmap, uint64_t dp_key, uint64_t port_key,
+                      struct in6_addr *ip, uint32_t hash)
+{
+    struct buffered_packets *mb;
+    HMAP_FOR_EACH_WITH_HASH (mb, hmap_node, hash, hmap) {
+        if (mb->dp_key == dp_key && mb->port_key == port_key &&
+            IN6_ARE_ADDR_EQUAL(&mb->ip, ip)) {
+            return mb;
+        }
+    }
+
+    return NULL;
+}
+
+static void
+buffered_packets_destroy(struct buffered_packets *bp)
+{
+    ovn_packet_data_list_destroy(&bp->queue);
+    free(bp);
+}
+
+struct buffered_packets *
+ovn_buffered_packets_add(struct hmap *hmap, uint64_t dp_key, uint64_t port_key,
+                         struct in6_addr ip)
+{
+    struct buffered_packets *bp;
+
+    uint32_t hash = keys_ip_hash(dp_key, port_key, &ip);
+    bp = buffered_packets_find(hmap, dp_key, port_key, &ip, hash);
+    if (!bp) {
+        if (hmap_count(hmap) >= 1000) {
+            return NULL;
+        }
+
+        bp = xmalloc(sizeof *bp);
+        hmap_insert(hmap, &bp->hmap_node, hash);
+        bp->ip = ip;
+        bp->dp_key = dp_key;
+        bp->port_key = port_key;
+        ovs_list_init(&bp->queue);
+    }
+
+    bp->expire = time_msec() + OVN_BUFFERED_PACKETS_TIMEOUT;
+
+    return bp;
+}
+
+void
+ovn_buffered_packets_add_packet_data(struct buffered_packets *bp,
+                                     struct ofpbuf ofpacts,
+                                     struct dp_packet *packet)
+{
+    struct packet_data *pd = xmalloc(sizeof *pd);
+
+    pd->ofpacts = ofpacts;
+    pd->p = packet;
+
+    if (ovs_list_size(&bp->queue) == BUFFER_QUEUE_DEPTH) {
+        struct packet_data *p = CONTAINER_OF(ovs_list_pop_front(&bp->queue),
+                                             struct packet_data, node);
+        ovn_packet_data_destroy(p);
+    }
+
+    ovs_list_push_back(&bp->queue, &pd->node);
+}
+
+void
+ovn_buffured_packets_prepare_ready(struct hmap *bp_hmap,
+                                   const struct hmap *recent_mac_bindings,
+                                   struct ovs_list *ready_packet_data)
+{
+    long long now = time_msec();
+
+    struct buffered_packets *bp;
+    HMAP_FOR_EACH_SAFE (bp, hmap_node, bp_hmap) {
+        if (now > bp->expire) {
+            hmap_remove(bp_hmap, &bp->hmap_node);
+            buffered_packets_destroy(bp);
+            continue;
+        }
+
+        uint32_t hash = keys_ip_hash(bp->dp_key, bp->port_key, &bp->ip);
+        struct mac_binding *mb = mac_binding_find(recent_mac_bindings,
+                                                  bp->dp_key, bp->port_key,
+                                                  &bp->ip, hash);
+        if (!mb) {
+            continue;
+        }
+
+        struct packet_data *pd;
+        LIST_FOR_EACH_POP (pd, node, &bp->queue) {
+            struct eth_header *eth = dp_packet_data(pd->p);
+            eth->eth_dst = mb->mac;
+
+            ovs_list_push_back(ready_packet_data, &pd->node);
+        }
+
+        hmap_remove(bp_hmap, &bp->hmap_node);
+        buffered_packets_destroy(bp);
+    }
+}
+
+void
+ovn_packet_data_destroy(struct packet_data *pd)
+{
+    dp_packet_delete(pd->p);
+    ofpbuf_uninit(&pd->ofpacts);
+    free(pd);
+}
+
+void
+ovn_packet_data_list_destroy(struct ovs_list *list)
+{
+    struct packet_data *pd;
+    LIST_FOR_EACH_POP (pd, node, list) {
+        ovn_packet_data_destroy(pd);
+    }
+}
+
+void
+ovn_buffered_packets_hmap_destroy(struct hmap *hmap)
+{
+    struct buffered_packets *bp;
+    HMAP_FOR_EACH_POP (bp, hmap_node, hmap) {
+        buffered_packets_destroy(bp);
+    }
 }
