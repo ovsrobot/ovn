@@ -33,19 +33,21 @@ struct mac_binding {
     struct eth_addr mac;
 
     /* Timestamp when to commit to SB. */
-    long long commit_at_ms;
+    long long expire;
 };
 
 void ovn_mac_bindings_init(struct hmap *mac_bindings);
 void ovn_mac_bindings_destroy(struct hmap *mac_bindings);
 void ovn_mac_binding_wait(struct hmap *mac_bindings);
 void ovn_mac_binding_remove(struct mac_binding *mb, struct hmap *mac_bindings);
-bool ovn_mac_binding_can_commit(const struct mac_binding *mb, long long now);
+bool ovn_mac_binding_is_expired(const struct mac_binding *mb, long long now);
 
 struct mac_binding *ovn_mac_binding_add(struct hmap *mac_bindings,
                                         uint32_t dp_key, uint32_t port_key,
                                         struct in6_addr *ip,
-                                        struct eth_addr mac, bool is_unicast);
+                                        struct eth_addr mac,
+                                        uint32_t timestamp_offset,
+                                        bool limited_capacity);
 
 
 
@@ -67,5 +69,7 @@ void ovn_fdbs_destroy(struct hmap *fdbs);
 struct fdb_entry *ovn_fdb_add(struct hmap *fdbs,
                                 uint32_t dp_key, struct eth_addr mac,
                                 uint32_t port_key);
+
+#define OVN_BUFFERED_PACKETS_TIMEOUT 10000
 
 #endif /* OVN_MAC_LEARN_H */

@@ -1541,7 +1541,6 @@ buffered_send_packets(struct rconn *swconn, struct buffered_packets *bp,
     }
 }
 
-#define BUFFER_MAP_TIMEOUT   10000
 static void
 buffered_packets_map_gc(void)
 {
@@ -1549,7 +1548,7 @@ buffered_packets_map_gc(void)
     long long int now = time_msec();
 
     HMAP_FOR_EACH_SAFE (cur_qp, hmap_node, &buffered_packets_map) {
-        if (now > cur_qp->timestamp + BUFFER_MAP_TIMEOUT) {
+        if (now > cur_qp->timestamp + OVN_BUFFERED_PACKETS_TIMEOUT) {
             destroy_buffered_packets(cur_qp);
             hmap_remove(&buffered_packets_map, &cur_qp->hmap_node);
             free(cur_qp);
@@ -4196,6 +4195,8 @@ destroy_put_mac_bindings(void)
     ovn_mac_bindings_destroy(&put_mac_bindings);
 }
 
+#define MAX_MAC_BINDING_DELAY_MSEC 50
+
 /* Called with in the pinctrl_handler thread context. */
 static void
 pinctrl_handle_put_mac_binding(const struct flow *md,
@@ -4216,11 +4217,13 @@ pinctrl_handle_put_mac_binding(const struct flow *md,
 
     /* If the ARP reply was unicast we should not delay it,
      * there won't be any race. */
-    bool is_unicast = !eth_addr_is_multicast(headers->dl_dst);
+    uint32_t delay = eth_addr_is_multicast(headers->dl_dst)
+                     ? random_range(MAX_MAC_BINDING_DELAY_MSEC) + 1
+                     : 0;
     struct mac_binding *mb = ovn_mac_binding_add(&put_mac_bindings, dp_key,
                                                  port_key, &ip_key,
                                                  headers->dl_src,
-                                                 is_unicast);
+                                                 delay, true);
     if (!mb) {
         COVERAGE_INC(pinctrl_drop_put_mac_binding);
         return;
@@ -4391,7 +4394,7 @@ run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
 
     struct mac_binding *mb;
     HMAP_FOR_EACH_SAFE (mb, hmap_node, &put_mac_bindings) {
-        if (ovn_mac_binding_can_commit(mb, now)) {
+        if (ovn_mac_binding_is_expired(mb, now)) {
             run_put_mac_binding(ovnsb_idl_txn,
                                 sbrec_datapath_binding_by_key,
                                 sbrec_port_binding_by_key,

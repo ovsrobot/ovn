@@ -29,9 +29,8 @@ VLOG_DEFINE_THIS_MODULE(mac_learn);
 
 #define MAX_MAC_BINDINGS 1000
 #define MAX_FDB_ENTRIES  1000
-#define MAX_MAC_BINDING_DELAY_MSEC 50
 
-static size_t mac_binding_hash(uint32_t dp_key, uint32_t port_key,
+static size_t keys_ip_hash(uint32_t dp_key, uint32_t port_key,
                                struct in6_addr *);
 static struct mac_binding *mac_binding_find(struct hmap *mac_bindings,
                                             uint32_t dp_key,
@@ -62,24 +61,23 @@ ovn_mac_bindings_destroy(struct hmap *mac_bindings)
 struct mac_binding *
 ovn_mac_binding_add(struct hmap *mac_bindings, uint32_t dp_key,
                     uint32_t port_key, struct in6_addr *ip,
-                    struct eth_addr mac, bool is_unicast)
+                    struct eth_addr mac, uint32_t timestamp_offset,
+                    bool limited_capacity)
 {
-    uint32_t hash = mac_binding_hash(dp_key, port_key, ip);
+    uint32_t hash = keys_ip_hash(dp_key, port_key, ip);
 
     struct mac_binding *mb =
         mac_binding_find(mac_bindings, dp_key, port_key, ip, hash);
     if (!mb) {
-        if (hmap_count(mac_bindings) >= MAX_MAC_BINDINGS) {
+        if (limited_capacity && hmap_count(mac_bindings) >= MAX_MAC_BINDINGS) {
             return NULL;
         }
 
-        uint32_t delay = is_unicast
-            ? 0 : random_range(MAX_MAC_BINDING_DELAY_MSEC) + 1;
         mb = xmalloc(sizeof *mb);
         mb->dp_key = dp_key;
         mb->port_key = port_key;
         mb->ip = *ip;
-        mb->commit_at_ms = time_msec() + delay;
+        mb->expire = time_msec() + timestamp_offset;
         hmap_insert(mac_bindings, &mb->hmap_node, hash);
     }
     mb->mac = mac;
@@ -94,7 +92,7 @@ ovn_mac_binding_wait(struct hmap *mac_bindings)
     struct mac_binding *mb;
 
     HMAP_FOR_EACH (mb, hmap_node, mac_bindings) {
-        poll_timer_wait_until(mb->commit_at_ms);
+        poll_timer_wait_until(mb->expire);
     }
 }
 
@@ -106,9 +104,9 @@ ovn_mac_binding_remove(struct mac_binding *mb, struct hmap *mac_bindings)
 }
 
 bool
-ovn_mac_binding_can_commit(const struct mac_binding *mb, long long now)
+ovn_mac_binding_is_expired(const struct mac_binding *mb, long long now)
 {
-    return now >= mb->commit_at_ms;
+    return now >= mb->expire;
 }
 
 /* fdb functions. */
@@ -161,7 +159,7 @@ ovn_fdb_add(struct hmap *fdbs, uint32_t dp_key, struct eth_addr mac,
 /* mac_binding related static functions. */
 
 static size_t
-mac_binding_hash(uint32_t dp_key, uint32_t port_key, struct in6_addr *ip)
+keys_ip_hash(uint32_t dp_key, uint32_t port_key, struct in6_addr *ip)
 {
     return hash_bytes(ip, sizeof *ip, hash_2words(dp_key, port_key));
 }
