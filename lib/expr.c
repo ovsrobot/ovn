@@ -16,20 +16,21 @@
 
 #include <config.h>
 #include "byte-order.h"
-#include "openvswitch/json.h"
+#include "hmapx.h"
 #include "nx-match.h"
 #include "openvswitch/dynamic-string.h"
+#include "openvswitch/json.h"
 #include "openvswitch/match.h"
 #include "openvswitch/ofp-actions.h"
-#include "openvswitch/vlog.h"
 #include "openvswitch/shash.h"
+#include "openvswitch/vlog.h"
+#include "ovn-util.h"
 #include "ovn/expr.h"
 #include "ovn/lex.h"
 #include "ovn/logical-fields.h"
 #include "simap.h"
 #include "sset.h"
 #include "util.h"
-#include "ovn-util.h"
 
 VLOG_DEFINE_THIS_MODULE(expr);
 
@@ -2520,6 +2521,74 @@ crush_and_string(struct expr *expr, const struct expr_symbol *symbol)
     return expr_fix(expr);
 }
 
+/* This function expects an OR expression with already crushed sub
+ * expressions, so they are plain comparisons.  Result is the same
+ * expression, but with unnecessary sub-expressions removed. */
+static struct expr *
+crush_or_supersets(struct expr *expr, const struct expr_symbol *symbol)
+{
+    struct hmapx to_delete = HMAPX_INITIALIZER(&to_delete);
+
+    ovs_assert(expr->type == EXPR_T_OR);
+    if (!symbol->width) {
+        return expr;
+    }
+
+    struct expr *a;
+    LIST_FOR_EACH (a, node, &expr->andor) {
+        ovs_assert(a->type == EXPR_T_CMP);
+
+        if (hmapx_contains(&to_delete, a)) {
+            continue;
+        }
+
+        struct expr *b;
+        LIST_FOR_EACH (b, node, &expr->andor) {
+            union mf_subvalue tmp_value, tmp_mask;
+
+            if (a == b || hmapx_contains(&to_delete, b)) {
+                continue;
+            }
+
+            /* Conflicting sub-expressions cannot superseed each other. */
+            if (mf_subvalue_intersect(&a->cmp.value, &a->cmp.mask,
+                                      &b->cmp.value, &b->cmp.mask,
+                                      &tmp_value, &tmp_mask)) {
+                const size_t sz = sizeof a->cmp.mask * CHAR_BIT;
+                const unsigned long *a_mask, *b_mask;
+
+                a_mask = (unsigned long *) a->cmp.mask.be64;
+                b_mask = (unsigned long *) b->cmp.mask.be64;
+
+                /* Check if 'a' is a superset of 'b' or the other way around.
+                 * Keep the smaller mask. */
+                if (bitmap_is_superset(a_mask, b_mask, sz)) {
+                    hmapx_add(&to_delete, a);
+                    break;
+                } else if (bitmap_is_superset(b_mask, a_mask, sz)) {
+                    hmapx_add(&to_delete, b);
+                }
+            }
+        }
+    }
+
+    if (hmapx_count(&to_delete)) {
+        /* Members modified, so untrack address set. */
+        free(expr->as_name);
+        expr->as_name = NULL;
+    }
+
+    struct hmapx_node *node;
+    HMAPX_FOR_EACH (node, &to_delete) {
+        a = (struct expr *) node->data;
+        ovs_list_remove(&a->node);
+        expr_destroy(a);
+    }
+    hmapx_destroy(&to_delete);
+
+    return expr;
+}
+
 /* Implementation of crush_cmps() for expr->type == EXPR_T_AND and a
  * numeric-typed 'symbol'. */
 static struct expr *
@@ -2679,31 +2748,6 @@ crush_and_numeric(struct expr *expr, const struct expr_symbol *symbol)
     }
 }
 
-static int
-compare_cmps_3way(const struct expr *a, const struct expr *b)
-{
-    ovs_assert(a->cmp.symbol == b->cmp.symbol);
-    if (!a->cmp.symbol->width) {
-        return strcmp(a->cmp.string, b->cmp.string);
-    } else {
-        int d = memcmp(&a->cmp.value, &b->cmp.value, sizeof a->cmp.value);
-        if (!d) {
-            d = memcmp(&a->cmp.mask, &b->cmp.mask, sizeof a->cmp.mask);
-        }
-        return d;
-    }
-}
-
-static int
-compare_cmps_cb(const void *a_, const void *b_)
-{
-    const struct expr *const *ap = a_;
-    const struct expr *const *bp = b_;
-    const struct expr *a = *ap;
-    const struct expr *b = *bp;
-    return compare_cmps_3way(a, b);
-}
-
 /* Implementation of crush_cmps() for expr->type == EXPR_T_OR. */
 static struct expr *
 crush_or(struct expr *expr, const struct expr_symbol *symbol)
@@ -2723,34 +2767,8 @@ crush_or(struct expr *expr, const struct expr_symbol *symbol)
         return expr;
     }
 
-    /* Sort subexpressions by value and mask, to bring together duplicates. */
-    size_t n = ovs_list_size(&expr->andor);
-    struct expr **subs = xmalloc(n * sizeof *subs);
+    expr = crush_or_supersets(expr, symbol);
 
-    size_t i = 0;
-    LIST_FOR_EACH (sub, node, &expr->andor) {
-        subs[i++] = sub;
-    }
-    ovs_assert(i == n);
-
-    qsort(subs, n, sizeof *subs, compare_cmps_cb);
-
-    /* Eliminate duplicates. */
-    ovs_list_init(&expr->andor);
-    ovs_list_push_back(&expr->andor, &subs[0]->node);
-    for (i = 1; i < n; i++) {
-        struct expr *a = expr_from_node(ovs_list_back(&expr->andor));
-        struct expr *b = subs[i];
-        if (compare_cmps_3way(a, b)) {
-            ovs_list_push_back(&expr->andor, &b->node);
-        } else {
-            expr_destroy(b);
-            /* Member modified, so untrack address set. */
-            free(expr->as_name);
-            expr->as_name = NULL;
-        }
-    }
-    free(subs);
     return expr_fix(expr);
 }
 
