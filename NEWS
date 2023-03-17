@@ -2,6 +2,8 @@ Post v23.03.0
 -------------
   - Enhance LSP.options:arp_proxy to support IPv6, configurable MAC
     addresses and CIDRs.
+  - Add an option for LBs called "ct_flush" that allows CMS to specify
+    if ovn-controller should flush related CT entries for removed LB backends.
 
 OVN v23.03.0 - 03 Mar 2023
 --------------------------

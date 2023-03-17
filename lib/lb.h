@@ -193,6 +193,7 @@ struct ovn_controller_lb {
                                               * as source for hairpinned
                                               * traffic.
                                               */
+    bool ct_flush;
 };
 
 struct ovn_controller_lb *ovn_controller_lb_create(
