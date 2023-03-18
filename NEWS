@@ -2,6 +2,8 @@ Post v23.03.0
 -------------
   - Enhance LSP.options:arp_proxy to support IPv6, configurable MAC
     addresses and CIDRs.
+  - Add support to configure OVSDB inactivity probe interval for ovn-ic and
+    ovn-controller-vtep.
 
 OVN v23.03.0 - 03 Mar 2023
 --------------------------
