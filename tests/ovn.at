@@ -736,37 +736,38 @@ expr_to_flow () {
     echo "$1" | ovstest test-ovn expr-to-flows | sort
 }
 AT_CHECK([expr_to_flow 'ip4.src == {10.0.0.1, 10.0.0.2, 10.0.0.3}'], [0], [dnl
-ip,nw_src=10.0.0.1
+ip,nw_src=10.0.0.1/255.255.255.253
 ip,nw_src=10.0.0.2
-ip,nw_src=10.0.0.3
+])
+AT_CHECK([expr_to_flow 'ip4.src == {10.0.0.2, 10.0.0.1, 10.0.0.3}'], [0], [dnl
+ip,nw_src=10.0.0.1
+ip,nw_src=10.0.0.2/31
+])
+AT_CHECK([expr_to_flow 'ip4.src == {10.0.0.0/24, 10.0.1.0/24, 10.0.2.0/24, 10.0.3.0/24}'], [0], [dnl
+ip,nw_src=10.0.0.0/22
 ])
 AT_CHECK([expr_to_flow 'ip4.src == $set1'], [0], [dnl
-ip,nw_src=10.0.0.1
+ip,nw_src=10.0.0.1/255.255.255.253
 ip,nw_src=10.0.0.2
-ip,nw_src=10.0.0.3
 ])
 AT_CHECK([expr_to_flow 'ip4.src == {1.2.3.4, $set1}'], [0], [dnl
 ip,nw_src=1.2.3.4
-ip,nw_src=10.0.0.1
+ip,nw_src=10.0.0.1/255.255.255.253
 ip,nw_src=10.0.0.2
-ip,nw_src=10.0.0.3
 ])
 AT_CHECK([expr_to_flow 'ip4.src == {1.2.0.0/20, 5.5.5.0/24, $set1}'], [0], [dnl
 ip,nw_src=1.2.0.0/20
-ip,nw_src=10.0.0.1
+ip,nw_src=10.0.0.1/255.255.255.253
 ip,nw_src=10.0.0.2
-ip,nw_src=10.0.0.3
 ip,nw_src=5.5.5.0/24
 ])
 AT_CHECK([expr_to_flow 'ip6.src == {::1, ::2, ::3}'], [0], [dnl
-ipv6,ipv6_src=::1
+ipv6,ipv6_src=::1/ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffd
 ipv6,ipv6_src=::2
-ipv6,ipv6_src=::3
 ])
 AT_CHECK([expr_to_flow 'ip6.src == {::1, $set2, ::4}'], [0], [dnl
-ipv6,ipv6_src=::1
+ipv6,ipv6_src=::1/ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffd
 ipv6,ipv6_src=::2
-ipv6,ipv6_src=::3
 ipv6,ipv6_src=::4
 ])
 AT_CHECK([expr_to_flow 'eth.src == {00:00:00:00:00:01, 00:00:00:00:00:02, 00:00:00:00:00:03}'], [0], [dnl
@@ -818,9 +819,8 @@ ip,nw_src=64.0.0.0/64.0.0.0
 ip,nw_src=8.0.0.0/8.0.0.0
 ])
 AT_CHECK([expr_to_flow 'ip4.dst == 172.27.0.65 && ip4.src == $set1 && ip4.dst != 10.128.0.0/14'], [0], [dnl
-ip,nw_src=10.0.0.1,nw_dst=172.27.0.65
+ip,nw_src=10.0.0.1/255.255.255.253,nw_dst=172.27.0.65
 ip,nw_src=10.0.0.2,nw_dst=172.27.0.65
-ip,nw_src=10.0.0.3,nw_dst=172.27.0.65
 ])
 AT_CHECK([expr_to_flow 'ip4.src == 172.168.13.0/16 && ip4.src != {172.168.13.0/24, 172.168.14.0/24}'], [0], [dnl
 ip,nw_src=172.168.0.0/255.255.3.0
@@ -834,6 +834,17 @@ ip,nw_src=172.168.64.0/255.255.64.0
 ])
 dnl Negative match flow explosion.
 AT_CHECK([test $(expr_to_flow 'ip4.src != {172.168.13.0/24, 172.168.14.0/24, 172.168.15.0/24}' | wc -l) -le 30])
+
+AT_CHECK([expr_to_flow 'ip4.src == {172.168.12.0/24, 172.168.13.0/24, 172.168.14.0/24, 172.168.15.0/24, 172.169.12.0/24}'], [0], [dnl
+ip,nw_src=172.168.12.0/22
+ip,nw_src=172.169.12.0/24
+])
+dnl Inefficient aggregation due to the order.
+AT_CHECK([expr_to_flow 'ip4.src == {172.169.12.0/24, 172.168.12.0/24, 172.168.13.0/24, 172.168.14.0/24, 172.168.15.0/24}'], [0], [dnl
+ip,nw_src=172.168.12.0/255.254.255.0
+ip,nw_src=172.168.13.0/255.255.253.0
+ip,nw_src=172.168.14.0/24
+])
 AT_CLEANUP
 
 AT_SETUP([converting expressions to flows -- port groups])
@@ -864,12 +875,10 @@ lflow="ip4.src == {10.0.0.1, 10.0.0.2, 10.0.0.3} && \
 ip4.dst == {20.0.0.1, 20.0.0.2, 20.0.0.3}"
 AT_CHECK([expr_to_flow "$lflow"], [0], [dnl
 conj_id=1,ip
-ip,nw_dst=20.0.0.1: conjunction(1, 0/2)
+ip,nw_dst=20.0.0.1/255.255.255.253: conjunction(1, 0/2)
 ip,nw_dst=20.0.0.2: conjunction(1, 0/2)
-ip,nw_dst=20.0.0.3: conjunction(1, 0/2)
-ip,nw_src=10.0.0.1: conjunction(1, 1/2)
+ip,nw_src=10.0.0.1/255.255.255.253: conjunction(1, 1/2)
 ip,nw_src=10.0.0.2: conjunction(1, 1/2)
-ip,nw_src=10.0.0.3: conjunction(1, 1/2)
 ])
 
 lflow="ip && (!ct.est || (ct.est && ct_mark.blocked == 1))"
@@ -886,9 +895,8 @@ AT_CHECK([expr_to_flow "$lflow"], [0], [dnl
 conj_id=1,ip
 ip,nw_dst=20.0.0.1: conjunction(1, 0/2)
 ip,nw_dst=20.0.0.2: conjunction(1, 0/2)
-ip,nw_src=10.0.0.1: conjunction(1, 1/2)
+ip,nw_src=10.0.0.1/255.255.255.253: conjunction(1, 1/2)
 ip,nw_src=10.0.0.2: conjunction(1, 1/2)
-ip,nw_src=10.0.0.3: conjunction(1, 1/2)
 ])
 
 lflow="ip4 && ip4.src == {10.0.0.1, 10.0.0.2, 10.0.0.3} && \
@@ -897,17 +905,12 @@ tcp.dst >= 1000 && tcp.dst <= 1010"
 
 AT_CHECK([expr_to_flow "$lflow"], [0], [dnl
 conj_id=1,tcp
-tcp,nw_dst=20.0.0.1: conjunction(1, 0/3)
+tcp,nw_dst=20.0.0.1/255.255.255.253: conjunction(1, 0/3)
 tcp,nw_dst=20.0.0.2: conjunction(1, 0/3)
-tcp,nw_dst=20.0.0.3: conjunction(1, 0/3)
-tcp,nw_src=10.0.0.1: conjunction(1, 1/3)
+tcp,nw_src=10.0.0.1/255.255.255.253: conjunction(1, 1/3)
 tcp,nw_src=10.0.0.2: conjunction(1, 1/3)
-tcp,nw_src=10.0.0.3: conjunction(1, 1/3)
-tcp,tp_dst=0x3ea/0xfffe: conjunction(1, 2/3)
-tcp,tp_dst=0x3ec/0xfffc: conjunction(1, 2/3)
+tcp,tp_dst=0x3e8/0xfff8: conjunction(1, 2/3)
 tcp,tp_dst=0x3f0/0xfffe: conjunction(1, 2/3)
-tcp,tp_dst=1000: conjunction(1, 2/3)
-tcp,tp_dst=1001: conjunction(1, 2/3)
 tcp,tp_dst=1010: conjunction(1, 2/3)
 ])
 
@@ -918,39 +921,30 @@ tcp.dst <= 2000 && tcp.src >=1000 && tcp.src <= 2000) \
 
 AT_CHECK([expr_to_flow "$lflow"], [0], [dnl
 conj_id=1,tcp
-ip,nw_src=10.0.0.4,nw_dst=20.0.0.5
-ip,nw_src=10.0.0.4,nw_dst=20.0.0.6
-ip,nw_src=10.0.0.5,nw_dst=20.0.0.5
-ip,nw_src=10.0.0.5,nw_dst=20.0.0.6
+ip,nw_src=10.0.0.4/31,nw_dst=20.0.0.5
+ip,nw_src=10.0.0.4/31,nw_dst=20.0.0.6
 ip,nw_src=10.0.0.6,nw_dst=20.0.0.5
 ip,nw_src=10.0.0.6,nw_dst=20.0.0.6
 tcp,nw_dst=20.0.0.4: conjunction(1, 0/4)
 tcp,nw_dst=20.0.0.7: conjunction(1, 0/4)
 tcp,nw_dst=20.0.0.8: conjunction(1, 0/4)
-tcp,nw_src=10.0.0.4: conjunction(1, 1/4)
-tcp,nw_src=10.0.0.5: conjunction(1, 1/4)
+tcp,nw_src=10.0.0.4/31: conjunction(1, 1/4)
 tcp,nw_src=10.0.0.6: conjunction(1, 1/4)
-tcp,tp_dst=0x3ea/0xfffe: conjunction(1, 2/4)
-tcp,tp_dst=0x3ec/0xfffc: conjunction(1, 2/4)
+tcp,tp_dst=0x3e8/0xfff8: conjunction(1, 2/4)
 tcp,tp_dst=0x3f0/0xfff0: conjunction(1, 2/4)
 tcp,tp_dst=0x400/0xfe00: conjunction(1, 2/4)
 tcp,tp_dst=0x600/0xff00: conjunction(1, 2/4)
 tcp,tp_dst=0x700/0xff80: conjunction(1, 2/4)
 tcp,tp_dst=0x780/0xffc0: conjunction(1, 2/4)
 tcp,tp_dst=0x7c0/0xfff0: conjunction(1, 2/4)
-tcp,tp_dst=1000: conjunction(1, 2/4)
-tcp,tp_dst=1001: conjunction(1, 2/4)
 tcp,tp_dst=2000: conjunction(1, 2/4)
-tcp,tp_src=0x3ea/0xfffe: conjunction(1, 3/4)
-tcp,tp_src=0x3ec/0xfffc: conjunction(1, 3/4)
+tcp,tp_src=0x3e8/0xfff8: conjunction(1, 3/4)
 tcp,tp_src=0x3f0/0xfff0: conjunction(1, 3/4)
 tcp,tp_src=0x400/0xfe00: conjunction(1, 3/4)
 tcp,tp_src=0x600/0xff00: conjunction(1, 3/4)
 tcp,tp_src=0x700/0xff80: conjunction(1, 3/4)
 tcp,tp_src=0x780/0xffc0: conjunction(1, 3/4)
 tcp,tp_src=0x7c0/0xfff0: conjunction(1, 3/4)
-tcp,tp_src=1000: conjunction(1, 3/4)
-tcp,tp_src=1001: conjunction(1, 3/4)
 tcp,tp_src=2000: conjunction(1, 3/4)
 ])
 AT_CLEANUP
@@ -17450,14 +17444,14 @@ ovn_start
 ovn-nbctl ls-add ls1
 
 ovn-nbctl lsp-add ls1 ls1-lp1 \
--- lsp-set-addresses ls1-lp1 "f0:00:00:00:00:01 10.0.0.4"
+-- lsp-set-addresses ls1-lp1 "f0:00:00:00:00:01 10.4.0.4"
 
-ovn-nbctl lsp-set-port-security ls1-lp1 "f0:00:00:00:00:01 10.0.0.4"
+ovn-nbctl lsp-set-port-security ls1-lp1 "f0:00:00:00:00:01 10.4.0.4"
 
 ovn-nbctl lsp-add ls1 ls1-lp2 \
 -- lsp-set-addresses ls1-lp2 "f0:00:00:00:00:02 10.0.0.6"
 
-ovn-nbctl lsp-set-port-security ls1-lp2 "f0:00:00:00:00:02 10.0.0.6"
+ovn-nbctl lsp-set-port-security ls1-lp2 "f0:00:00:00:00:02 10.6.0.6"
 
 net_add n1
 sim_add hv1
@@ -17478,9 +17472,9 @@ ovs-vsctl -- add-port br-int hv1-vif2 -- \
     ofport-request=2
 
 ovn-nbctl create Address_Set name=set1 \
-addresses=\"10.0.0.4\",\"10.0.0.5\",\"10.0.0.6\"
+addresses=\"10.4.0.4\",\"10.5.0.5\",\"10.6.0.6\"
 ovn-nbctl create Address_Set name=set2 \
-addresses=\"10.0.0.7\",\"10.0.0.8\",\"10.0.0.9\"
+addresses=\"10.7.0.7\",\"10.8.0.8\",\"10.9.0.9\"
 ovn-nbctl acl-add ls1 to-lport 1001 \
 'ip4 && ip4.src == $set1 && ip4.dst == $set1' allow
 check ovn-nbctl --wait=hv acl-add ls1 to-lport 1001 \
@@ -17506,8 +17500,8 @@ ${dst_ip}0035111100080000
     done
 }
 
-sip=`ip_to_hex 10 0 0 4`
-dip=`ip_to_hex 10 0 0 6`
+sip=`ip_to_hex 10 4 0 4`
+dip=`ip_to_hex 10 6 0 6`
 
 test_ip 1 f00000000001 f00000000002 $sip $dip hv1/vif2-tx.pcap 2
 
@@ -17519,15 +17513,15 @@ AT_CHECK([cat 2.packets], [0], [expout])
 # with conj match. Eg.
 # table=44, priority=2001,conj_id=2,metadata=0x1 actions=resubmit(,45)
 # table=44, priority=2001,conj_id=3,metadata=0x1 actions=drop
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.6 actions=conjunction(2,2/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.4 actions=conjunction(2,2/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.5 actions=conjunction(2,2/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.7 actions=conjunction(3,2/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.9 actions=conjunction(3,2/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.8 actions=conjunction(3,2/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.6 actions=conjunction(2,1/2),conjunction(3,1/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.4 actions=conjunction(2,1/2),conjunction(3,1/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.5 actions=conjunction(2,1/2),conjunction(3,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.6.0.6 actions=conjunction(2,2/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.4.0.4 actions=conjunction(2,2/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.5.0.5 actions=conjunction(2,2/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.7.0.7 actions=conjunction(3,2/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.9.0.9 actions=conjunction(3,2/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.8.0.8 actions=conjunction(3,2/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.6.0.6 actions=conjunction(2,1/2),conjunction(3,1/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.4.0.4 actions=conjunction(2,1/2),conjunction(3,1/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.5.0.5 actions=conjunction(2,1/2),conjunction(3,1/2)
 
 OVS_WAIT_UNTIL([test 9 = `as hv1 ovs-ofctl dump-flows br-int | \
 grep conjunction | wc -l`])
@@ -17539,15 +17533,15 @@ grep conj_id | wc -l`])
 as hv1 ovs-ofctl dump-flows br-int
 
 # Set the ip address for ls1-lp2 from set2 so that the drop ACL flow is hit.
-ovn-nbctl lsp-set-addresses ls1-lp2 "f0:00:00:00:00:02 10.0.0.7 20.0.0.4"
-ovn-nbctl lsp-set-port-security ls1-lp2 "f0:00:00:00:00:02 10.0.0.7 20.0.0.4"
+ovn-nbctl lsp-set-addresses ls1-lp2 "f0:00:00:00:00:02 10.7.0.7 20.4.0.4"
+ovn-nbctl lsp-set-port-security ls1-lp2 "f0:00:00:00:00:02 10.7.0.7 20.4.0.4"
 
 reset_pcap_file hv1-vif2 hv1/vif2
 
 rm -f 2.packets
 
-sip=`ip_to_hex 10 0 0 4`
-dip=`ip_to_hex 10 0 0 7`
+sip=`ip_to_hex 10 4 0 4`
+dip=`ip_to_hex 10 7 0 7`
 
 test_ip 1 f00000000001 f00000000002 $sip $dip
 
@@ -17559,12 +17553,12 @@ AT_CHECK([cat 2.packets], [0], [])
 # There should be total of 6 flows present with conjunction action and 1 flow
 # with conj match. Eg.
 # table=44, priority=2001,conj_id=3,metadata=0x1 actions=drop
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.7 actions=conjunction(4,2/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.9 actions=conjunction(4,2/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.8 actions=conjunction(4,2/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.6 actions=conjunction(4,1/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.4 actions=conjunction(4,1/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.5 actions=conjunction(4,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.7.0.7 actions=conjunction(4,2/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.9.0.9 actions=conjunction(4,2/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.8.0.8 actions=conjunction(4,2/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.6.0.6 actions=conjunction(4,1/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.4.0.4 actions=conjunction(4,1/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.5.0.5 actions=conjunction(4,1/2)
 
 ovn-nbctl acl-del ls1 to-lport 1001 \
 'ip4 && ip4.src == $set1 && ip4.dst == $set1'
@@ -17581,18 +17575,18 @@ ovn-nbctl acl-add ls1 to-lport 1001 \
 'ip4 && ip4.src == $set1 && ip4.dst == $set1' allow
 # Add one more ACL with more overlapping
 ovn-nbctl acl-add ls1 to-lport 1001 \
-'ip4 && ip4.src == $set1 && ip4.dst == {10.0.0.9, 10.0.0.10}' drop
+'ip4 && ip4.src == $set1 && ip4.dst == {10.9.0.9, 10.10.0.10}' drop
 
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.8 actions=conjunction(4,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.7 actions=conjunction(4,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.4 actions=conjunction(5,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.5 actions=conjunction(5,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.6 actions=conjunction(5,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.9 actions=conjunction(4,1/2),conjunction(6,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.10 actions=conjunction(6,1/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.5 actions=conjunction(4,2/2),conjunction(5,2/2),conjunction(6,2/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.4 actions=conjunction(4,2/2),conjunction(5,2/2),conjunction(6,2/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.6 actions=conjunction(4,2/2),conjunction(5,2/2),conjunction(6,2/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.8.0.8 actions=conjunction(4,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.7.0.7 actions=conjunction(4,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.4.0.4 actions=conjunction(5,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.5.0.5 actions=conjunction(5,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.6.0.6 actions=conjunction(5,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.9.0.9 actions=conjunction(4,1/2),conjunction(6,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.10.0.10 actions=conjunction(6,1/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.5.0.5 actions=conjunction(4,2/2),conjunction(5,2/2),conjunction(6,2/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.4.0.4 actions=conjunction(4,2/2),conjunction(5,2/2),conjunction(6,2/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.6.0.6 actions=conjunction(4,2/2),conjunction(5,2/2),conjunction(6,2/2)
 
 OVS_WAIT_UNTIL([test 10 = `as hv1 ovs-ofctl dump-flows br-int | \
 grep conjunction | wc -l`])
@@ -17601,19 +17595,19 @@ grep conjunction.*conjunction | wc -l`])
 OVS_WAIT_UNTIL([test 3 = `as hv1 ovs-ofctl dump-flows br-int | \
 grep conjunction.*conjunction.*conjunction | wc -l`])
 
-# Remove 10.0.0.7 from address set2. All flows should be updated properly.
+# Remove 10.7.0.7 from address set2. All flows should be updated properly.
 ovn-nbctl set Address_Set set2 \
-addresses=\"10.0.0.8\",\"10.0.0.9\"
+addresses=\"10.8.0.8\",\"10.9.0.9\"
 
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.4 actions=conjunction(9,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.10 actions=conjunction(7,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.8 actions=conjunction(8,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.5 actions=conjunction(9,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.9 actions=conjunction(7,1/2),conjunction(8,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.6 actions=conjunction(9,1/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.5 actions=conjunction(7,2/2),conjunction(8,2/2),conjunction(9,2/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.6 actions=conjunction(7,2/2),conjunction(8,2/2),conjunction(9,2/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.4 actions=conjunction(7,2/2),conjunction(8,2/2),conjunction(9,2/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.4.0.4 actions=conjunction(9,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.10.0.10 actions=conjunction(7,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.8.0.8 actions=conjunction(8,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.5.0.5 actions=conjunction(9,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.9.0.9 actions=conjunction(7,1/2),conjunction(8,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.6.0.6 actions=conjunction(9,1/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.5.0.5 actions=conjunction(7,2/2),conjunction(8,2/2),conjunction(9,2/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.6.0.6 actions=conjunction(7,2/2),conjunction(8,2/2),conjunction(9,2/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.4.0.4 actions=conjunction(7,2/2),conjunction(8,2/2),conjunction(9,2/2)
 
 OVS_WAIT_UNTIL([test 9 = `as hv1 ovs-ofctl dump-flows br-int | \
 grep conjunction | wc -l`])
@@ -17628,12 +17622,12 @@ ovn-nbctl acl-del ls1 to-lport 1001 \
 
 wait_for_ports_up
 ovn-nbctl --wait=hv sync
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.10 actions=conjunction(10,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.8 actions=conjunction(11,1/2)
-# priority=2001,ip,metadata=0x1,nw_dst=10.0.0.9 actions=conjunction(10,1/2),conjunction(11,1/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.5 actions=conjunction(10,2/2),conjunction(11,2/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.6 actions=conjunction(10,2/2),conjunction(11,2/2)
-# priority=2001,ip,metadata=0x1,nw_src=10.0.0.4 actions=conjunction(10,2/2),conjunction(11,2/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.10.0.10 actions=conjunction(10,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.8.0.8 actions=conjunction(11,1/2)
+# priority=2001,ip,metadata=0x1,nw_dst=10.9.0.9 actions=conjunction(10,1/2),conjunction(11,1/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.5.0.5 actions=conjunction(10,2/2),conjunction(11,2/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.6.0.6 actions=conjunction(10,2/2),conjunction(11,2/2)
+# priority=2001,ip,metadata=0x1,nw_src=10.4.0.4 actions=conjunction(10,2/2),conjunction(11,2/2)
 
 OVS_WAIT_UNTIL([test 6 = `as hv1 ovs-ofctl dump-flows br-int | \
 grep conjunction | wc -l`])
@@ -19446,7 +19440,7 @@ for i in 1 2 3; do
 
     # Update address set as1
     ovn-nbctl --wait=hv set addr as1 addresses="10.1.2.10 10.1.2.11"
-    AT_CHECK([ovs-ofctl dump-flows br-int | grep "10.1.2.11"], [0], [ignore])
+    AT_CHECK([ovs-ofctl dump-flows br-int | grep "10.1.2.10/31"], [0], [ignore])
 
     # Update address set as2
     ovn-nbctl --wait=hv set addr as2 addresses="10.1.2.12 10.1.2.13"
@@ -31510,7 +31504,7 @@ ovn-nbctl lr-add lr0
 
 for i in $(seq 0 9); do
     ovn-nbctl ls-add ls$i
-    ovn-nbctl lrp-add lr0 lrp_lr0_ls$i aa:bb:bb:00:00:0$i 192.168.${i}.1/24
+    ovn-nbctl lrp-add lr0 lrp_lr0_ls$i aa:bb:bb:00:00:0$i 192.${i}.${i}.1/24
 
     ovn-nbctl lsp-add ls$i lsp_ls${i}_lr0 -- \
         lsp-set-addresses lsp_ls${i}_lr0 router -- \
@@ -31519,7 +31513,7 @@ for i in $(seq 0 9); do
 
     for j in 0 1; do
         ovn-nbctl lsp-add ls$i lsp${i}-${j} -- \
-            lsp-set-addresses lsp${i}-${j} "aa:aa:aa:00:0$i:0$j 192.168.$i.1$j"
+            lsp-set-addresses lsp${i}-${j} "aa:aa:aa:00:0$i:0$j 192.$i.$i.$((($j + 1) * 4))"
     done
 done
 
@@ -31551,7 +31545,7 @@ AT_CHECK([test $(ovs-ofctl dump-flows br-int table=44 | grep conjunction | wc -l
 ovs-vsctl del-port br-int lsp0-0
 check ovn-nbctl --wait=hv sync
 AT_CHECK([test $(ovs-ofctl dump-flows br-int table=44 | grep conjunction | wc -l) == 0])
-AT_CHECK([test $(ovs-ofctl dump-flows br-int table=44 | grep 192.168 | wc -l) == 10])
+AT_CHECK([test $(ovs-ofctl dump-flows br-int table=44 | grep 192. | wc -l) == 10])
 
 # 3. Rebind lsp0-0. The expected conjunction flows are back to 12.
 ovs-vsctl add-port br-int lsp0-0 -- set interface lsp0-0 external_ids:iface-id=lsp0-0

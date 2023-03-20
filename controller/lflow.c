@@ -449,8 +449,9 @@ consider_lflow_for_added_as_ips__(
         new_fake_as->n_values = 2;
         new_fake_as->values[0] = new_fake_as->values[1] =
             as_diff_added->values[0];
-        /* Make a dummy ip that is different from the real one. */
-        new_fake_as->values[1].value.u8_val++;
+        /* Make a dummy ip that is different from the real one in 2 bits,
+         * so expression normalization won't combine them. */
+        new_fake_as->values[1].value.u8_val ^= 3;
         dummy_ip = new_fake_as->values[1].value.ipv6;
         has_dummy_ip = true;
         fake_as = new_fake_as;

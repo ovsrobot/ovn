@@ -2522,9 +2522,39 @@ crush_and_string(struct expr *expr, const struct expr_symbol *symbol)
     return expr_fix(expr);
 }
 
-/* This function expects an OR expression with already crushed sub
- * expressions, so they are plain comparisons.  Result is the same
- * expression, but with unnecessary sub-expressions removed. */
+/* Given 2 CMP expressions for the same maskable symbol, calculates bitmaps
+ * that starts at the same offset, has the same size and cover all the
+ * masked bits in both expressions.  Results are correctly aligned to be
+ * used in bitmap_* functions. */
+static void
+expr_bitmap_mask_range(struct expr *a, struct expr *b,
+                       const struct expr_symbol *symbol,
+                       unsigned long **a_bitmap, unsigned long **b_bitmap,
+                       size_t *start_ofs, size_t *n_bits)
+{
+    ovs_assert(a->type == EXPR_T_CMP);
+    ovs_assert(b->type == EXPR_T_CMP);
+
+    *n_bits = sizeof a->cmp.mask.be64 * CHAR_BIT;
+    *a_bitmap = (unsigned long *) a->cmp.mask.be64;
+    *b_bitmap = (unsigned long *) b->cmp.mask.be64;
+
+    size_t a_start = bitmap_scan(*a_bitmap, 1, 0, *n_bits);
+    size_t b_start = bitmap_scan(*b_bitmap, 1, 0, *n_bits);
+
+    size_t mask_start = MIN(a_start, b_start);
+    size_t mask_end = MIN(MAX(a_start, b_start) + symbol->width, *n_bits);
+    size_t end_ofs = DIV_ROUND_UP(mask_end, BITMAP_ULONG_BITS);
+
+    *start_ofs = mask_start / BITMAP_ULONG_BITS;
+    *a_bitmap += *start_ofs;
+    *b_bitmap += *start_ofs;
+    *n_bits = (end_ofs - *start_ofs) * BITMAP_ULONG_BITS;
+}
+
+/* This function expects an OR expression with already crushed sub-expressions,
+ * so they are plain comparisons.  Result is the same expression, but with
+ * unnecessary sub-expressions removed and the rest combined, if possible. */
 static struct expr *
 crush_or_supersets(struct expr *expr, const struct expr_symbol *symbol)
 {
@@ -2539,6 +2569,7 @@ crush_or_supersets(struct expr *expr, const struct expr_symbol *symbol)
     LIST_FOR_EACH (a, node, &expr->andor) {
         ovs_assert(a->type == EXPR_T_CMP);
 
+check_again:
         if (hmapx_contains(&to_delete, a)) {
             continue;
         }
@@ -2546,21 +2577,19 @@ crush_or_supersets(struct expr *expr, const struct expr_symbol *symbol)
         struct expr *b;
         LIST_FOR_EACH (b, node, &expr->andor) {
             union mf_subvalue tmp_value, tmp_mask;
+            unsigned long *a_mask, *b_mask;
+            size_t ofs, sz;
 
             if (a == b || hmapx_contains(&to_delete, b)) {
                 continue;
             }
 
-            /* Conflicting sub-expressions cannot superseed each other. */
+            expr_bitmap_mask_range(a, b, symbol, &a_mask, &b_mask, &ofs, &sz);
+
+            /* Conflicting sub-expressions cannot superseed each other ... */
             if (mf_subvalue_intersect(&a->cmp.value, &a->cmp.mask,
                                       &b->cmp.value, &b->cmp.mask,
                                       &tmp_value, &tmp_mask)) {
-                const size_t sz = sizeof a->cmp.mask * CHAR_BIT;
-                const unsigned long *a_mask, *b_mask;
-
-                a_mask = (unsigned long *) a->cmp.mask.be64;
-                b_mask = (unsigned long *) b->cmp.mask.be64;
-
                 /* Check if 'a' is a superset of 'b' or the other way around.
                  * Keep the smaller mask. */
                 if (bitmap_is_superset(a_mask, b_mask, sz)) {
@@ -2568,6 +2597,34 @@ crush_or_supersets(struct expr *expr, const struct expr_symbol *symbol)
                     break;
                 } else if (bitmap_is_superset(b_mask, a_mask, sz)) {
                     hmapx_add(&to_delete, b);
+                }
+            } else if (bitmap_equal(a_mask, b_mask, sz)) {
+                /* ... but they can potentially be combined. */
+                unsigned long *a_value, *b_value, *t_value;
+
+                a_value = (unsigned long *) a->cmp.value.be64 + ofs;
+                b_value = (unsigned long *) b->cmp.value.be64 + ofs;
+                t_value = (unsigned long *) tmp_value.be64;
+
+                for (size_t i = 0; i < BITMAP_N_LONGS(sz); i++) {
+                    t_value[i] = (a_value[i] & a_mask[i]) ^
+                                 (b_value[i] & b_mask[i]);
+                }
+                if (bitmap_count1(t_value, sz) == 1) {
+                    /* Same masks, values differ in one bit.  These expressions
+                     * can be replaced with a superset with this one bit
+                     * excluded from the mask. */
+                    size_t bit = bitmap_scan(t_value, 1, 0, sz);
+
+                    bitmap_set0(a_value, bit);
+                    bitmap_set0(a_mask, bit);
+
+                    hmapx_add(&to_delete, b);
+
+                    /* 'a' changed.  Need to check if it became a superset of
+                     * something else or if there are ways to turn it into even
+                     * larger superset. */
+                    goto check_again;
                 }
             }
         }
