@@ -208,6 +208,9 @@ ovn_dbctl_main(int argc, char *argv[],
     if (daemon_mode) {
         server_loop(dbctl_options, idl, argc, argv_);
     } else {
+        /* Disable OVSDB probe interval for non-daemon mode. */
+        ovsdb_idl_set_probe_interval(idl, 0);
+
         struct ctl_command *commands;
         size_t n_commands;
         char *error;
