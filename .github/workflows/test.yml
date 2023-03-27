@@ -19,13 +19,14 @@ jobs:
         libssl-dev llvm-dev libelf-dev libnuma-dev libpcap-dev  \
         selinux-policy-dev ncat python3-scapy isc-dhcp-server
       m32_dependecies: gcc-multilib
-      ARCH:        ${{ matrix.cfg.arch }}
-      CC:          ${{ matrix.cfg.compiler }}
-      LIBS:        ${{ matrix.cfg.libs }}
-      OPTS:        ${{ matrix.cfg.opts }}
-      TESTSUITE:   ${{ matrix.cfg.testsuite }}
-      TEST_RANGE:  ${{ matrix.cfg.test_range }}
-      SANITIZERS:  ${{ matrix.cfg.sanitizers }}
+      ARCH:           ${{ matrix.cfg.arch }}
+      CC:             ${{ matrix.cfg.compiler }}
+      LIBS:           ${{ matrix.cfg.libs }}
+      OPTS:           ${{ matrix.cfg.opts }}
+      TESTSUITE:      ${{ matrix.cfg.testsuite }}
+      TEST_RANGE:     ${{ matrix.cfg.test_range }}
+      SANITIZERS:     ${{ matrix.cfg.sanitizers }}
+      OVS_USE_STABLE: ${{ github.event_name == 'schedule'}}
 
     name: linux ${{ join(matrix.cfg.*, ' ') }}
     runs-on: ubuntu-20.04
@@ -70,15 +71,15 @@ jobs:
       if: github.event_name == 'schedule'
       uses: actions/checkout@v3
 
-    # Weekly runs test using OVS master instead of the
-    # submodule.
-    - name: checkout OVS master
+    # Weekly runs test using the tip of the most recent stable OVS branch
+    # instead of the submodule (OVS_USE_STABLE gets set to "true").
+    - name: checkout OVS
       if: github.event_name == 'schedule'
       uses: actions/checkout@v3
       with:
         repository: 'openvswitch/ovs'
+        fetch-depth: 0
         path: 'ovs'
-        ref: 'master'
 
     - name: update APT cache
       run:  sudo apt update
@@ -137,8 +138,9 @@ jobs:
 
   build-osx:
     env:
-      CC:    clang
-      OPTS:  --disable-ssl
+      CC:             clang
+      OPTS:           --disable-ssl
+      OVS_USE_STABLE: ${{ github.event_name == 'schedule'}}
 
     name:    osx clang --disable-ssl
     runs-on: macos-latest
@@ -156,15 +158,15 @@ jobs:
     - name: checkout without submodule
       if: github.event_name == 'schedule'
       uses: actions/checkout@v3
-    # Weekly runs test using OVS master instead of the
-    # submodule.
-    - name: checkout OVS master
+    # Weekly runs test using the tip of the most recent stable OVS branch
+    # instead of the submodule (OVS_USE_STABLE gets set to "true")
+    - name: checkout OVS
       if: github.event_name == 'schedule'
       uses: actions/checkout@v3
       with:
         repository: 'openvswitch/ovs'
+        fetch-depth: 0
         path: 'ovs'
-        ref: 'master'
     - name: install dependencies
       run:  brew install automake libtool
     - name: update PATH

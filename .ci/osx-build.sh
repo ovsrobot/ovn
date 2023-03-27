@@ -1,13 +1,20 @@
 #!/bin/bash
 
 set -o errexit
+set -x
+
+. ./.ci/util.sh
 
 CFLAGS="-Werror $CFLAGS"
 EXTRA_OPTS=""
+OVS_USE_STABLE=${OVS_USE_STABLE:false}
 
 function configure_ovs()
 {
     pushd ovs
+    if [ "$OVS_USE_STABLE" = "true" ]; then
+        checkout_latest_stable_branch
+    fi
     ./boot.sh && ./configure $*
     make -j4 || { cat config.log; exit 1; }
     popd

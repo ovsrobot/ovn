@@ -3,15 +3,21 @@
 set -o errexit
 set -x
 
+. ./.ci/util.sh
+
 ARCH=${ARCH:-"x86_64"}
 COMMON_CFLAGS=""
 OVN_CFLAGS=""
 OPTS="$OPTS --enable-Werror"
 JOBS=${JOBS:-"-j4"}
+OVS_USE_STABLE=${OVS_USE_STABLE:false}
 
 function configure_ovs()
 {
     pushd ovs
+    if [ "$OVS_USE_STABLE" = "true" ]; then
+        checkout_latest_stable_branch
+    fi
     ./boot.sh && ./configure CFLAGS="${COMMON_CFLAGS}" $* || \
     { cat config.log; exit 1; }
     make $JOBS || { cat config.log; exit 1; }
