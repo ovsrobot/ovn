@@ -5033,6 +5033,8 @@ main(int argc, char *argv[])
         engine_get_internal_data(&en_template_vars);
     struct ed_type_lb_data *lb_data =
         engine_get_internal_data(&en_lb_data);
+    struct hmap *recent_mac_bindings =
+        engine_get_internal_data(&en_recent_mac_bindings);
 
     ofctrl_init(&lflow_output_data->group_table,
                 &lflow_output_data->meter_table,
@@ -5385,14 +5387,13 @@ main(int argc, char *argv[])
                                         ovnsb_idl_loop.idl),
                                     sbrec_service_monitor_table_get(
                                         ovnsb_idl_loop.idl),
-                                    sbrec_mac_binding_table_get(
-                                        ovnsb_idl_loop.idl),
                                     sbrec_bfd_table_get(ovnsb_idl_loop.idl),
                                     br_int, chassis,
                                     &runtime_data->local_datapaths,
                                     &runtime_data->active_tunnels,
                                     &runtime_data->local_active_ports_ipv6_pd,
-                                    &runtime_data->local_active_ports_ras);
+                                    &runtime_data->local_active_ports_ras,
+                                    recent_mac_bindings);
                         stopwatch_stop(PINCTRL_RUN_STOPWATCH_NAME,
                                        time_msec());
                         mirror_run(ovs_idl_txn,
