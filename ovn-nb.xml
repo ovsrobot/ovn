@@ -3026,6 +3026,21 @@ or
             port on the logical router.  It is otherwise ignored.
           </p>
         </column>
+
+        <column name="options" key="hosting-chassis">
+          <p>
+            This option is populated by <code>ovn-northd</code>, rather
+            than by the CMS plugin.
+          </p>
+
+          <p>
+            When a distributed gateway port is bound to a location in
+            the OVN Southbound database
+            <ref db="OVN_Southbound" table="Port_Binding"/>
+            <code>ovn-northd</code> will populate this option with the
+            name of the Chassis that is currently hosting this port.
+          </p>
+        </column>
       </group>
     </group>
 

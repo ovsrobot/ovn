@@ -16746,6 +16746,34 @@ handle_port_binding_changes(struct northd_input *input_data,
 
     SBREC_PORT_BINDING_TABLE_FOR_EACH (sb,
                                        input_data->sbrec_port_binding_table) {
+
+        /* Look for a chassisredirect binding and set the "active-chassis"
+         * option in the NBDB logical_router_port table indicating on which
+         * chassis the distributed port is bond to. */
+        if (!strcmp(sb->type, "chassisredirect")) {
+             const char *dist_port =
+                 smap_get(&sb->options, "distributed-port");
+             if (dist_port) {
+                 struct ovn_port *router_port =
+                     ovn_port_find(ports, dist_port);
+                 if (router_port) {
+                     struct smap options;
+                     smap_clone(&options, &router_port->nbrp->options);
+                     if (sb->chassis) {
+                         smap_replace(&options, "hosting-chassis",
+                                      sb->chassis->name);
+                     } else {
+                         smap_remove(&options, "hosting-chassis");
+                     }
+                     nbrec_logical_router_port_set_options(router_port->nbrp,
+                                                           &options);
+                  }
+             }
+             /* Continue since there are no matching logical port for
+              * chassisredirect bindings */
+             continue;
+        }
+
         struct ovn_port *op = ovn_port_find(ports, sb->logical_port);
 
         if (!op || !op->nbsp) {
