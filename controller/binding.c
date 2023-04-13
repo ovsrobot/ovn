@@ -197,9 +197,7 @@ get_qos_egress_interface_name(struct shash *bridge_mappings,
                 continue;
             }
 
-            bool is_egress_iface = smap_get_bool(&iface_rec->external_ids,
-                                                 "ovn-egress-iface", false);
-            if (is_egress_iface || !strcmp(iface_rec->type, "")) {
+            if (!strcmp(iface_rec->type, "")) {
                 return iface_rec->name;
             }
         }
@@ -457,25 +455,6 @@ add_localnet_egress_interface_mappings(
             &port_binding->options, "qos_physical_network");
     if (qos_physical_network && !strcmp(qos_physical_network, network)) {
             smap_replace(egress_ifaces, port_binding->logical_port, network);
-            return;
-    }
-
-    /* Add egress-ifaces from the connected bridge */
-    for (size_t i = 0; i < br_ln->n_ports; i++) {
-        const struct ovsrec_port *port_rec = br_ln->ports[i];
-
-        for (size_t j = 0; j < port_rec->n_interfaces; j++) {
-            const struct ovsrec_interface *iface_rec;
-
-            iface_rec = port_rec->interfaces[j];
-            bool is_egress_iface = smap_get_bool(&iface_rec->external_ids,
-                                                 "ovn-egress-iface", false);
-            if (!is_egress_iface) {
-                continue;
-            }
-            smap_replace(egress_ifaces, port_binding->logical_port,
-                         network);
-        }
     }
 }
 

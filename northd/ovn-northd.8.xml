@@ -2238,12 +2238,6 @@ output;
         matches on the localnet <code>outport</code> and applies the action
         <code>set_queue(id); output;"</code>.
         </p>
-
-        <p>
-          Please remember to mark the corresponding physical interface with
-          <code>ovn-egress-iface</code> set to true in
-          <ref column="external_ids" table="Interface" db="Open_vSwitch"/>.
-        </p>
       </li>
 
       <li>
