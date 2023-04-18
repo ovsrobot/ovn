@@ -198,7 +198,7 @@ get_qos_egress_port_interface(struct shash *bridge_mappings,
 
             bool is_egress_iface = smap_get_bool(&iface->external_ids,
                                                  "ovn-egress-iface", false);
-            if (is_egress_iface) {
+            if (is_egress_iface || !strcmp(iface->type, "")) {
                 return iface;
             }
         }
@@ -455,6 +455,13 @@ add_localnet_egress_interface_mappings(
     struct ovsrec_bridge *br_ln = shash_find_data(bridge_mappings, network);
     if (!br_ln) {
         return;
+    }
+
+    const char *qos_physical_network = smap_get(
+            &port_binding->options, "qos_physical_network");
+    if (qos_physical_network && !strcmp(qos_physical_network, network)) {
+            smap_replace(egress_ifaces, port_binding->logical_port, network);
+            return;
     }
 
     /* Add egress-ifaces from the connected bridge */
@@ -1497,6 +1504,14 @@ consider_vif_lport_(const struct sbrec_port_binding *pb,
                 tracked_datapath_lport_add(pb, TRACKED_RESOURCE_UPDATED,
                                            b_ctx_out->tracked_dp_bindings);
             }
+
+            const char *qos_physical_network =
+                smap_get(&pb->options, "qos_physical_network");
+            if (qos_physical_network) {
+                smap_replace(b_ctx_out->egress_ifaces, pb->logical_port,
+                             qos_physical_network);
+            }
+
             if (b_lport->lbinding->iface && qos_map && b_ctx_in->ovs_idl_txn) {
                 get_qos_params(pb, qos_map, b_ctx_out->egress_ifaces);
             }
@@ -2946,6 +2961,10 @@ binding_handle_port_binding_changes(struct binding_ctx_in *b_ctx_in,
             shash_add(&deleted_localport_pbs, pb->logical_port, pb);
         } else {
             shash_add(&deleted_other_pbs, pb->logical_port, pb);
+        }
+
+        if (smap_get(&pb->options, "qos_physical_network")) {
+            smap_remove(b_ctx_out->egress_ifaces, pb->logical_port);
         }
     }
 
