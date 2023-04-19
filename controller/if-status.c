@@ -16,6 +16,7 @@
 #include <config.h>
 
 #include "binding.h"
+#include "lport.h"
 #include "if-status.h"
 #include "ofctrl-seqno.h"
 #include "simap.h"
@@ -75,6 +76,9 @@ enum if_state {
     OIF_INSTALLED,        /* Interface flows programmed in OVS and binding
                            * marked "up" in the binding module.
                            */
+    OIF_UPDATE_PORT,      /* Logical ports need to be set down, and pb->chassis
+                           * removed.
+                           */
     OIF_MAX,
 };
 
@@ -85,18 +89,20 @@ static const char *if_state_names[] = {
     [OIF_MARK_UP]          = "MARK_UP",
     [OIF_MARK_DOWN]        = "MARK_DOWN",
     [OIF_INSTALLED]        = "INSTALLED",
+    [OIF_UPDATE_PORT]      = "UPDATE_PORT",
 };
 
 /*
  *       +----------------------+
  * +---> |                      |
- * | +-> |         NULL         | <--------------------------------------+++-+
- * | |   +----------------------+                                            |
- * | |     ^ release_iface   | claim_iface()                                 |
- * | |     |                 V - sbrec_update_chassis(if sb is rw)           |
- * | |   +----------------------+                                            |
- * | |   |                      | <----------------------------------------+ |
- * | |   |       CLAIMED        | <--------------------------------------+ | |
+ * | +-> |         NULL         |
+ * | |   +----------------------+
+ * | |     ^ release_iface   | claim_iface()
+ * | |     |                 V - sbrec_update_chassis(if sb is rw)
+ * | |   +----------------------+
+ * | |   |                      | <------------------------------------------+
+ * | |   |       CLAIMED        | <----------------------------------------+ |
+ * | |   |                      | <--------------------------------------+ | |
  * | |   +----------------------+                                        | | |
  * | |                 |  V  ^                                           | | |
  * | |                 |  |  | handle_claims()                           | | |
@@ -136,25 +142,34 @@ static const char *if_state_names[] = {
  * |               V  V                                                  | | |
  * |   +----------------------+                                          | | |
  * |   |                      |  mgr_run()                               | | |
- * +-- |       MARK_UP        |  - set port up in sb                     | | |
- *     |                      |  - set ovn-installed in ovs              | | |
- *     |                      |  mgr_update()                            | | |
- *     +----------------------+  - sbrec_update_chassis if needed        | | |
- *              |                                                        | | |
- *              | mgr_update(rcvd port up / ovn_installed & chassis set) | | |
- *              V                                                        | | |
- *     +----------------------+                                          | | |
- *     |      INSTALLED       | ------------> claim_iface ---------------+ | |
- *     +----------------------+                                            | |
- *              |                                                          | |
- *              | release_iface                                            | |
- *              V                                                          | |
- *     +----------------------+                                            | |
- *     |                      | ------------> claim_iface -----------------+ |
- *     |      MARK_DOWN       | ------> mgr_update(rcvd port down) ----------+
- *     |                      | mgr_run()
- *     |                      | - set port down in sb
- *     |                      | mgr_update()
+ * +---|       MARK_UP        |  - set port up in sb                     | | |
+ * |   |                      |  - set ovn-installed in ovs              | | |
+ * |   |                      |  mgr_update()                            | | |
+ * |   +----------------------+  - sbrec_update_chassis if needed        | | |
+ * |            |                                                        | | |
+ * |            | mgr_update(rcvd port up / ovn_installed & chassis set) | | |
+ * |            V                                                        | | |
+ * |   +----------------------+                                          | | |
+ * |   |      INSTALLED       | ------------> claim_iface ---------------+ | |
+ * |   +----------------------+                                            | |
+ * |                  |                                                    | |
+ * |                  | release_iface                                      | |
+ * |mgr_update(       |                                                    | |
+ * |  rcvd port down) |                                                    | |
+ * |                  V                                                    | |
+ * |   +----------------------+                                            | |
+ * |   |                      | ------------> claim_iface -----------------+ |
+ * +---+      MARK_DOWN       | mgr_run()                                    |
+ * |   |                      | - set port down in sb                        |
+ * |   |                      | mgr_update(sb is rw)                         |
+ * |   +----------------------+ - sbrec_update_chassis(NULL)                 |
+ * |                  |                                                      |
+ * |                  | mgr_update(local binding not found)                  |
+ * |                  |                                                      |
+ * |                  V                                                      |
+ * |   +----------------------+                                              |
+ * |   |                      | ------------> claim_iface -------------------+
+ * +---+      UPDATE_PORT     | mgr_run()
  *     +----------------------+ - sbrec_update_chassis(NULL)
  */
 
@@ -278,6 +293,7 @@ if_status_mgr_claim_iface(struct if_status_mgr *mgr,
         break;
     case OIF_INSTALLED:
     case OIF_MARK_DOWN:
+    case OIF_UPDATE_PORT:
         ovs_iface_set_state(mgr, iface, OIF_CLAIMED);
         break;
     case OIF_MAX:
@@ -306,9 +322,9 @@ if_status_mgr_release_iface(struct if_status_mgr *mgr, const char *iface_id)
     switch (iface->state) {
     case OIF_CLAIMED:
     case OIF_INSTALL_FLOWS:
-        /* Not yet fully installed interfaces can be safely deleted. */
-        ovs_iface_destroy(mgr, iface);
-        break;
+        /* Not yet fully installed interfaces:
+         * pb->chassis still need to be deleted.
+         */
     case OIF_REM_OLD_OVN_INST:
     case OIF_MARK_UP:
     case OIF_INSTALLED:
@@ -318,6 +334,7 @@ if_status_mgr_release_iface(struct if_status_mgr *mgr, const char *iface_id)
         ovs_iface_set_state(mgr, iface, OIF_MARK_DOWN);
         break;
     case OIF_MARK_DOWN:
+    case OIF_UPDATE_PORT:
         /* Nothing to do here. */
         break;
     case OIF_MAX:
@@ -338,9 +355,9 @@ if_status_mgr_delete_iface(struct if_status_mgr *mgr, const char *iface_id)
     switch (iface->state) {
     case OIF_CLAIMED:
     case OIF_INSTALL_FLOWS:
-        /* Not yet fully installed interfaces can be safely deleted. */
-        ovs_iface_destroy(mgr, iface);
-        break;
+        /* Not yet fully installed interfaces:
+         * pb->chassis still need to be deleted.
+         */
     case OIF_REM_OLD_OVN_INST:
     case OIF_MARK_UP:
     case OIF_INSTALLED:
@@ -350,6 +367,7 @@ if_status_mgr_delete_iface(struct if_status_mgr *mgr, const char *iface_id)
         ovs_iface_set_state(mgr, iface, OIF_MARK_DOWN);
         break;
     case OIF_MARK_DOWN:
+    case OIF_UPDATE_PORT:
         /* Nothing to do here. */
         break;
     case OIF_MAX:
@@ -403,6 +421,7 @@ void
 if_status_mgr_update(struct if_status_mgr *mgr,
                      struct local_binding_data *binding_data,
                      const struct sbrec_chassis *chassis_rec,
+                     struct ovsdb_idl_index *sbrec_port_binding_by_name,
                      const struct ovsrec_interface_table *iface_table,
                      bool ovs_readonly,
                      bool sb_readonly)
@@ -459,6 +478,10 @@ if_status_mgr_update(struct if_status_mgr *mgr,
     HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_MARK_DOWN]) {
         struct ovs_iface *iface = node->data;
 
+        if (!local_binding_find(bindings, iface->id)) {
+            ovs_iface_set_state(mgr, iface, OIF_UPDATE_PORT);
+            continue;
+        }
         if (!sb_readonly) {
             local_binding_set_pb(bindings, iface->id, chassis_rec,
                                  NULL, false);
@@ -506,6 +529,21 @@ if_status_mgr_update(struct if_status_mgr *mgr,
         }
     }
 
+    if (!sb_readonly) {
+        HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_UPDATE_PORT]) {
+            struct ovs_iface *iface = node->data;
+            port_binding_set_down(sbrec_port_binding_by_name, chassis_rec,
+                                  iface->id);
+            ovs_iface_destroy(mgr, node->data);
+        }
+    } else {
+        HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_UPDATE_PORT]) {
+            struct ovs_iface *iface = node->data;
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_INFO_RL(&rl, "Not setting lport %s down as sb is readonly",
+                         iface->id);
+        }
+    }
     /* Register for a notification about flows being installed in OVS for all
      * newly claimed interfaces for which pb->chassis has been updated.
      * Request a seqno update when the flows for new interfaces have been

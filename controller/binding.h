@@ -204,6 +204,10 @@ void set_pb_chassis_in_sbrec(const struct sbrec_port_binding *pb,
 void remove_ovn_installed_for_uuid(const struct ovsrec_interface_table *,
                                    const struct uuid *);
 
+void port_binding_set_down(struct ovsdb_idl_index *sbrec_port_binding_by_name,
+                           const struct sbrec_chassis *chassis_rec,
+                           const char *iface_id);
+
 /* Corresponds to each Port_Binding.type. */
 enum en_lport_type {
     LP_UNKNOWN,

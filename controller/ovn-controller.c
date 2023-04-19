@@ -5243,6 +5243,7 @@ main(int argc, char *argv[])
                     stopwatch_start(IF_STATUS_MGR_UPDATE_STOPWATCH_NAME,
                                     time_msec());
                     if_status_mgr_update(if_mgr, binding_data, chassis,
+                                         sbrec_port_binding_by_name,
                                          ovsrec_interface_table_get(
                                                     ovs_idl_loop.idl),
                                          !ovs_idl_txn,

@@ -912,7 +912,6 @@ local_binding_set_down(struct shash *local_bindings, const char *pb_name,
 
     if (!sb_readonly && b_lport && b_lport->pb->n_up && b_lport->pb->up[0] &&
             (!b_lport->pb->chassis || b_lport->pb->chassis == chassis_rec)) {
-        VLOG_INFO("Setting lport %s down in Southbound", pb_name);
         binding_lport_set_down(b_lport, sb_readonly);
         LIST_FOR_EACH (b_lport, list_node, &lbinding->binding_lports) {
             binding_lport_set_down(b_lport, sb_readonly);
@@ -3389,6 +3388,24 @@ binding_lport_delete(struct shash *binding_lports,
     binding_lport_destroy(b_lport);
 }
 
+void
+port_binding_set_down(struct ovsdb_idl_index *sbrec_port_binding_by_name,
+                           const struct sbrec_chassis *chassis_rec,
+                           const char *iface_id)
+{
+        const struct sbrec_port_binding *pb = lport_lookup_by_name(
+            sbrec_port_binding_by_name, iface_id);
+
+        if (!pb || sbrec_port_binding_is_deleted(pb)) {
+            VLOG_DBG("port_binding already deleted for %s", iface_id);
+        } else if (pb->n_up && pb->up[0]) {
+            bool up = false;
+            sbrec_port_binding_set_up(pb, &up, 1);
+            VLOG_INFO("Setting lport %s down in Southbound", iface_id);
+            set_pb_chassis_in_sbrec(pb, chassis_rec, false);
+        }
+}
+
 static void
 binding_lport_set_up(struct binding_lport *b_lport, bool sb_readonly)
 {
@@ -3406,6 +3423,7 @@ binding_lport_set_down(struct binding_lport *b_lport, bool sb_readonly)
     if (sb_readonly || !b_lport || !b_lport->pb->n_up || !b_lport->pb->up[0]) {
         return;
     }
+    VLOG_INFO("Setting lport %s down in Southbound", b_lport->name);
 
     bool up = false;
     sbrec_port_binding_set_up(b_lport->pb, &up, 1);

@@ -36,6 +36,7 @@ void if_status_mgr_delete_iface(struct if_status_mgr *, const char *iface_id);
 
 void if_status_mgr_update(struct if_status_mgr *, struct local_binding_data *,
                           const struct sbrec_chassis *chassis,
+                          struct ovsdb_idl_index *sbrec_port_binding_by_name,
                           const struct ovsrec_interface_table *iface_table,
                           bool ovs_readonly,
                           bool sb_readonly);
