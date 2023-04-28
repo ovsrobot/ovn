@@ -4181,19 +4181,22 @@ pinctrl_destroy(void)
 
 /* Buffered "put_mac_binding" operation. */
 
+#define MAX_MAC_BINDING_DELAY_MSEC 50
+#define MAX_MAC_BINDINGS           1000
+
 /* Contains "struct mac_binding"s. */
-static struct hmap put_mac_bindings;
+static struct mac_bindings_map put_mac_bindings;
 
 static void
 init_put_mac_bindings(void)
 {
-    ovn_mac_bindings_init(&put_mac_bindings);
+    ovn_mac_bindings_map_init(&put_mac_bindings, MAX_MAC_BINDINGS);
 }
 
 static void
 destroy_put_mac_bindings(void)
 {
-    ovn_mac_bindings_destroy(&put_mac_bindings);
+    ovn_mac_bindings_map_destroy(&put_mac_bindings);
 }
 
 /* Called with in the pinctrl_handler thread context. */
@@ -4216,11 +4219,12 @@ pinctrl_handle_put_mac_binding(const struct flow *md,
 
     /* If the ARP reply was unicast we should not delay it,
      * there won't be any race. */
-    bool is_unicast = !eth_addr_is_multicast(headers->dl_dst);
+    uint32_t delay = eth_addr_is_multicast(headers->dl_dst)
+                     ? random_range(MAX_MAC_BINDING_DELAY_MSEC) + 1
+                     : 0;
     struct mac_binding *mb = ovn_mac_binding_add(&put_mac_bindings, dp_key,
                                                  port_key, &ip_key,
-                                                 headers->dl_src,
-                                                 is_unicast);
+                                                 headers->dl_src, delay);
     if (!mb) {
         COVERAGE_INC(pinctrl_drop_put_mac_binding);
         return;
@@ -4390,8 +4394,8 @@ run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
     long long now = time_msec();
 
     struct mac_binding *mb;
-    HMAP_FOR_EACH_SAFE (mb, hmap_node, &put_mac_bindings) {
-        if (ovn_mac_binding_can_commit(mb, now)) {
+    HMAP_FOR_EACH_SAFE (mb, hmap_node, &put_mac_bindings.map) {
+        if (ovn_is_mac_binding_timestamp_past(mb, now)) {
             run_put_mac_binding(ovnsb_idl_txn,
                                 sbrec_datapath_binding_by_key,
                                 sbrec_port_binding_by_key,
@@ -4472,8 +4476,8 @@ static void
 wait_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn)
     OVS_REQUIRES(pinctrl_mutex)
 {
-    if (ovnsb_idl_txn && !hmap_is_empty(&put_mac_bindings)) {
-        ovn_mac_binding_wait(&put_mac_bindings);
+    if (ovnsb_idl_txn) {
+        ovn_mac_bindings_map_wait(&put_mac_bindings);
     }
 }
 
