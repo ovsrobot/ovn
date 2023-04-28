@@ -195,6 +195,8 @@ char *normalize_ipv4_prefix(ovs_be32 ipv4, unsigned int plen);
 char *normalize_ipv6_prefix(const struct in6_addr *ipv6, unsigned int plen);
 char *normalize_v46_prefix(const struct in6_addr *prefix, unsigned int plen);
 
+bool ip_parse_mapped(const char *ip_str, struct in6_addr *ip);
+
 /* Temporary util function until ovs library has smap_get_unit. */
 unsigned int ovn_smap_get_uint(const struct smap *smap, const char *key,
                                unsigned int def);
