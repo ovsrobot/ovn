@@ -45,6 +45,7 @@
 #include "lib/vswitch-idl.h"
 #include "local_data.h"
 #include "lport.h"
+#include "mac-learn.h"
 #include "memory.h"
 #include "ofctrl.h"
 #include "ofctrl-seqno.h"
@@ -4303,6 +4304,177 @@ pflow_output_debug_handler(struct engine_node *node, void *data)
     return true;
 }
 
+static void
+recent_mac_bindings_add(struct mac_bindings_map *recent_mbs,
+                        const struct sbrec_mac_binding *smb,
+                        const struct hmap *local_datapaths,
+                        struct ovsdb_idl_index *sbrec_port_binding_by_name)
+{
+    struct in6_addr ip;
+    struct eth_addr mac;
+
+    if (!get_local_datapath(local_datapaths, smb->datapath->tunnel_key)) {
+        return;
+    }
+
+    const struct sbrec_port_binding *pb =
+        lport_lookup_by_name(sbrec_port_binding_by_name, smb->logical_port);
+    if (!pb) {
+        return;
+    }
+
+    if (!eth_addr_from_string(smb->mac, &mac)) {
+        return;
+    }
+
+    if (!ip_parse_mapped(smb->ip, &ip)) {
+        return;
+    }
+
+    /* Give the recent mac_binding entry bigger timeout than the buffered
+     * packet in case the MAC binding is created earlier. */
+    ovn_mac_binding_add(recent_mbs, smb->datapath->tunnel_key, pb->tunnel_key,
+                        &ip, mac, 2 * OVN_BUFFERED_PACKETS_TIMEOUT);
+
+    const char *redirect_port =
+        smap_get(&pb->options, "chassis-redirect-port");
+    if (!redirect_port) {
+        return;
+    }
+
+    pb = lport_lookup_by_name(sbrec_port_binding_by_name, redirect_port);
+    if (!pb || pb->datapath->tunnel_key != smb->datapath->tunnel_key ||
+        strcmp(pb->type, "chassisredirect")) {
+        return;
+    }
+
+    /* Add the same entry also for chassisredirect port as the traffic might
+     * be buffered on the cr port. */
+    ovn_mac_binding_add(recent_mbs, smb->datapath->tunnel_key, pb->tunnel_key,
+                        &ip, mac, 2 * OVN_BUFFERED_PACKETS_TIMEOUT);
+}
+
+static void *
+en_recent_mac_bindings_init(struct engine_node *node OVS_UNUSED,
+                            struct engine_arg *arg OVS_UNUSED)
+{
+    struct mac_bindings_map *recent_mbs = xmalloc(sizeof *recent_mbs);
+    ovn_mac_bindings_map_init(recent_mbs, 0);
+
+    return recent_mbs;
+}
+
+static void
+en_recent_mac_bindings_cleanup(void *data)
+{
+    struct mac_bindings_map *recent_mbs = data;
+    ovn_mac_bindings_map_destroy(recent_mbs);
+}
+
+static void
+en_recent_mac_bindings_clear_tracked_data(void *data)
+{
+    long long now = time_msec();
+    struct mac_bindings_map *recent_mbs = data;
+
+    struct mac_binding *mb;
+    HMAP_FOR_EACH_SAFE (mb, hmap_node, &recent_mbs->map) {
+        if (ovn_is_mac_binding_timestamp_past(mb, now)) {
+            ovn_mac_binding_remove(mb, recent_mbs);
+        }
+    }
+}
+
+static void
+en_recent_mac_bindings_run(struct engine_node *node, void *data)
+{
+    struct mac_bindings_map *recent_mbs = data;
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+    const struct sbrec_mac_binding_table *mac_binding_table =
+        EN_OVSDB_GET(engine_get_input("SB_mac_binding", node));
+    struct ovsdb_idl_index *sbrec_port_binding_by_name =
+        engine_ovsdb_node_get_index(
+            engine_get_input("SB_port_binding", node),
+            "name");
+
+    const struct sbrec_mac_binding *smb;
+    SBREC_MAC_BINDING_TABLE_FOR_EACH (smb, mac_binding_table) {
+        recent_mac_bindings_add(recent_mbs, smb, &rt_data->local_datapaths,
+                                sbrec_port_binding_by_name);
+    }
+}
+
+static bool
+recent_mac_bindings_mac_binding_handler(struct engine_node *node, void *data)
+{
+    struct mac_bindings_map *recent_mbs = data;
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+    const struct sbrec_mac_binding_table *mac_binding_table =
+        EN_OVSDB_GET(engine_get_input("SB_mac_binding", node));
+    struct ovsdb_idl_index *sbrec_port_binding_by_name =
+        engine_ovsdb_node_get_index(
+            engine_get_input("SB_port_binding", node),
+            "name");
+
+    const struct sbrec_mac_binding *smb;
+    SBREC_MAC_BINDING_TABLE_FOR_EACH_TRACKED (smb, mac_binding_table) {
+        /* The deleted entry will expire eventually. */
+        if (sbrec_mac_binding_is_deleted(smb)) {
+            continue;
+        }
+
+        recent_mac_bindings_add(recent_mbs, smb, &rt_data->local_datapaths,
+                                sbrec_port_binding_by_name);
+    }
+
+    engine_set_node_state(node, EN_UPDATED);
+    return true;
+}
+
+static bool
+recent_mac_bindings_runtime_data_handler(struct engine_node *node, void *data)
+{
+    struct mac_bindings_map *recent_mbs = data;
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+    struct ovsdb_idl_index *smb_by_datapath =
+        engine_ovsdb_node_get_index(
+            engine_get_input("SB_mac_binding", node),
+            "datapath");
+    struct ovsdb_idl_index *sbrec_port_binding_by_name =
+        engine_ovsdb_node_get_index(
+            engine_get_input("SB_port_binding", node),
+            "name");
+
+    if (!rt_data->tracked) {
+        return false;
+    }
+
+    struct tracked_datapath *tdp;
+    HMAP_FOR_EACH (tdp, node, &rt_data->tracked_dp_bindings) {
+        if (tdp->tracked_type != TRACKED_RESOURCE_NEW) {
+            continue;
+        }
+
+        struct sbrec_mac_binding *mb_index_row =
+            sbrec_mac_binding_index_init_row(smb_by_datapath);
+        sbrec_mac_binding_index_set_datapath(mb_index_row, tdp->dp);
+
+        const struct sbrec_mac_binding *smb;
+        SBREC_MAC_BINDING_FOR_EACH_EQUAL (smb, mb_index_row, smb_by_datapath) {
+            recent_mac_bindings_add(recent_mbs, smb, &rt_data->local_datapaths,
+                                    sbrec_port_binding_by_name);
+        }
+
+        sbrec_mac_binding_index_destroy_row(mb_index_row);
+    }
+
+    engine_set_node_state(node, EN_UPDATED);
+    return true;
+}
+
 static void *
 en_controller_output_init(struct engine_node *node OVS_UNUSED,
                           struct engine_arg *arg OVS_UNUSED)
@@ -4334,6 +4506,14 @@ controller_output_pflow_output_handler(struct engine_node *node,
 static bool
 controller_output_lflow_output_handler(struct engine_node *node,
                                        void *data OVS_UNUSED)
+{
+    engine_set_node_state(node, EN_UPDATED);
+    return true;
+}
+
+static bool
+controller_output_recent_mac_bindings_handler(struct engine_node *node,
+                                              void *data OVS_UNUSED)
 {
     engine_set_node_state(node, EN_UPDATED);
     return true;
@@ -4611,6 +4791,8 @@ main(int argc, char *argv[])
     ENGINE_NODE(northd_options, "northd_options");
     ENGINE_NODE(dhcp_options, "dhcp_options");
     ENGINE_NODE_WITH_CLEAR_TRACK_DATA(lb_data, "lb_data");
+    ENGINE_NODE_WITH_CLEAR_TRACK_DATA(recent_mac_bindings,
+                                      "recent_mac_bindings");
 
 #define SB_NODE(NAME, NAME_STR) ENGINE_NODE_SB(NAME, NAME_STR);
     SB_NODES
@@ -4783,10 +4965,21 @@ main(int argc, char *argv[])
     engine_add_input(&en_runtime_data, &en_ovs_interface_shadow,
                      runtime_data_ovs_interface_shadow_handler);
 
+    engine_add_input(&en_recent_mac_bindings, &en_sb_mac_binding,
+                     recent_mac_bindings_mac_binding_handler);
+    engine_add_input(&en_recent_mac_bindings, &en_runtime_data,
+                     recent_mac_bindings_runtime_data_handler);
+    /* Using a noop handler since we really need just access to the index
+     * which allows us to filter port binding by name. */
+    engine_add_input(&en_recent_mac_bindings, &en_sb_port_binding,
+                     engine_noop_handler);
+
     engine_add_input(&en_controller_output, &en_lflow_output,
                      controller_output_lflow_output_handler);
     engine_add_input(&en_controller_output, &en_pflow_output,
                      controller_output_pflow_output_handler);
+    engine_add_input(&en_controller_output, &en_recent_mac_bindings,
+                     controller_output_recent_mac_bindings_handler);
 
     struct engine_arg engine_arg = {
         .sb_idl = ovnsb_idl_loop.idl,
@@ -4832,6 +5025,8 @@ main(int argc, char *argv[])
         engine_get_internal_data(&en_template_vars);
     struct ed_type_lb_data *lb_data =
         engine_get_internal_data(&en_lb_data);
+    struct mac_bindings_map *recent_mac_bindings =
+        engine_get_internal_data(&en_recent_mac_bindings);
 
     ofctrl_init(&lflow_output_data->group_table,
                 &lflow_output_data->meter_table,
@@ -5185,14 +5380,13 @@ main(int argc, char *argv[])
                                         ovnsb_idl_loop.idl),
                                     sbrec_service_monitor_table_get(
                                         ovnsb_idl_loop.idl),
-                                    sbrec_mac_binding_table_get(
-                                        ovnsb_idl_loop.idl),
                                     sbrec_bfd_table_get(ovnsb_idl_loop.idl),
                                     br_int, chassis,
                                     &runtime_data->local_datapaths,
                                     &runtime_data->active_tunnels,
                                     &runtime_data->local_active_ports_ipv6_pd,
-                                    &runtime_data->local_active_ports_ras);
+                                    &runtime_data->local_active_ports_ras,
+                                    recent_mac_bindings);
                         stopwatch_stop(PINCTRL_RUN_STOPWATCH_NAME,
                                        time_msec());
                         mirror_run(ovs_idl_txn,

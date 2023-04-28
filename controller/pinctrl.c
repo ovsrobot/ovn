@@ -180,9 +180,7 @@ static struct pinctrl pinctrl;
 
 static void init_buffered_packets_ctx(void);
 static void destroy_buffered_packets_ctx(void);
-static void
-run_buffered_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                     const struct sbrec_mac_binding_table *mac_binding_table)
+static void run_buffered_binding(const struct mac_bindings_map *recent_mbs)
     OVS_REQUIRES(pinctrl_mutex);
 
 static void pinctrl_handle_put_mac_binding(const struct flow *md,
@@ -3438,14 +3436,14 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             const struct sbrec_dns_table *dns_table,
             const struct sbrec_controller_event_table *ce_table,
             const struct sbrec_service_monitor_table *svc_mon_table,
-            const struct sbrec_mac_binding_table *mac_binding_table,
             const struct sbrec_bfd_table *bfd_table,
             const struct ovsrec_bridge *br_int,
             const struct sbrec_chassis *chassis,
             const struct hmap *local_datapaths,
             const struct sset *active_tunnels,
             const struct shash *local_active_ports_ipv6_pd,
-            const struct shash *local_active_ports_ras)
+            const struct shash *local_active_ports_ras,
+            const struct mac_bindings_map *recent_mac_bindings)
 {
     ovs_mutex_lock(&pinctrl_mutex);
     run_put_mac_bindings(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
@@ -3468,7 +3466,7 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                   sbrec_port_binding_by_key,
                   sbrec_igmp_groups,
                   sbrec_ip_multicast_opts);
-    run_buffered_binding(sbrec_port_binding_by_name, mac_binding_table);
+    run_buffered_binding(recent_mac_bindings);
     sync_svc_monitors(ovnsb_idl_txn, svc_mon_table, sbrec_port_binding_by_name,
                       chassis);
     bfd_monitor_run(ovnsb_idl_txn, bfd_table, sbrec_port_binding_by_name,
@@ -4259,59 +4257,14 @@ run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
 }
 
 static void
-run_buffered_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                     const struct sbrec_mac_binding_table *mac_binding_table)
+run_buffered_binding(const struct mac_bindings_map *recent_mbs)
     OVS_REQUIRES(pinctrl_mutex)
 {
     if (!ovn_buffered_packets_ctx_has_packets(&buffered_packets_ctx)) {
         return;
     }
 
-    struct mac_bindings_map recent_mbs;
-    ovn_mac_bindings_map_init(&recent_mbs, 0);
-
-    const struct sbrec_mac_binding *smb;
-    SBREC_MAC_BINDING_TABLE_FOR_EACH_TRACKED (smb, mac_binding_table) {
-        const struct sbrec_port_binding *pb = lport_lookup_by_name(
-            sbrec_port_binding_by_name, smb->logical_port);
-        if (!pb || !pb->datapath) {
-            continue;
-        }
-
-        struct in6_addr ip;
-        if (!ip_parse_mapped(smb->ip, &ip)) {
-            continue;
-        }
-
-        struct eth_addr mac;
-        if (!eth_addr_from_string(smb->mac, &mac)) {
-            continue;
-        }
-
-        ovn_mac_binding_add(&recent_mbs, smb->datapath->tunnel_key,
-                            pb->tunnel_key, &ip, mac, 0);
-
-        const char *redirect_port =
-            smap_get(&pb->options, "chassis-redirect-port");
-        if (!redirect_port) {
-            continue;
-        }
-
-        pb = lport_lookup_by_name(sbrec_port_binding_by_name, redirect_port);
-        if (!pb || pb->datapath->tunnel_key != smb->datapath->tunnel_key ||
-            strcmp(pb->type, "chassisredirect")) {
-            continue;
-        }
-
-        /* Add the same entry also for chassisredirect port as the buffered
-         * traffic might be buffered on the cr port. */
-        ovn_mac_binding_add(&recent_mbs, smb->datapath->tunnel_key,
-                            pb->tunnel_key, &ip, mac, 0);
-    }
-
-    ovn_buffered_packets_ctx_run(&buffered_packets_ctx, &recent_mbs);
-
-    ovn_mac_bindings_map_destroy(&recent_mbs);
+    ovn_buffered_packets_ctx_run(&buffered_packets_ctx, recent_mbs);
 
     if (ovn_buffered_packets_ctx_is_ready_to_send(&buffered_packets_ctx)) {
         notify_pinctrl_handler();

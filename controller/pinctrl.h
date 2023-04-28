@@ -36,7 +36,7 @@ struct sbrec_controller_event_table;
 struct sbrec_service_monitor_table;
 struct sbrec_bfd_table;
 struct sbrec_port_binding;
-struct sbrec_mac_binding_table;
+struct mac_bindings_map;
 
 void pinctrl_init(void);
 void pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
@@ -51,13 +51,13 @@ void pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                  const struct sbrec_dns_table *,
                  const struct sbrec_controller_event_table *,
                  const struct sbrec_service_monitor_table *,
-                 const struct sbrec_mac_binding_table *,
                  const struct sbrec_bfd_table *,
                  const struct ovsrec_bridge *, const struct sbrec_chassis *,
                  const struct hmap *local_datapaths,
                  const struct sset *active_tunnels,
                  const struct shash *local_active_ports_ipv6_pd,
-                 const struct shash *local_active_ports_ras);
+                 const struct shash *local_active_ports_ras,
+                 const struct mac_bindings_map *recent_mac_bindings);
 void pinctrl_wait(struct ovsdb_idl_txn *ovnsb_idl_txn);
 void pinctrl_destroy(void);
 void pinctrl_set_br_int_name(const char *br_int_name);

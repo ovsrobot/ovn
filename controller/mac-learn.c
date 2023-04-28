@@ -241,7 +241,6 @@ ovn_buffered_packets_ctx_run(struct buffered_packets_ctx *ctx,
     long long now = time_msec();
 
     struct buffered_packets *bp;
-
     HMAP_FOR_EACH_SAFE (bp, hmap_node, &ctx->buffered_packets) {
         /* Remove expired buffered packets. */
         if (now > bp->expire) {
