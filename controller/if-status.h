@@ -29,6 +29,7 @@ void if_status_mgr_destroy(struct if_status_mgr *);
 void if_status_mgr_claim_iface(struct if_status_mgr *,
                                const struct sbrec_port_binding *pb,
                                const struct sbrec_chassis *chassis_rec,
+                               const struct ovsrec_interface *iface_rec,
                                bool sb_readonly);
 void if_status_mgr_release_iface(struct if_status_mgr *, const char *iface_id);
 void if_status_mgr_delete_iface(struct if_status_mgr *, const char *iface_id);
@@ -48,5 +49,7 @@ bool if_status_handle_claims(struct if_status_mgr *mgr,
                              const struct sbrec_chassis *chassis_rec,
                              struct hmap *tracked_datapath,
                              bool sb_readonly);
+uint16_t if_status_mgr_iface_get_mtu(const struct if_status_mgr *mgr,
+                                     const char *iface_id);
 
 # endif /* controller/if-status.h */

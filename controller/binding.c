@@ -1228,7 +1228,7 @@ claim_lport(const struct sbrec_port_binding *pb,
                 }
                 set_pb_chassis_in_sbrec(pb, chassis_rec, true);
             } else {
-                if_status_mgr_claim_iface(if_mgr, pb, chassis_rec,
+                if_status_mgr_claim_iface(if_mgr, pb, chassis_rec, iface_rec,
                                           sb_readonly);
             }
             register_claim_timestamp(pb->logical_port, now);
@@ -1241,7 +1241,7 @@ claim_lport(const struct sbrec_port_binding *pb,
             } else {
                 if (pb->n_up && !pb->up[0]) {
                     if_status_mgr_claim_iface(if_mgr, pb, chassis_rec,
-                                              sb_readonly);
+                                              iface_rec, sb_readonly);
                 }
             }
         }
