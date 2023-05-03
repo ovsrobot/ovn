@@ -226,7 +226,7 @@ if_status_mgr_claim_iface(struct if_status_mgr *mgr,
                           const struct sbrec_port_binding *pb,
                           const struct sbrec_chassis *chassis_rec,
                           const struct ovsrec_interface *iface_rec,
-                          bool sb_readonly)
+                          bool sb_readonly, enum can_bind bind_type)
 {
     const char *iface_id = pb->logical_port;
     struct ovs_iface *iface = shash_find_data(&mgr->ifaces, iface_id);
@@ -236,7 +236,11 @@ if_status_mgr_claim_iface(struct if_status_mgr *mgr,
     }
 
     if (!sb_readonly) {
-        set_pb_chassis_in_sbrec(pb, chassis_rec, true);
+        if (bind_type == CAN_BIND_AS_MAIN) {
+            set_pb_chassis_in_sbrec(pb, chassis_rec, true);
+        } else if (bind_type == CAN_BIND_AS_ADDITIONAL) {
+            set_pb_additional_chassis_in_sbrec(pb, chassis_rec, true);
+        }
     }
 
     switch (iface->state) {

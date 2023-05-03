@@ -194,6 +194,10 @@ bool is_additional_chassis(const struct sbrec_port_binding *pb,
 void set_pb_chassis_in_sbrec(const struct sbrec_port_binding *pb,
                              const struct sbrec_chassis *chassis_rec,
                              bool is_set);
+void
+set_pb_additional_chassis_in_sbrec(const struct sbrec_port_binding *pb,
+                                   const struct sbrec_chassis *chassis_rec,
+                                   bool is_set);
 
 /* Corresponds to each Port_Binding.type. */
 enum en_lport_type {
