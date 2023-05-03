@@ -29,6 +29,17 @@
 #define ROUTE_ORIGIN_CONNECTED "connected"
 #define ROUTE_ORIGIN_STATIC "static"
 
+#define ETH_HEADER_LENGTH 14
+#define ETH_CRC_LENGTH 4
+#define ETHERNET_OVERHEAD (ETH_HEADER_LENGTH + ETH_CRC_LENGTH)
+
+#define IPV4_HEADER_LEN 20
+#define IPV6_HEADER_LEN 40
+
+#define GENEVE_TUNNEL_OVERHEAD 38
+#define STT_TUNNEL_OVERHEAD 18
+#define VXLAN_TUNNEL_OVERHEAD 30
+
 struct eth_addr;
 struct nbrec_logical_router_port;
 struct ovsrec_flow_sample_collector_set_table;

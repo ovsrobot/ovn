@@ -57,6 +57,7 @@ struct physical_ctx {
     const struct sbrec_chassis_table *chassis_table;
     const struct sbrec_chassis *chassis;
     const struct sset *active_tunnels;
+    const struct if_status_mgr *if_mgr;
     struct hmap *local_datapaths;
     struct sset *local_lports;
     const struct simap *ct_zones;
