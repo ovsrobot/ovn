@@ -4083,6 +4083,9 @@ static void init_physical_ctx(struct engine_node *node,
     p_ctx->patch_ofports = &non_vif_data->patch_ofports;
     p_ctx->chassis_tunnels = &non_vif_data->chassis_tunnels;
 
+    struct controller_engine_ctx *ctrl_ctx = engine_get_context()->client_ctx;
+    p_ctx->if_mgr = ctrl_ctx->if_mgr;
+
     pflow_output_get_debug(node, &p_ctx->debug);
 }
 
