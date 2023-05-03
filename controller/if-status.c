@@ -18,6 +18,7 @@
 #include "binding.h"
 #include "if-status.h"
 #include "ofctrl-seqno.h"
+#include "ovsport.h"
 #include "simap.h"
 
 #include "lib/hmapx.h"
@@ -500,21 +501,25 @@ ovs_iface_account_mem(const char *iface_id, bool erase)
     }
 }
 
-static uint16_t
-get_iface_mtu(const struct ovsrec_interface *iface)
-{
-    if (!iface || !iface->n_mtu || iface->mtu[0] <= 0) {
-        return 0;
-    }
-    return (uint16_t) iface->mtu[0];
-}
-
 uint16_t
 if_status_mgr_iface_get_mtu(const struct if_status_mgr *mgr,
                             const char *iface_id)
 {
     const struct ovs_iface *iface = shash_find_data(&mgr->ifaces, iface_id);
     return iface ? iface->mtu : 0;
+}
+
+bool
+if_status_mgr_iface_set_mtu(const struct if_status_mgr *mgr,
+                            const char *iface_id,
+                            uint16_t mtu)
+{
+    struct ovs_iface *iface = shash_find_data(&mgr->ifaces, iface_id);
+    if (iface && iface->mtu != mtu) {
+        iface->mtu = mtu;
+        return true;
+    }
+    return false;
 }
 
 static struct ovs_iface *
