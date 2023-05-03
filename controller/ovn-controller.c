@@ -60,6 +60,7 @@
 #include "lib/ovn-dirs.h"
 #include "lib/ovn-sb-idl.h"
 #include "lib/ovn-util.h"
+#include "ovsport.h"
 #include "patch.h"
 #include "vif-plug.h"
 #include "vif-plug-provider.h"
@@ -1056,6 +1057,7 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_name);
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_bfd);
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_bfd_status);
+    ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_mtu);
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_type);
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_options);
     ovsdb_idl_track_add_column(ovs_idl, &ovsrec_interface_col_ofport);
@@ -4046,6 +4048,9 @@ static void init_physical_ctx(struct engine_node *node,
     const struct ed_type_mff_ovn_geneve *ed_mff_ovn_geneve =
         engine_get_input_data("mff_ovn_geneve", node);
 
+    const struct ovsrec_interface_table *ovs_interface_table =
+        EN_OVSDB_GET(engine_get_input("OVS_interface", node));
+
     const struct ovsrec_open_vswitch_table *ovs_table =
         EN_OVSDB_GET(engine_get_input("OVS_open_vswitch", node));
     const struct ovsrec_bridge_table *bridge_table =
@@ -4070,6 +4075,7 @@ static void init_physical_ctx(struct engine_node *node,
     p_ctx->sbrec_port_binding_by_name = sbrec_port_binding_by_name;
     p_ctx->sbrec_port_binding_by_datapath = sbrec_port_binding_by_datapath;
     p_ctx->port_binding_table = port_binding_table;
+    p_ctx->ovs_interface_table = ovs_interface_table;
     p_ctx->mc_group_table = multicast_group_table;
     p_ctx->br_int = br_int;
     p_ctx->chassis_table = chassis_table;
@@ -4127,6 +4133,71 @@ en_pflow_output_run(struct engine_node *node, void *data)
     physical_run(&p_ctx, pflow_table);
 
     engine_set_node_state(node, EN_UPDATED);
+}
+
+static bool
+pflow_output_ovs_interface_handler(struct engine_node *node,
+                                   void *data)
+{
+    enum engine_node_state state = EN_UNCHANGED;
+
+    struct ed_type_pflow_output *pfo = data;
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+    struct ed_type_non_vif_data *non_vif_data =
+        engine_get_input_data("non_vif_data", node);
+
+    struct physical_ctx p_ctx;
+    init_physical_ctx(node, rt_data, non_vif_data, &p_ctx);
+
+    const struct ovsrec_interface *iface;
+    const struct ovsrec_interface_table *ovs_interface_table =
+        p_ctx.ovs_interface_table;
+    OVSREC_INTERFACE_TABLE_FOR_EACH_TRACKED (iface, ovs_interface_table) {
+        const char *iface_id = smap_get(&iface->external_ids, "iface-id");
+        if (!iface_id) {
+            continue;
+        }
+
+        uint16_t mtu = get_iface_mtu(iface);
+        if (!if_status_mgr_iface_set_mtu(p_ctx.if_mgr, iface_id, mtu)) {
+            continue;
+        }
+        const struct sbrec_port_binding *pb = lport_lookup_by_name(
+            p_ctx.sbrec_port_binding_by_name, iface_id);
+        if (!pb) {
+            continue;
+        }
+        if (pb->n_additional_chassis) {
+            /* Update flows for all ports in datapath. */
+            struct sbrec_port_binding *target =
+                sbrec_port_binding_index_init_row(
+                    p_ctx.sbrec_port_binding_by_datapath);
+            sbrec_port_binding_index_set_datapath(target, pb->datapath);
+
+            const struct sbrec_port_binding *binding;
+            SBREC_PORT_BINDING_FOR_EACH_EQUAL (
+                    binding, target, p_ctx.sbrec_port_binding_by_datapath) {
+                bool removed = sbrec_port_binding_is_deleted(binding);
+                if (!physical_handle_flows_for_lport(binding, removed, &p_ctx,
+                                                     &pfo->flow_table)) {
+                    return false;
+                }
+                state = EN_UPDATED;
+            }
+            sbrec_port_binding_index_destroy_row(target);
+        } else {
+            /* If any multichassis ports, update flows for the port. */
+            bool removed = sbrec_port_binding_is_deleted(pb);
+            if (!physical_handle_flows_for_lport(pb, removed, &p_ctx,
+                                                 &pfo->flow_table)) {
+                return false;
+            }
+            state = EN_UPDATED;
+        }
+    }
+    engine_set_node_state(node, state);
+    return true;
 }
 
 static bool
@@ -4661,6 +4732,8 @@ main(int argc, char *argv[])
     engine_add_input(&en_pflow_output, &en_sb_chassis,
                      pflow_lflow_output_sb_chassis_handler);
 
+    engine_add_input(&en_pflow_output, &en_ovs_interface,
+                     pflow_output_ovs_interface_handler);
     engine_add_input(&en_pflow_output, &en_sb_port_binding,
                      pflow_output_sb_port_binding_handler);
     engine_add_input(&en_pflow_output, &en_sb_multicast_group,

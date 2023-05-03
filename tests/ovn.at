@@ -15271,7 +15271,7 @@ m4_define([MULTICHASSIS_PATH_MTU_DISCOVERY_TEST],
    done
 
    send_ip_packet() {
-       local inport=${1} hv=${2} eth_src=${3} eth_dst=${4} ipv4_src=${5} ipv4_dst=${6} data=${7} fail=${8}
+       local inport=${1} hv=${2} eth_src=${3} eth_dst=${4} ipv4_src=${5} ipv4_dst=${6} data=${7} fail=${8} mtu=${9:-$3}
        packet=$(fmt_pkt "
            Ether(dst='${eth_dst}', src='${eth_src}') /
            IP(src='${ipv4_src}', dst='${ipv4_dst}') /
@@ -15288,7 +15288,7 @@ m4_define([MULTICHASSIS_PATH_MTU_DISCOVERY_TEST],
          packet=$(fmt_pkt "
              Ether(dst='${eth_src}', src='${eth_dst}') /
              IP(src='${ipv4_dst}', dst='${ipv4_src}', ttl=255, flags=2, id=0) /
-             ICMP(type=3, code=4, nexthopmtu=$3) /
+             ICMP(type=3, code=4, nexthopmtu=${mtu}) /
              bytes.fromhex('${original_ip_frame:0:$((534 * 2))}')
          ")
        fi
@@ -15296,7 +15296,7 @@ m4_define([MULTICHASSIS_PATH_MTU_DISCOVERY_TEST],
    }
 
    send_ip6_packet() {
-       local inport=${1} hv=${2} eth_src=${3} eth_dst=${4} ipv6_src=${5} ipv6_dst=${6} data=${7} fail=${8}
+       local inport=${1} hv=${2} eth_src=${3} eth_dst=${4} ipv6_src=${5} ipv6_dst=${6} data=${7} fail=${8} mtu=${9:-$3}
        packet=$(fmt_pkt "
            Ether(dst='${eth_dst}', src='${eth_src}') /
            IPv6(src='${ipv6_src}', dst='${ipv6_dst}') /
@@ -15311,7 +15311,7 @@ m4_define([MULTICHASSIS_PATH_MTU_DISCOVERY_TEST],
          packet=$(fmt_pkt "
              Ether(dst='${eth_src}', src='${eth_dst}') /
              IPv6(src='${ipv6_dst}', dst='${ipv6_src}', hlim=255) /
-             ICMPv6PacketTooBig(mtu=$3) /
+             ICMPv6PacketTooBig(mtu=${mtu}) /
              bytes.fromhex('${original_ip_frame:0:$((1218 * 2))}')
          ")
        fi
@@ -15442,6 +15442,64 @@ m4_define([MULTICHASSIS_PATH_MTU_DISCOVERY_TEST],
    echo $packet >> hv1/multi1.expected
 
    packet=$(send_ip6_packet multi1 1 $multi1_mac $multi2_mac $multi1_ip6 $multi2_ip6 $(payload $len) 1)
+   echo $packet >> hv1/multi1.expected
+
+   check_pkts
+   reset_env
+
+   AS_BOX([MTU updates are honored in ICMP Path MTU calculation])
+
+   set_mtu() {
+       local hv=${1} iface=${2} new_mtu=${3}
+
+       iface_uuid=$(as ${hv} ovs-vsctl --bare --columns _uuid find Interface name=${iface})
+       check as ${hv} ovs-vsctl set interface ${iface_uuid} mtu_request=${new_mtu}
+   }
+
+   set_mtu_for_all_ports() {
+       for port in multi1 multi2 first; do
+           set_mtu hv1 ${port} ${1}
+       done
+       for port in multi1 multi2 second; do
+           set_mtu hv2 ${port} ${1}
+       done
+   }
+
+   initial_mtu=1500  # all interfaces are 1500 by default
+   new_mtu=1400
+   set_mtu_for_all_ports ${new_mtu}
+   mtu_diff=$((${initial_mtu} - ${new_mtu}))
+
+   len=3000
+   expected_ip_mtu=$(($3 - ${mtu_diff}))
+   packet=$(send_ip_packet first 1 $first_mac $multi1_mac $first_ip $multi1_ip $(payload $len) 1 ${expected_ip_mtu})
+   echo $packet >> hv1/first.expected
+
+   packet=$(send_ip_packet second 2 $second_mac $multi1_mac $second_ip $multi1_ip $(payload $len) 1 ${expected_ip_mtu})
+   echo $packet >> hv2/second.expected
+
+   packet=$(send_ip6_packet first 1 $first_mac $multi1_mac $first_ip6 $multi1_ip6 $(payload $len) 1 ${expected_ip_mtu})
+   echo $packet >> hv1/first.expected
+
+   packet=$(send_ip6_packet second 2 $second_mac $multi1_mac $second_ip6 $multi1_ip6 $(payload $len) 1 ${expected_ip_mtu})
+   echo $packet >> hv2/second.expected
+
+   packet=$(send_ip_packet multi1 1 $multi1_mac $first_mac $multi1_ip $first_ip $(payload $len) 1 ${expected_ip_mtu})
+   echo $packet >> hv1/multi1.expected
+
+   packet=$(send_ip_packet multi1 1 $multi1_mac $second_mac $multi1_ip $second_ip $(payload $len) 1 ${expected_ip_mtu})
+   echo $packet >> hv1/multi1.expected
+
+   packet=$(send_ip6_packet multi1 1 $multi1_mac $first_mac $multi1_ip6 $first_ip6 $(payload $len) 1 ${expected_ip_mtu})
+   echo $packet >> hv1/multi1.expected
+
+   packet=$(send_ip6_packet multi1 1 $multi1_mac $second_mac $multi1_ip6 $second_ip6 $(payload $len) 1 ${expected_ip_mtu})
+   echo $packet >> hv1/multi1.expected
+
+   packet=$(send_ip_packet multi1 1 $multi1_mac $multi2_mac $multi1_ip $multi2_ip $(payload $len) 1 ${expected_ip_mtu})
+   echo $packet >> hv1/multi1.expected
+
+   packet=$(send_ip6_packet multi1 1 $multi1_mac $multi2_mac $multi1_ip6 $multi2_ip6 $(payload $len) 1 ${expected_ip_mtu})
    echo $packet >> hv1/multi1.expected
 
    check_pkts
