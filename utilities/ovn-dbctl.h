@@ -52,6 +52,7 @@ struct ovn_dbctl_options {
                           const struct timer *wait_timeout,
                           long long int start_time, bool print_wait_time);
 
+    int (*get_inactivity_probe)(struct ovsdb_idl *);
     struct ctl_context *(*ctx_create)(void);
     void (*ctx_destroy)(struct ctl_context *);
 };
