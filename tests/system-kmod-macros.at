@@ -1,3 +1,30 @@
+# LOAD_MODULE([name])
+#
+# Tries to load specified kernel module and removes it after
+# if it wasn't loaded before this call.
+#
+m4_define([LOAD_MODULE],
+    [if ! lsmod | grep -q $1; then
+         OVS_WAIT_UNTIL([modprobe $1])
+         on_exit 'modprobe -q -r $1'
+     fi
+    ]
+)
+
+# TRY_LOAD_MODULE([name])
+#
+# Tries to load specified kernel module, it won't fail
+# if modprobe didn't succeed, and removes it after
+# if it wasn't loaded before this call.
+#
+m4_define([TRY_LOAD_MODULE],
+    [if ! lsmod | grep -q $1; then
+         modprobe $1 || echo "Module $1 not loaded."
+         on_exit 'modprobe -q -r $1'
+     fi
+    ]
+)
+
 # _ADD_BR([name])
 #
 # Expands into the proper ovs-vsctl commands to create a bridge with the
@@ -16,12 +43,9 @@ m4_define([_ADD_BR], [[add-br $1 -- set Bridge $1 protocols=OpenFlow10,OpenFlow1
 # Best-effort loading of all available vport modules is performed.
 #
 m4_define([OVS_TRAFFIC_VSWITCHD_START],
-  [AT_CHECK([modprobe openvswitch])
-   on_exit 'modprobe -r openvswitch'
+  [LOAD_MODULE([openvswitch])
    m4_foreach([mod], [[vport_geneve], [vport_gre], [vport_lisp], [vport_stt], [vport_vxlan]],
-              [modprobe -q mod || echo "Module mod not loaded."
-               on_exit 'modprobe -q -r mod'
-              ])
+              [TRY_LOAD_MODULE([mod])])
    on_exit 'ovs-dpctl del-dp ovs-system'
    on_exit 'ovs-appctl dpctl/flush-conntrack'
    _OVS_VSWITCHD_START([])
@@ -60,10 +84,7 @@ m4_define([CONFIGURE_VETH_OFFLOADS],
 #
 m4_define([CHECK_CONNTRACK],
      m4_foreach([mod], [[nf_conntrack_ipv4], [nf_conntrack_ipv6], [nf_nat_ftp],
-                        [nf_nat_tftp]],
-                [modprobe mod || echo "Module mod not loaded."
-                 on_exit 'modprobe -r mod'
-                ])
+                        [nf_nat_tftp]], [TRY_LOAD_MODULE([mod])])
      sysctl -w net.netfilter.nf_conntrack_helper=0
      on_exit 'ovstest test-netlink-conntrack flush'
 )
