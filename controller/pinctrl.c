@@ -2444,19 +2444,22 @@ compose_out_dhcpv6_opts(struct ofpbuf *userdata,
                         struct ofpbuf *out_dhcpv6_opts, ovs_be32 iaid)
 {
     while (userdata->size) {
-        struct dhcp_opt6_header *userdata_opt = ofpbuf_try_pull(
-            userdata, sizeof *userdata_opt);
+        ovs_be16 opt_size, opt_code;
+        uint8_t *userdata_opt = ofpbuf_try_pull(
+                userdata, sizeof (struct dhcp_opt6_header));
         if (!userdata_opt) {
             return false;
         }
 
-        size_t size = ntohs(userdata_opt->size);
+        memcpy(&opt_size, userdata_opt + sizeof opt_code, sizeof opt_size);
+        size_t size = ntohs(opt_size);
         uint8_t *userdata_opt_data = ofpbuf_try_pull(userdata, size);
         if (!userdata_opt_data) {
             return false;
         }
 
-        switch (ntohs(userdata_opt->opt_code)) {
+        memcpy(&opt_code, userdata_opt, sizeof opt_code);
+        switch (ntohs(opt_code)) {
         case DHCPV6_OPT_SERVER_ID_CODE:
         {
             /* The Server Identifier option carries a DUID
