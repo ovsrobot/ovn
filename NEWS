@@ -14,6 +14,13 @@ Post v23.03.0
     existing behaviour of flooding these arp requests to all attached Ports.
   - Always allow IPv6 Router Discovery, Neighbor Discovery, and Multicast
     Listener Discovery protocols, regardless of ACLs defined.
+  - Increased ovn-{ic-,}{n,s}bctl default OVSDB inactivity probe interval from
+    5000 ms to 120000 ms to give the ability to connect to large databases
+    (mainly, OVN_Southbound).  Also, for daemon mode it is possible to
+    configure inactivity probe interval via OVN_Northbound and OVN_Southbound
+    databases for ovn-nbctl and ovn-sbctl respectively.  See man ovn-nb and
+    man ovn-sb for 'nbctl_probe_interval' and 'sbctl_probe_interval'
+    options for more details.
 
 OVN v23.03.0 - 03 Mar 2023
 --------------------------
