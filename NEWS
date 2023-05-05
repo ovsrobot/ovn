@@ -14,6 +14,9 @@ Post v23.03.0
     existing behaviour of flooding these arp requests to all attached Ports.
   - Always allow IPv6 Router Discovery, Neighbor Discovery, and Multicast
     Listener Discovery protocols, regardless of ACLs defined.
+  - Support for tiered ACLs has been added. This allows for ACLs to be layered
+    into separate tiers of priority. For more information, please see the
+    ovn-nb and ovn-northd manpages.
 
 OVN v23.03.0 - 03 Mar 2023
 --------------------------
