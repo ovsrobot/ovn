@@ -16,6 +16,12 @@ Post v23.03.0
     Listener Discovery protocols, regardless of ACLs defined.
   - Add IPv6 iPXE support introducing "bootfile_name" (59) and
     "bootfile_name_alt" (254) options to ovn dhcpv6 server.
+  - Rework OVN egress QoS implementation in order to rely on OvS interface
+    instead of directly running tc from OVN. Get rid of traffic shaping on the
+    tunnel interfaces. Now for LSPs running on a LogicalSwitch with a localnet
+    port is possible to define QoS rules to apply to the local egress localnet
+    port. Please note now the QoS will be applied just to the local localnet
+    port and not to all localnet port marked with ovn-egress iface.
 
 OVN v23.03.0 - 03 Mar 2023
 --------------------------
