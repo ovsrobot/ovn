@@ -102,7 +102,7 @@ struct buffered_packets {
     struct ovs_list queue;
 
     /* Timestamp in ms when the buffered packet should expire. */
-    long long int expire;
+    long long int expire_at_ms;
 };
 
 struct buffered_packets_ctx {
@@ -121,6 +121,13 @@ ovn_buffered_packets_add(struct buffered_packets_ctx *ctx, uint64_t dp_key,
                          uint64_t port_key, struct in6_addr ip);
 void ovn_buffered_packets_packet_data_enqueue(struct buffered_packets *bp,
                                               struct packet_data *pd);
+bool ovn_buffered_packets_expired(const struct buffered_packets *bp,
+                                  long long now);
+void ovn_buffered_packets_set_ready(struct buffered_packets_ctx *ctx,
+                                    struct buffered_packets *bp,
+                                    struct eth_addr mac);
+void ovn_buffered_packets_remove(struct buffered_packets_ctx *ctx,
+                                 struct buffered_packets *bp);
 void
 ovn_buffered_packets_ctx_run(struct buffered_packets_ctx *ctx,
                              const struct mac_bindings_map *recent_mbs);

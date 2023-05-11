@@ -43,8 +43,6 @@ static struct fdb_entry *fdb_entry_find(struct hmap *fdbs, uint32_t dp_key,
 static struct buffered_packets *
 buffered_packets_find(struct buffered_packets_ctx *ctx, uint64_t dp_key,
                       uint64_t port_key, struct in6_addr *ip, uint32_t hash);
-static void ovn_buffered_packets_remove(struct buffered_packets_ctx *ctx,
-                                        struct buffered_packets *bp);
 
 /* mac_binding functions. */
 void
@@ -215,7 +213,7 @@ ovn_buffered_packets_add(struct buffered_packets_ctx *ctx, uint64_t dp_key,
         ovs_list_init(&bp->queue);
     }
 
-    bp->expire = time_msec() + OVN_BUFFERED_PACKETS_TIMEOUT_MS;
+    bp->expire_at_ms= time_msec() + OVN_BUFFERED_PACKETS_TIMEOUT_MS;
 
     return bp;
 }
@@ -233,39 +231,37 @@ ovn_buffered_packets_packet_data_enqueue(struct buffered_packets *bp,
     ovs_list_push_back(&bp->queue, &pd->node);
 }
 
-void
-ovn_buffered_packets_ctx_run(struct buffered_packets_ctx *ctx,
-                             const struct mac_bindings_map *recent_mbs)
+bool
+ovn_buffered_packets_expired(const struct buffered_packets *bp, long long now)
 {
-    long long now = time_msec();
+    return now >= bp->expire_at_ms;
+}
 
-    struct buffered_packets *bp;
+void
+ovn_buffered_packets_set_ready(struct buffered_packets_ctx *ctx,
+                               struct buffered_packets *bp,
+                               struct eth_addr mac)
+{
+    struct packet_data *pd;
+    LIST_FOR_EACH_POP (pd, node, &bp->queue) {
+        struct eth_header *eth = dp_packet_data(pd->p);
+        eth->eth_dst = mac;
 
-    HMAP_FOR_EACH_SAFE (bp, hmap_node, &ctx->buffered_packets) {
-        /* Remove expired buffered packets. */
-        if (now > bp->expire) {
-            ovn_buffered_packets_remove(ctx, bp);
-            continue;
-        }
-
-        uint32_t hash = keys_ip_hash(bp->dp_key, bp->port_key, &bp->ip);
-        struct mac_binding *mb = mac_binding_find(recent_mbs, bp->dp_key,
-                                                  bp->port_key, &bp->ip, hash);
-
-        if (!mb) {
-            continue;
-        }
-
-        struct packet_data *pd;
-        LIST_FOR_EACH_POP (pd, node, &bp->queue) {
-            struct eth_header *eth = dp_packet_data(pd->p);
-            eth->eth_dst = mb->mac;
-
-            ovs_list_push_back(&ctx->ready_packets_data, &pd->node);
-        }
-
-        ovn_buffered_packets_remove(ctx, bp);
+        ovs_list_push_back(&ctx->ready_packets_data, &pd->node);
     }
+}
+
+void
+ovn_buffered_packets_remove(struct buffered_packets_ctx *ctx,
+                            struct buffered_packets *bp)
+{
+    struct packet_data *pd;
+    LIST_FOR_EACH_POP (pd, node, &bp->queue) {
+        ovn_packet_data_destroy(pd);
+    }
+
+    hmap_remove(&ctx->buffered_packets, &bp->hmap_node);
+    free(bp);
 }
 
 bool
@@ -364,18 +360,4 @@ buffered_packets_find(struct buffered_packets_ctx *ctx, uint64_t dp_key,
     }
 
     return NULL;
-}
-
-static void
-ovn_buffered_packets_remove(struct buffered_packets_ctx *ctx,
-                            struct buffered_packets *bp)
-{
-    struct packet_data *pd;
-
-    LIST_FOR_EACH_POP (pd, node, &bp->queue) {
-        ovn_packet_data_destroy(pd);
-    }
-
-    hmap_remove(&ctx->buffered_packets, &bp->hmap_node);
-    free(bp);
 }
