@@ -16473,7 +16473,6 @@ northd_init(struct northd_data *data)
     shash_init(&data->meter_groups);
     hmap_init(&data->lbs);
     hmap_init(&data->lb_groups);
-    hmap_init(&data->bfd_connections);
     ovs_list_init(&data->lr_list);
     data->features = (struct chassis_features) {
         .ct_no_masked_label = true,
@@ -16504,7 +16503,6 @@ northd_destroy(struct northd_data *data)
     }
 
     hmap_destroy(&data->port_groups);
-    hmap_destroy(&data->bfd_connections);
 
     struct shash_node *node;
     SHASH_FOR_EACH_SAFE (node, &data->meter_groups) {
