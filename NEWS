@@ -25,6 +25,12 @@ Post v23.03.0
     databases for ovn-nbctl and ovn-sbctl respectively.  See man ovn-nb and
     man ovn-sb for 'nbctl_probe_interval' and 'sbctl_probe_interval'
     options for more details.
+  - Send ICMP Fragmentation Needed packets back to offending ports when
+    communicating with multichassis ports using frames that don't fit through a
+    tunnel. This is done only for logical switches that are attached to a
+    physical network via a localnet port, in which case multichassis ports may
+    have an effective MTU different from regular ports and hence may need this
+    mechanism to maintain connectivity with other peers in the network.
 
 OVN v23.03.0 - 03 Mar 2023
 --------------------------
