@@ -25,6 +25,9 @@ Post v23.03.0
     databases for ovn-nbctl and ovn-sbctl respectively.  See man ovn-nb and
     man ovn-sb for 'nbctl_probe_interval' and 'sbctl_probe_interval'
     options for more details.
+  - Added FDB aging mechanism, that is disabled by default.
+    It can be enabled per logical switch with other_config
+    "fdb_age_threshold".
 
 OVN v23.03.0 - 03 Mar 2023
 --------------------------
