@@ -7777,6 +7777,13 @@ pinctrl_handle_svc_check(struct rconn *swconn, const struct flow *ip_flow,
         ip_proto = in_ip->ip6_nxt;
     }
 
+    if (ip_proto == IPPROTO_UDP) {
+        /* We should do nothing if we got UDP packet.
+         * If service is running, it can respond with any UDP data,
+         * so just ingore it. */
+         return;
+    }
+
     if (ip_proto != IPPROTO_TCP && ip_proto != IPPROTO_ICMP &&
         ip_proto != IPPROTO_ICMPV6) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
