@@ -22,7 +22,6 @@
 #include "openvswitch/util.h"
 
 #include "en-sync-sb.h"
-#include "include/ovn/expr.h"
 #include "lib/inc-proc-eng.h"
 #include "lib/lb.h"
 #include "lib/ovn-nb-idl.h"
@@ -325,45 +324,40 @@ static void
 update_sb_addr_set(const char **nb_addresses, size_t n_addresses,
                    const struct sbrec_address_set *sb_as)
 {
-    struct expr_constant_set *cs_nb_as =
-        expr_constant_set_create_integers(
-            (const char *const *) nb_addresses, n_addresses);
-    struct expr_constant_set *cs_sb_as =
-        expr_constant_set_create_integers(
-            (const char *const *) sb_as->addresses, sb_as->n_addresses);
+    size_t i;
+    char *ip;
 
-    struct expr_constant_set *addr_added = NULL;
-    struct expr_constant_set *addr_deleted = NULL;
-    expr_constant_set_integers_diff(cs_sb_as, cs_nb_as, &addr_added,
-                                    &addr_deleted);
+    struct svec svec_nb_as = SVEC_EMPTY_INITIALIZER;
+    struct svec svec_sb_as = SVEC_EMPTY_INITIALIZER;
 
-    struct ds ds = DS_EMPTY_INITIALIZER;
-    if (addr_added && addr_added->n_values) {
-        for (size_t i = 0; i < addr_added->n_values; i++) {
-            ds_clear(&ds);
-            expr_constant_format(&addr_added->values[i], EXPR_C_INTEGER, &ds);
-            sbrec_address_set_update_addresses_addvalue(sb_as, ds_cstr(&ds));
-        }
+    for (i = 0; i < n_addresses; i++) {
+        svec_add(&svec_nb_as, nb_addresses[i]);
     }
 
-    if (addr_deleted && addr_deleted->n_values) {
-        for (size_t i = 0; i < addr_deleted->n_values; i++) {
-            ds_clear(&ds);
-            expr_constant_format(&addr_deleted->values[i],
-                                 EXPR_C_INTEGER, &ds);
-            sbrec_address_set_update_addresses_delvalue(sb_as, ds_cstr(&ds));
-        }
+
+    for (i = 0; i < sb_as->n_addresses; i++) {
+        svec_add(&svec_sb_as, sb_as->addresses[i]);
     }
 
-    ds_destroy(&ds);
-    expr_constant_set_destroy(cs_nb_as);
-    free(cs_nb_as);
-    expr_constant_set_destroy(cs_sb_as);
-    free(cs_sb_as);
-    expr_constant_set_destroy(addr_added);
-    free(addr_added);
-    expr_constant_set_destroy(addr_deleted);
-    free(addr_deleted);
+    struct svec addr_added;
+    struct svec addr_deleted;
+
+    svec_sort(&svec_nb_as);
+    svec_sort(&svec_sb_as);
+    svec_diff(&svec_nb_as, &svec_sb_as, &addr_added, NULL, &addr_deleted);
+
+    SVEC_FOR_EACH (i, ip, &addr_added) {
+        sbrec_address_set_update_addresses_addvalue(sb_as, ip);
+    }
+
+    SVEC_FOR_EACH (i, ip, &addr_deleted) {
+        sbrec_address_set_update_addresses_delvalue(sb_as, ip);
+    }
+
+    svec_destroy(&svec_nb_as);
+    svec_destroy(&svec_sb_as);
+    svec_destroy(&addr_added);
+    svec_destroy(&addr_deleted);
 }
 
 static void
