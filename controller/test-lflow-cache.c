@@ -16,6 +16,8 @@
 #include <config.h>
 
 #include "lib/uuid.h"
+#include "openvswitch/ofpbuf.h"
+#include "ovn/actions.h"
 #include "ovn/expr.h"
 #include "tests/ovstest.h"
 #include "tests/test-utils.h"
@@ -39,22 +41,26 @@ test_lflow_cache_add__(struct lflow_cache *lc, const char *op_type,
                        const struct uuid *lflow_uuid,
                        unsigned int conj_id_ofs,
                        unsigned int n_conjs,
-                       struct expr *e)
+                       struct expr *e, struct ofpbuf *a)
 {
+    struct ds ovnacts_s = DS_EMPTY_INITIALIZER;
+    ovnacts_format(a->data, a->size, &ovnacts_s);
+
     printf("ADD %s:\n", op_type);
     printf("  conj-id-ofs: %u\n", conj_id_ofs);
     printf("  n_conjs: %u\n", n_conjs);
+    printf("  action: %s\n", ds_cstr(&ovnacts_s));
 
     if (!strcmp(op_type, "expr")) {
         lflow_cache_add_expr(lc, lflow_uuid, expr_clone(e),
-                             TEST_LFLOW_CACHE_VALUE_SIZE);
+                             TEST_LFLOW_CACHE_VALUE_SIZE, ofpbuf_clone(a));
     } else if (!strcmp(op_type, "matches")) {
         struct hmap *matches = xmalloc(sizeof *matches);
         ovs_assert(expr_to_matches(e, NULL, NULL, matches) == 0);
         ovs_assert(hmap_count(matches) == 1);
         lflow_cache_add_matches(lc, lflow_uuid,
                                 conj_id_ofs, n_conjs, matches,
-                                TEST_LFLOW_CACHE_VALUE_SIZE);
+                                TEST_LFLOW_CACHE_VALUE_SIZE, ofpbuf_clone(a));
     } else {
         OVS_NOT_REACHED();
     }
@@ -72,8 +78,12 @@ test_lflow_cache_lookup__(struct lflow_cache *lc,
         return;
     }
 
+    struct ds ovnacts_s = DS_EMPTY_INITIALIZER;
+    ovnacts_format(lcv->actions->data, lcv->actions->size, &ovnacts_s);
+
     printf("  conj_id_ofs: %"PRIu32"\n", lcv->conj_id_ofs);
     printf("  n_conjs: %"PRIu32"\n", lcv->n_conjs);
+    printf("  action: %s\n", ds_cstr(&ovnacts_s));
     switch (lcv->type) {
     case LCACHE_T_EXPR:
         printf("  type: expr\n");
@@ -110,6 +120,13 @@ test_lflow_cache_operations(struct ovs_cmdl_context *ctx)
 {
     struct lflow_cache *lc = lflow_cache_create();
     struct expr *e = expr_create_boolean(true);
+    struct ofpbuf *a = ofpbuf_new(0);
+    struct ovnact_next *next = ovnact_put_NEXT(a);
+    next->pipeline = 1;
+    next->ltable = 2;
+    next->src_pipeline = OVNACT_P_INGRESS;
+    next->src_ltable = 3;
+
     bool enabled = !strcmp(ctx->argv[1], "true");
     struct uuid *lflow_uuids = NULL;
     size_t n_allocated_lflow_uuids = 0;
@@ -160,7 +177,7 @@ test_lflow_cache_operations(struct ovs_cmdl_context *ctx)
 
             uuid_generate(lflow_uuid);
             test_lflow_cache_add__(lc, op_type, lflow_uuid, conj_id_ofs,
-                                   n_conjs, e);
+                                   n_conjs, e, a);
             test_lflow_cache_lookup__(lc, lflow_uuid);
         } else if (!strcmp(op, "add-del")) {
             const char *op_type = test_read_value(ctx, shift++, "op_type");
@@ -183,7 +200,7 @@ test_lflow_cache_operations(struct ovs_cmdl_context *ctx)
             struct uuid lflow_uuid;
             uuid_generate(&lflow_uuid);
             test_lflow_cache_add__(lc, op_type, &lflow_uuid, conj_id_ofs,
-                                   n_conjs, e);
+                                   n_conjs, e, a);
             test_lflow_cache_lookup__(lc, &lflow_uuid);
             test_lflow_cache_delete__(lc, &lflow_uuid);
             test_lflow_cache_lookup__(lc, &lflow_uuid);
@@ -264,16 +281,23 @@ test_lflow_cache_negative(struct ovs_cmdl_context *ctx OVS_UNUSED)
 
     for (size_t i = 0; i < ARRAY_SIZE(lcs); i++) {
         struct expr *e = expr_create_boolean(true);
+        struct ofpbuf *a = ofpbuf_new(0);
+        struct ovnact_next *next = ovnact_put_NEXT(a);
+        next->pipeline = 1;
+        next->ltable = 2;
+        next->src_pipeline = OVNACT_P_INGRESS;
+        next->src_ltable = 3;
+
         struct hmap *matches = xmalloc(sizeof *matches);
 
         ovs_assert(expr_to_matches(e, NULL, NULL, matches) == 0);
         ovs_assert(hmap_count(matches) == 1);
 
-        lflow_cache_add_expr(lcs[i], NULL, NULL, 0);
-        lflow_cache_add_expr(lcs[i], NULL, e, expr_size(e));
-        lflow_cache_add_matches(lcs[i], NULL, 0, 0, NULL, 0);
+        lflow_cache_add_expr(lcs[i], NULL, NULL, 0, NULL);
+        lflow_cache_add_expr(lcs[i], NULL, e, expr_size(e), a);
+        lflow_cache_add_matches(lcs[i], NULL, 0, 0, NULL, 0, NULL);
         lflow_cache_add_matches(lcs[i], NULL, 0, 0, matches,
-                                TEST_LFLOW_CACHE_VALUE_SIZE);
+                                TEST_LFLOW_CACHE_VALUE_SIZE, a);
         lflow_cache_destroy(lcs[i]);
     }
 }

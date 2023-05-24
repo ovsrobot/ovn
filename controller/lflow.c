@@ -1078,14 +1078,23 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
     struct sset template_vars_ref = SSET_INITIALIZER(&template_vars_ref);
     struct expr *prereqs = NULL;
 
-    if (!lflow_parse_actions(lflow, l_ctx_in, &template_vars_ref,
-                             &ovnacts, &prereqs)) {
-        ovnacts_free(ovnacts.data, ovnacts.size);
-        ofpbuf_uninit(&ovnacts);
-        store_lflow_template_refs(l_ctx_out->lflow_deps_mgr,
-                                  &template_vars_ref, lflow);
-        sset_destroy(&template_vars_ref);
-        return;
+    struct lflow_cache_value *lcv =
+        lflow_cache_get(l_ctx_out->lflow_cache, &lflow->header_.uuid);
+    enum lflow_cache_type lcv_type =
+        lcv ? lcv->type : LCACHE_T_NONE;
+
+    if (lcv_type != LCACHE_T_NONE) {
+        ovnacts = *ofpbuf_clone(lcv->actions);
+    } else {
+        if (!lflow_parse_actions(lflow, l_ctx_in, &template_vars_ref,
+                                 &ovnacts, &prereqs)) {
+            ovnacts_free(ovnacts.data, ovnacts.size);
+            ofpbuf_uninit(&ovnacts);
+            store_lflow_template_refs(l_ctx_out->lflow_deps_mgr,
+                                    &template_vars_ref, lflow);
+            sset_destroy(&template_vars_ref);
+            return;
+        }
     }
 
     struct lookup_port_aux aux = {
@@ -1104,11 +1113,6 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
         .lflow = lflow,
         .deps_mgr = l_ctx_out->lflow_deps_mgr,
     };
-
-    struct lflow_cache_value *lcv =
-        lflow_cache_get(l_ctx_out->lflow_cache, &lflow->header_.uuid);
-    enum lflow_cache_type lcv_type =
-        lcv ? lcv->type : LCACHE_T_NONE;
 
     struct expr *cached_expr = NULL, *expr = NULL;
     struct hmap *matches = NULL;
@@ -1211,17 +1215,20 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
     case LCACHE_T_NONE:
         /* Cache new entry if caching is enabled. */
         if (lflow_cache_is_enabled(l_ctx_out->lflow_cache)) {
+            struct ofpbuf *lcv_actions = ofpbuf_clone(&ovnacts);
             if (cached_expr
                 && !objdep_mgr_contains_obj(l_ctx_out->lflow_deps_mgr,
                                             &lflow->header_.uuid)) {
                 lflow_cache_add_matches(l_ctx_out->lflow_cache,
                                         &lflow->header_.uuid, start_conj_id,
-                                        n_conjs, matches, matches_size);
+                                        n_conjs, matches, matches_size,
+                                        lcv_actions);
                 matches = NULL;
             } else if (cached_expr) {
                 lflow_cache_add_expr(l_ctx_out->lflow_cache,
                                      &lflow->header_.uuid,
-                                     cached_expr, expr_size(cached_expr));
+                                     cached_expr, expr_size(cached_expr),
+                                     lcv_actions);
                 cached_expr = NULL;
             }
         }
@@ -1236,7 +1243,9 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
 
 done:
     expr_destroy(prereqs);
-    ovnacts_free(ovnacts.data, ovnacts.size);
+    if (!lflow_cache_is_enabled(l_ctx_out->lflow_cache)) {
+        ovnacts_free(ovnacts.data, ovnacts.size);
+    }
     ofpbuf_uninit(&ovnacts);
     expr_destroy(expr);
     expr_destroy(cached_expr);

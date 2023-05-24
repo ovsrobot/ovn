@@ -25,7 +25,9 @@
 #include "lflow-cache.h"
 #include "lib/uuid.h"
 #include "memory-trim.h"
+#include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
+#include "ovn/actions.h"
 #include "ovn/expr.h"
 
 VLOG_DEFINE_THIS_MODULE(lflow_cache);
@@ -209,7 +211,8 @@ lflow_cache_get_stats(const struct lflow_cache *lc, struct ds *output)
 
 void
 lflow_cache_add_expr(struct lflow_cache *lc, const struct uuid *lflow_uuid,
-                     struct expr *expr, size_t expr_sz)
+                     struct expr *expr, size_t expr_sz,
+                     struct ofpbuf *actions)
 {
     struct lflow_cache_value *lcv =
         lflow_cache_add__(lc, lflow_uuid, LCACHE_T_EXPR, expr_sz);
@@ -220,12 +223,14 @@ lflow_cache_add_expr(struct lflow_cache *lc, const struct uuid *lflow_uuid,
     }
     COVERAGE_INC(lflow_cache_add_expr);
     lcv->expr = expr;
+    lcv->actions = actions;
 }
 
 void
 lflow_cache_add_matches(struct lflow_cache *lc, const struct uuid *lflow_uuid,
                         uint32_t conj_id_ofs, uint32_t n_conjs,
-                        struct hmap *matches, size_t matches_sz)
+                        struct hmap *matches, size_t matches_sz,
+                        struct ofpbuf *actions)
 {
     struct lflow_cache_value *lcv =
         lflow_cache_add__(lc, lflow_uuid, LCACHE_T_MATCHES, matches_sz);
@@ -239,6 +244,7 @@ lflow_cache_add_matches(struct lflow_cache *lc, const struct uuid *lflow_uuid,
     lcv->expr_matches = matches;
     lcv->n_conjs = n_conjs;
     lcv->conj_id_ofs = conj_id_ofs;
+    lcv->actions = actions;
 }
 
 struct lflow_cache_value *
@@ -380,11 +386,13 @@ lflow_cache_delete__(struct lflow_cache *lc, struct lflow_cache_entry *lce)
     case LCACHE_T_EXPR:
         COVERAGE_INC(lflow_cache_free_expr);
         expr_destroy(lce->value.expr);
+        ovnacts_free((*lce->value.actions).data, (*lce->value.actions).size);
         break;
     case LCACHE_T_MATCHES:
         COVERAGE_INC(lflow_cache_free_matches);
         expr_matches_destroy(lce->value.expr_matches);
         free(lce->value.expr_matches);
+        ovnacts_free((*lce->value.actions).data, (*lce->value.actions).size);
         break;
     }
 

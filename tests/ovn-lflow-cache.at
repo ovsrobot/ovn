@@ -19,9 +19,11 @@ trim count      : 0
 ADD expr:
   conj-id-ofs: 2
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 0
   n_conjs: 0
+  action: next(pipeline=egress, table=2);
   type: expr
 Enabled: true
 high-watermark  : 1
@@ -32,9 +34,11 @@ trim count      : 0
 ADD matches:
   conj-id-ofs: 3
   n_conjs: 2
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 3
   n_conjs: 2
+  action: next(pipeline=egress, table=2);
   type: matches
 Enabled: true
 high-watermark  : 2
@@ -61,9 +65,11 @@ trim count      : 0
 ADD expr:
   conj-id-ofs: 2
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 0
   n_conjs: 0
+  action: next(pipeline=egress, table=2);
   type: expr
 DELETE
 LOOKUP:
@@ -77,9 +83,11 @@ trim count      : 0
 ADD matches:
   conj-id-ofs: 3
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 3
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
   type: matches
 DELETE
 LOOKUP:
@@ -109,6 +117,7 @@ trim count      : 0
 ADD expr:
   conj-id-ofs: 2
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   not found
 Enabled: false
@@ -120,6 +129,7 @@ trim count      : 0
 ADD matches:
   conj-id-ofs: 3
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   not found
 Enabled: false
@@ -154,9 +164,11 @@ trim count      : 0
 ADD expr:
   conj-id-ofs: 2
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 0
   n_conjs: 0
+  action: next(pipeline=egress, table=2);
   type: expr
 Enabled: true
 high-watermark  : 1
@@ -167,9 +179,11 @@ trim count      : 0
 ADD matches:
   conj-id-ofs: 3
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 3
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
   type: matches
 Enabled: true
 high-watermark  : 2
@@ -188,6 +202,7 @@ trim count      : 1
 ADD expr:
   conj-id-ofs: 5
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   not found
 Enabled: false
@@ -199,6 +214,7 @@ trim count      : 1
 ADD matches:
   conj-id-ofs: 6
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   not found
 Enabled: false
@@ -217,9 +233,11 @@ trim count      : 1
 ADD expr:
   conj-id-ofs: 8
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 0
   n_conjs: 0
+  action: next(pipeline=egress, table=2);
   type: expr
 Enabled: true
 high-watermark  : 1
@@ -230,9 +248,11 @@ trim count      : 1
 ADD matches:
   conj-id-ofs: 9
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 9
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
   type: matches
 Enabled: true
 high-watermark  : 2
@@ -273,9 +293,11 @@ trim count      : 0
 ADD expr:
   conj-id-ofs: 2
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 0
   n_conjs: 0
+  action: next(pipeline=egress, table=2);
   type: expr
 Enabled: true
 high-watermark  : 1
@@ -286,9 +308,11 @@ trim count      : 0
 ADD matches:
   conj-id-ofs: 3
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 3
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
   type: matches
 Enabled: true
 high-watermark  : 2
@@ -309,9 +333,11 @@ trim count      : 1
 ADD expr:
   conj-id-ofs: 5
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 0
   n_conjs: 0
+  action: next(pipeline=egress, table=2);
   type: expr
 Enabled: true
 high-watermark  : 1
@@ -322,9 +348,11 @@ trim count      : 1
 ADD matches:
   conj-id-ofs: 6
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 6
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
   type: matches
 dnl
 dnl Cache is full but we can evict the expr entry because we're adding
@@ -339,6 +367,7 @@ trim count      : 1
 ADD expr:
   conj-id-ofs: 7
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   not found
 dnl
@@ -365,6 +394,7 @@ trim count      : 2
 ADD expr:
   conj-id-ofs: 9
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   not found
 dnl
@@ -380,6 +410,7 @@ trim count      : 2
 ADD matches:
   conj-id-ofs: 10
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   not found
 dnl
@@ -428,9 +459,11 @@ trim count      : 0
 ADD expr:
   conj-id-ofs: 1
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 0
   n_conjs: 0
+  action: next(pipeline=egress, table=2);
   type: expr
 Enabled: true
 high-watermark  : 1
@@ -441,9 +474,11 @@ trim count      : 0
 ADD expr:
   conj-id-ofs: 2
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 0
   n_conjs: 0
+  action: next(pipeline=egress, table=2);
   type: expr
 Enabled: true
 high-watermark  : 2
@@ -454,9 +489,11 @@ trim count      : 0
 ADD expr:
   conj-id-ofs: 3
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 0
   n_conjs: 0
+  action: next(pipeline=egress, table=2);
   type: expr
 Enabled: true
 high-watermark  : 3
@@ -467,9 +504,11 @@ trim count      : 0
 ADD expr:
   conj-id-ofs: 4
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 0
   n_conjs: 0
+  action: next(pipeline=egress, table=2);
   type: expr
 Enabled: true
 high-watermark  : 4
@@ -480,9 +519,11 @@ trim count      : 0
 ADD expr:
   conj-id-ofs: 5
   n_conjs: 1
+  action: next(pipeline=egress, table=2);
 LOOKUP:
   conj_id_ofs: 0
   n_conjs: 0
+  action: next(pipeline=egress, table=2);
   type: expr
 Enabled: true
 high-watermark  : 5
