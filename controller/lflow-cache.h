@@ -50,6 +50,8 @@ struct lflow_cache_value {
     uint32_t n_conjs;
     uint32_t conj_id_ofs;
 
+    struct ofpbuf *actions;
+
     union {
         struct hmap *expr_matches;
         struct expr *expr;
@@ -66,11 +68,13 @@ bool lflow_cache_is_enabled(const struct lflow_cache *);
 void lflow_cache_get_stats(const struct lflow_cache *, struct ds *output);
 
 void lflow_cache_add_expr(struct lflow_cache *, const struct uuid *lflow_uuid,
-                          struct expr *expr, size_t expr_sz);
+                          struct expr *expr, size_t expr_sz,
+                          struct ofpbuf *actions);
 void lflow_cache_add_matches(struct lflow_cache *,
                              const struct uuid *lflow_uuid,
                              uint32_t conj_id_ofs, uint32_t n_conjs,
-                             struct hmap *matches, size_t matches_sz);
+                             struct hmap *matches, size_t matches_sz,
+                             struct ofpbuf *actions);
 
 struct lflow_cache_value *lflow_cache_get(struct lflow_cache *,
                                           const struct uuid *lflow_uuid);
