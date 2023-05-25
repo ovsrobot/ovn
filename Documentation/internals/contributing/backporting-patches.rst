@@ -73,6 +73,34 @@ not a trivial cherry-pick, then the maintainer may opt to submit the backport
 for the older branch on the mailing list for further review. This should be done
 in the same manner as described above.
 
+Supported Versions
+~~~~~~~~~~~~~~~~~~
+
+As documented in :doc:`release-policy`, standard term support versions receive
+regular releases for a year, and LTS versions receive regular releases for two
+years, plus an additional year of critical and security fixes.
+
+To make things easy, maintainers should simply backport all bugfixes to the
+previous four branches before main. This is guaranteed to get the fix into all
+supported standard-support versions as well as the current LTS version. This
+will mean that maintainers will backport bugfixes to branches representing
+versions that are not currently supported.
+
+Critical and security fixes should be handled differently. Maintainers should
+determine what is the oldest LTS version that currently is supported for
+critical and security fixes. Maintainers should backport these fixes to all
+branches between main and that LTS version. This will mean that maintainers
+will backport critical and security fixes into branches representing versions
+that are not currently supported.
+
+The reason for backporting fixes into unsupported versions is twofold:
+
+- Backporting bugfixes into unsupported versions likely makes it easier to
+  backport critical and security fixes into older versions when necessary.
+- Backporting critical and security fixes into unsupported versions allows for
+  users that are not ready to upgrade to a supported version to continue using
+  the branch tip until they are ready to fully upgrade.
+
 Submission
 ~~~~~~~~~~
 
