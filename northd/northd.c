@@ -10740,6 +10740,8 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
                                      struct ovn_datapath *od)
 {
     struct ovn_port *dgp = od->l3dgw_ports[0];
+    struct ds gw_redir_match = DS_EMPTY_INITIALIZER;
+    struct ds gw_redir_action = DS_EMPTY_INITIALIZER;
 
     const char *undnat_action;
 
@@ -10784,6 +10786,17 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
         return;
     }
 
+    /* We need to centralize the LB traffic to properly perform
+     * the undnat stage.
+     */
+    ds_put_format(&gw_redir_match, "%s) && outport == %s",
+                  ds_cstr(ctx->undnat_match), dgp->json_key);
+    ds_put_format(&gw_redir_action, "outport = %s; next;",
+                  dgp->cr_port->json_key);
+    ovn_lflow_add_with_hint(ctx->lflows, od, S_ROUTER_IN_GW_REDIRECT,
+                            200, ds_cstr(&gw_redir_match),
+                            ds_cstr(&gw_redir_action), &ctx->lb->nlb->header_);
+
     ds_put_format(ctx->undnat_match, ") && (inport == %s || outport == %s)"
                   " && is_chassis_resident(%s)", dgp->json_key, dgp->json_key,
                   dgp->cr_port->json_key);
@@ -10791,6 +10804,8 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
                             ds_cstr(ctx->undnat_match), undnat_action,
                             &ctx->lb->nlb->header_);
     ds_truncate(ctx->undnat_match, undnat_match_len);
+    ds_destroy(&gw_redir_match);
+    ds_destroy(&gw_redir_action);
 }
 
 static void

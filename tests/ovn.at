@@ -35819,3 +35819,140 @@ OVS_WAIT_UNTIL([test $(as hv-1 ovs-vsctl list queue | grep -c 'burst="8000000000
 
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([DNAT_SNAT and LB traffic])
+AT_KEYWORDS([dnat-snat-lb])
+ovn_start
+
+test_ip_req_packet() {
+    local src_mac="505400000088"
+    local dst_mac="$1"
+    local src_ip=$(ip_to_hex 172 168 0 200)
+    local dst_ip="$2"
+    local cksum="$3"
+
+    local packet=${dst_mac}${src_mac}080045000072000000004011${cksum}
+    local packet_l3=${src_ip}${dst_ip}0035111100080000
+
+    packet_l3=${packet_l3}000000000000000000000000000000000000
+    packet_l3=${packet_l3}000000000000000000000000000000000000
+    packet_l3=${packet_l3}000000000000000000000000000000000000
+    packet_l3=${packet_l3}000000000000000000000000000000000000
+    packet_l3=${packet_l3}0000000000000000000000000000
+    packet=${packet}${packet_l3}
+
+    as hv1 reset_pcap_file hv1-vif1 hv1/vif1
+    as hv2 reset_pcap_file hv2-vif1 hv2/vif1
+    check as hv2 ovs-appctl netdev-dummy/receive hv2-vif1 $packet
+}
+
+test_ip_rep_packet() {
+    local src_mac="505400000001"
+    local dst_mac="00000000ff01"
+    local src_ip=$(ip_to_hex 10 0 0 2)
+    local dst_ip=$(ip_to_hex 172 168 0 200)
+
+    local packet=${dst_mac}${src_mac}080045000072000000004011c309
+    local packet_l3=${src_ip}${dst_ip}1111003500080000
+
+    packet_l3=${packet_l3}000000000000000000000000000000000000
+    packet_l3=${packet_l3}000000000000000000000000000000000000
+    packet_l3=${packet_l3}000000000000000000000000000000000000
+    packet_l3=${packet_l3}000000000000000000000000000000000000
+    packet_l3=${packet_l3}0000000000000000000000000000
+    packet=${packet}${packet_l3}
+
+    check as hv1 ovs-appctl netdev-dummy/receive hv1-vif1 $packet
+}
+
+test_arp_reply() {
+    local dst_mac=f00000010203
+    local spa=$(ip_to_hex 172 168 0 200)
+    local tpa=$(ip_to_hex 172 168 0 110)
+
+    local packet=${dst_mac}50540000008808060001080006040002505400000088${spa}${dst_mac}${tpa}
+
+    as hv1 ovs-appctl netdev-dummy/receive br-phys_n $packet
+}
+
+net_add n
+
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n br-phys 192.168.0.1
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+check ovs-vsctl -- add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=sw0-port1 \
+    options:tx_pcap=hv1/vif1-tx.pcap \
+    options:rxq_pcap=hv1/vif1-rx.pcap
+
+sim_add hv2
+as hv2
+check ovs-vsctl add-br br-phys
+ovn_attach n br-phys 192.168.0.2
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+check ovs-vsctl -- add-port br-int hv2-vif1 -- \
+    set interface hv2-vif1 external-ids:iface-id=public-port1 \
+    options:tx_pcap=hv2/vif1-tx.pcap \
+    options:rxq_pcap=hv2/vif1-rx.pcap
+
+check ovn-nbctl ls-add sw0
+check ovn-nbctl lsp-add sw0 sw0-port1
+check ovn-nbctl lsp-set-addresses sw0-port1 "50:54:00:00:00:01 10.0.0.2"
+
+check ovn-nbctl ls-add public
+check ovn-nbctl lsp-add public ln-public
+check ovn-nbctl lsp-set-type ln-public localnet
+check ovn-nbctl lsp-set-addresses ln-public unknown
+check ovn-nbctl lsp-set-options ln-public network_name=phys
+check ovn-nbctl lsp-add public public-port1
+check ovn-nbctl lsp-set-addresses public-port1 "50:54:00:00:00:88 172.168.0.200"
+
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24
+check ovn-nbctl lsp-add sw0 sw0-lr0
+check ovn-nbctl lsp-set-type sw0-lr0 router
+check ovn-nbctl lsp-set-addresses sw0-lr0 router
+check ovn-nbctl lsp-set-options sw0-lr0 router-port=lr0-sw0
+check ovn-nbctl lrp-add lr0 lr0-public 00:00:20:20:12:13 172.168.0.1/24
+check ovn-nbctl lsp-add public public-lr0
+check ovn-nbctl lsp-set-type public-lr0 router
+check ovn-nbctl lsp-set-addresses public-lr0 router
+check ovn-nbctl lsp-set-options public-lr0 router-port=lr0-public
+
+check ovn-nbctl lrp-set-gateway-chassis lr0-public hv2 20
+
+check ovn-nbctl lr-nat-add lr0 snat 172.168.0.1 10.0.0.0/24
+check ovn-nbctl lr-nat-add lr0 dnat_and_snat 172.168.0.110 10.0.0.2 sw0-port1 f0:00:00:01:02:03
+
+wait_for_ports_up
+OVN_POPULATE_ARP
+
+# send UDP request to the FIP associated to sw0-port1
+test_ip_req_packet "f00000010203" $(ip_to_hex 172 168 0 110) "1ff5"
+OVS_WAIT_UNTIL([test $($PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif1-tx.pcap | wc -l) -ge 1])
+# send UDP reply from sw0-port1
+test_ip_rep_packet
+# generate arp reply
+test_arp_reply
+# packet sent by the FIP
+echo "505400000088f00000010203080045000072000000003f1120f5aca8006eaca800c811110035000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" > expected
+
+OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
+
+check ovn-nbctl lb-add lb0 172.168.0.1:4369 10.0.0.2:4369 udp
+check ovn-nbctl lr-lb-add lr0 lb0
+
+# send UDP request to the load-balancer VIP
+test_ip_req_packet "000020201213" $(ip_to_hex 172 168 0 1) "2062"
+OVS_WAIT_UNTIL([test $($PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif1-tx.pcap | wc -l) -ge 1])
+# send UDP reply from sw0-port1
+test_ip_rep_packet
+# packet sent by the load balancer VIP
+echo "505400000088000020201213080045000072000000003f112162aca80001aca800c811110035000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" > expected
+OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
+
+AT_CLEANUP
+])
