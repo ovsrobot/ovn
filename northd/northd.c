@@ -11951,6 +11951,17 @@ build_neigh_learning_flows_for_lrouter(
     ovn_lflow_add(lflows, od, S_ROUTER_IN_LOOKUP_NEIGHBOR, 100, "nd_ns",
                   ds_cstr(actions));
 
+    if (!learn_from_arp_request) {
+        /* Add flow to skip LLA only if we don't know it already. */
+        ds_clear(actions);
+        ds_put_format(actions, REGBIT_LOOKUP_NEIGHBOR_RESULT
+                      " = lookup_nd(inport, ip6.src, nd.tll); "
+                      REGBIT_LOOKUP_NEIGHBOR_IP_RESULT
+                      " = lookup_nd_ip(inport, ip6.src); next;");
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_LOOKUP_NEIGHBOR, 110,
+                      "nd_na && ip6.src == fe80::/10", ds_cstr(actions));
+    }
+
     /* For other packet types, we can skip neighbor learning.
      * So set REGBIT_LOOKUP_NEIGHBOR_RESULT to 1. */
     ovn_lflow_add(lflows, od, S_ROUTER_IN_LOOKUP_NEIGHBOR, 0, "1",
