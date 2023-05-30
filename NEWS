@@ -37,6 +37,8 @@ OVN v23.06.0 - xx xxx xxxx
   - Support for tiered ACLs has been added. This allows for ACLs to be layered
     into separate tiers of priority. For more information, please see the
     ovn-nb and ovn-northd manpages.
+  - Support to create/update MAC_Binding when GARP received from VTEP (RAMP)
+    switch on l3dgw port.
 
 OVN v23.03.0 - 03 Mar 2023
 --------------------------
