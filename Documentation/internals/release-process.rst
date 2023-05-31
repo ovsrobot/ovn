@@ -152,6 +152,12 @@ approximate:
 | T + 6         | Sep 1, Mar 1, ...   | Release version x.y.0                |
 +---------------+---------------------+--------------------------------------+
 
+After the .0 release is created for a given OVN version, that version will have
+releases made every month until its support lifetime has concluded. If for some
+reason, no changes occur to a supported OVN version during a month, then no
+release will be made that month. Therefore, there is no guarantee about the
+exact number of releases to be expected for any given OVN version.
+
 Release Calendar
 ----------------
 
