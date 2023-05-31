@@ -1568,6 +1568,7 @@ consider_vif_lport_(const struct sbrec_port_binding *pb,
             || is_additional_chassis(pb, b_ctx_in->chassis_rec)) {
         /* Release the lport if there is no lbinding. */
         if (!lbinding_set || !can_bind) {
+            remove_related_lport(pb, b_ctx_out);
             return release_lport(pb, b_ctx_in->chassis_rec,
                                  !b_ctx_in->ovnsb_idl_txn,
                                  b_ctx_out->tracked_dp_bindings,
