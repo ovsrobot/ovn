@@ -2288,7 +2288,7 @@ exit:
 static bool
 compose_out_dhcpv6_opts(struct ofpbuf *userdata,
                         struct ofpbuf *out_dhcpv6_opts,
-                        ovs_be32 iaid, bool ipxe_req)
+                        ovs_be32 iaid, bool ipxe_req, uint8_t fqdn_flags)
 {
     while (userdata->size) {
         struct dhcpv6_opt_header *userdata_opt = ofpbuf_try_pull(
@@ -2412,6 +2412,24 @@ compose_out_dhcpv6_opts(struct ofpbuf *userdata,
             break;
         }
 
+        case DHCPV6_OPT_FQDN_CODE: {
+            if (fqdn_flags != DHCPV6_FQDN_FLAGS_UNDEFINED) {
+                struct dhcpv6_opt_header *header =
+                        ofpbuf_put_zeros(out_dhcpv6_opts, sizeof *header);
+                header->code = htons(DHCPV6_OPT_FQDN_CODE);
+                header->len = htons(size + 1);
+                uint8_t *flags = ofpbuf_put_zeros(out_dhcpv6_opts, 1);
+                /* If client requested N or S inform him that it
+                 * was overwritten by the server. */
+                if (fqdn_flags & DHCPV6_FQDN_FLAGS_N ||
+                    fqdn_flags & DHCPV6_FQDN_FLAGS_S) {
+                    *flags |= DHCPV6_FQDN_FLAGS_O;
+                }
+                ofpbuf_put(out_dhcpv6_opts, userdata_opt_data, size);
+            }
+            break;
+        }
+
         default:
             return false;
         }
@@ -2500,6 +2518,7 @@ pinctrl_handle_put_dhcpv6_opts(
     size_t l4_len = dp_packet_l4_size(pkt_in);
     uint8_t *end = (uint8_t *)in_udp + MIN(udp_len, l4_len);
     bool ipxe_req = false;
+    uint8_t fqdn_flags = DHCPV6_FQDN_FLAGS_UNDEFINED;
     while (in_dhcpv6_data < end) {
         struct dhcpv6_opt_header const *in_opt =
              (struct dhcpv6_opt_header *)in_dhcpv6_data;
@@ -2524,6 +2543,10 @@ pinctrl_handle_put_dhcpv6_opts(
             break;
         }
 
+        case DHCPV6_OPT_FQDN_CODE:
+            fqdn_flags = *(in_dhcpv6_data + sizeof *in_opt);
+            break;
+
         default:
             break;
         }
@@ -2547,7 +2570,7 @@ pinctrl_handle_put_dhcpv6_opts(
         OFPBUF_STUB_INITIALIZER(out_ofpacts_dhcpv6_opts_stub);
 
     if (!compose_out_dhcpv6_opts(userdata, &out_dhcpv6_opts,
-                                 iaid, ipxe_req)) {
+                                 iaid, ipxe_req, fqdn_flags)) {
         VLOG_WARN_RL(&rl, "Invalid userdata");
         goto exit;
     }

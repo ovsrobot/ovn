@@ -2470,7 +2470,8 @@ parse_gen_opt(struct action_context *ctx, struct ovnact_gen_option *o,
     }
 
     if (!strcmp(o->option->type, "str") ||
-        !strcmp(o->option->type, "domains")) {
+        !strcmp(o->option->type, "domains") ||
+        !strcmp(o->option->type, "domain")) {
         if (o->value.type != EXPR_C_STRING) {
             lexer_error(ctx->lexer, "%s option %s requires string value.",
                         opts_type, o->option->name);
@@ -2903,6 +2904,33 @@ encode_put_dhcpv6_option(const struct ovnact_gen_option *o,
         size = strlen(c->string);
         opt->len = htons(size);
         ofpbuf_put(ofpacts, c->string, size);
+    } else if (!strcmp(o->option->type, "domain")) {
+        /* The DNS format is 2 bytes longer than the "domain".
+         * It replaces every '.' with len of the next name. */
+        size_t domain_len = strlen(c->string);
+        size = domain_len + 2;
+        char *encoded = xzalloc(size);
+
+        int8_t label_len = 0;
+        for (size_t i = 0; i < domain_len; i++) {
+            if (c->string[i] == '.') {
+                encoded[i - label_len] = label_len;
+                label_len = 0;
+            } else {
+                encoded[i + 1] = c->string[i];
+                label_len++;
+            }
+        }
+
+        /* This is required for the last label if it doesn't end with '.' */
+        if (label_len) {
+            encoded[domain_len - label_len] = label_len;
+        }
+
+        opt->len = htons(size);
+        ofpbuf_put(ofpacts, encoded, size);
+
+        free(encoded);
     }
 }
 
