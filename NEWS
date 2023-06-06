@@ -1,5 +1,7 @@
 Post v23.06.0
 -------------
+  - Add DHCPv6 "fqdn" (39) option, that works similarly to
+    DHCPv4 "hostname" (12) option.
 
 OVN v23.06.0 - 01 Jun 2023
 --------------------------
