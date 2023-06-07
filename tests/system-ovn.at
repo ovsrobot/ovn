@@ -4268,6 +4268,10 @@ done
 ovn-nbctl set Logical_Switch sw1 other_config:mcast_querier="false"
 ovn-nbctl set Logical_Switch sw1 other_config:mcast_snoop="true"
 
+# When running through GitHub actions on a busy system, we need to
+# delay sending the IGMP join until all configuration has settled.
+# If we fail to do this, the join message might be missed.
+sleep 1
 
 group_v4="239.0.1.68"
 # Inject IGMP Join for v4 group on sw1-p1.
