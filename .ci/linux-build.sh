@@ -66,7 +66,7 @@ function execute_tests()
 
     export DISTCHECK_CONFIGURE_FLAGS="$OPTS"
     if ! make distcheck CFLAGS="${COMMON_CFLAGS} ${OVN_CFLAGS}" $JOBS \
-        TESTSUITEFLAGS="$JOBS $TEST_RANGE" RECHECK=yes
+        TESTSUITEFLAGS="$JOBS $TEST_RANGE"
     then
         # testsuite.log is necessary for debugging.
         cat */_build/sub/tests/testsuite.log
@@ -81,7 +81,7 @@ function execute_system_tests()
 
       configure_ovn $OPTS
       make $JOBS || { cat config.log; exit 1; }
-      if ! sudo make $JOBS $type TESTSUITEFLAGS="$TEST_RANGE" RECHECK=yes; then
+      if ! sudo make $JOBS $type TESTSUITEFLAGS="$TEST_RANGE"; then
           # $log_file is necessary for debugging.
           cat tests/$log_file
           exit 1
