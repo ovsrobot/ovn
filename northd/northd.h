@@ -73,6 +73,7 @@ struct chassis_features {
     bool mac_binding_timestamp;
     bool ct_lb_related;
     bool fdb_timestamp;
+    bool ls_dpg_column;
 };
 
 /* A collection of datapaths. E.g. all logical switch datapaths, or all
