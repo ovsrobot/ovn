@@ -174,10 +174,10 @@ enum ovn_stage {
     PIPELINE_STAGE(ROUTER, IN,  ND_RA_OPTIONS,   10, "lr_in_nd_ra_options") \
     PIPELINE_STAGE(ROUTER, IN,  ND_RA_RESPONSE,  11, "lr_in_nd_ra_response") \
     PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_PRE,  12, "lr_in_ip_routing_pre")  \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      13, "lr_in_ip_routing")      \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 14, "lr_in_ip_routing_ecmp") \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY,          15, "lr_in_policy")          \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     16, "lr_in_policy_ecmp")     \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY,          13, "lr_in_policy")          \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     14, "lr_in_policy_ecmp")     \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      15, "lr_in_ip_routing")      \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 16, "lr_in_ip_routing_ecmp") \
     PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     17, "lr_in_arp_resolve")     \
     PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     18, "lr_in_chk_pkt_len")     \
     PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     19, "lr_in_larger_pkts")     \
@@ -278,6 +278,7 @@ enum ovn_stage {
 #define REG_SRC_IPV4 "reg1"
 #define REG_SRC_IPV6 "xxreg1"
 #define REG_ROUTE_TABLE_ID "reg7"
+#define REG_ROUTE_POLICY "reg2"
 
 /* Register used to store backend ipv6 address
  * for load balancer affinity. */
@@ -341,7 +342,7 @@ enum ovn_stage {
  * | R1  |   SRC_IPV4 for ARP-REQ    | 0 |                 | R |                                    |
  * |     |      (>= IP_INPUT)        |   |                 | E |     NEXT_HOP_IPV6 (>= DEFRAG )     |
  * +-----+---------------------------+---+-----------------+ G |                                    |
- * | R2  |        UNUSED             | X |                 | 0 |                                    |
+ * | R2  |     REG_ROUTE_POLICY      | X |                 | 0 |                                    |
  * |     |                           | R |                 |   |                                    |
  * +-----+---------------------------+ E |     UNUSED      |   |                                    |
  * | R3  |        UNUSED             | G |                 |   |                                    |
@@ -10240,6 +10241,7 @@ build_routing_policy_flow(struct hmap *lflows, struct ovn_datapath *od,
         bool is_ipv4 = strchr(nexthop, '.') ? true : false;
         ds_put_format(&actions, "%s = %s; "
                       "%s = %s; "
+                      "%s = 1; "
                       "eth.src = %s; "
                       "outport = %s; "
                       "flags.loopback = 1; "
@@ -10249,6 +10251,7 @@ build_routing_policy_flow(struct hmap *lflows, struct ovn_datapath *od,
                       nexthop,
                       is_ipv4 ? REG_SRC_IPV4 : REG_SRC_IPV6,
                       lrp_addr_s,
+                      REG_ROUTE_POLICY,
                       out_port->lrp_networks.ea_s,
                       out_port->json_key);
 
@@ -10340,6 +10343,7 @@ build_ecmp_routing_policy_flows(struct hmap *lflows, struct ovn_datapath *od,
                       out_port->json_key);
 
         ds_clear(&match);
+        ds_put_cstr(&actions, REG_ROUTE_POLICY" = 1; ");
         ds_put_format(&match, REG_ECMP_GROUP_ID" == %"PRIu16" && "
                       REG_ECMP_MEMBER_ID" == %"PRIuSIZE,
                       ecmp_group_id, i + 1);
@@ -12911,6 +12915,8 @@ build_mcast_lookup_flows_for_lrouter(
      */
     ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 10550,
                   "nd_rs || nd_ra", debug_drop_action());
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 10000,
+                  REG_ROUTE_POLICY" == 1", "reg8[0..15] = 0; next;");
     if (!od->mcast_info.rtr.relay) {
         return;
     }
