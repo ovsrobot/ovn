@@ -9,6 +9,7 @@ COMMON_CFLAGS=""
 OVN_CFLAGS=""
 OPTS="$OPTS --enable-Werror"
 JOBS=${JOBS:-"-j4"}
+RECHECK=${RECHECK:-"no"}
 
 function install_dpdk()
 {
@@ -99,15 +100,10 @@ function configure_clang()
     COMMON_CFLAGS="${COMMON_CFLAGS} -Wno-error=unused-command-line-argument"
 }
 
-function execute_tests()
+function run_tests()
 {
-    # 'distcheck' will reconfigure with required options.
-    # Now we only need to prepare the Makefile without sparse-wrapped CC.
-    configure_ovn
-
-    export DISTCHECK_CONFIGURE_FLAGS="$OPTS"
     if ! make distcheck CFLAGS="${COMMON_CFLAGS} ${OVN_CFLAGS}" $JOBS \
-        TESTSUITEFLAGS="$JOBS $TEST_RANGE" RECHECK=yes
+        TESTSUITEFLAGS="$JOBS $TEST_RANGE" RECHECK=$RECHECK
     then
         # testsuite.log is necessary for debugging.
         cat */_build/sub/tests/testsuite.log
@@ -115,18 +111,46 @@ function execute_tests()
     fi
 }
 
+function execute_tests()
+{
+    # 'distcheck' will reconfigure with required options.
+    # Now we only need to prepare the Makefile without sparse-wrapped CC.
+    configure_ovn
+
+    export DISTCHECK_CONFIGURE_FLAGS="$OPTS"
+
+    SKIP_UNSTABLE=yes run_tests
+
+    if [ "$UNSTABLE" ]; then
+        SKIP_UNSTABLE=no TEST_RANGE="-k unstable" RECHECK=yes \
+            run_tests
+    fi
+}
+
+function run_system_tests()
+{
+    type=$1
+    log_file=$2
+
+    if ! sudo make $JOBS $type TESTSUITEFLAGS="$TEST_RANGE" \
+            RECHECK=$RECHECK; then
+        # $log_file is necessary for debugging.
+        cat tests/$log_file
+        exit 1
+    fi
+}
+
 function execute_system_tests()
 {
-      type=$1
-      log_file=$2
+    configure_ovn $OPTS
+    make $JOBS || { cat config.log; exit 1; }
 
-      configure_ovn $OPTS
-      make $JOBS || { cat config.log; exit 1; }
-      if ! sudo make $JOBS $type TESTSUITEFLAGS="$TEST_RANGE" RECHECK=yes; then
-          # $log_file is necessary for debugging.
-          cat tests/$log_file
-          exit 1
-      fi
+    SKIP_UNSTABLE=yes run_system_tests $@
+
+    if [ "$UNSTABLE" ]; then
+        SKIP_UNSTABLE=no TEST_RANGE="-k unstable" RECHECK=yes \
+            run_system_tests $@
+    fi
 }
 
 configure_$CC
