@@ -252,3 +252,87 @@ mac_cache_threshold_remove(struct hmap *thresholds,
     hmap_remove(thresholds, &threshold->hmap_node);
     free(threshold);
 }
+
+struct mac_cache_mb_stats {
+    struct ovs_list list_node;
+
+    int64_t idle_age_ms;
+    uint32_t cookie;
+    /* Common data to identify MAC binding. */
+    struct mac_cache_mb_data data;
+};
+
+void
+mac_cache_mb_stats_process_flow_stats(struct ovs_list *stats_list,
+                                      struct ofputil_flow_stats *ofp_stats)
+{
+    struct mac_cache_mb_stats *stats = xmalloc(sizeof *stats);
+
+    stats->idle_age_ms = ofp_stats->idle_age * 1000;
+    stats->cookie = ntohll(ofp_stats->cookie);
+    stats->data.port_key =
+            ofp_stats->match.flow.regs[MFF_LOG_INPORT - MFF_REG0];
+    stats->data.dp_key = ntohll(ofp_stats->match.flow.metadata);
+
+    if (ofp_stats->match.flow.dl_type == htons(ETH_TYPE_IP)) {
+        stats->data.ip = in6_addr_mapped_ipv4(ofp_stats->match.flow.nw_src);
+    } else {
+        stats->data.ip = ofp_stats->match.flow.ipv6_src;
+    }
+
+    stats->data.mac = ofp_stats->match.flow.dl_src;
+
+    ovs_list_push_back(stats_list, &stats->list_node);
+}
+
+void
+mac_cache_mb_stats_destroy(struct ovs_list *stats_list)
+{
+    struct mac_cache_mb_stats *stats;
+    LIST_FOR_EACH_POP (stats, list_node, stats_list) {
+        free(stats);
+    }
+}
+
+void
+mac_cache_mb_stats_run(struct ovs_list *stats_list, uint64_t *req_delay,
+                       void *data)
+{
+    struct mac_cache_data *cache_data = data;
+    long long timewall_now = time_wall_msec();
+
+    struct mac_cache_threshold *threshold;
+    struct mac_cache_mb_stats *stats;
+    struct mac_cache_mac_binding *mc_mb;
+    LIST_FOR_EACH_POP (stats, list_node, stats_list) {
+        mc_mb = mac_cache_mac_binding_find_by_mb_data(cache_data,
+                                                      &stats->data);
+
+        if (!mc_mb) {
+            free(stats);
+            continue;
+        }
+
+        struct uuid *dp_uuid = &mc_mb->sbrec_mb->datapath->header_.uuid;
+        threshold = mac_cache_threshold_find(&cache_data->mb_thresholds,
+                                             dp_uuid);
+
+        uint64_t dump_period = (3 * threshold->value) / 4;
+        /* If "idle_age" is under threshold it means that the mac binding is
+         * used on this chassis. Also make sure that we don't update the
+         * timestamp more than once during the dump period. */
+        if (stats->idle_age_ms < threshold->value &&
+            (timewall_now - mc_mb->sbrec_mb->timestamp) >= dump_period) {
+            sbrec_mac_binding_set_timestamp(mc_mb->sbrec_mb, timewall_now);
+        }
+
+        free(stats);
+    }
+
+    uint64_t dump_period = UINT64_MAX;
+    HMAP_FOR_EACH (threshold, hmap_node, &cache_data->mb_thresholds) {
+        dump_period = MIN(dump_period, (3 * threshold->value) / 4);
+    }
+
+    *req_delay = dump_period < UINT64_MAX ? dump_period : 0;
+}

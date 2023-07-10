@@ -84,6 +84,7 @@
 #include "hmapx.h"
 #include "mirror.h"
 #include "mac_cache.h"
+#include "statctrl.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
 
@@ -4804,6 +4805,7 @@ main(int argc, char *argv[])
     lflow_init();
     mirror_init();
     vif_plug_provider_initialize();
+    statctrl_init();
 
     /* Connect to OVS OVSDB instance. */
     struct ovsdb_idl_loop ovs_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(
@@ -5205,6 +5207,8 @@ main(int argc, char *argv[])
         engine_get_internal_data(&en_template_vars);
     struct ed_type_lb_data *lb_data =
         engine_get_internal_data(&en_lb_data);
+    struct mac_cache_data *mac_cache_data =
+            engine_get_internal_data(&en_mac_cache);
 
     ofctrl_init(&lflow_output_data->group_table,
                 &lflow_output_data->meter_table,
@@ -5593,6 +5597,11 @@ main(int argc, char *argv[])
                         }
                     }
 
+                    if (mac_cache_data) {
+                        statctrl_update(br_int->name);
+                        statctrl_run(ovnsb_idl_txn, mac_cache_data);
+                    }
+
                     ofctrl_seqno_update_create(
                         ofctrl_seq_type_nb_cfg,
                         get_nb_cfg(sbrec_sb_global_table_get(
@@ -5702,6 +5711,7 @@ main(int argc, char *argv[])
             if (br_int) {
                 ofctrl_wait();
                 pinctrl_wait(ovnsb_idl_txn);
+                statctrl_wait(ovnsb_idl_txn);
             }
 
             binding_wait();
@@ -5836,6 +5846,7 @@ loop_done:
     patch_destroy();
     mirror_destroy();
     encaps_destroy();
+    statctrl_destroy();
     if_status_mgr_destroy(if_mgr);
     shash_destroy(&vif_plug_deleted_iface_ids);
     shash_destroy(&vif_plug_changed_iface_ids);
