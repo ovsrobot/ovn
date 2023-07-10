@@ -34532,12 +34532,23 @@ send_garp() {
     mac_byte=$3
     ip_byte=${4-$3}
 
-    mac="0000000010$mac_byte"
-    ip=`ip_to_hex 192 168 10 $ip_byte`
-    packet=ffffffffffff${mac}08060001080006040002${mac}${ip}${mac}${ip}
+    mac="00:00:00:00:10:${mac_byte}"
+    ip="192.168.10.${ip_byte}"
+    packet=$(fmt_pkt "Ether(dst='ff:ff:ff:ff:ff:ff', src='${mac}')/ \
+                      ARP(op=2, hwsrc='${mac}', hwdst='${mac}', \
+                      psrc='${ip}', pdst='${ip}')")
     as $hv ovs-appctl netdev-dummy/receive $dev $packet
 }
 
+send_udp() {
+    hv=$1
+    dev=$2
+    byte=$3
+
+    packet=$(fmt_pkt "Ether(dst='00:00:00:00:10:00', src='00:00:00:00:10:${byte}')/ \
+                      IP(dst='192.168.20.${byte}', src='192.168.10.${byte}')/UDP()")
+    as $hv ovs-appctl netdev-dummy/receive $dev $packet
+}
 # Check if the option is not present by default
 AT_CHECK([fetch_column nb:logical_router options name="gw" | grep -q mac_binding_age_threshold], [1])
 
@@ -34547,6 +34558,12 @@ send_garp hv2 ext2 20
 
 OVS_WAIT_UNTIL([ovn-sbctl list mac_binding | grep -q "192.168.10.10"])
 OVS_WAIT_UNTIL([ovn-sbctl list mac_binding | grep -q "192.168.10.20"])
+
+send_udp hv1 ext1 10
+send_udp hv2 ext2 20
+
+OVS_WAIT_UNTIL([as hv1 ovs-ofctl dump-flows br-int table=79 | grep "192.168.10.10" | grep -q "n_packets=1"])
+OVS_WAIT_UNTIL([as hv2 ovs-ofctl dump-flows br-int table=79 | grep "192.168.10.20" | grep -q "n_packets=1"])
 
 # Set the MAC binding aging threshold
 AT_CHECK([ovn-nbctl set logical_router gw options:mac_binding_age_threshold=1])
