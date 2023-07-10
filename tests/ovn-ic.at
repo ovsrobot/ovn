@@ -256,6 +256,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn-ic -- gateway sync])
+TAG_UNSTABLE
 
 ovn_init_ic_db
 net_add n1
