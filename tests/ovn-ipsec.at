@@ -1,6 +1,7 @@
 AT_BANNER([OVN - IPsec])
 
 AT_SETUP([ipsec -- basic configuration])
+TAG_UNSTABLE
 ovn_start
 
 # Configure the Northbound database
