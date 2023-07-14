@@ -85,7 +85,8 @@ struct ovn_northd_lb {
     size_t n_nb_lr;
     unsigned long *nb_lr_map;
 
-    struct ovn_dp_group *dpg;
+    struct ovn_dp_group *ls_dpg;
+    struct ovn_dp_group *lr_dpg;
 };
 
 struct ovn_lb_vip {
