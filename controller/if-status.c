@@ -820,3 +820,15 @@ if_status_mgr_get_memory_usage(struct if_status_mgr *mgr,
     simap_increase(usage, "if_status_mgr_ifaces_state_usage-KB",
                    ROUND_UP(ifaces_state_usage, 1024) / 1024);
 }
+
+bool
+if_status_is_port_claimed(const struct if_status_mgr *mgr,
+                          const char *iface_id)
+{
+    struct ovs_iface *iface = shash_find_data(&mgr->ifaces, iface_id);
+    if (!iface || (iface->state > OIF_INSTALLED)) {
+        return false;
+    } else {
+        return true;
+    }
+}
