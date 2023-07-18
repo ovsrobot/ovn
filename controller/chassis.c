@@ -831,7 +831,11 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
     }
 
     ovs_chassis_cfg_destroy(&ovs_cfg);
-    return chassis_rec;
+    if (existed) {
+        return chassis_rec;
+    } else {
+        return NULL;
+    }
 }
 
 bool
