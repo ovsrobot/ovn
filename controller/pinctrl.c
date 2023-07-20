@@ -165,6 +165,7 @@ VLOG_DEFINE_THIS_MODULE(pinctrl);
 static struct ovs_mutex pinctrl_mutex = OVS_MUTEX_INITIALIZER;
 static struct seq *pinctrl_handler_seq;
 static struct seq *pinctrl_main_seq;
+static long long int garp_rarp_max_timeout = LLONG_MAX;
 
 static void *pinctrl_handler(void *arg);
 
@@ -227,7 +228,8 @@ static void send_garp_rarp_prepare(
     const struct ovsrec_bridge *,
     const struct sbrec_chassis *,
     const struct hmap *local_datapaths,
-    const struct sset *active_tunnels)
+    const struct sset *active_tunnels,
+    const struct ovsrec_open_vswitch_table *ovs_table)
     OVS_REQUIRES(pinctrl_mutex);
 static void send_garp_rarp_run(struct rconn *swconn,
                                long long int *send_garp_rarp_time)
@@ -3492,7 +3494,8 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             const struct hmap *local_datapaths,
             const struct sset *active_tunnels,
             const struct shash *local_active_ports_ipv6_pd,
-            const struct shash *local_active_ports_ras)
+            const struct shash *local_active_ports_ras,
+            const struct ovsrec_open_vswitch_table *ovs_table)
 {
     ovs_mutex_lock(&pinctrl_mutex);
     run_put_mac_bindings(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
@@ -3503,7 +3506,7 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
     send_garp_rarp_prepare(ovnsb_idl_txn, sbrec_port_binding_by_datapath,
                            sbrec_port_binding_by_name,
                            sbrec_mac_binding_by_lport_ip, br_int, chassis,
-                           local_datapaths, active_tunnels);
+                           local_datapaths, active_tunnels, ovs_table);
     prepare_ipv6_ras(local_active_ports_ras, sbrec_port_binding_by_name);
     prepare_ipv6_prefixd(ovnsb_idl_txn, sbrec_port_binding_by_name,
                          local_active_ports_ipv6_pd, chassis,
@@ -4424,7 +4427,8 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
                       struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
                       const struct hmap *local_datapaths,
                       const struct sbrec_port_binding *binding_rec,
-                      struct shash *nat_addresses)
+                      struct shash *nat_addresses,
+                      long long int garp_max_timeout)
 {
     volatile struct garp_rarp_data *garp_rarp = NULL;
 
@@ -4450,6 +4454,11 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 if (garp_rarp) {
                     garp_rarp->dp_key = binding_rec->datapath->tunnel_key;
                     garp_rarp->port_key = binding_rec->tunnel_key;
+                    if (garp_max_timeout != garp_rarp_max_timeout) {
+                        /* reset backoff */
+                        garp_rarp->announce_time = time_msec() + 1000;
+                        garp_rarp->backoff = 1;
+                    }
                 } else {
                     add_garp_rarp(name, laddrs->ea,
                                   laddrs->ipv4_addrs[i].addr,
@@ -4474,6 +4483,11 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
                     if (garp_rarp) {
                         garp_rarp->dp_key = binding_rec->datapath->tunnel_key;
                         garp_rarp->port_key = binding_rec->tunnel_key;
+                        if (garp_max_timeout != garp_rarp_max_timeout) {
+                            /* reset backoff */
+                            garp_rarp->announce_time = time_msec() + 1000;
+                            garp_rarp->backoff = 1;
+                        }
                     } else {
                         add_garp_rarp(name, laddrs->ea,
                                       0, binding_rec->datapath->tunnel_key,
@@ -4493,6 +4507,11 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
     if (garp_rarp) {
         garp_rarp->dp_key = binding_rec->datapath->tunnel_key;
         garp_rarp->port_key = binding_rec->tunnel_key;
+        if (garp_max_timeout != garp_rarp_max_timeout) {
+            /* reset backoff */
+            garp_rarp->announce_time = time_msec() + 1000;
+            garp_rarp->backoff = 1;
+        }
         return;
     }
 
@@ -4582,6 +4601,8 @@ send_garp_rarp(struct rconn *swconn, struct garp_rarp_data *garp_rarp,
     if (garp_rarp->backoff < 16) {
         garp_rarp->backoff *= 2;
         garp_rarp->announce_time = current_time + garp_rarp->backoff * 1000;
+    } else if (garp_rarp_max_timeout != LLONG_MAX) {
+        garp_rarp->announce_time = current_time + garp_rarp_max_timeout;
     } else {
         garp_rarp->announce_time = LLONG_MAX;
     }
@@ -5881,13 +5902,26 @@ send_garp_rarp_prepare(struct ovsdb_idl_txn *ovnsb_idl_txn,
                        const struct ovsrec_bridge *br_int,
                        const struct sbrec_chassis *chassis,
                        const struct hmap *local_datapaths,
-                       const struct sset *active_tunnels)
+                       const struct sset *active_tunnels,
+                       const struct ovsrec_open_vswitch_table *ovs_table)
     OVS_REQUIRES(pinctrl_mutex)
 {
     struct sset localnet_vifs = SSET_INITIALIZER(&localnet_vifs);
     struct sset local_l3gw_ports = SSET_INITIALIZER(&local_l3gw_ports);
     struct sset nat_ip_keys = SSET_INITIALIZER(&nat_ip_keys);
     struct shash nat_addresses;
+    unsigned long long garp_max_timeout = LLONG_MAX;
+    const struct ovsrec_open_vswitch *cfg =
+        ovsrec_open_vswitch_table_first(ovs_table);
+    if (cfg) {
+        garp_max_timeout = smap_get_ullong(
+                &cfg->external_ids, "garp-max-timeout", LLONG_MAX);
+        if (!garp_max_timeout) {
+            garp_max_timeout = LLONG_MAX;
+        } else if (garp_max_timeout != LLONG_MAX) {
+            garp_max_timeout *= 1000; /* sec */
+        }
+    }
 
     shash_init(&nat_addresses);
 
@@ -5918,7 +5952,8 @@ send_garp_rarp_prepare(struct ovsdb_idl_txn *ovnsb_idl_txn,
         if (pb) {
             send_garp_rarp_update(ovnsb_idl_txn,
                                   sbrec_mac_binding_by_lport_ip,
-                                  local_datapaths, pb, &nat_addresses);
+                                  local_datapaths, pb, &nat_addresses,
+                                  garp_max_timeout);
         }
     }
 
@@ -5929,7 +5964,8 @@ send_garp_rarp_prepare(struct ovsdb_idl_txn *ovnsb_idl_txn,
             = lport_lookup_by_name(sbrec_port_binding_by_name, gw_port);
         if (pb) {
             send_garp_rarp_update(ovnsb_idl_txn, sbrec_mac_binding_by_lport_ip,
-                                  local_datapaths, pb, &nat_addresses);
+                                  local_datapaths, pb, &nat_addresses,
+                                  garp_max_timeout);
         }
     }
 
@@ -5947,6 +5983,8 @@ send_garp_rarp_prepare(struct ovsdb_idl_txn *ovnsb_idl_txn,
     shash_destroy(&nat_addresses);
 
     sset_destroy(&nat_ip_keys);
+
+    garp_rarp_max_timeout = garp_max_timeout;
 }
 
 static bool

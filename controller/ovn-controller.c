@@ -1040,6 +1040,7 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
      * calls are after the "non-track" calls. */
     ovsdb_idl_add_table(ovs_idl, &ovsrec_table_open_vswitch);
     ovsdb_idl_add_column(ovs_idl, &ovsrec_open_vswitch_col_other_config);
+    ovsdb_idl_add_column(ovs_idl, &ovsrec_open_vswitch_col_external_ids);
     ovsdb_idl_add_column(ovs_idl, &ovsrec_open_vswitch_col_bridges);
     ovsdb_idl_add_column(ovs_idl, &ovsrec_open_vswitch_col_datapaths);
     ovsdb_idl_add_table(ovs_idl, &ovsrec_table_interface);
@@ -5363,7 +5364,9 @@ main(int argc, char *argv[])
                                     &runtime_data->local_datapaths,
                                     &runtime_data->active_tunnels,
                                     &runtime_data->local_active_ports_ipv6_pd,
-                                    &runtime_data->local_active_ports_ras);
+                                    &runtime_data->local_active_ports_ras,
+                                    ovsrec_open_vswitch_table_get(
+                                            ovs_idl_loop.idl));
                         stopwatch_stop(PINCTRL_RUN_STOPWATCH_NAME,
                                        time_msec());
                         mirror_run(ovs_idl_txn,
