@@ -3773,11 +3773,30 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
         sbrec_port_binding_set_tunnel_key(op->sb, op->tunnel_key);
     }
 
+    bool up = false;
+    /* ovn-northd is supposed to set port_binding for remote ports
+     * if requested chassis is marked as remote
+     */
+    if (op->nbsp && lsp_is_remote(op->nbsp)) {
+        const struct sbrec_chassis *chassis_sb = NULL;
+        const char *requested_chassis = smap_get(
+                &op->nbsp->options, "requested-chassis");
+        if (requested_chassis) {
+            chassis_sb = chassis_lookup(
+                sbrec_chassis_by_name, sbrec_chassis_by_hostname,
+                requested_chassis);
+            if (chassis_sb) {
+                up = smap_get_bool(&chassis_sb->other_config,
+                                   "is-remote", false);
+            }
+        }
+        sbrec_port_binding_set_chassis(op->sb, chassis_sb);
+    }
+
     /* ovn-controller will update 'Port_Binding.up' only if it was explicitly
      * set to 'false'.
      */
     if (!op->sb->n_up) {
-        bool up = false;
         sbrec_port_binding_set_up(op->sb, &up, 1);
     }
 }

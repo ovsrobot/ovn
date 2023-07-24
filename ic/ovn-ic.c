@@ -506,20 +506,6 @@ get_lrp_address_for_sb_pb(struct ic_context *ctx,
     return peer->n_mac ? *peer->mac : NULL;
 }
 
-static const struct sbrec_chassis *
-find_sb_chassis(struct ic_context *ctx, const char *name)
-{
-    const struct sbrec_chassis *key =
-        sbrec_chassis_index_init_row(ctx->sbrec_chassis_by_name);
-    sbrec_chassis_index_set_name(key, name);
-
-    const struct sbrec_chassis *chassis =
-        sbrec_chassis_index_find(ctx->sbrec_chassis_by_name, key);
-    sbrec_chassis_index_destroy_row(key);
-
-    return chassis;
-}
-
 static void
 sync_lsp_tnl_key(const struct nbrec_logical_switch_port *lsp,
                  int64_t isb_tnl_key)
@@ -622,13 +608,10 @@ sync_local_port(struct ic_context *ctx,
 
 /* For each remote port:
  *   - Sync from ISB to NB
- *   - Sync gateway from ISB to SB
  */
 static void
-sync_remote_port(struct ic_context *ctx,
-                 const struct icsbrec_port_binding *isb_pb,
-                 const struct nbrec_logical_switch_port *lsp,
-                 const struct sbrec_port_binding *sb_pb)
+sync_remote_port(const struct icsbrec_port_binding *isb_pb,
+                 const struct nbrec_logical_switch_port *lsp)
 {
     /* Sync address from ISB to NB */
     if (isb_pb->address[0]) {
@@ -645,25 +628,6 @@ sync_remote_port(struct ic_context *ctx,
 
     /* Sync tunnel key from ISB to NB */
     sync_lsp_tnl_key(lsp, isb_pb->tunnel_key);
-
-    /* Sync gateway from ISB to SB */
-    if (isb_pb->gateway[0]) {
-        if (!sb_pb->chassis || strcmp(sb_pb->chassis->name, isb_pb->gateway)) {
-            const struct sbrec_chassis *chassis =
-                find_sb_chassis(ctx, isb_pb->gateway);
-            if (!chassis) {
-                VLOG_DBG("Chassis %s is not found in SB, syncing from ISB "
-                         "to SB skipped for logical port %s.",
-                         isb_pb->gateway, lsp->name);
-                return;
-            }
-            sbrec_port_binding_set_chassis(sb_pb, chassis);
-        }
-    } else {
-        if (sb_pb->chassis) {
-            sbrec_port_binding_set_chassis(sb_pb, NULL);
-        }
-    }
 }
 
 static void
@@ -813,7 +777,7 @@ port_binding_run(struct ic_context *ctx,
                     if (!sb_pb) {
                         continue;
                     }
-                    sync_remote_port(ctx, isb_pb, lsp, sb_pb);
+                    sync_remote_port(isb_pb, lsp);
                 }
             } else {
                 VLOG_DBG("Ignore lsp %s on ts %s with type %s.",
