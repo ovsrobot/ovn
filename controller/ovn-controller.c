@@ -5434,6 +5434,13 @@ main(int argc, char *argv[])
                                       ovsrec_interface_table_get(
                                                   ovs_idl_loop.idl),
                                       !ovnsb_idl_txn, !ovs_idl_txn);
+                    if (runtime_data && ovs_idl_txn) {
+                        update_qos(sbrec_port_binding_by_name, ovs_idl_txn,
+                                      ovsrec_port_by_qos,
+                                      ovsrec_qos_table_get(ovs_idl_loop.idl),
+                                      &runtime_data->qos_map,
+                                      ovs_table, bridge_table);
+                    }
                     stopwatch_stop(IF_STATUS_MGR_RUN_STOPWATCH_NAME,
                                    time_msec());
                 }
