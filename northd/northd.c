@@ -3601,6 +3601,14 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
                  * ha_chassis_group cleared in the same transaction. */
                 sbrec_port_binding_set_ha_chassis_group(op->sb, NULL);
             }
+
+            /* ovn-northd is supposed to set port_binding for remote ports
+             * if requested chassis is marked as remote
+             */
+            if (lsp_is_remote(op->nbsp)) {
+                sbrec_port_binding_set_chassis(op->sb,
+                                               op->sb->requested_chassis);
+            }
         } else {
             const char *chassis = NULL;
             if (op->peer && op->peer->od && op->peer->od->nbr) {
