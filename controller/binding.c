@@ -1514,6 +1514,35 @@ release_lport(const struct sbrec_port_binding *pb,
     return true;
 }
 
+/*
+ * This function will update the tracked_dp_bindings
+ * whenever an ofport on a specific ovs port.
+ * This update will trigger flow recomputation during
+ * the incremental processing run which updates the local
+ * flows in_port filed.
+ *
+ * This function will trigger flow recomputation only for
+ * affected local_bindings that have port_binding associated
+ * with it, otherwise, no flows are installed and we don't
+ * have to update any in_port field.
+ */
+static void
+handle_ovs_ofport_update(const char *iface_id,
+                         struct binding_ctx_out *b_ctx_out)
+{
+    struct shash *local_bindings = &b_ctx_out->lbinding_data->bindings;
+    struct local_binding *lbinding = local_binding_find(local_bindings,
+                                                        iface_id);
+    struct binding_lport *b_lport =
+        local_binding_get_primary_or_localport_lport(lbinding);
+
+    if (b_lport) {
+        tracked_datapath_lport_add(b_lport->pb, TRACKED_RESOURCE_UPDATED,
+                                   b_ctx_out->tracked_dp_bindings);
+        b_ctx_out->local_lports_changed = true;
+    }
+}
+
 static bool
 is_lbinding_set(struct local_binding *lbinding)
 {
@@ -2680,6 +2709,12 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
                                            b_ctx_out);
             if (!handled) {
                 break;
+            }
+
+            if (!b_ctx_out->local_lports_changed
+                 && ovsrec_interface_is_updated(iface_rec,
+                                                OVSREC_INTERFACE_COL_OFPORT)) {
+                handle_ovs_ofport_update(iface_id, b_ctx_out);
             }
         }
     }
