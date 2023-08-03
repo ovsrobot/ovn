@@ -5120,6 +5120,11 @@ northd_handle_ls_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             op->visited = false;
         }
 
+        bool only_rports = (od->n_router_ports == hmap_count(&od->ports));
+        if (only_rports) {
+            goto fail;
+        }
+
         /* Compare the individual ports in the old and new Logical Switches */
         for (size_t j = 0; j < changed_ls->n_ports; ++j) {
             struct nbrec_logical_switch_port *new_nbsp = changed_ls->ports[j];
@@ -5199,6 +5204,11 @@ northd_handle_ls_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 delete_fdb_entry(ni->sbrec_fdb_by_dp_and_port, od->tunnel_key,
                                  op->tunnel_key);
             }
+        }
+
+        only_rports = (od->n_router_ports == hmap_count(&od->ports));
+        if (only_rports) {
+            goto fail_clean_deleted;
         }
 
         if (!ovs_list_is_empty(&ls_change->added_ports) ||
