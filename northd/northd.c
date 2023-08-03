@@ -17780,6 +17780,22 @@ build_ha_chassis_group_ref_chassis(struct ovsdb_idl_index *ha_ch_grp_by_name,
     }
 }
 
+/* Set the "hosting-chassis" option in the NBDB logical_router_port
+ * table indicating which chassis the distributed port is bond to. */
+static void
+handle_cr_port_binding_changes(const struct sbrec_port_binding *sb,
+                struct ovn_port *orp)
+{
+    if (sb->chassis) {
+        nbrec_logical_router_port_update_options_setkey(
+            orp->l3dgw_port->nbrp, "hosting-chassis",
+            sb->chassis->name);
+    } else {
+        nbrec_logical_router_port_update_options_delkey(
+            orp->l3dgw_port->nbrp, "hosting-chassis");
+    }
+}
+
 /* Handle changes to the 'chassis' column of the 'Port_Binding' table.  When
  * this column is not empty, it means we need to set the corresponding logical
  * port as 'up' in the northbound DB. */
@@ -17789,6 +17805,7 @@ handle_port_binding_changes(struct ovsdb_idl_txn *ovnsb_txn,
                 const struct sbrec_ha_chassis_group_table *sb_ha_ch_grp_table,
                 struct ovsdb_idl_index *sb_ha_ch_grp_by_name,
                 struct hmap *ls_ports,
+                struct hmap *lr_ports,
                 struct shash *ha_ref_chassis_map)
 {
     const struct sbrec_port_binding *sb;
@@ -17807,6 +17824,14 @@ handle_port_binding_changes(struct ovsdb_idl_txn *ovnsb_txn,
     }
 
     SBREC_PORT_BINDING_TABLE_FOR_EACH (sb, sb_pb_table) {
+
+        struct ovn_port *orp = ovn_port_find(lr_ports, sb->logical_port);
+
+        if (orp && is_cr_port(orp)) {
+            handle_cr_port_binding_changes(sb, orp);
+            continue;
+        }
+
         struct ovn_port *op = ovn_port_find(ls_ports, sb->logical_port);
 
         if (!op || !op->nbsp) {
@@ -17855,7 +17880,8 @@ ovnsb_db_run(struct ovsdb_idl_txn *ovnnb_txn,
              const struct sbrec_port_binding_table *sb_pb_table,
              const struct sbrec_ha_chassis_group_table *sb_ha_ch_grp_table,
              struct ovsdb_idl_index *sb_ha_ch_grp_by_name,
-             struct hmap *ls_ports)
+             struct hmap *ls_ports,
+             struct hmap *lr_ports)
 {
     if (!ovnnb_txn ||
         !ovsdb_idl_has_ever_connected(ovsdb_idl_txn_get_idl(ovnsb_txn))) {
@@ -17864,7 +17890,7 @@ ovnsb_db_run(struct ovsdb_idl_txn *ovnnb_txn,
 
     struct shash ha_ref_chassis_map = SHASH_INITIALIZER(&ha_ref_chassis_map);
     handle_port_binding_changes(ovnsb_txn, sb_pb_table, sb_ha_ch_grp_table,
-                                sb_ha_ch_grp_by_name, ls_ports,
+                                sb_ha_ch_grp_by_name, ls_ports, lr_ports,
                                 &ha_ref_chassis_map);
     if (ovnsb_txn) {
         update_sb_ha_group_ref_chassis(sb_ha_ch_grp_table,
