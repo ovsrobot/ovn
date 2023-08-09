@@ -868,6 +868,7 @@ main(int argc, char *argv[])
     /* Main loop. */
     exiting = false;
 
+    uint32_t northd_backoff_ms = 0;
     bool recompute = false;
     while (!exiting) {
         update_ssl_config();
@@ -932,10 +933,12 @@ main(int argc, char *argv[])
 
             if (ovsdb_idl_has_lock(ovnsb_idl_loop.idl)) {
                 bool activity = false;
-                if (ovnnb_txn && ovnsb_txn) {
+                if (ovnnb_txn && ovnsb_txn &&
+                    inc_proc_northd_can_run(recompute)) {
                     int64_t loop_start_time = time_wall_msec();
                     activity = inc_proc_northd_run(ovnnb_txn, ovnsb_txn,
-                                                        recompute);
+                                                   recompute,
+                                                   northd_backoff_ms);
                     recompute = false;
                     check_and_add_supported_dhcp_opts_to_sb_db(
                                  ovnsb_txn, ovnsb_idl_loop.idl);
@@ -1019,6 +1022,8 @@ main(int argc, char *argv[])
         if (nb) {
             interval = smap_get_int(&nb->options, "northd_probe_interval",
                                     interval);
+            northd_backoff_ms = smap_get_uint(&nb->options,
+                                              "northd-backoff-interval-ms", 0);
         }
         set_idl_probe_interval(ovnnb_idl_loop.idl, ovnnb_db, interval);
         set_idl_probe_interval(ovnsb_idl_loop.idl, ovnsb_db, interval);
