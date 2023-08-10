@@ -42,6 +42,8 @@ VLOG_DEFINE_THIS_MODULE(inc_proc_northd);
 
 static unixctl_cb_func chassis_features_list;
 
+static int64_t next_northd_run_ms = 0;
+
 #define NB_NODES \
     NB_NODE(nb_global, "nb_global") \
     NB_NODE(logical_switch, "logical_switch") \
@@ -295,8 +297,10 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
 /* Returns true if the incremental processing ended up updating nodes. */
 bool inc_proc_northd_run(struct ovsdb_idl_txn *ovnnb_txn,
                          struct ovsdb_idl_txn *ovnsb_txn,
-                         bool recompute) {
+                         bool recompute, uint32_t backoff_ms) {
     ovs_assert(ovnnb_txn && ovnsb_txn);
+
+    int64_t start = time_msec();
     engine_init_run();
 
     /* Force a full recompute if instructed to, for example, after a NB/SB
@@ -330,6 +334,12 @@ bool inc_proc_northd_run(struct ovsdb_idl_txn *ovnnb_txn,
     } else {
         engine_set_force_recompute(false);
     }
+
+    int64_t now = time_msec();
+    /* Postpone the next run by length of current run with maximum capped
+     * by "northd-backoff-interval-ms" interval. */
+    next_northd_run_ms = now + MIN(now - start, backoff_ms);
+
     return engine_has_updated();
 }
 
@@ -337,6 +347,17 @@ void inc_proc_northd_cleanup(void)
 {
     engine_cleanup();
     engine_set_context(NULL);
+}
+
+bool
+inc_proc_northd_can_run(bool recompute)
+{
+    if (recompute || time_msec() >= next_northd_run_ms) {
+        return true;
+    }
+
+    poll_timer_wait_until(next_northd_run_ms);
+    return false;
 }
 
 static void
