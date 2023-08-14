@@ -433,10 +433,10 @@ check ovn-nbctl --wait=hv sync
 check ovn-nbctl --wait=hv sync
 
 # nb_cfg should be set to 1 in the chassis_private/nb_global/sb_global table
-check_column 1 chassis_private nb_cfg
-check_column 1 sb_global nb_cfg
-check_column 1 nb:nb_global nb_cfg
-check_column 0 chassis nb_cfg
+wait_row_count nb:nb_global 1 nb_cfg=1
+wait_row_count chassis_private 1 nb_cfg=1
+wait_row_count sb_global 1 nb_cfg=1
+wait_row_count chassis 1 nb_cfg=0
 
 OVN_CLEANUP([hv])
 AT_CLEANUP
@@ -562,7 +562,7 @@ primary lport : [[lsp1]]
 ])
 
 # Set the port type to localport
-check ovn-nbctl lsp-set-type lsp1 localport
+check ovn-nbctl --wait=hv lsp-set-type lsp1 localport
 check as hv1 ovs-vsctl set open . external_ids:ovn-cms-options=localport
 OVS_WAIT_UNTIL([test localport = $(ovn-sbctl get chassis . other_config:ovn-cms-options)])
 
