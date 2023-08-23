@@ -15832,7 +15832,7 @@ build_lswitch_and_lrouter_flows(const struct ovn_datapaths *ls_datapaths,
         struct lswitch_flow_build_info *lsiv;
         int index;
 
-        lsiv = xcalloc(sizeof(*lsiv), build_lflows_pool->size);
+        lsiv = xcalloc(build_lflows_pool->size, sizeof *lsiv);
 
         /* Set up "work chunks" for each thread to work on. */
 
