@@ -816,6 +816,15 @@ ovn_trace_client() {
     ovs-appctl -t $target trace "$@" | tee trace | sed '/^# /d'
 }
 
+wait_unix_socket() {
+    local socketfile=$1
+    for i in `seq 100`; do
+        nc -zU "$socketfile" && return 0
+        sleep 0.1
+    done
+    return 1
+}
+
 # Receives a string with scapy python code that represents a packet.
 # Returns a hex-string that contains bytes that reflect the packet symbolic
 # description.
@@ -833,10 +842,20 @@ ovn_trace_client() {
 # ovs-appctl netdev-dummy/receive $vif $packet
 #
 fmt_pkt() {
-    echo "from scapy.all import *; \
-          import binascii; \
-          out = binascii.hexlify(raw($1)); \
-          print(out.decode())" | $PYTHON3
+    sockfile=$ovs_base/scapy.sock
+    if [[ ! -e $sockfile ]]; then
+        start_scapy_server > /dev/null
+        wait_unix_socket $sockfile
+    fi
+    echo "$(echo $1 | nc -U $sockfile)"
+}
+
+start_scapy_server() {
+    pidfile=$ovs_base/scapy.pid
+    sockfile=$ovs_base/scapy.sock
+    "$top_srcdir"/tests/scapy_server.py --pidfile=$pidfile --sockfile=$sockfile
+    on_exit "test -e \"$pidfile\" && kill \`cat \"$pidfile\"\`"
+    on_exit "test -e \"$sockfile\" && rm \"$sockfile\""
 }
 
 sleep_sb() {
