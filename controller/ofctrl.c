@@ -1770,6 +1770,16 @@ ovn_flow_log(const struct ovn_flow *f, const char *action)
 }
 
 static void
+ovn_flow_log_size_err(const struct ovn_flow *f)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+
+    char *s = ovn_flow_to_string(f);
+    VLOG_ERR_RL(&rl, "The FLOW_MOD message is too big: %s", s);
+    free(s);
+}
+
+static void
 ovn_flow_uninit(struct ovn_flow *f)
 {
     minimatch_destroy(&f->match);
@@ -1888,15 +1898,27 @@ encode_bundle_add(struct ofpbuf *msg, struct ofputil_bundle_ctrl_msg *bc)
     return ofputil_encode_bundle_add(OFP15_VERSION, &bam);
 }
 
-static void
+static bool
 add_flow_mod(struct ofputil_flow_mod *fm,
              struct ofputil_bundle_ctrl_msg *bc,
              struct ovs_list *msgs)
 {
     struct ofpbuf *msg = encode_flow_mod(fm);
     struct ofpbuf *bundle_msg = encode_bundle_add(msg, bc);
+
+    uint32_t flow_mod_len = msg->size;
+    uint32_t bundle_len = bundle_msg->size;
+
     ofpbuf_delete(msg);
+
+    if (flow_mod_len > UINT16_MAX || bundle_len > UINT16_MAX) {
+        ofpbuf_delete(bundle_msg);
+
+        return false;
+    }
+
     ovs_list_push_back(msgs, &bundle_msg->list_node);
+    return true;
 }
 
 /* group_table. */
@@ -2227,15 +2249,18 @@ installed_flow_add(struct ovn_flow *d,
 {
     /* Send flow_mod to add flow. */
     struct ofputil_flow_mod fm = {
-        .match = d->match,
-        .priority = d->priority,
-        .table_id = d->table_id,
-        .ofpacts = d->ofpacts,
-        .ofpacts_len = d->ofpacts_len,
-        .new_cookie = htonll(d->cookie),
-        .command = OFPFC_ADD,
+            .match = d->match,
+            .priority = d->priority,
+            .table_id = d->table_id,
+            .ofpacts = d->ofpacts,
+            .ofpacts_len = d->ofpacts_len,
+            .new_cookie = htonll(d->cookie),
+            .command = OFPFC_ADD,
     };
-    add_flow_mod(&fm, bc, msgs);
+
+    if (!add_flow_mod(&fm, bc, msgs)) {
+        ovn_flow_log_size_err(d);
+    }
 }
 
 static void
@@ -2245,12 +2270,12 @@ installed_flow_mod(struct ovn_flow *i, struct ovn_flow *d,
 {
     /* Update actions in installed flow. */
     struct ofputil_flow_mod fm = {
-        .match = i->match,
-        .priority = i->priority,
-        .table_id = i->table_id,
-        .ofpacts = d->ofpacts,
-        .ofpacts_len = d->ofpacts_len,
-        .command = OFPFC_MODIFY_STRICT,
+            .match = i->match,
+            .priority = i->priority,
+            .table_id = i->table_id,
+            .ofpacts = d->ofpacts,
+            .ofpacts_len = d->ofpacts_len,
+            .command = OFPFC_MODIFY_STRICT,
     };
     /* Update cookie if it is changed. */
     if (i->cookie != d->cookie) {
@@ -2259,7 +2284,7 @@ installed_flow_mod(struct ovn_flow *i, struct ovn_flow *d,
         /* Use OFPFC_ADD so that cookie can be updated. */
         fm.command = OFPFC_ADD;
     }
-    add_flow_mod(&fm, bc, msgs);
+    bool result = add_flow_mod(&fm, bc, msgs);
 
     /* Replace 'i''s actions and cookie by 'd''s. */
     mem_stats.installed_flow_usage -= i->ofpacts_len - d->ofpacts_len;
@@ -2267,6 +2292,10 @@ installed_flow_mod(struct ovn_flow *i, struct ovn_flow *d,
     i->ofpacts = xmemdup(d->ofpacts, d->ofpacts_len);
     i->ofpacts_len = d->ofpacts_len;
     i->cookie = d->cookie;
+
+    if (!result) {
+        ovn_flow_log_size_err(i);
+    }
 }
 
 static void
@@ -2275,12 +2304,15 @@ installed_flow_del(struct ovn_flow *i,
                    struct ovs_list *msgs)
 {
     struct ofputil_flow_mod fm = {
-        .match = i->match,
-        .priority = i->priority,
-        .table_id = i->table_id,
-        .command = OFPFC_DELETE_STRICT,
+            .match = i->match,
+            .priority = i->priority,
+            .table_id = i->table_id,
+            .command = OFPFC_DELETE_STRICT,
     };
-    add_flow_mod(&fm, bc, msgs);
+
+    if (!add_flow_mod(&fm, bc, msgs)) {
+        ovn_flow_log_size_err(i);
+    }
 }
 
 static void
