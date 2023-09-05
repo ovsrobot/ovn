@@ -170,9 +170,7 @@ ovn_start_northd() {
         ovn-northd-ddlog) northd_args="$northd_args --ddlog-record=${AZ:+$AZ/}northd$suffix/replay.dat -v" ;;
     esac
 
-    if test X$NORTHD_USE_PARALLELIZATION = Xyes; then
-        northd_args="$northd_args --n-threads=4"
-    fi
+    northd_args="$northd_args --n-threads=4"
 
     local name=${d_prefix}northd${suffix}
     echo "${prefix}starting $name"
@@ -890,17 +888,15 @@ m4_define([OVN_POPULATE_ARP], [AT_CHECK(ovn_populate_arp__, [0], [ignore])])
 # parallelization on/off and conditional monitoring on/off.
 m4_define([OVN_FOR_EACH_NORTHD],
   [m4_foreach([NORTHD_TYPE], [ovn-northd],
-     [m4_foreach([NORTHD_USE_PARALLELIZATION], [yes, no],
-       [m4_foreach([OVN_MONITOR_ALL], [yes, no], [$1
-])])])])
+     [m4_foreach([OVN_MONITOR_ALL], [yes, no], [$1
+])])])
 
 # Defines versions of the test with all combinations of northd and
 # parallelization on/off.  To be used when the ovn-controller configuration
 # is not relevant.
 m4_define([OVN_FOR_EACH_NORTHD_NO_HV],
-  [m4_foreach([NORTHD_TYPE], [ovn-northd],
-     [m4_foreach([NORTHD_USE_PARALLELIZATION], [yes, no], [$1
-])])])
+  [m4_foreach([NORTHD_TYPE], [ovn-northd], [$1
+])])
 
 
 # OVN_NBCTL(NBCTL_COMMAND) adds NBCTL_COMMAND to list of commands to be run by RUN_OVN_NBCTL().
