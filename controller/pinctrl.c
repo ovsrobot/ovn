@@ -2815,6 +2815,7 @@ pinctrl_handle_dns_lookup(
     enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
     struct dp_packet *pkt_out_ptr = NULL;
     uint32_t success = 0;
+    bool send_aaaa_query_rejection = false;
 
     /* Parse result field. */
     const struct mf_field *f;
@@ -2972,6 +2973,18 @@ pinctrl_handle_dns_lookup(
                 ancount++;
             }
         }
+
+        /* DNS is configured with a record for this domain with
+         * an IPv4 only, so instead of ignoring this AAAA query,
+         * we can reply with  RCODE = 5 (server refuses) and that
+         * will speed up the DNS process by not letting the customer
+         * wait for a timeout.
+         */
+        if (query_type == DNS_QUERY_TYPE_AAAA && !ancount) {
+            ancount = 1;
+            send_aaaa_query_rejection = true;
+        }
+
         destroy_lport_addresses(&ip_addrs);
     }
 
@@ -3009,15 +3022,24 @@ pinctrl_handle_dns_lookup(
     out_dns_header->lo_flag |= 0x80;
 
     /* Set the answer RRs. */
-    out_dns_header->ancount = htons(ancount);
+    if (!send_aaaa_query_rejection) {
+        out_dns_header->ancount = htons(ancount);
+    } else {
+        /* set RCODE = 5 (server refuses). */
+        out_dns_header->ancount = 0;
+        out_dns_header->hi_flag |= 0x5;
+        ofpbuf_uninit(&dns_answer);
+    }
     out_dns_header->arcount = 0;
 
     /* Copy the Query section. */
     dp_packet_put(&pkt_out, dp_packet_data(pkt_in), dp_packet_size(pkt_in));
 
     /* Copy the answer sections. */
-    dp_packet_put(&pkt_out, dns_answer.data, dns_answer.size);
-    ofpbuf_uninit(&dns_answer);
+    if (!send_aaaa_query_rejection) {
+        dp_packet_put(&pkt_out, dns_answer.data, dns_answer.size);
+        ofpbuf_uninit(&dns_answer);
+    }
 
     out_udp->udp_len = htons(new_l4_size);
     out_udp->udp_csum = 0;
