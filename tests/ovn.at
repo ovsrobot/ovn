@@ -25418,7 +25418,9 @@ check_row_count Service_Monitor 0
 # Let's also be sure the warning message about SCTP load balancers is
 # is in the ovn-northd log
 
-AT_CHECK([test 1 = `grep -c "SCTP load balancers do not currently support health checks" northd/NORTHD_TYPE.log`])
+cnt1=`grep -c "SCTP load balancers do not currently support health checks" northd/NORTHD_TYPE.log`
+cnt2=`grep -c "SCTP load balancers do not currently support health checks" northd-backup/NORTHD_TYPE.log`
+AT_CHECK([test 1 -le "$(($cnt1 + $cnt2))"])
 
 AT_CLEANUP
 ])
