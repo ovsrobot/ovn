@@ -19495,6 +19495,9 @@ OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
 # Stop ovn-controller on hv2
 as hv2 ovs-appctl -t ovn-controller exit
 
+# Make sure it's really stopped, as we will restart it later.
+OVS_WAIT_WHILE([kill -0 $(cat hv2/ovn-controller.pid) 2> /dev/null])
+
 # Now send the packet again. This time, it should not arrive.
 OVS_WAIT_UNTIL([as hv1 ovs-appctl -t ovn-controller inject-pkt "$packet"])
 
@@ -36263,7 +36266,9 @@ rm -f ${OVN_SYSCONFDIR}/system-id-override
 check ovn-appctl -t ovn-controller exit --restart
 
 # Make sure ovn-controller stopped before restarting it
-OVS_WAIT_UNTIL([test x$(ovn-appctl -t ovn-controller debug/status) != "xrunning"])
+# Checking the debug/status would not be not enough as the unixctl might be closed
+# but ovn-controller still finishing up cleaning.
+OVS_WAIT_WHILE([kill -0 $(cat hv1/ovn-controller.pid) 2> /dev/null])
 
 # for some reason SSL ovsdb configuration overrides CLI, so
 # delete ssl config from ovsdb to give CLI arguments priority
