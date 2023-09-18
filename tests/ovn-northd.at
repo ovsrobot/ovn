@@ -8928,7 +8928,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([Address set incremental processing])
-ovn_start
+ovn_start --backup-northd=none
 
 # Create a few resources.
 check ovn-nbctl ls-add sw0
@@ -8986,7 +8986,6 @@ grep -c mutate], [0], [2
 # Pause ovn-northd and add/remove few addresses.  when it is resumed
 # it should use mutate for updating the address sets.
 check as northd ovn-appctl -t NORTHD_TYPE pause
-check as northd-backup ovn-appctl -t NORTHD_TYPE pause
 
 check as northd ovn-appctl -t NORTHD_TYPE inc-engine/clear-stats
 check ovn-nbctl add address_set $foo_as_uuid addresses 1.1.1.5
@@ -9033,7 +9032,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([Port group incremental processing])
-ovn_start
+ovn_start --backup-northd=none
 
 check ovn-nbctl ls-add sw1 \
   -- lsp-add sw1 sw1.1     \
@@ -9687,7 +9686,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([Chassis-feature compatibitility - remote chassis])
-ovn_start
+ovn_start --backup-northd=none
 
 AS_BOX([Local chassis])
 check ovn-sbctl chassis-add hv1 geneve 127.0.0.1 \
@@ -9979,7 +9978,7 @@ AT_CLEANUP
 # This test checks the compute/recompute stats of sync_to_sb_lb engine node
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([sync_to_sb_lb incremental processing])
-ovn_start
+ovn_start --backup-northd=none
 
 check ovn-nbctl ls-add sw
 check ovn-nbctl lsp-add sw p1
@@ -10000,7 +9999,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([LSP incremental processing])
-ovn_start
+ovn_start --backup-northd=none
 
 net_add n1
 sim_add hv1
@@ -10109,7 +10108,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([LSP incremental processing with only router ports before and after adding a VIF])
-ovn_start
+ovn_start --backup-northd=none
 
 check_recompute_counter() {
     northd_recomp=$(as northd ovn-appctl -t NORTHD_TYPE inc-engine/show-stats northd recompute)
@@ -10151,7 +10150,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([LSP incremental processing fallback to recompute])
-ovn_start
+ovn_start --backup-northd=none
 
 net_add n1
 sim_add hv1
@@ -10197,7 +10196,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([ACL/Meter incremental processing - no northd recompute])
-ovn_start
+ovn_start --backup-northd=none
 
 check_recompute_counter() {
     northd_recomp=$(as northd ovn-appctl -t NORTHD_TYPE inc-engine/show-stats northd recompute)
@@ -10348,7 +10347,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([Load balancer incremental processing])
-ovn_start
+ovn_start --backup-northd=none
 
 check_engine_stats() {
   node=$1
