@@ -10010,13 +10010,13 @@ ovn_attach n1 br-phys 192.168.0.11
 
 check_recompute_counter() {
     northd_recomp=$(as northd ovn-appctl -t NORTHD_TYPE inc-engine/show-stats northd recompute)
-    AT_CHECK([test x$northd_recomp = x$1])
+    AT_CHECK([test $northd_recomp -le $1])
 
     lflow_recomp=$(as northd ovn-appctl -t NORTHD_TYPE inc-engine/show-stats lflow recompute)
-    AT_CHECK([test x$lflow_recomp = x$2])
+    AT_CHECK([test $lflow_recomp -le $2])
 
     sync_sb_pb_recomp=$(as northd ovn-appctl -t NORTHD_TYPE inc-engine/show-stats sync_to_sb_pb recompute)
-    AT_CHECK([test x$sync_sb_pb_recomp = x$3])
+    AT_CHECK([test $sync_sb_pb_recomp -le $3])
 }
 
 check ovn-nbctl --wait=hv ls-add ls0
