@@ -179,6 +179,7 @@ struct pinctrl {
     struct latch pinctrl_thread_exit;
     bool mac_binding_can_timestamp;
     bool fdb_can_timestamp;
+    bool dns_can_ovn_owned;
 };
 
 static struct pinctrl pinctrl;
@@ -2709,6 +2710,7 @@ struct dns_data {
     uint64_t *dps;
     size_t n_dps;
     struct smap records;
+    struct smap options;
     bool delete;
 };
 
@@ -2737,6 +2739,7 @@ sync_dns_cache(const struct sbrec_dns_table *dns_table)
         if (!dns_data) {
             dns_data = xmalloc(sizeof *dns_data);
             smap_init(&dns_data->records);
+            smap_init(&dns_data->options);
             shash_add(&dns_cache, dns_id, dns_data);
             dns_data->n_dps = 0;
             dns_data->dps = NULL;
@@ -2751,6 +2754,12 @@ sync_dns_cache(const struct sbrec_dns_table *dns_table)
             smap_clone(&dns_data->records, &sbrec_dns->records);
         }
 
+        if (pinctrl.dns_can_ovn_owned
+            && !smap_equal(&dns_data->options, &sbrec_dns->options)) {
+            smap_destroy(&dns_data->options);
+            smap_clone(&dns_data->options, &sbrec_dns->options);
+        }
+
         dns_data->n_dps = sbrec_dns->n_datapaths;
         dns_data->dps = xcalloc(dns_data->n_dps, sizeof(uint64_t));
         for (size_t i = 0; i < sbrec_dns->n_datapaths; i++) {
@@ -2763,6 +2772,7 @@ sync_dns_cache(const struct sbrec_dns_table *dns_table)
         if (d->delete) {
             shash_delete(&dns_cache, iter);
             smap_destroy(&d->records);
+            smap_destroy(&d->options);
             free(d->dps);
             free(d);
         }
@@ -2777,6 +2787,7 @@ destroy_dns_cache(void)
         struct dns_data *d = iter->data;
         shash_delete(&dns_cache, iter);
         smap_destroy(&d->records);
+        smap_destroy(&d->options);
         free(d->dps);
         free(d);
     }
@@ -2850,6 +2861,8 @@ dns_build_ptr_answer(
     free(encoded);
 }
 
+#define DNS_RCODE_SERVER_REFUSE 0x5
+
 /* Called with in the pinctrl_handler thread context. */
 static void
 pinctrl_handle_dns_lookup(
@@ -2863,6 +2876,7 @@ pinctrl_handle_dns_lookup(
     enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
     struct dp_packet *pkt_out_ptr = NULL;
     uint32_t success = 0;
+    bool send_query_rejection = false;
 
     /* Parse result field. */
     const struct mf_field *f;
@@ -2962,6 +2976,7 @@ pinctrl_handle_dns_lookup(
 
     uint64_t dp_key = ntohll(pin->flow_metadata.flow.metadata);
     const char *answer_data = NULL;
+    bool ovn_owned = false;
     struct shash_node *iter;
     SHASH_FOR_EACH (iter, &dns_cache) {
         struct dns_data *d = iter->data;
@@ -2974,6 +2989,7 @@ pinctrl_handle_dns_lookup(
                 answer_data = smap_get(&d->records, query_name_lower);
                 free(query_name_lower);
                 if (answer_data) {
+                    ovn_owned = smap_get_bool(&d->options, "ovn-owned", false);
                     break;
                 }
             }
@@ -3020,10 +3036,22 @@ pinctrl_handle_dns_lookup(
                 ancount++;
             }
         }
+
+        /* DNS is configured with a record for this domain with
+         * an IPv4/IPV6 only, so instead of ignoring this A/AAAA query,
+         * we can reply with  RCODE = 5 (server refuses) and that
+         * will speed up the DNS process by not letting the customer
+         * wait for a timeout.
+         */
+        if (ovn_owned && (query_type == DNS_QUERY_TYPE_AAAA ||
+            query_type == DNS_QUERY_TYPE_A) && !ancount) {
+            send_query_rejection = true;
+        }
+
         destroy_lport_addresses(&ip_addrs);
     }
 
-    if (!ancount) {
+    if (!ancount && !send_query_rejection) {
         ofpbuf_uninit(&dns_answer);
         goto exit;
     }
@@ -3058,13 +3086,19 @@ pinctrl_handle_dns_lookup(
 
     /* Set the answer RRs. */
     out_dns_header->ancount = htons(ancount);
+    if (send_query_rejection) {
+        /* set RCODE = 5 (server refuses). */
+        out_dns_header->hi_flag |= DNS_RCODE_SERVER_REFUSE;
+    }
     out_dns_header->arcount = 0;
 
     /* Copy the Query section. */
     dp_packet_put(&pkt_out, dp_packet_data(pkt_in), dp_packet_size(pkt_in));
 
     /* Copy the answer sections. */
-    dp_packet_put(&pkt_out, dns_answer.data, dns_answer.size);
+    if (!send_query_rejection) {
+        dp_packet_put(&pkt_out, dns_answer.data, dns_answer.size);
+    }
     ofpbuf_uninit(&dns_answer);
 
     out_udp->udp_len = htons(new_l4_size);
@@ -3515,6 +3549,15 @@ pinctrl_update(const struct ovsdb_idl *idl, const char *br_int_name)
     bool can_fdb_timestamp = sbrec_server_has_fdb_table_col_timestamp(idl);
     if (can_fdb_timestamp != pinctrl.fdb_can_timestamp) {
         pinctrl.fdb_can_timestamp = can_fdb_timestamp;
+
+        /* Notify pinctrl_handler that fdb timestamp column
+       * availability has changed. */
+        notify_pinctrl_handler();
+    }
+
+    bool dns_can_ovn_owned = sbrec_server_has_dns_table_col_options(idl);
+    if (dns_can_ovn_owned != pinctrl.dns_can_ovn_owned) {
+        pinctrl.dns_can_ovn_owned = dns_can_ovn_owned;
 
         /* Notify pinctrl_handler that fdb timestamp column
        * availability has changed. */
