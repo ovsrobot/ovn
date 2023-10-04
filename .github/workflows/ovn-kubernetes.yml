@@ -142,6 +142,7 @@ jobs:
     - name: kind setup
       run: |
         export OVN_IMAGE="ovn-daemonset-f:dev"
+        export MASTER_LOG_LEVEL=1 NODE_LOG_LEVEL=1
         make -C test install-kind
       working-directory: src/github.com/ovn-org/ovn-kubernetes
 
