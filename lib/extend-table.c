@@ -17,7 +17,6 @@
 #include <config.h>
 #include <string.h>
 
-#include "bitmap.h"
 #include "extend-table.h"
 #include "hash.h"
 #include "lib/uuid.h"
@@ -30,10 +29,10 @@ ovn_extend_table_delete_desired(struct ovn_extend_table *table,
                                 struct ovn_extend_table_lflow_to_desired *l);
 
 void
-ovn_extend_table_init(struct ovn_extend_table *table)
+ovn_extend_table_init(struct ovn_extend_table *table, uint32_t max_size)
 {
-    table->table_ids = bitmap_allocate(MAX_EXT_TABLE_ID);
-    bitmap_set1(table->table_ids, 0); /* table id 0 is invalid. */
+    /* Table id 0 is invalid, set id-pool base to 1. */
+    table->table_ids = id_pool_create(1, max_size + 1);
     hmap_init(&table->desired);
     hmap_init(&table->lflow_to_desired);
     hmap_init(&table->existing);
@@ -192,7 +191,7 @@ ovn_extend_table_clear(struct ovn_extend_table *table, bool existing)
             g->peer->peer = NULL;
         } else {
             /* Unset the bitmap because the peer is deleted already. */
-            bitmap_set0(table->table_ids, g->table_id);
+            id_pool_free_id(table->table_ids, g->table_id);
         }
         ovn_extend_table_info_destroy(g);
     }
@@ -206,7 +205,7 @@ ovn_extend_table_destroy(struct ovn_extend_table *table)
     hmap_destroy(&table->lflow_to_desired);
     ovn_extend_table_clear(table, true);
     hmap_destroy(&table->existing);
-    bitmap_free(table->table_ids);
+    id_pool_destroy(table->table_ids);
 }
 
 /* Remove an entry from existing table */
@@ -221,7 +220,7 @@ ovn_extend_table_remove_existing(struct ovn_extend_table *table,
         existing->peer->peer = NULL;
     } else {
         /* Dealloc the ID. */
-        bitmap_set0(table->table_ids, existing->table_id);
+        id_pool_free_id(table->table_ids, existing->table_id);
     }
     ovn_extend_table_info_destroy(existing);
 }
@@ -242,7 +241,7 @@ ovn_extend_table_delete_desired(struct ovn_extend_table *table,
             if (e->peer) {
                 e->peer->peer = NULL;
             } else {
-                bitmap_set0(table->table_ids, e->table_id);
+                id_pool_free_id(table->table_ids, e->table_id);
             }
             ovn_extend_table_info_destroy(e);
         }
@@ -320,15 +319,12 @@ ovn_extend_table_assign_id(struct ovn_extend_table *table, const char *name,
 
     if (!existing_info) {
         /* Reserve a new id. */
-        table_id = bitmap_scan(table->table_ids, 0, 1, MAX_EXT_TABLE_ID + 1);
+        if (!id_pool_alloc_id(table->table_ids, &table_id)) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_ERR_RL(&rl, "%"PRIu32" out of table ids.", table_id);
+            return EXT_TABLE_ID_INVALID;
+        }
     }
-
-    if (table_id == MAX_EXT_TABLE_ID + 1) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
-        VLOG_ERR_RL(&rl, "%"PRIu32" out of table ids.", table_id);
-        return EXT_TABLE_ID_INVALID;
-    }
-    bitmap_set1(table->table_ids, table_id);
 
     table_info = ovn_extend_table_info_alloc(name, table_id, existing_info,
                                              hash);
