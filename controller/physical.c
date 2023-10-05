@@ -1969,6 +1969,27 @@ local_output_pb(int64_t tunnel_key, struct ofpbuf *ofpacts)
     put_resubmit(OFTABLE_CHECK_LOOPBACK, ofpacts);
 }
 
+/* Split multicast groups with size greater than MC_OFPACTS_MAX_MSG_SIZE in
+ * order to not overcome the MAX_ACTIONS_BUFSIZE netlink buffer size supported
+ * by the kernel. In order to avoid all the action buffers to be squashed
+ * together by ovs, add a controller action for each configured openflow.
+ */
+static void
+mc_split_buf_controller_action(struct ofpbuf *ofpacts, uint32_t index,
+                               uint8_t table_id, uint32_t port_key)
+{
+    size_t oc_offset = encode_start_controller_op(
+            ACTION_OPCODE_MG_SPLIT_BUF, false, NX_CTLR_NO_METER, ofpacts);
+    ovs_be32 val = htonl(index);
+    ofpbuf_put(ofpacts, &val, sizeof val);
+    val = htonl(port_key);
+    ofpbuf_put(ofpacts, &val, sizeof val);
+    ofpbuf_put(ofpacts, &table_id, sizeof table_id);
+    encode_finish_controller_op(oc_offset, ofpacts);
+}
+
+#define MC_OFPACTS_MAX_MSG_SIZE     8192
+#define MC_BUF_START_ID             0x9000
 static void
 consider_mc_group(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                   enum mf_field_id mff_ovn_geneve,
@@ -1990,9 +2011,6 @@ consider_mc_group(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     struct sset remote_chassis = SSET_INITIALIZER(&remote_chassis);
     struct sset vtep_chassis = SSET_INITIALIZER(&vtep_chassis);
 
-    struct match match;
-    match_outport_dp_and_port_keys(&match, dp_key, mc->tunnel_key);
-
     /* Go through all of the ports in the multicast group:
      *
      *    - For remote ports, add the chassis to 'remote_chassis' or
@@ -2013,10 +2031,18 @@ consider_mc_group(struct ovsdb_idl_index *sbrec_port_binding_by_name,
      *      set the output port to be the router patch port for which
      *      the redirect port was added.
      */
-    struct ofpbuf ofpacts, remote_ofpacts, remote_ofpacts_ramp;
+    struct ofpbuf ofpacts, remote_ofpacts, remote_ofpacts_ramp, reset_ofpacts;
     ofpbuf_init(&ofpacts, 0);
     ofpbuf_init(&remote_ofpacts, 0);
     ofpbuf_init(&remote_ofpacts_ramp, 0);
+    ofpbuf_init(&reset_ofpacts, 0);
+
+    bool local_ports = false, remote_ports = false, remote_ramp_ports = false;
+
+    put_load(0, MFF_REG6, 0, 32, &reset_ofpacts);
+
+    /* local port loop. */
+    uint32_t local_flow_index = MC_BUF_START_ID;
     for (size_t i = 0; i < mc->n_ports; i++) {
         struct sbrec_port_binding *port = mc->ports[i];
 
@@ -2040,19 +2066,15 @@ consider_mc_group(struct ovsdb_idl_index *sbrec_port_binding_by_name,
             if (ldp->is_transit_switch) {
                 local_output_pb(port->tunnel_key, &ofpacts);
             } else {
-                local_output_pb(port->tunnel_key, &remote_ofpacts);
-                local_output_pb(port->tunnel_key, &remote_ofpacts_ramp);
+                remote_ramp_ports = true;
+                remote_ports = true;
             }
         } if (!strcmp(port->type, "remote")) {
             if (port->chassis) {
-                put_load(port->tunnel_key, MFF_LOG_OUTPORT, 0, 32,
-                         &remote_ofpacts);
-                tunnel_to_chassis(mff_ovn_geneve, port->chassis->name,
-                                  chassis_tunnels, mc->datapath,
-                                  port->tunnel_key, &remote_ofpacts);
+                remote_ports = true;
             }
         } else if (!strcmp(port->type, "localport")) {
-            local_output_pb(port->tunnel_key, &remote_ofpacts);
+            remote_ports = true;
         } else if ((port->chassis == chassis
                     || is_additional_chassis(port, chassis))
                    && (local_binding_get_primary_pb(local_bindings, lport_name)
@@ -2095,87 +2117,196 @@ consider_mc_group(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                 }
             }
         }
+
+        local_ports |= !!ofpacts.size;
+        if (!local_ports) {
+            continue;
+        }
+
+        /* do not overcome max netlink message size used by ovs-vswitchd to
+         * send netlink configuration to the kernel. */
+        if (ofpacts.size > MC_OFPACTS_MAX_MSG_SIZE || i == mc->n_ports - 1) {
+            struct match match;
+
+            match_outport_dp_and_port_keys(&match, dp_key, mc->tunnel_key);
+
+            bool is_first = local_flow_index == MC_BUF_START_ID;
+            if (!is_first) {
+                match_set_reg(&match, MFF_REG6 - MFF_REG0, local_flow_index);
+            }
+
+            if (i == mc->n_ports - 1) {
+                /* Following delivery to local logical ports, restore the
+                 * multicast group as the logical output port. */
+                put_load(mc->tunnel_key, MFF_LOG_OUTPORT, 0, 32, &ofpacts);
+            } else {
+                mc_split_buf_controller_action(&ofpacts, ++local_flow_index,
+                                               OFTABLE_LOCAL_OUTPUT,
+                                               mc->tunnel_key);
+            }
+
+            /* reset MFF_REG6. */
+            ofpbuf_insert(&ofpacts, 0, reset_ofpacts.data, reset_ofpacts.size);
+
+            /* Table 40, priority 100.
+             * ==========================
+             *
+             * Handle output to the local logical ports in the multicast group,
+             * if any. */
+            ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT,
+                            is_first ? 100 : 110,
+                            mc->header_.uuid.parts[0], &match, &ofpacts,
+                            &mc->header_.uuid);
+            ofpbuf_clear(&ofpacts);
+        }
     }
 
-    /* Table 40, priority 100.
-     * =======================
-     *
-     * Handle output to the local logical ports in the multicast group, if
-     * any. */
-    bool local_ports = ofpacts.size > 0;
-    if (local_ports) {
-        /* Following delivery to local logical ports, restore the multicast
-         * group as the logical output port. */
-        put_load(mc->tunnel_key, MFF_LOG_OUTPORT, 0, 32, &ofpacts);
-
-        ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100,
-                        mc->header_.uuid.parts[0],
-                        &match, &ofpacts, &mc->header_.uuid);
+    /* remote port loop. */
+    struct ofpbuf remote_ofpacts_last;
+    ofpbuf_init(&remote_ofpacts_last, 0);
+    if (remote_ports) {
+        put_load(mc->tunnel_key, MFF_LOG_OUTPORT, 0, 32, &remote_ofpacts_last);
+    }
+    fanout_to_chassis(mff_ovn_geneve, &remote_chassis, chassis_tunnels,
+                      mc->datapath, mc->tunnel_key, false,
+                      &remote_ofpacts_last);
+    fanout_to_chassis(mff_ovn_geneve, &vtep_chassis, chassis_tunnels,
+                      mc->datapath, mc->tunnel_key, true,
+                      &remote_ofpacts_last);
+    remote_ports |= !!remote_ofpacts_last.size;
+    if (remote_ports && local_ports) {
+        put_resubmit(OFTABLE_LOCAL_OUTPUT, &remote_ofpacts_last);
     }
 
-    /* Table 39, priority 100.
-     * =======================
-     *
-     * Handle output to the remote chassis in the multicast group, if
-     * any. */
-    if (!sset_is_empty(&remote_chassis) ||
-            !sset_is_empty(&vtep_chassis) || remote_ofpacts.size > 0) {
-        if (remote_ofpacts.size > 0) {
-            /* Following delivery to logical patch ports, restore the
-             * multicast group as the logical output port. */
-            put_load(mc->tunnel_key, MFF_LOG_OUTPORT, 0, 32,
-                     &remote_ofpacts);
+    bool has_vtep = get_vtep_port(local_datapaths, mc->datapath->tunnel_key);
+    uint32_t reverse_ramp_flow_index = MC_BUF_START_ID;
+    uint32_t reverse_flow_index = MC_BUF_START_ID;
 
-            if (get_vtep_port(local_datapaths, mc->datapath->tunnel_key)) {
-                struct match match_ramp;
+    for (size_t i = 0; i < mc->n_ports; i++) {
+        struct sbrec_port_binding *port = mc->ports[i];
+
+        if (port->datapath != mc->datapath) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_WARN_RL(&rl, UUID_FMT": multicast group contains ports "
+                         "in wrong datapath",
+                         UUID_ARGS(&mc->header_.uuid));
+            continue;
+        }
+
+        if (!strcmp(port->type, "patch")) {
+            if (!ldp->is_transit_switch) {
+                local_output_pb(port->tunnel_key, &remote_ofpacts);
+                local_output_pb(port->tunnel_key, &remote_ofpacts_ramp);
+            }
+        } if (!strcmp(port->type, "remote")) {
+            if (port->chassis) {
+                put_load(port->tunnel_key, MFF_LOG_OUTPORT, 0, 32,
+                         &remote_ofpacts);
+                tunnel_to_chassis(mff_ovn_geneve, port->chassis->name,
+                                  chassis_tunnels, mc->datapath,
+                                  port->tunnel_key, &remote_ofpacts);
+            }
+        } else if (!strcmp(port->type, "localport")) {
+            local_output_pb(port->tunnel_key, &remote_ofpacts);
+        }
+
+        /* do not overcome max netlink message size used by ovs-vswitchd to
+         * send netlink configuration to the kernel. */
+        if (remote_ofpacts.size > MC_OFPACTS_MAX_MSG_SIZE ||
+            i == mc->n_ports - 1) {
+            struct match match;
+            match_outport_dp_and_port_keys(&match, dp_key, mc->tunnel_key);
+            if (has_vtep) {
                 match_set_reg_masked(&match, MFF_LOG_FLAGS - MFF_REG0, 0,
                                      MLF_RCV_FROM_RAMP);
+            }
 
+            bool is_first = reverse_flow_index == MC_BUF_START_ID;
+            if (!is_first) {
+                match_set_reg(&match, MFF_REG6 - MFF_REG0, reverse_flow_index);
+            }
+
+            if (i == mc->n_ports - 1) {
+                ofpbuf_put(&remote_ofpacts, remote_ofpacts_last.data,
+                           remote_ofpacts_last.size);
+            } else {
+                mc_split_buf_controller_action(&remote_ofpacts,
+                                               ++reverse_flow_index,
+                                               OFTABLE_REMOTE_OUTPUT,
+                                               mc->tunnel_key);
+            }
+
+            /* reset MFF_REG6. */
+            ofpbuf_insert(&remote_ofpacts, 0, reset_ofpacts.data,
+                          reset_ofpacts.size);
+            if (remote_ports) {
+                /* Table 39, priority 100.
+                 * =======================
+                 *
+                 * Handle output to the remote chassis in the multicast group,
+                 * if any. */
+                ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT,
+                                is_first ? 100 : 110,
+                                mc->header_.uuid.parts[0],
+                                &match, &remote_ofpacts, &mc->header_.uuid);
+            }
+            ofpbuf_clear(&remote_ofpacts);
+        }
+
+        if (!remote_ports || !remote_ramp_ports || !has_vtep) {
+            continue;
+        }
+
+        if (remote_ofpacts_ramp.size > MC_OFPACTS_MAX_MSG_SIZE ||
+            i == mc->n_ports - 1) {
+            /* MCAST traffic which was originally received from RAMP_SWITCH
+             * is not allowed to be re-sent to remote_chassis.
+             * Process "patch" port binding for routing in
+             * OFTABLE_REMOTE_OUTPUT and resubmit packets to
+             * OFTABLE_LOCAL_OUTPUT for local delivery. */
+            struct match match_ramp;
+            match_outport_dp_and_port_keys(&match_ramp, dp_key,
+                                           mc->tunnel_key);
+
+            /* Match packets coming from RAMP_SWITCH and allowed for
+            * loopback processing (including routing). */
+            match_set_reg_masked(&match_ramp, MFF_LOG_FLAGS - MFF_REG0,
+                                 MLF_RCV_FROM_RAMP | MLF_ALLOW_LOOPBACK,
+                                 MLF_RCV_FROM_RAMP | MLF_ALLOW_LOOPBACK);
+
+            bool is_first = reverse_ramp_flow_index == MC_BUF_START_ID;
+            if (!is_first) {
+                match_set_reg(&match_ramp, MFF_REG6 - MFF_REG0,
+                              reverse_ramp_flow_index);
+            }
+
+            if (i == mc->n_ports - 1) {
                 put_load(mc->tunnel_key, MFF_LOG_OUTPORT, 0, 32,
                          &remote_ofpacts_ramp);
-
-                /* MCAST traffic which was originally received from RAMP_SWITCH
-                 * is not allowed to be re-sent to remote_chassis.
-                 * Process "patch" port binding for routing in
-                 * OFTABLE_REMOTE_OUTPUT and resubmit packets to
-                 * OFTABLE_LOCAL_OUTPUT for local delivery. */
-
-                match_outport_dp_and_port_keys(&match_ramp, dp_key,
-                                               mc->tunnel_key);
-
-                /* Match packets coming from RAMP_SWITCH and allowed for
-                * loopback processing (including routing). */
-                match_set_reg_masked(&match_ramp, MFF_LOG_FLAGS - MFF_REG0,
-                                     MLF_RCV_FROM_RAMP | MLF_ALLOW_LOOPBACK,
-                                     MLF_RCV_FROM_RAMP | MLF_ALLOW_LOOPBACK);
-
                 put_resubmit(OFTABLE_LOCAL_OUTPUT, &remote_ofpacts_ramp);
-
-                ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 120,
-                                mc->header_.uuid.parts[0], &match_ramp,
-                                &remote_ofpacts_ramp, &mc->header_.uuid);
+            } else {
+                mc_split_buf_controller_action(&remote_ofpacts_ramp,
+                                               ++reverse_ramp_flow_index,
+                                               OFTABLE_REMOTE_OUTPUT,
+                                               mc->tunnel_key);
             }
-        }
 
-        fanout_to_chassis(mff_ovn_geneve, &remote_chassis, chassis_tunnels,
-                          mc->datapath, mc->tunnel_key, false,
-                          &remote_ofpacts);
-        fanout_to_chassis(mff_ovn_geneve, &vtep_chassis, chassis_tunnels,
-                          mc->datapath, mc->tunnel_key, true,
-                          &remote_ofpacts);
-
-        if (remote_ofpacts.size) {
-            if (local_ports) {
-                put_resubmit(OFTABLE_LOCAL_OUTPUT, &remote_ofpacts);
-            }
-            ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 100,
-                            mc->header_.uuid.parts[0],
-                            &match, &remote_ofpacts, &mc->header_.uuid);
+            /* reset MFF_REG6. */
+            ofpbuf_insert(&remote_ofpacts_ramp, 0, reset_ofpacts.data,
+                          reset_ofpacts.size);
+            ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT,
+                            is_first ? 120 : 130,
+                            mc->header_.uuid.parts[0], &match_ramp,
+                            &remote_ofpacts_ramp, &mc->header_.uuid);
+            ofpbuf_clear(&remote_ofpacts_ramp);
         }
     }
+
     ofpbuf_uninit(&ofpacts);
     ofpbuf_uninit(&remote_ofpacts);
+    ofpbuf_uninit(&remote_ofpacts_last);
     ofpbuf_uninit(&remote_ofpacts_ramp);
+    ofpbuf_uninit(&reset_ofpacts);
     sset_destroy(&remote_chassis);
     sset_destroy(&vtep_chassis);
 }
