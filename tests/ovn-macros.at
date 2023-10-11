@@ -288,6 +288,25 @@ net_attach () {
         || return 1
 }
 
+ovn_wait_for_encaps() {
+    local systemid=$1
+
+    local encap=$(ovs-vsctl get Open_vSwitch . external_ids:ovn-encap-type-$systemid)
+    if [[ -n "$encap" ]]; then
+        encap=$(ovs-vsctl get Open_vSwitch .external_ids:ovn-encap-type)
+    fi
+
+    local ip=$(ovs-vsctl get Open_vSwitch . external_ids:ovn-encap-ip-$systemid)
+    if [[ -n "$ip" ]]; then
+        ip=$(ovs-vsctl get Open_vSwitch .external_ids:ovn-encap-ip)
+    fi
+
+    IFS="," read -r -a encap_types <<< "$encap"
+    for e in "${encap_types[[@]]}"; do
+        wait_column "$ip" sb:Encap ip chassis_name="$systemid" type="$e"
+    done
+}
+
 # ovn_az_attach AZ NETWORK BRIDGE IP [MASKLEN] [ENCAP]
 ovn_az_attach() {
     local az=$1 net=$2 bridge=$3 ip=$4 masklen=${5-24} encap=${6-geneve,vxlan} systemid=${7-$sandbox} cli_args=${@:8}
@@ -332,6 +351,11 @@ ovn_az_attach() {
     fi
 
     start_daemon ovn-controller --enable-dummy-vif-plug ${cli_args} || return 1
+    if test X"$az" = XNONE; then
+        ovn_wait_for_encaps $systemid
+    else
+        ovn_as $az ovn_wait_for_encaps $systemid
+    fi
 }
 
 # ovn_attach NETWORK BRIDGE IP [MASKLEN] [ENCAP]
@@ -372,6 +396,7 @@ start_virtual_controller() {
         || return 1
 
     ovn-controller --enable-dummy-vif-plug ${cli_args} -vconsole:off --detach --no-chdir
+    ovn_wait_for_encaps $systemid
 }
 
 # ovn_setenv AZ
