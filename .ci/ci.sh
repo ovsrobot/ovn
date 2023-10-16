@@ -148,11 +148,6 @@ while true; do
     shift
 done
 
-# Workaround for https://bugzilla.redhat.com/2153359
-if [ "$ARCH" = "aarch64" ]; then
-    ASAN_OPTIONS="detect_leaks=0"
-fi
-
 if [ -z "$DPDK" ]; then
    mkdir -p "$DPDK_PATH"
 fi
