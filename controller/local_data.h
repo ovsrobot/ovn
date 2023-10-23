@@ -168,5 +168,7 @@ void remove_local_datapath_multichassis_port(struct local_datapath *ld,
                                              char *logical_port);
 bool lb_is_local(const struct sbrec_load_balancer *sbrec_lb,
                  const struct hmap *local_datapaths);
+void local_datapaths_clean(struct hmap *local_datapaths);
+
 
 #endif /* controller/local_data.h */

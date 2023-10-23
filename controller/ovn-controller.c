@@ -1904,6 +1904,11 @@ runtime_data_sb_datapath_binding_handler(struct engine_node *node OVS_UNUSED,
     struct ed_type_runtime_data *rt_data = data;
 
     SBREC_DATAPATH_BINDING_TABLE_FOR_EACH_TRACKED (dp, dp_table) {
+        if (sbrec_datapath_binding_is_updated(dp,
+                SBREC_DATAPATH_BINDING_COL_TUNNEL_KEY) &&
+            !sbrec_datapath_binding_is_new(dp)) {
+            local_datapaths_clean(&rt_data->local_datapaths);
+        }
         if (sbrec_datapath_binding_is_deleted(dp)) {
             if (get_local_datapath(&rt_data->local_datapaths,
                                    dp->tunnel_key)) {
