@@ -42,6 +42,7 @@
 /build-arch-stamp
 /build-indep-stamp
 /compile
+/compile_commands.json
 /config.guess
 /config.h
 /config.h.in
