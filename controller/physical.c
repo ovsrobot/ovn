@@ -2205,7 +2205,7 @@ consider_mc_group(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                 local_output_pb(port->tunnel_key, &remote_ofpacts);
                 local_output_pb(port->tunnel_key, &remote_ofpacts_ramp);
             }
-        } if (!strcmp(port->type, "remote")) {
+        } else if (!strcmp(port->type, "remote")) {
             if (port->chassis) {
                 put_load(port->tunnel_key, MFF_LOG_OUTPORT, 0, 32,
                          &remote_ofpacts);
