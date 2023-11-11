@@ -94,12 +94,14 @@ def main():
                 print(
                     f"Expected log {key}={val} but got "
                     f"{key}={parsed_log[key]} "
-                    f"in:\n\t'{acl_log}'"
+                    "in:\n\t"
+                    f"'{acl_log}'"
                 )
                 exit(1)
         except KeyError:
             print(
-                f"Expected log {key}={val} but {key} does not exist in:\n"
+                f"Expected log {key}={val} but {key} "
+                "does not exist in:\n"
                 f"\t'{acl_log}'"
             )
             exit(1)
