@@ -35352,20 +35352,35 @@ as hv1
 check ovs-vsctl add-br br-phys
 ovn_attach n1 br-phys 192.168.0.1
 
+check ovn-nbctl ls-add ls
+
 dnl Ensure that there are 4 openflow connections.
 OVS_WAIT_UNTIL([test "$(grep -c 'negotiated OpenFlow version' hv1/ovs-vswitchd.log)" -eq "4"])
+
+as hv1 check ovs-vsctl -- add-port br-int lsp0       \
+    -- set Interface lsp0 external-ids:iface-id=lsp0 \
+    -- add-port br-int lsp1                          \
+    -- set Interface lsp1 external-ids:iface-id=lsp1 \
+    -- add-port br-int lsp2                          \
+    -- set Interface lsp2 external-ids:iface-id=lsp2
 
 dnl "Wait" 3 times 60 seconds and ensure ovn-controller writes to the
 dnl openflow connections in the meantime.  This should allow ovs-vswitchd
 dnl to probe the openflow connections at least twice.
 
 as hv1 ovs-appctl time/warp 60000
+check ovn-nbctl lsp-add ls lsp0
+wait_for_ports_up
 check ovn-nbctl --wait=hv sync
 
 as hv1 ovs-appctl time/warp 60000
+check ovn-nbctl lsp-add ls lsp1
+wait_for_ports_up
 check ovn-nbctl --wait=hv sync
 
 as hv1 ovs-appctl time/warp 60000
+check ovn-nbctl lsp-add ls lsp2
+wait_for_ports_up
 check ovn-nbctl --wait=hv sync
 
 AT_CHECK([test -z "`grep disconnecting hv1/ovs-vswitchd.log`"])
