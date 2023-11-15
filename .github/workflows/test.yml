@@ -83,7 +83,6 @@ jobs:
   build-linux:
     needs: build-dpdk
     env:
-      IMAGE_NAME:  ghcr.io/ovn-org/ovn-tests:ubuntu
       ARCH:        ${{ matrix.cfg.arch }}
       CC:          ${{ matrix.cfg.compiler }}
       DPDK:        ${{ matrix.cfg.dpdk }}
@@ -127,6 +126,21 @@ jobs:
       uses: actions/checkout@v3
       with:
         submodules: recursive
+
+    - name: get CI container image name
+      run: |
+        image_branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}
+        image="ghcr.io/$GITHUB_REPOSITORY_OWNER/ovn-tests:${image_branch}-ubuntu"
+        if ! podman pull $image; then
+          # Fall back to the main branch if the current branch image doesn't
+          # exist.
+          image="ghcr.io/$GITHUB_REPOSITORY_OWNER/ovn-tests:main-ubuntu"
+          if ! podman pull $image; then
+            # Fall back to the old way of using the single per-repo image.
+            image="ghcr.io/$GITHUB_REPOSITORY_OWNER/ovn-tests:ubuntu"
+          fi
+        fi
+        echo "IMAGE_NAME=$image" >> "$GITHUB_ENV"
 
     # For weekly runs, don't update submodules
     - name: checkout without submodule

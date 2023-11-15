@@ -1,7 +1,7 @@
 arm_unit_tests_task:
 
   arm_container:
-    image: ghcr.io/ovn-org/ovn-tests:fedora
+    image: ghcr.io/ovn-org/ovn-tests:main-fedora
     memory: 4G
     cpu: 2
 

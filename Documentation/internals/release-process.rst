@@ -58,6 +58,12 @@ Scheduling`_ for the timing of each stage:
    bug fixes to the main branch, except for bugs present only on release
    branches (which are rare in practice).
 
+   When a release branch is created it might be beneficial to manually trigger
+   a run of the `containers.yml` GitHub actions workflow on this new branch.
+   This ensures that a branch-specific CI container image is built.  This
+   image will be used by subsequent CI runs on this branch (otherwise the main
+   branch image is used by default).
+
    At this stage, sometimes there can be exceptions to the rule that a release
    branch receives only bug fixes.  Like bug fixes, new features on release
    branches should be backports of the corresponding commits on the main
