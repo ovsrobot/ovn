@@ -83,7 +83,6 @@ jobs:
   build-linux:
     needs: build-dpdk
     env:
-      IMAGE_NAME:  ghcr.io/ovn-org/ovn-tests:ubuntu
       ARCH:        ${{ matrix.cfg.arch }}
       CC:          ${{ matrix.cfg.compiler }}
       DPDK:        ${{ matrix.cfg.dpdk }}
@@ -127,6 +126,12 @@ jobs:
       uses: actions/checkout@v3
       with:
         submodules: recursive
+
+    - name: Build image name
+      run: |
+        IMAGE_BRANCH=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}
+        echo "IMAGE_NAME=ghcr.io/$GITHUB_REPOSITORY_OWNER/ovn-tests:${IMAGE_BRANCH}-ubuntu" \
+          >> $GITHUB_ENV
 
     # For weekly runs, don't update submodules
     - name: checkout without submodule

@@ -7,8 +7,6 @@ on:
     - cron:  '0 0 * * 1'
 
 env:
-  IMAGE_REGISTRY: ghcr.io
-  IMAGE_NAMESPACE: ovn-org
   IMAGE_NAME: ovn-tests
   CONTAINERS_PATH: ./utilities/containers
   DEPENDENCIES: podman
@@ -31,13 +29,22 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
 
+      - name: Build image name
+        run: |
+          echo "IMAGE_BRANCH=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" \
+            >> $GITHUB_ENV
+          echo "IMAGE_REGISTRY=ghcr.io" \
+            >> $GITHUB_ENV
+          echo "IMAGE_NAMESPACE=$GITHUB_REPOSITORY_OWNER" \
+            >> $GITHUB_ENV
+
       - name: Build container images
         id: build-image
         uses: redhat-actions/buildah-build@v2
         with:
           image: ${{ env.IMAGE_NAME }}
           archs: amd64, arm64
-          tags: ${{ matrix.distro }}
+          tags: ${{ env.IMAGE_BRANCH }}-${{ matrix.distro }}
           build-args: CONTAINERS_PATH=${{ env.CONTAINERS_PATH }}
           dockerfiles: ${{ env.CONTAINERS_PATH }}/${{ matrix.distro }}/Dockerfile
 

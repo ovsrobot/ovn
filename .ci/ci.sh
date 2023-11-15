@@ -20,7 +20,8 @@ DPDK_PATH=${DPDK_PATH:-$OVN_PATH/dpdk-dir}
 CONTAINER_CMD=${CONTAINER_CMD:-podman}
 CONTAINER_WORKSPACE="/workspace"
 CONTAINER_WORKDIR="/workspace/ovn-tmp"
-IMAGE_NAME=${IMAGE_NAME:-"ovn-org/ovn-tests"}
+DEFAULT_IMAGE_NAME="ovn-org/ovn-tests:main-fedora"
+IMAGE_NAME=${IMAGE_NAME:-${DEFAULT_IMAGE_NAME}}
 
 # Test variables
 ARCH=${ARCH:-$(uname -m)}
@@ -165,6 +166,12 @@ fi
 
 if [ -z "$DPDK" ]; then
    mkdir -p "$DPDK_PATH"
+fi
+
+# Check if the IMAGE_NAME is a real image we can pull, otherwise fall
+# back to DEFAULT_IMAGE_NAME.
+if ! $CONTAINER_CMD pull $IMAGE_NAME; then
+    IMAGE_NAME=$DEFAULT_IMAGE_NAME
 fi
 
 CONTAINER_ID="$($CONTAINER_CMD run --privileged -d \
