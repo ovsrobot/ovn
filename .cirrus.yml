@@ -1,7 +1,7 @@
 arm_unit_tests_task:
 
   arm_container:
-    image: ghcr.io/ovn-org/ovn-tests:fedora
+    image: ghcr.io/ovn-org/ovn-tests:ubuntu
     memory: 4G
     cpu: 2
 
@@ -10,6 +10,7 @@ arm_unit_tests_task:
     CIRRUS_CLONE_SUBMODULES: true
     PATH: ${HOME}/bin:${HOME}/.local/bin:${PATH}
     RECHECK: yes
+    LANG: C
     matrix:
       - CC: gcc
         TESTSUITE: test
