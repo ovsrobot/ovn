@@ -5654,6 +5654,14 @@ main(int argc, char *argv[])
                                            br_int ? br_int->name : NULL)) {
                 VLOG_INFO("OVS feature set changed, force recompute.");
                 engine_set_force_recompute(true);
+                if (ovs_feature_set_discovered()) {
+                    lflow_output_data =
+                        engine_get_internal_data(&en_lflow_output);
+                    ovn_extend_table_reinit(&lflow_output_data->group_table,
+                                        ovs_feature_max_select_groups_get());
+                    ovn_extend_table_reinit(&lflow_output_data->meter_table,
+                                            ovs_feature_max_meters_get());
+                }
             }
 
             if (br_int && ovs_feature_set_discovered()) {
