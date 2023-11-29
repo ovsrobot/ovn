@@ -3355,6 +3355,8 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
             break;
         case OVNACT_MAC_CACHE_USE:
             break;
+        case OVNACT_COMMIT_FDB_LOCAL:
+            break;
         }
     }
     ofpbuf_uninit(&stack);

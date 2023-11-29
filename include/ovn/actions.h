@@ -127,6 +127,7 @@ struct collector_set_ids;
     OVNACT(CHK_LB_AFF,        ovnact_result)          \
     OVNACT(SAMPLE,            ovnact_sample)          \
     OVNACT(MAC_CACHE_USE,     ovnact_null)            \
+    OVNACT(COMMIT_FDB_LOCAL,  ovnact_commit_fdb_local) \
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -512,6 +513,12 @@ struct ovnact_commit_lb_aff {
     uint16_t backend_port;
 
     uint16_t timeout;
+};
+
+/* OVNACT_COMMIT_FBD_LOCAL. */
+struct ovnact_commit_fdb_local{
+    struct ovnact ovnact;
+    uint16_t timeout;  /* fdb_local flow timeout */
 };
 
 /* Internal use by the helpers below. */

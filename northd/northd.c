@@ -1835,6 +1835,12 @@ localnet_can_learn_mac(const struct nbrec_logical_switch_port *nbsp)
 }
 
 static bool
+ls_is_fdb_local(const struct nbrec_logical_switch *nbs)
+{
+    return smap_get_bool(&nbs->other_config, "fdb_local", false);
+}
+
+static bool
 lsp_is_type_changed(const struct sbrec_port_binding *sb,
                 const struct nbrec_logical_switch_port *nbsp,
                 bool *update_sbrec)
@@ -7034,6 +7040,8 @@ build_lswitch_port_sec_op(struct ovn_port *op, struct hmap *lflows,
     }
 }
 
+#define FDB_LOCAL_DEF_IDLE_TIMEOUT_S 300
+
 static void
 build_lswitch_learn_fdb_op(
         struct ovn_port *op, struct hmap *lflows,
@@ -7043,6 +7051,24 @@ build_lswitch_learn_fdb_op(
 
     if (!op->n_ps_addrs && op->has_unknown && (!strcmp(op->nbsp->type, "") ||
         (lsp_is_localnet(op->nbsp) && localnet_can_learn_mac(op->nbsp)))) {
+
+        if (ls_is_fdb_local(op->od->nbs))
+        {
+            uint32_t idle_timeout =smap_get_uint(
+                        &op->od->nbs->other_config, "fdb_local_idle_timeout",
+                        FDB_LOCAL_DEF_IDLE_TIMEOUT_S);
+            ds_clear(match);
+            ds_clear(actions);
+            ds_put_format(match, "inport == %s", op->json_key);
+            ds_put_format(actions, "commit_fdb_local(timeout=%u); next;",
+                                    idle_timeout);
+            ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+                                              S_SWITCH_IN_LOOKUP_FDB, 100,
+                                              ds_cstr(match), ds_cstr(actions),
+                                              op->key, &op->nbsp->header_);
+            return;
+        }
+
         ds_clear(match);
         ds_clear(actions);
         ds_put_format(match, "inport == %s", op->json_key);

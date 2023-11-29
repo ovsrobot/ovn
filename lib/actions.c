@@ -5237,6 +5237,98 @@ format_MAC_CACHE_USE(const struct ovnact_null *null OVS_UNUSED, struct ds *s)
 }
 
 static void
+parse_commit_fdb_local(struct action_context *ctx,
+                     struct ovnact_commit_fdb_local *fdb_local)
+{
+    uint16_t timeout = 0;
+    lexer_force_match(ctx->lexer, LEX_T_LPAREN); /* Skip '('. */
+    if (!lexer_match_id(ctx->lexer, "timeout")) {
+        lexer_syntax_error(ctx->lexer, "invalid parameter");
+        return;
+    }
+    if (!lexer_force_match(ctx->lexer, LEX_T_EQUALS)) {
+        lexer_syntax_error(ctx->lexer, "invalid parameter");
+        return;
+    }
+    if (!action_parse_uint16(ctx, &timeout, "fdb_local flow timeout")) {
+        return;
+    }
+    fdb_local->timeout = timeout;
+    lexer_force_match(ctx->lexer, LEX_T_RPAREN); /* Skip ')'. */
+}
+
+static void
+format_COMMIT_FDB_LOCAL(const struct ovnact_commit_fdb_local *fdb_local,
+                      struct ds *s)
+{
+    ds_put_format(s, "commit_fdb_local(timeout=%u);", fdb_local->timeout);
+}
+
+static void
+ovnact_commit_fdb_local_free(struct ovnact_commit_fdb_local *fdb_local OVS_UNUSED)
+{
+}
+
+static void
+commit_fdb_local_learn_action(struct ovnact_commit_fdb_local *fdb_local,
+                        struct ofpbuf *ofpacts, uint32_t cookie)
+{
+    struct ofpact_learn *ol = ofpact_put_LEARN(ofpacts);
+    struct match match = MATCH_CATCHALL_INITIALIZER;
+    struct ofpact_learn_spec *ol_spec;
+    unsigned int imm_bytes;
+    uint8_t *src_imm;
+
+    ol->flags = NX_LEARN_F_DELETE_LEARNED;
+    ol->idle_timeout = fdb_local->timeout;
+    ol->hard_timeout = OFP_FLOW_PERMANENT;
+    ol->priority = OFP_DEFAULT_PRIORITY;
+    ol->table_id = OFTABLE_GET_FDB;
+    ol->cookie = htonll(cookie);
+
+    /* Match on metadata of the packet that created the new table. */
+    ol_spec = ofpbuf_put_zeros(ofpacts, sizeof *ol_spec);
+    ol_spec->dst.field = mf_from_id(MFF_METADATA);
+    ol_spec->dst.ofs = 0;
+    ol_spec->dst.n_bits = ol_spec->dst.field->n_bits;
+    ol_spec->n_bits = ol_spec->dst.n_bits;
+    ol_spec->dst_type = NX_LEARN_DST_MATCH;
+    ol_spec->src_type = NX_LEARN_SRC_FIELD;
+    ol_spec->src.field = mf_from_id(MFF_METADATA);
+
+    /* Match on metadata of the packet. */
+    ol_spec = ofpbuf_put_zeros(ofpacts, sizeof *ol_spec);
+    ol_spec->dst.field = mf_from_id(MFF_ETH_DST);
+    ol_spec->dst.ofs = 0;
+    ol_spec->dst.n_bits = ol_spec->dst.field->n_bits;
+    ol_spec->n_bits = ol_spec->dst.n_bits;
+    ol_spec->dst_type = NX_LEARN_DST_MATCH;
+    ol_spec->src_type = NX_LEARN_SRC_FIELD;
+    ol_spec->src.field = mf_from_id(MFF_ETH_SRC);
+
+
+    /* Load MFF_LOG_OUTPORT from MFF_IN_PORT. */
+    ol_spec = ofpbuf_put_zeros(ofpacts, sizeof *ol_spec);
+    ol_spec->dst.field = mf_from_id(MFF_LOG_OUTPORT);
+    ol_spec->dst.ofs = 0;
+    ol_spec->dst.n_bits = ol_spec->dst.field->n_bits;
+    ol_spec->n_bits = ol_spec->dst.n_bits;
+    ol_spec->dst_type = NX_LEARN_DST_LOAD;
+    ol_spec->src_type = NX_LEARN_SRC_FIELD;
+    ol_spec->src.field = mf_from_id(MFF_LOG_INPORT);
+
+    ofpact_finish_LEARN(ofpacts, &ol);
+}
+
+static void
+encode_COMMIT_FDB_LOCAL(const struct ovnact_commit_fdb_local *fdb_local,
+                      const struct ovnact_encode_params *ep,
+                      struct ofpbuf *ofpacts)
+{
+     commit_fdb_local_learn_action(fdb_local, ofpacts, ep->lflow_uuid.parts[0]);
+}
+
+static void
 encode_MAC_CACHE_USE(const struct ovnact_null *null OVS_UNUSED,
                      const struct ovnact_encode_params *ep,
                      struct ofpbuf *ofpacts)
@@ -5451,6 +5543,8 @@ parse_action(struct action_context *ctx)
         parse_sample(ctx);
     } else if (lexer_match_id(ctx->lexer, "mac_cache_use")) {
         ovnact_put_MAC_CACHE_USE(ctx->ovnacts);
+    } else if (lexer_match_id(ctx->lexer, "commit_fdb_local")) {
+        parse_commit_fdb_local(ctx, ovnact_put_COMMIT_FDB_LOCAL(ctx->ovnacts));
     } else {
         lexer_syntax_error(ctx->lexer, "expecting action");
     }

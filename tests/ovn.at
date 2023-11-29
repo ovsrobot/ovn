@@ -34505,6 +34505,114 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([Local FDB MAC learning])
+ovn_start
+net_add n1
+
+AT_CHECK([ovn-nbctl ls-add ls0])
+
+AT_CHECK([ovn-nbctl lsp-add ls0 vif0])
+AT_CHECK([ovn-nbctl lsp-set-addresses vif0 "50:54:00:00:00:03 10.0.0.3" "unknown"])
+AT_CHECK([ovn-nbctl set logical_switch_port vif0 options:requested-tnl-key=2])
+
+AT_CHECK([ovn-nbctl lsp-add ls0 vif1])
+AT_CHECK([ovn-nbctl lsp-set-addresses vif1 "50:54:00:00:00:04 10.0.0.4"])
+AT_CHECK([ovn-nbctl set logical_switch_port vif1 options:requested-tnl-key=3])
+
+AT_CHECK([ovn-nbctl lsp-add ls0 ln_port])
+AT_CHECK([ovn-nbctl lsp-set-addresses ln_port unknown])
+AT_CHECK([ovn-nbctl lsp-set-type ln_port localnet])
+AT_CHECK([ovn-nbctl lsp-set-options ln_port network_name=physnet1])
+AT_CHECK([ovn-nbctl set logical_switch_port ln_port options:localnet_learn_fdb=true])
+AT_CHECK([ovn-nbctl set logical_switch_port ln_port options:requested-tnl-key=1])
+
+AT_CHECK([ovn-nbctl set logical_switch ls0 other_config:fdb_local=true])
+
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl -- add-port br-int vif0 -- \
+    set interface vif0 external-ids:iface-id=vif0 \
+    options:tx_pcap=hv1/vif0-tx.pcap \
+    options:rxq_pcap=hv1/vif0-rx.pcap \
+    ofport-request=1
+ovs-vsctl -- add-port br-int vif1 -- \
+    set interface vif1 external-ids:iface-id=vif1 \
+    options:tx_pcap=hv1/vif1-tx.pcap \
+    options:rxq_pcap=hv1/vif1-rx.pcap \
+    ofport-request=2
+ovs-vsctl -- add-port br-phys ext0 -- \
+    set interface ext0 \
+    options:tx_pcap=hv1/ext0-tx.pcap \
+    options:rxq_pcap=hv1/ext0-rx.pcap \
+    ofport-request=3
+ovs-vsctl set open . external_ids:ovn-bridge-mappings=physnet1:br-phys
+
+wait_for_ports_up
+AT_CHECK([ovn-nbctl --wait=hv sync])
+
+send_packet() {
+    src_mac=$1
+    src_ip=$2
+    dst_mac=$3
+    dst_ip=$4
+    iface=$5
+    packet=${dst_mac}${src_mac}08004500001c0000000040110000${src_ip}${dst_ip}0035111100080000
+    ovs-appctl netdev-dummy/receive $iface $packet
+}
+
+
+# Check that there is commit_fdb_local_fdb() flow added by ovn-northd for vif0 and localnet
+ovn-sbctl dump-flows ls0 > sw0flows
+AT_CAPTURE_FILE([sw0flows])
+
+AT_CHECK([grep "ls_in_lookup_fdb" sw0flows | sort], [0], [dnl
+  table=2 (ls_in_lookup_fdb   ), priority=0    , dnl
+match=(1), action=(next;)
+  table=2 (ls_in_lookup_fdb   ), priority=100  , dnl
+match=(inport == "ln_port"), action=(commit_fdb_local(timeout=300); next;)
+  table=2 (ls_in_lookup_fdb   ), priority=100  , dnl
+match=(inport == "vif0"), action=(commit_fdb_local(timeout=300); next;)
+])
+
+AT_CHECK([grep "ls_in_put_fdb" sw0flows | sort], [0], [dnl
+  table=3 (ls_in_put_fdb      ), priority=0    , dnl
+match=(1), action=(next;)
+])
+
+
+src_mac="505400000003"
+src_ip=`ip_to_hex 10.0.0.3`
+dst_mac="505400000004"
+dst_ip=`ip_to_hex 10.0.0.4`
+
+# send packet from vif0(which has unknown addr set) to vif1
+send_packet $src_mac $src_ip $dst_mac $dst_ip vif0
+
+# send packet from vif1 to vif0(which has unknown addr set)
+send_packet $dst_mac $dst_ip $src_mac $src_ip vif1
+
+# send packet from underlay to vif1
+src_mac="505400000064"
+src_ip=`ip_to_hex 10.0.0.100`
+send_packet $src_mac $src_ip $dst_mac $dst_ip ext0
+AT_CHECK([ovn-nbctl --wait=hv sync])
+
+# Make sure that OVS table 71 is populated on hv1.
+AS_BOX([Check that ovn-controller programs the flows for FDB])
+as hv1 ovs-ofctl dump-flows br-int table=71 > hv1_offlows_table71.txt
+AT_CAPTURE_FILE([hv1_offlows_table71.txt])
+AT_CHECK([cat hv1_offlows_table71.txt | grep -v NXST | cut -d ' ' -f7- | sort], [0], [dnl
+idle_timeout=300, idle_age=0, metadata=0x1,dl_dst=50:54:00:00:00:03 actions=load:0x2->NXM_NX_REG15[[]]
+idle_timeout=300, idle_age=0, metadata=0x1,dl_dst=50:54:00:00:00:64 actions=load:0x1->NXM_NX_REG15[[]]
+])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([MAC binding aging])
 AT_SKIP_IF([test $HAVE_SCAPY = no])
 ovn_start

@@ -803,6 +803,20 @@
       </column>
     </group>
 
+    <group title="Local FDB options">
+      <column name="other_config" key="fdb_local"
+              type='{"type": "boolean"}'>
+        If set to <code>true</code>, FDB flows are commited only to the
+        local chassis instead of southbound DB. Default is false.
+      </column>
+      <column name="other_config" key="fdb_local_idle_timeout"
+              type='{"type": "integer", "minInteger": 0, "maxInteger": 65535}'>
+        Local FDB flows <code>idle_timeout</code> value in seconds. FDB local
+        flows exceeding this timeout will be automatically removed. The value
+        defaults to 300, 0 means disabled.
+      </column>
+    </group>
+
     <column name="copp">
       <p>
         The control plane protection policy from table <ref table="Copp"/>
