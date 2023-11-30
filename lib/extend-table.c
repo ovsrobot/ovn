@@ -47,6 +47,7 @@ ovn_extend_table_init(struct ovn_extend_table *table, const char *table_name,
 void
 ovn_extend_table_reinit(struct ovn_extend_table *table, uint32_t n_ids)
 {
+    ovn_extend_table_clear(table, true);
     if (n_ids != table->n_ids) {
         id_pool_destroy(table->table_ids);
         table->table_ids = id_pool_create(1, n_ids);
