@@ -51,6 +51,7 @@
 #include "openvswitch/rconn.h"
 #include "socket-util.h"
 #include "timeval.h"
+#include "unixctl.h"
 #include "util.h"
 #include "vswitch-idl.h"
 
@@ -323,6 +324,7 @@ struct ofctrl_flow_update {
     struct ovs_list list_node;  /* In 'flow_updates'. */
     ovs_be32 xid;               /* OpenFlow transaction ID for barrier. */
     uint64_t req_cfg;           /* Requested sequence number. */
+    long long start_msec;       /* Timestamp when the update started. */
 };
 
 static struct ofctrl_flow_update *
@@ -402,6 +404,10 @@ static enum mf_field_id mff_ovn_geneve;
  * (e.g. after OVS restart). */
 static bool ofctrl_initial_clear;
 
+/* The time in ms it took for the last flow installation to be processed
+ * by OvS. */
+static long long last_flow_install_time_ms = 0;
+
 static ovs_be32 queue_msg(struct ofpbuf *);
 
 static struct ofpbuf *encode_flow_mod(struct ofputil_flow_mod *);
@@ -413,6 +419,8 @@ static struct ofpbuf *encode_meter_mod(const struct ofputil_meter_mod *);
 static void ovn_installed_flow_table_clear(void);
 static void ovn_installed_flow_table_destroy(void);
 
+static void flow_install_time_report(struct unixctl_conn *conn, int argc,
+                                     const char *argv[], void *param);
 
 static void ofctrl_recv(const struct ofp_header *, enum ofptype);
 
@@ -429,6 +437,8 @@ ofctrl_init(struct ovn_extend_table *group_table,
     groups = group_table;
     meters = meter_table;
     shash_init(&meter_bands);
+    unixctl_command_register("ofctrl/flow-install-time", "", 0, 0,
+                             flow_install_time_report, NULL);
 }
 
 /* S_NEW, for a new connection.
@@ -732,6 +742,9 @@ recv_S_UPDATE_FLOWS(const struct ofp_header *oh, enum ofptype type,
             if (fup->req_cfg >= cur_cfg) {
                 cur_cfg = fup->req_cfg;
             }
+
+            last_flow_install_time_ms = time_msec() - fup->start_msec;
+
             mem_stats.oflow_update_usage -= ofctrl_flow_update_size(fup);
             ovs_list_remove(&fup->list_node);
             free(fup);
@@ -2900,6 +2913,7 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
         const struct ofp_header *oh = barrier->data;
         ovs_be32 xid_ = oh->xid;
         ovs_list_push_back(&msgs, &barrier->list_node);
+        long long flow_update_start = time_msec();
 
         /* Queue the messages. */
         struct ofpbuf *msg;
@@ -2945,9 +2959,13 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
 
         /* Add a flow update. */
         fup = xmalloc(sizeof *fup);
+        *fup = (struct ofctrl_flow_update) {
+            .xid = xid_,
+            .req_cfg = req_cfg,
+            .start_msec = flow_update_start,
+        };
+
         ovs_list_push_back(&flow_updates, &fup->list_node);
-        fup->xid = xid_;
-        fup->req_cfg = req_cfg;
         mem_stats.oflow_update_usage += ofctrl_flow_update_size(fup);
     done:;
     } else if (!ovs_list_is_empty(&flow_updates)) {
@@ -3089,4 +3107,13 @@ ofctrl_get_memory_usage(struct simap *usage)
     simap_increase(usage, "ofctrl_rconn_packet_counter-KB",
                    ROUND_UP(rconn_packet_counter_n_bytes(tx_counter), 1024)
                    / 1024);
+}
+
+static void
+flow_install_time_report(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                         const char *argv[] OVS_UNUSED, void *param OVS_UNUSED)
+{
+    char *msg = xasprintf("%lld ms", last_flow_install_time_ms);
+    unixctl_command_reply(conn, msg);
+    free(msg);
 }
