@@ -10,6 +10,8 @@ Post v23.09.0
     external_ids:ovn-openflow-probe-interval configuration option for
     ovn-controller no longer matters and is ignored.
   - Enable PMTU discovery on geneve tunnels for E/W traffic.
+  - Add "ovn-appctl ofctrl/flow-install-time" that returns how long the last
+    flow processing and installation took in OvS.
 
 OVN v23.09.0 - 15 Sep 2023
 --------------------------

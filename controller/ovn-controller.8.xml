@@ -770,6 +770,12 @@
       <dd>
         Reset <code>ovn-controller</code> engine counters.
       </dd>
+
+        <dt><code>ofctrl/flow-install-time</code></dt>
+        <dd>
+          Returns how long the last flow processing and installation took
+          in OvS.
+        </dd>
       </dl>
     </p>
 
