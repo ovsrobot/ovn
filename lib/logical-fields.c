@@ -132,6 +132,10 @@ ovn_init_symtab(struct shash *symtab)
     snprintf(flags_str, sizeof flags_str, "flags[%d]",
              MLF_LOCALNET_BIT);
     expr_symtab_add_subfield(symtab, "flags.localnet", NULL,
+                            flags_str);
+    snprintf(flags_str, sizeof flags_str, "flags[%d]",
+             MLF_ICMP_SNAT);
+    expr_symtab_add_subfield(symtab, "flags.icmp_snat", NULL,
                              flags_str);
 
     /* Connection tracking state. */
