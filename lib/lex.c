@@ -865,6 +865,21 @@ lexer_get(struct lexer *lexer)
     return lexer->token.type;
 }
 
+/* Consumes all tokens from 'lexer' until type 't', the token with type 't'
+ * can be examined via 'lexer->token'. Returns 'true' if token was found,
+ * otherwise 'false'. */
+bool
+lexer_get_until(struct lexer *lexer, enum lex_type t)
+{
+    enum lex_type type = lexer->token.type;
+
+    while (type != t && type != LEX_T_END) {
+        type = lexer_get(lexer);
+    }
+
+    return type == t;
+}
+
 /* Returns the type of the next token that will be fetched by lexer_get(),
  * without advancing 'lexer->token' to that token. */
 enum lex_type

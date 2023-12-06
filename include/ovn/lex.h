@@ -138,6 +138,7 @@ void lexer_init(struct lexer *, const char *input);
 void lexer_destroy(struct lexer *);
 
 enum lex_type lexer_get(struct lexer *);
+bool lexer_get_until(struct lexer *, enum lex_type);
 enum lex_type lexer_lookahead(const struct lexer *);
 bool lexer_match(struct lexer *, enum lex_type);
 bool lexer_force_match(struct lexer *, enum lex_type);
