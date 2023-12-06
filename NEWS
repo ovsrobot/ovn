@@ -10,6 +10,8 @@ Post v23.09.0
     external_ids:ovn-openflow-probe-interval configuration option for
     ovn-controller no longer matters and is ignored.
   - Enable PMTU discovery on geneve tunnels for E/W traffic.
+  - Add "garp-max-timeout-sec" config option to vswitchd external-ids to
+    cap the time between when ovn-controller sends gARP packets.
 
 OVN v23.09.0 - 15 Sep 2023
 --------------------------
