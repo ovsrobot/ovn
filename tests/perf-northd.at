@@ -60,7 +60,7 @@ m4_define([PARSE_STOPWATCH], [
 # to performance results.
 #
 m4_define([PERF_RECORD_STOPWATCH], [
-    PERF_RECORD_RESULT($3, [`ovn-appctl -t northd/NORTHD_TYPE stopwatch/show $1 | PARSE_STOPWATCH($2)`])
+    PERF_RECORD_RESULT($3, [`ovn-appctl -t northd/ovn-northd stopwatch/show $1 | PARSE_STOPWATCH($2)`])
 ])
 
 # PERF_RECORD()

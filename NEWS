@@ -10,6 +10,7 @@ Post v23.09.0
     external_ids:ovn-openflow-probe-interval configuration option for
     ovn-controller no longer matters and is ignored.
   - Enable PMTU discovery on geneve tunnels for E/W traffic.
+  - ovn-northd-ddlog has been removed.
 
 OVN v23.09.0 - 15 Sep 2023
 --------------------------
