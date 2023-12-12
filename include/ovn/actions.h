@@ -514,6 +514,18 @@ struct ovnact_commit_lb_aff {
     uint16_t timeout;
 };
 
+#define OVN_FIELD_NOTE_MAGIC "ovn"
+
+struct ovn_field_note_header {
+    char magic[4];
+    uint8_t pad[2];
+    ovs_be16 type;   /* The type of ovn field note, based
+                      * on 'enum ovn_field_id'. */
+    uint8_t data[];
+};
+
+BUILD_ASSERT_DECL(sizeof(struct ovn_field_note_header) == 8);
+
 /* Internal use by the helpers below. */
 void ovnact_init(struct ovnact *, enum ovnact_type, size_t len);
 void *ovnact_put(struct ofpbuf *, enum ovnact_type, size_t len);
@@ -900,5 +912,9 @@ size_t encode_start_controller_op(enum action_opcode opcode, bool pause,
 void encode_finish_controller_op(size_t ofs, struct ofpbuf *ofpacts);
 void encode_controller_op(enum action_opcode opcode, uint32_t meter_id,
                           struct ofpbuf *ofpacts);
+
+size_t encode_start_ovn_field_note(enum ovn_field_id id,
+                                   struct ofpbuf *ofpacts);
+void encode_finish_ovn_field_note(size_t offset, struct ofpbuf *ofpacts);
 
 #endif /* ovn/actions.h */
