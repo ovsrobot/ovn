@@ -21905,7 +21905,7 @@ eth_dst=00000000ff01
 ip_src=$(ip_to_hex 10 0 0 10)
 ip_dst=$(ip_to_hex 172 168 0 101)
 send_icmp_packet 1 1 $eth_src $eth_dst $ip_src $ip_dst c4c9 0000000000000000000000
-AT_CHECK_UNQUOTED([as hv1 ovs-ofctl dump-flows br-int metadata=0x$lr0_dp_key | awk '/table=28, n_packets=1, n_bytes=45/{print $7" "$8}'],[0],[dnl
+AT_CHECK_UNQUOTED([as hv1 ovs-ofctl dump-flows br-int metadata=0x$lr0_dp_key | awk '/table=29, n_packets=1, n_bytes=45/{print $7" "$8}'],[0],[dnl
 priority=80,ip,reg15=0x$lr0_public_dp_key,metadata=0x$lr0_dp_key,nw_src=10.0.0.10 actions=drop
 ])
 
@@ -28964,7 +28964,7 @@ AT_CHECK([
         grep "priority=100" | \
         grep -c "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],.*exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_MARK\\[[16..31\\]]))"
 
-        grep table=25 hv${hv}flows | \
+        grep table=26 hv${hv}flows | \
         grep "priority=200" | \
         grep -c "move:NXM_NX_CT_LABEL\\[[\\]]->NXM_NX_XXREG1\\[[\\]],move:NXM_NX_XXREG1\\[[32..79\\]]->NXM_OF_ETH_DST"
     done; :], [0], [dnl
@@ -29089,7 +29089,7 @@ AT_CHECK([
         grep "priority=100" | \
         grep -c "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],.*exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_MARK\\[[16..31\\]]))"
 
-        grep table=25 hv${hv}flows | \
+        grep table=26 hv${hv}flows | \
         grep "priority=200" | \
         grep -c "move:NXM_NX_CT_LABEL\\[[\\]]->NXM_NX_XXREG1\\[[\\]],move:NXM_NX_XXREG1\\[[32..79\\]]->NXM_OF_ETH_DST"
     done; :], [0], [dnl
@@ -29586,7 +29586,7 @@ if test X"$1" = X"DGP"; then
 else
     prio=2
 fi
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=25, n_packets=1,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=26, n_packets=1,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
 1
 ])
 
@@ -29605,13 +29605,13 @@ AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep "actions=controller" | grep 
 
 if test X"$1" = X"DGP"; then
     # The packet dst should be resolved once for E/W centralized NAT purpose.
-    AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=25, n_packets=1,.* priority=100,reg0=0xa000101,reg15=.*metadata=0x${sw_key} actions=mod_dl_dst:00:00:00:00:01:01,resubmit" -c], [0], [dnl
+    AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=26, n_packets=1,.* priority=100,reg0=0xa000101,reg15=.*metadata=0x${sw_key} actions=mod_dl_dst:00:00:00:00:01:01,resubmit" -c], [0], [dnl
 1
 ])
 fi
 
 # The packet should've been finally dropped in the lr_in_arp_resolve stage.
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=25, n_packets=2,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=26, n_packets=2,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
 1
 ])
 OVN_CLEANUP([hv1])

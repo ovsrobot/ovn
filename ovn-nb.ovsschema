@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
-    "version": "7.2.0",
-    "cksum": "1069338687 34162",
+    "version": "7.3.0",
+    "cksum": "2325497400 35185",
     "tables": {
         "NB_Global": {
             "columns": {
@@ -89,7 +89,12 @@
                     "type": {"key": {"type": "uuid",
                                      "refTable": "Forwarding_Group",
                                      "refType": "strong"},
-                                     "min": 0, "max": "unlimited"}}},
+                                     "min": 0, "max": "unlimited"}},
+                "dhcp_relay_port": {"type": {"key": {"type": "uuid",
+                                            "refTable": "Logical_Router_Port",
+                                            "refType": "weak"},
+                                            "min": 0,
+                                            "max": 1}}},
             "isRoot": true},
         "Logical_Switch_Port": {
             "columns": {
@@ -436,6 +441,11 @@
                 "ipv6_prefix": {"type": {"key": "string",
                                       "min": 0,
                                       "max": "unlimited"}},
+                "dhcp_relay": {"type": {"key": {"type": "uuid",
+                                            "refTable": "DHCP_Relay",
+                                            "refType": "weak"},
+                                            "min": 0,
+                                            "max": 1}},
                 "external_ids": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}},
@@ -525,6 +535,15 @@
                 "cidr": {"type": "string"},
                 "options": {"type": {"key": "string", "value": "string",
                                      "min": 0, "max": "unlimited"}},
+                "external_ids": {
+                    "type": {"key": "string", "value": "string",
+                             "min": 0, "max": "unlimited"}}},
+            "isRoot": true},
+        "DHCP_Relay": {
+            "columns": {
+                "servers": {"type": {"key": "string",
+                                       "min": 0,
+                                       "max": 1}},
                 "external_ids": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}}},

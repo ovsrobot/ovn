@@ -2329,6 +2329,25 @@ execute_put_dhcp_opts(const struct ovnact_put_opts *pdo,
 }
 
 static void
+execute_dhcpv4_relay_resp_fwd(const struct ovnact_dhcp_relay *dr,
+                                const char *name, struct flow *uflow,
+                                struct ovs_list *super)
+{
+    ovntrace_node_append(
+        super, OVNTRACE_NODE_ERROR,
+        "/* We assume that this packet is DHCPOFFER or DHCPACK and "
+            "DHCP broadcast flag is set. Dest IP is set to broadcast. "
+            "Dest MAC is set to broadcast but in real network this is unicast "
+            "which is extracted from DHCP header. */");
+
+    /* Assume DHCP broadcast flag is set */
+    uflow->nw_dst = 0xFFFFFFFF;
+    /* Dest MAC is set to broadcast but in real network this is unicast */
+    struct eth_addr bcast_mac = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    uflow->dl_dst = bcast_mac;
+}
+
+static void
 execute_put_nd_ra_opts(const struct ovnact_put_opts *pdo,
                        const char *name, struct flow *uflow,
                        struct ovs_list *super)
@@ -3213,6 +3232,15 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
         case OVNACT_PUT_DHCPV6_OPTS:
             execute_put_dhcp_opts(ovnact_get_PUT_DHCPV6_OPTS(a),
                                   "put_dhcpv6_opts", uflow, super);
+            break;
+
+        case OVNACT_DHCPV4_RELAY_REQ:
+            /* Nothing to do for tracing. */
+            break;
+
+        case OVNACT_DHCPV4_RELAY_RESP_FWD:
+            execute_dhcpv4_relay_resp_fwd(ovnact_get_DHCPV4_RELAY_RESP_FWD(a),
+                                    "dhcp_relay_resp_fwd", uflow, super);
             break;
 
         case OVNACT_PUT_ND_RA_OPTS:

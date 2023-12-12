@@ -8786,9 +8786,9 @@ ovn-nbctl --wait=sb set logical_router_port R1-PUB options:redirect-type=bridged
 ovn-sbctl dump-flows R1 > R1flows
 AT_CAPTURE_FILE([R1flows])
 
-AT_CHECK([grep "lr_in_arp_resolve" R1flows | grep priority=90 | sort], [0], [dnl
-  table=17(lr_in_arp_resolve  ), priority=90   , match=(outport == "R1-PUB" && ip4.src == 10.0.0.3 && is_chassis_resident("S0-P0")), action=(get_arp(outport, reg0); next;)
-  table=17(lr_in_arp_resolve  ), priority=90   , match=(outport == "R1-PUB" && ip6.src == 1000::3 && is_chassis_resident("S0-P0")), action=(get_nd(outport, xxreg0); next;)
+AT_CHECK([grep "lr_in_arp_resolve" R1flows | grep priority=90 | sed 's/table=../table=??/' | sort], [0], [dnl
+  table=??(lr_in_arp_resolve  ), priority=90   , match=(outport == "R1-PUB" && ip4.src == 10.0.0.3 && is_chassis_resident("S0-P0")), action=(get_arp(outport, reg0); next;)
+  table=??(lr_in_arp_resolve  ), priority=90   , match=(outport == "R1-PUB" && ip6.src == 1000::3 && is_chassis_resident("S0-P0")), action=(get_nd(outport, xxreg0); next;)
 ])
 
 AT_CLEANUP
@@ -10962,6 +10962,41 @@ CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
 AT_CHECK([as northd ovn-appctl -t NORTHD_TYPE status], [0], [dnl
 Status: active
+])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([check DHCP RELAY AGENT])
+ovn_start NORTHD_TYPE
+
+check ovn-nbctl ls-add ls0
+check ovn-nbctl lsp-add ls0 ls0-port1
+check ovn-nbctl lsp-set-addresses ls0-port1 02:00:00:00:00:10
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lrp1 02:00:00:00:00:01 192.168.1.1/24
+check ovn-nbctl lsp-add ls0 lrp1-attachment
+check ovn-nbctl lsp-set-type lrp1-attachment router
+check ovn-nbctl lsp-set-addresses lrp1-attachment 00:00:00:00:ff:02
+check ovn-nbctl lsp-set-options lrp1-attachment router-port=lrp1
+check ovn-nbctl lrp-add lr0 lrp-ext 02:00:00:00:00:02 192.168.2.1/24
+
+dhcp_relay=$(ovn-nbctl create DHCP_Relay servers=172.16.1.1)
+check ovn-nbctl set Logical_Router_port lrp1 dhcp_relay=$dhcp_relay
+rp_uuid=$(ovn-nbctl --bare --colum=_uuid list logical_router_port lrp1)
+check ovn-nbctl set Logical_Switch ls0 dhcp_relay_port=$rp_uuid
+
+check ovn-nbctl --wait=sb sync
+
+ovn-sbctl lflow-list > lflows
+AT_CAPTURE_FILE([lflows])
+
+AT_CHECK([grep -e "DHCP_RELAY_" lflows | sed 's/table=../table=??/'], [0], [dnl
+  table=??(lr_in_ip_input     ), priority=110  , match=(inport == "lrp1" && ip4.src == 0.0.0.0 && ip4.dst == 255.255.255.255 && udp.src == 68 && udp.dst == 67), action=(dhcp_relay_req(192.168.1.1,172.16.1.1);ip4.src=192.168.1.1;ip4.dst=172.16.1.1;udp.src=67;next; /* DHCP_RELAY_REQ */)
+  table=??(lr_in_ip_input     ), priority=110  , match=(ip4.src == 172.16.1.1 && ip4.dst == 192.168.1.1 && udp.src == 67 && udp.dst == 67), action=(next;/* DHCP_RELAY_RESP */)
+  table=??(lr_in_dhcp_relay_resp_fwd), priority=110  , match=(ip4.src == 172.16.1.1 && ip4.dst == 192.168.1.1 && udp.src == 67 && udp.dst == 67), action=(dhcp_relay_resp_fwd(192.168.1.1,172.16.1.1);ip4.src=192.168.1.1;udp.dst=68;outport="lrp1";output; /* DHCP_RELAY_RESP */)
+  table=??(ls_in_l2_lkup      ), priority=100  , match=(inport == "ls0-port1" && eth.src == 02:00:00:00:00:10 && ip4.src == 0.0.0.0 && ip4.dst == 255.255.255.255 && udp.src == 68 && udp.dst == 67), action=(eth.dst=02:00:00:00:00:01;outport="lrp1-attachment";next;/* DHCP_RELAY_REQ */)
 ])
 
 AT_CLEANUP

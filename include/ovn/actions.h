@@ -95,6 +95,8 @@ struct collector_set_ids;
     OVNACT(LOOKUP_ND_IP,      ovnact_lookup_mac_bind_ip) \
     OVNACT(PUT_DHCPV4_OPTS,   ovnact_put_opts)        \
     OVNACT(PUT_DHCPV6_OPTS,   ovnact_put_opts)        \
+    OVNACT(DHCPV4_RELAY_REQ,  ovnact_dhcp_relay)      \
+    OVNACT(DHCPV4_RELAY_RESP_FWD, ovnact_dhcp_relay)      \
     OVNACT(SET_QUEUE,         ovnact_set_queue)       \
     OVNACT(DNS_LOOKUP,        ovnact_result)          \
     OVNACT(LOG,               ovnact_log)             \
@@ -385,6 +387,14 @@ struct ovnact_put_opts {
     struct expr_field dst;      /* 1-bit destination field. */
     struct ovnact_gen_option *options;
     size_t n_options;
+};
+
+/* OVNACT_DHCP_RELAY. */
+struct ovnact_dhcp_relay {
+    struct ovnact ovnact;
+    int family;
+    ovs_be32 relay_ipv4;
+    ovs_be32 server_ipv4;
 };
 
 /* Valid arguments to SET_QUEUE action.
@@ -750,6 +760,22 @@ enum action_opcode {
 
     /* multicast group split buffer action. */
     ACTION_OPCODE_MG_SPLIT_BUF,
+
+    /* "dhcp_relay_req(relay_ip, server_ip)".
+     *
+     * Arguments follow the action_header, in this format:
+     *   - The 32-bit DHCP relay IP.
+     *   - The 32-bit DHCP server IP.
+     */
+    ACTION_OPCODE_DHCP_RELAY_REQ,
+
+    /* "dhcp_relay_resp_fwd(relay_ip, server_ip)".
+     *
+     * Arguments follow the action_header, in this format:
+     *   - The 32-bit DHCP relay IP.
+     *   - The 32-bit DHCP server IP.
+     */
+    ACTION_OPCODE_DHCP_RELAY_RESP_FWD,
 };
 
 /* Header. */
