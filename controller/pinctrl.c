@@ -259,12 +259,7 @@ static void pinctrl_handle_nd_ns(struct rconn *swconn,
                                  struct dp_packet *pkt_in,
                                  const struct match *md,
                                  struct ofpbuf *userdata);
-static void pinctrl_handle_put_icmp_frag_mtu(struct rconn *swconn,
-                                             const struct flow *in_flow,
-                                             struct dp_packet *pkt_in,
-                                             struct ofputil_packet_in *pin,
-                                             struct ofpbuf *userdata,
-                                             struct ofpbuf *continuation);
+
 static void
 pinctrl_handle_event(struct ofpbuf *userdata)
     OVS_REQUIRES(pinctrl_mutex);
@@ -607,6 +602,23 @@ set_switch_config(struct rconn *swconn,
 }
 
 static void
+enqueue_packet(struct rconn *swconn, enum ofp_version version,
+               const struct dp_packet *packet, const struct ofpbuf *ofpacts)
+{
+    struct ofputil_packet_out po = {
+            .packet = dp_packet_data(packet),
+            .packet_len = dp_packet_size(packet),
+            .buffer_id = UINT32_MAX,
+            .ofpacts = ofpacts->data,
+            .ofpacts_len = ofpacts->size,
+    };
+
+    match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
+    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
+    queue_msg(swconn, ofputil_encode_packet_out(&po, proto));
+}
+
+static void
 set_actions_and_enqueue_msg(struct rconn *swconn,
                             const struct dp_packet *packet,
                             const struct match *md,
@@ -631,17 +643,57 @@ set_actions_and_enqueue_msg(struct rconn *swconn,
         return;
     }
 
-    struct ofputil_packet_out po = {
-        .packet = dp_packet_data(packet),
-        .packet_len = dp_packet_size(packet),
-        .buffer_id = UINT32_MAX,
-        .ofpacts = ofpacts.data,
-        .ofpacts_len = ofpacts.size,
-    };
-    match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
-    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
-    queue_msg(swconn, ofputil_encode_packet_out(&po, proto));
+    enqueue_packet(swconn, version, packet, &ofpacts);
     ofpbuf_uninit(&ofpacts);
+}
+
+static bool
+ofpacts_decode_and_reload_metadata(enum ofp_version version,
+                                   const struct match *md,
+                                   struct ofpbuf *userdata,
+                                   struct ofpbuf *ofpacts)
+{
+    /* Copy metadata from 'md' into the packet-out via "set_field"
+     * actions, then add actions from 'userdata'.
+     */
+    reload_metadata(ofpacts, md);
+    enum ofperr error = ofpacts_pull_openflow_actions(userdata, userdata->size,
+                                                      version, NULL, NULL,
+                                                      ofpacts);
+    if (error) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_WARN_RL(&rl, "failed to parse actions from userdata (%s)",
+                     ofperr_to_string(error));
+        return false;
+    }
+
+    return true;
+}
+
+static void *
+ofpacts_get_ovn_field(const struct ofpbuf *ofpacts,
+                      enum ovn_field_id id)
+{
+    const struct ovn_field *field = ovn_field_from_id(id);
+
+    struct ofpact *ofpact;
+    OFPACT_FOR_EACH (ofpact, ofpacts->data, ofpacts->size) {
+        if (ofpact->type != OFPACT_NOTE) {
+            continue;
+        }
+
+        struct ofpact_note *note = ofpact_get_NOTE(ofpact);
+        struct ovn_field_note_header *hdr = (void *) note->data;
+        /* The data can contain padding bytes from NXAST_NOTE encode/decode. */
+        size_t data_len = note->length - sizeof *hdr;
+
+        if (!strncmp(hdr->magic, OVN_FIELD_NOTE_MAGIC, sizeof hdr->magic) &&
+            field->id == ntohs(hdr->type) && data_len >= field->n_bytes) {
+            return hdr->data;
+        }
+    }
+
+    return NULL;
 }
 
 /* Forwards a packet to 'out_port_key' even if that's on a remote
@@ -1546,6 +1598,8 @@ pinctrl_handle_icmp(struct rconn *swconn, const struct flow *ip_flow,
                     const struct match *md, struct ofpbuf *userdata,
                     bool set_icmp_code, bool loopback)
 {
+    enum ofp_version version = rconn_get_version(swconn);
+
     /* This action only works for IP packets, and the switch should only send
      * us IP packets this way, but check here just to be sure. */
     if (ip_flow->dl_type != htons(ETH_TYPE_IP) &&
@@ -1554,6 +1608,14 @@ pinctrl_handle_icmp(struct rconn *swconn, const struct flow *ip_flow,
         VLOG_WARN_RL(&rl,
                      "ICMP action on non-IP packet (eth_type 0x%"PRIx16")",
                      ntohs(ip_flow->dl_type));
+        return;
+    }
+
+    uint64_t ofpacts_stub[4096 / 8];
+    struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(ofpacts_stub);
+
+    if (!ofpacts_decode_and_reload_metadata(version, md, userdata, &ofpacts)) {
+        ofpbuf_uninit(&ofpacts);
         return;
     }
 
@@ -1572,6 +1634,7 @@ pinctrl_handle_icmp(struct rconn *swconn, const struct flow *ip_flow,
             VLOG_WARN_RL(&rl,
                         "ICMP action on IP packet with invalid length (%u)",
                         in_ip_len);
+            ofpbuf_uninit(&ofpacts);
             return;
         }
 
@@ -1614,6 +1677,12 @@ pinctrl_handle_icmp(struct rconn *swconn, const struct flow *ip_flow,
         /* Include original IP + data. */
         void *data = ih + 1;
         memcpy(data, in_ip, in_ip_len);
+
+        ovs_be16 *mtu = ofpacts_get_ovn_field(&ofpacts, OVN_ICMP4_FRAG_MTU);
+        if (mtu) {
+            ih->icmp_fields.frag.mtu = *mtu;
+            ih->icmp_code = 4;
+        }
 
         ih->icmp_csum = 0;
         ih->icmp_csum = csum(ih, sizeof *ih + in_ip_len);
@@ -1662,6 +1731,12 @@ pinctrl_handle_icmp(struct rconn *swconn, const struct flow *ip_flow,
         }
         ih->icmp6_base.icmp6_cksum = 0;
 
+        ovs_be32 *mtu = ofpacts_get_ovn_field(&ofpacts, OVN_ICMP6_FRAG_MTU);
+        if (mtu) {
+            put_16aligned_be32(ih->icmp6_data.be32, *mtu);
+            ih->icmp6_base.icmp6_type = ICMP6_PACKET_TOO_BIG;
+        }
+
         void *data = ih + 1;
         memcpy(data, in_ip, in_ip_len);
         uint32_t icmpv6_csum =
@@ -1676,8 +1751,9 @@ pinctrl_handle_icmp(struct rconn *swconn, const struct flow *ip_flow,
                       ip_flow->vlans[0].tci);
     }
 
-    set_actions_and_enqueue_msg(swconn, &packet, md, userdata);
+    enqueue_packet(swconn, version, &packet, &ofpacts);
     dp_packet_uninit(&packet);
+    ofpbuf_uninit(&ofpacts);
 }
 
 /* Called with in the pinctrl_handler thread context. */
@@ -3283,12 +3359,6 @@ process_packet_in(struct rconn *swconn, const struct ofp_header *msg)
     case ACTION_OPCODE_REJECT:
         pinctrl_handle_reject(swconn, &headers, &packet, &pin.flow_metadata,
                               &userdata);
-        break;
-
-    case ACTION_OPCODE_PUT_ICMP4_FRAG_MTU:
-    case ACTION_OPCODE_PUT_ICMP6_FRAG_MTU:
-        pinctrl_handle_put_icmp_frag_mtu(swconn, &headers, &packet, &pin,
-                                         &userdata, &continuation);
         break;
 
     case ACTION_OPCODE_EVENT:
@@ -6310,73 +6380,6 @@ exit:
     }
     queue_msg(swconn, ofputil_encode_resume(pin, continuation, proto));
     dp_packet_uninit(pkt_out_ptr);
-}
-
-/* Called with in the pinctrl_handler thread context. */
-static void
-pinctrl_handle_put_icmp_frag_mtu(struct rconn *swconn,
-                                 const struct flow *in_flow,
-                                 struct dp_packet *pkt_in,
-                                 struct ofputil_packet_in *pin,
-                                 struct ofpbuf *userdata,
-                                 struct ofpbuf *continuation)
-{
-    enum ofp_version version = rconn_get_version(swconn);
-    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
-    struct dp_packet *pkt_out = NULL;
-
-    /* This action only works for ICMPv4/v6 packets. */
-    if (!is_icmpv4(in_flow, NULL) && !is_icmpv6(in_flow, NULL)) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_WARN_RL(&rl,
-                     "put_icmp(4/6)_frag_mtu action on non-ICMPv4/v6 packet");
-        goto exit;
-    }
-
-    pkt_out = dp_packet_clone(pkt_in);
-    pkt_out->l2_5_ofs = pkt_in->l2_5_ofs;
-    pkt_out->l2_pad_size = pkt_in->l2_pad_size;
-    pkt_out->l3_ofs = pkt_in->l3_ofs;
-    pkt_out->l4_ofs = pkt_in->l4_ofs;
-
-    if (is_icmpv4(in_flow, NULL)) {
-        ovs_be16 *mtu = ofpbuf_try_pull(userdata, sizeof *mtu);
-        if (!mtu) {
-            goto exit;
-        }
-
-        struct ip_header *nh = dp_packet_l3(pkt_out);
-        struct icmp_header *ih = dp_packet_l4(pkt_out);
-        ovs_be16 old_frag_mtu = ih->icmp_fields.frag.mtu;
-        ih->icmp_fields.frag.mtu = *mtu;
-        ih->icmp_csum = recalc_csum16(ih->icmp_csum, old_frag_mtu, *mtu);
-        nh->ip_csum = 0;
-        nh->ip_csum = csum(nh, sizeof *nh);
-    } else {
-        ovs_be32 *mtu = ofpbuf_try_pull(userdata, sizeof *mtu);
-        if (!mtu) {
-            goto exit;
-        }
-
-        struct icmp6_data_header *ih = dp_packet_l4(pkt_out);
-        put_16aligned_be32(ih->icmp6_data.be32, *mtu);
-
-        /* compute checksum and set correct mtu */
-        ih->icmp6_base.icmp6_cksum = 0;
-        uint32_t csum = packet_csum_pseudoheader6(dp_packet_l3(pkt_out));
-        uint32_t size = (uint8_t *)dp_packet_tail(pkt_out) - (uint8_t *)ih;
-        ih->icmp6_base.icmp6_cksum = csum_finish(
-                csum_continue(csum, ih, size));
-    }
-
-    pin->packet = dp_packet_data(pkt_out);
-    pin->packet_len = dp_packet_size(pkt_out);
-
-exit:
-    queue_msg(swconn, ofputil_encode_resume(pin, continuation, proto));
-    if (pkt_out) {
-        dp_packet_delete(pkt_out);
-    }
 }
 
 static void
