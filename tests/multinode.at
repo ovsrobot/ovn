@@ -117,7 +117,7 @@ check multinode_nbctl lsp-set-type sw1-lr0 router
 check multinode_nbctl lsp-set-addresses sw1-lr0 router
 check multinode_nbctl lsp-set-options sw1-lr0 router-port=lr0-sw1
 
-m_as ovn-chassis-2 /data/create_fake_vm.sh sw1-port1 sw1p1 40:54:00:00:00:03 20.0.0.3 24 20.0.0.1 2000::4/64 1000::a
+m_as ovn-chassis-2 /data/create_fake_vm.sh sw1-port1 sw1p1 40:54:00:00:00:03 20.0.0.3 24 20.0.0.1 2000::3/64 2000::a
 
 m_wait_for_ports_up sw1-port1
 
@@ -130,6 +130,13 @@ M_NS_CHECK_EXEC([ovn-chassis-1], [sw0p1], [ping -q -c 3 -i 0.3 -w 2 20.0.0.3 | F
 m_as ovn-chassis-1 ip route change 170.168.0.0/16 mtu 1200 dev eth1
 M_NS_CHECK_EXEC([ovn-chassis-1], [sw0p1], [ping -c 5 -s 1300 -M do 20.0.0.3 2>&1 |grep -q "message too long, mtu=1142"])
 
+M_NS_CHECK_EXEC([ovn-chassis-1], [sw0p1], [ip route flush dev sw0p1])
+M_NS_CHECK_EXEC([ovn-chassis-1], [sw0p1], [ip route add 10.0.0.0/24 dev sw0p1])
+M_NS_CHECK_EXEC([ovn-chassis-1], [sw0p1], [ip route add default via 10.0.0.1 dev sw0p1])
+
+m_as ovn-chassis-1 ip route change 170.168.0.0/16 mtu 1400 dev eth1
+M_NS_CHECK_EXEC([ovn-chassis-1], [sw0p1], [ping6 -c 5 -s 1450 -M do 2000::3 2>&1 |grep -q "message too long, mtu: 1342"])
+
 check multinode_nbctl lrp-set-gateway-chassis lr0-sw0 ovn-chassis-1 10
 check multinode_nbctl lrp-set-gateway-chassis lr0-sw1 ovn-chassis-2 10
 
@@ -139,5 +146,12 @@ M_NS_CHECK_EXEC([ovn-chassis-1], [sw0p1], [ip route add default via 10.0.0.1 dev
 
 m_as ovn-chassis-1 ip route change 170.168.0.0/16 mtu 1200 dev eth1
 M_NS_CHECK_EXEC([ovn-chassis-1], [sw0p1], [ping -c 5 -s 1300 -M do 20.0.0.3 2>&1 |grep -q "message too long, mtu=1142"])
+
+M_NS_CHECK_EXEC([ovn-chassis-1], [sw0p1], [ip route flush dev sw0p1])
+M_NS_CHECK_EXEC([ovn-chassis-1], [sw0p1], [ip route add 10.0.0.0/24 dev sw0p1])
+M_NS_CHECK_EXEC([ovn-chassis-1], [sw0p1], [ip route add default via 10.0.0.1 dev sw0p1])
+
+m_as ovn-chassis-1 ip route change 170.168.0.0/16 mtu 1400 dev eth1
+M_NS_CHECK_EXEC([ovn-chassis-1], [sw0p1], [ping6 -c 5 -s 1450 -M do 2000::3 2>&1 |grep -q "message too long, mtu: 1342"])
 
 AT_CLEANUP
