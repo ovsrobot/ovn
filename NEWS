@@ -9,6 +9,14 @@ Post v23.09.0
     connection method and doesn't require additional probing.
     external_ids:ovn-openflow-probe-interval configuration option for
     ovn-controller no longer matters and is ignored.
+  - OVN Interconnection:
+    * INB provides basic feedback to the CMS about the ISB changes
+      handling status.
+    * IC_NB_Global now have "nb_ic_cfg" and "sb_ic_cfg" columns for
+      for ISB informational status.
+    * IC_SB_Global now have "nb_ic_cfg" column for ISB informational status.
+    * Availability_Zone now have "nb_ic_cfg" column for local AZ
+      informational status.
 
 OVN v23.09.0 - 15 Sep 2023
 --------------------------
