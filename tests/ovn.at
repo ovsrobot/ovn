@@ -37464,3 +37464,72 @@ wait_for_ports_up
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([gratuitous arp max timeout])
+AT_KEYWORDS([garp-timeout])
+TAG_UNSTABLE
+AT_SKIP_IF([test $HAVE_TCPDUMP = no])
+ovn_start
+
+check ovn-nbctl ls-add ls0
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-ls0 f0:00:00:00:00:01 192.168.0.1/24
+check ovn-nbctl lsp-add ls0 ls0-lr0 -- set Logical_Switch_Port ls0-lr0 \
+    type=router options:router-port=lr0-ls0 addresses='"f0:00:00:00:00:01"'
+
+check ovn-nbctl lsp-add ls0 ln_port
+check ovn-nbctl lsp-set-addresses ln_port unknown
+check ovn-nbctl lsp-set-type ln_port localnet
+check ovn-nbctl --wait=hv lsp-set-options ln_port network_name=physnet1
+
+# Prepare packets
+echo $(fmt_pkt "Ether(dst='ff:ff:ff:ff:ff:ff', src='f0:00:00:00:00:01')/ \
+                ARP(op=2, hwsrc='f0:00:00:00:00:01', hwdst='00:00:00:00:00:00', psrc='192.168.0.1', pdst='192.168.0.1')") > arp_expected
+
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl \
+    -- add-br br-phys \
+    -- add-br br-eth0
+
+ovn_attach n1 br-phys 192.168.0.10
+
+AT_CHECK([ovs-vsctl set Open_vSwitch . external-ids:ovn-bridge-mappings=physnet1:br-eth0])
+AT_CHECK([ovs-vsctl add-port br-eth0 snoopvif -- set Interface snoopvif options:tx_pcap=hv1/snoopvif-tx.pcap options:rxq_pcap=hv1/snoopvif-rx.pcap])
+
+# set garp max timeout to 2s
+AT_CHECK([as hv1 ovs-vsctl set Open_vSwitch . external-ids:garp-max-timeout-sec=2])
+
+# Wait until the patch ports are created in hv1 to connect br-int to br-eth0
+AT_CHECK([ovn-nbctl set logical_router lr0 options:chassis=hv1])
+OVN_WAIT_PATCH_PORT_FLOWS(["ln_port"], ["hv1"])
+
+# sleep for 20s to get a garp every ~ 2s
+sleep 22
+
+n_arp=$(tcpdump -ner hv1/snoopvif-tx.pcap arp | wc -l)
+AT_CHECK([test $n_arp -ge 10 -a $n_arp -lt 15])
+
+# Temporarily remove lr0 chassis
+# Wait for hv confirmation to make sure chassis is removed before we reset pcap
+# Otherwise a garp might be sent after pcap have been reset but before chassis is removed
+AT_CHECK([ovn-nbctl --wait=hv remove logical_router lr0 options chassis])
+
+as hv1 reset_pcap_file snoopvif hv1/snoopvif
+# set garp max timeout to 1s
+AT_CHECK([as hv1 ovs-vsctl set Open_vSwitch . external-ids:garp-max-timeout-sec=1])
+hv1_uuid=$(ovn-sbctl --bare --columns _uuid list chassis hv1)
+AT_CHECK([ovn-nbctl set logical_router lr0 options:chassis=hv1])
+
+# sleep for 12s to get a garp every ~ 1s
+sleep 12
+
+n_arp=$(tcpdump -ner hv1/snoopvif-tx.pcap arp | wc -l)
+AT_CHECK([test $n_arp -ge 10 -a $n_arp -lt 15])
+
+OVN_CLEANUP([hv1])
+
+AT_CLEANUP
+])
