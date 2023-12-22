@@ -12794,6 +12794,75 @@ build_lrouter_force_snat_flows(struct hmap *lflows, struct ovn_datapath *od,
     ds_destroy(&actions);
 }
 
+/* Following flows are used to manage traffic redirected by the kernel
+ * (e.g. ICMP errors packets) that enter the cluster from the geneve ports
+ */
+static void
+build_lrouter_icmp_packet_toobig_admin_flows(
+        struct ovn_port *op, struct hmap *lflows,
+        struct ds *match, struct ds *actions)
+{
+    ovs_assert(op->nbrp);
+
+    if (is_l3dgw_port(op)) {
+        ds_clear(match);
+        ds_put_format(match,
+                      "((ip4 && icmp4.type == 3 && icmp4.code == 4) ||"
+                      " (ip6 && icmp6.type == 2 && icmp6.code == 0)) && "
+                      "eth.dst == %s && !is_chassis_resident(%s)",
+                      op->nbrp->mac, op->cr_port->json_key);
+        ds_clear(actions);
+        ds_put_format(actions, "outport = inport; inport = %s; next;",
+                      op->json_key);
+        ovn_lflow_add(lflows, op->od, S_ROUTER_IN_ADMISSION, 120,
+                      ds_cstr(match), ds_cstr(actions));
+    }
+
+    /* default flow */
+    ovn_lflow_add(lflows, op->od, S_ROUTER_IN_ADMISSION, 110,
+                  "(ip4 && icmp4.type == 3 && icmp4.code == 4) || "
+                  "(ip6 && icmp6.type == 2 && icmp6.code == 0)", "next; ");
+}
+
+static void
+build_lswitch_icmp_packet_toobig_admin_flows(
+        struct ovn_port *op, struct hmap *lflows,
+        struct ds *match, struct ds *actions)
+{
+    ovs_assert(op->nbsp);
+
+    if (lsp_is_router(op->nbsp)) {
+        return;
+    }
+
+    struct ovn_datapath *od = op->od;
+    for (int i = 0; i < od->n_router_ports; i++) {
+        struct ovn_port *peer = od->router_ports[i]->peer;
+        if (!peer) {
+            continue;
+        }
+
+        ds_clear(match);
+        char *rp_port =
+            is_l3dgw_port(peer) ? peer->cr_port->json_key : peer->json_key;
+        ds_put_format(match,
+                      "((ip4 && icmp4.type == 3 && icmp4.code == 4) ||"
+                      " (ip6 && icmp6.type == 2 && icmp6.code == 0)) && "
+                      "eth.dst == %s && !is_chassis_resident(%s)",
+                      peer->nbrp->mac, rp_port);
+        ds_clear(actions);
+        ds_put_format(actions, "outport = %s; inport = %s; output;",
+                      od->router_ports[i]->json_key, op->json_key);
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CHECK_PORT_SEC, 120,
+                      ds_cstr(match), ds_cstr(actions));
+    }
+
+    /* default flow */
+    ovn_lflow_add(lflows, op->od, S_SWITCH_IN_CHECK_PORT_SEC, 110,
+                  "(ip4 && icmp4.type == 3 && icmp4.code == 4) || "
+                  "(ip6 && icmp6.type == 2 && icmp6.code == 0)", "next; ");
+}
+
 static void
 build_lrouter_force_snat_flows_op(struct ovn_port *op,
                                   struct hmap *lflows,
@@ -16161,6 +16230,7 @@ build_lswitch_and_lrouter_iterate_by_lsp(struct ovn_port *op,
     build_lswitch_dhcp_options_and_response(op, lflows, meter_groups);
     build_lswitch_external_port(op, lflows);
     build_lswitch_ip_unicast_lookup(op, lflows, actions, match);
+    build_lswitch_icmp_packet_toobig_admin_flows(op, lflows, match, actions);
 
     /* Build Logical Router Flows. */
     build_ip_routing_flows_for_router_type_lsp(op, lr_ports, lflows);
@@ -16197,6 +16267,8 @@ build_lswitch_and_lrouter_iterate_by_lrp(struct ovn_port *op,
                                 &lsi->match, &lsi->actions, lsi->meter_groups);
     build_lrouter_force_snat_flows_op(op, lsi->lflows, &lsi->match,
                                       &lsi->actions);
+    build_lrouter_icmp_packet_toobig_admin_flows(op, lsi->lflows, &lsi->match,
+                                                 &lsi->actions);
 }
 
 static void *

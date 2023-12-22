@@ -373,6 +373,20 @@
     <h3>Ingress Table 1: Ingress Port Security - Apply</h3>
 
     <p>
+      For each logical switch port <var>P</var> a priority-120 flow that
+      matches icmp{4,6} error 'packet too big' and <code>eth.dst ==
+      <var>D</var> &amp;&amp; !is_chassis_resident(<var>RP</var>)</code> where
+      <var>D</var> is the peer logical router port <var>RP</var> mac address,
+      stores <var>RP</var> peer port as outport, stores <var>P</var> as inport
+      and forward the packet to the egress pipeline.
+    </p>
+
+    <p>
+      This table adds a priority-110 flow that matches icmp{4,6} error 'packet
+      too big' to forward the packet to the next stage in the pipeline.
+    </p>
+
+    <p>
       This table drops the packets if the port security check failed
       in the previous stage i.e the register bit
       <code>REGBIT_PORT_SEC_DROP</code> is set to 1.
@@ -2461,6 +2475,21 @@ output;
           the <code>is_chassis_resident()</code> part is not added to lflow to
           allow traffic originated from logical switch to reach LR services
           (LBs, NAT).
+        </p>
+
+        <p>
+          For each gateway port <var>GW</var> on a distributed logical router
+          a priority-120 flow that matches icmp{4,6} error 'packet too big' and
+          <code>eth.dst == <var>D</var> &amp;&amp; !is_chassis_resident(<var>
+          cr-GW</var>)</code> where <var>D</var> is the gateway port mac
+          address and <var>cr-GW</var> is the chassis resident port of
+          <var>GW</var>, swap inport and outport and stores <var>GW</var>
+          as inport.
+        </p>
+
+        <p>
+          This table adds a priority-110 flow that matches icmp{4,6} error 'packet
+          too big' to forward the packet to the next stage in the pipeline.
         </p>
 
         <p>
