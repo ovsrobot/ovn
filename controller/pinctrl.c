@@ -6407,23 +6407,26 @@ pinctrl_handle_empty_lb_backends_opts(struct ofpbuf *userdata)
     while (userdata->size) {
         userdata_opt = ofpbuf_try_pull(userdata, sizeof opt_hdr);
         if (!userdata_opt) {
-            return false;
+            goto err;
         }
         memcpy(&opt_hdr, userdata_opt, sizeof opt_hdr);
 
         size_t size = ntohs(opt_hdr.size);
         char *userdata_opt_data = ofpbuf_try_pull(userdata, size);
         if (!userdata_opt_data) {
-            return false;
+            goto err;
         }
         switch (ntohs(opt_hdr.opt_code)) {
         case EMPTY_LB_VIP:
+            free(vip);
             vip = xmemdup0(userdata_opt_data, size);
             break;
         case EMPTY_LB_PROTOCOL:
+            free(protocol);
             protocol = xmemdup0(userdata_opt_data, size);
             break;
         case EMPTY_LB_LOAD_BALANCER:
+            free(load_balancer);
             load_balancer = xmemdup0(userdata_opt_data, size);
             break;
         default:
@@ -6434,10 +6437,7 @@ pinctrl_handle_empty_lb_backends_opts(struct ofpbuf *userdata)
     if (!vip || !protocol || !load_balancer) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "missing lb parameters in userdata");
-        free(vip);
-        free(protocol);
-        free(load_balancer);
-        return false;
+        goto err;
     }
 
     struct empty_lb_backends_event *event;
@@ -6447,7 +6447,7 @@ pinctrl_handle_empty_lb_backends_opts(struct ofpbuf *userdata)
     if (!event) {
         if (hmap_count(&event_table[OVN_EVENT_EMPTY_LB_BACKENDS]) >= 1000) {
             COVERAGE_INC(pinctrl_drop_controller_event);
-            return false;
+            goto err;
         }
 
         event = xzalloc(sizeof *event);
@@ -6464,6 +6464,12 @@ pinctrl_handle_empty_lb_backends_opts(struct ofpbuf *userdata)
         free(load_balancer);
     }
     return true;
+
+err:
+    free(vip);
+    free(protocol);
+    free(load_balancer);
+    return false;
 }
 
 static void
