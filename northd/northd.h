@@ -374,4 +374,5 @@ bool check_sb_lb_duplicates(const struct sbrec_load_balancer_table *);
 void sync_pbs(struct ovsdb_idl_txn *, struct hmap *ls_ports);
 bool sync_pbs_for_northd_ls_changes(struct tracked_ls_changes *);
 
+const char *northd_get_svc_monitor_ip4(void);
 #endif /* NORTHD_H */

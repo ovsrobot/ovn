@@ -372,6 +372,16 @@ sync_addr_sets(struct ovsdb_idl_txn *ovnsb_txn,
     sync_addr_set(ovnsb_txn, "svc_monitor_mac", &svc, &sb_address_sets);
     sorted_array_destroy(&svc);
 
+    /* Service monitor IP. */
+    const char *svc_monitor_ip4 = northd_get_svc_monitor_ip4();
+    int num_addr = 0; /* Create empty address-set by default */
+    if (svc_monitor_ip4) {
+        num_addr = 1;
+    }
+    struct sorted_array ip_svc = sorted_array_create(&svc_monitor_ip4,
+                                                     num_addr, false);
+    sync_addr_set(ovnsb_txn, "svc_monitor_ip4", &ip_svc, &sb_address_sets);
+
     /* sync port group generated address sets first */
     const struct nbrec_port_group *nb_port_group;
     NBREC_PORT_GROUP_TABLE_FOR_EACH (nb_port_group,
