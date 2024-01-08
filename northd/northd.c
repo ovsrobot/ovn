@@ -790,8 +790,11 @@ init_lb_for_datapath(struct ovn_datapath *od)
 {
     if (od->nbs) {
         od->has_lb_vip = ls_has_lb_vip(od);
+        od->lb_vip_mac = nullable_xstrdup(
+            smap_get(&od->nbs->other_config, "lb_vip_mac"));
     } else {
         od->has_lb_vip = lr_has_lb_vip(od);
+        od->lb_vip_mac = NULL;
     }
 }
 
@@ -800,6 +803,9 @@ destroy_lb_for_datapath(struct ovn_datapath *od)
 {
     ovn_lb_ip_set_destroy(od->lb_ips);
     od->lb_ips = NULL;
+
+    free(od->lb_vip_mac);
+    od->lb_vip_mac = NULL;
 }
 
 /* A group of logical router datapaths which are connected - either
@@ -12205,6 +12211,70 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
 }
 
 static void
+build_lb_rules_arp_nd_rsp(struct hmap *lflows, struct ovn_lb_datapaths *lb_dps,
+                          const struct ovn_datapaths *ls_datapaths,
+                          struct ds *match, struct ds *actions)
+{
+    if (!lb_dps->n_nb_ls) {
+        return;
+    }
+
+    const struct ovn_northd_lb *lb = lb_dps->lb;
+    for (size_t i = 0; i < lb->n_vips; i++) {
+        struct ovn_lb_vip *lb_vip = &lb->vips[i];
+
+        size_t index;
+        BITMAP_FOR_EACH_1 (index, ods_size(ls_datapaths), lb_dps->nb_ls_map) {
+            struct ovn_datapath *od = ls_datapaths->array[index];
+            if (!od->lb_vip_mac) {
+              continue;
+            }
+            ds_clear(match);
+            ds_clear(actions);
+            if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
+                ds_put_format(match, "arp.tpa == %s && arp.op == 1",
+                              lb_vip->vip_str);
+                ds_put_format(actions,
+                    "eth.dst = eth.src; "
+                    "eth.src = %s; "
+                    "arp.op = 2; /* ARP reply */ "
+                    "arp.tha = arp.sha; "
+                    "arp.sha = %s; "
+                    "arp.tpa = arp.spa; "
+                    "arp.spa = %s; "
+                    "outport = inport; "
+                    "flags.loopback = 1; "
+                    "output;",
+                    od->lb_vip_mac, od->lb_vip_mac,
+                    lb_vip->vip_str);
+            } else {
+                ds_put_format(match, "nd_ns && nd.target == %s",
+                              lb_vip->vip_str);
+                ds_put_format(actions,
+                        "nd_na { "
+                        "eth.dst = eth.src; "
+                        "eth.src = %s; "
+                        "ip6.src = %s; "
+                        "nd.target = %s; "
+                        "nd.tll = %s; "
+                        "outport = inport; "
+                        "flags.loopback = 1; "
+                        "output; "
+                        "};",
+                        od->lb_vip_mac,
+                        lb_vip->vip_str,
+                        lb_vip->vip_str,
+                        od->lb_vip_mac);
+            }
+            ovn_lflow_add_with_hint(lflows, od,
+                                    S_SWITCH_IN_ARP_ND_RSP, 130,
+                                    ds_cstr(match), ds_cstr(actions),
+                                    &lb->nlb->header_);
+        }
+    }
+}
+
+static void
 build_lswitch_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
                            struct hmap *lflows,
                            const struct shash *meter_groups,
@@ -12255,6 +12325,7 @@ build_lswitch_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
                                 ls_datapaths, match, action);
     build_lb_rules(lflows, lb_dps, ls_datapaths, features, match, action,
                    meter_groups, svc_monitor_map);
+    build_lb_rules_arp_nd_rsp(lflows, lb_dps, ls_datapaths, match, action);
 }
 
 /* If there are any load balancing rules, we should send the packet to

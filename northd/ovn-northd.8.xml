@@ -1619,6 +1619,55 @@ output;
       </li>
 
       <li>
+        <p>
+          If <var>E</var> is defined in the value of
+          <ref column="other_config:lb_vip_mac" table="Logical_Switch" db="OVN_Northbound"/>,
+          For each <var>VIP</var> defined in the value of the
+          <ref column="vips" table="Load_Balancer" db="OVN_Northbound"/>
+          column of <ref table="Load_Balancer" db="OVN_Northbound"/> table,
+          priority-130 logical flow is added with the match
+          <code>arp.tpa == <var>VIP</var>
+          &amp;&amp; &amp;&amp; arp.op == 1</code> and applies the action
+        </p>
+
+        <pre>
+eth.dst = eth.src;
+eth.src = <var>E</var>;
+arp.op = 2; /* ARP reply. */
+arp.tha = arp.sha;
+arp.sha = <var>E</var>;
+arp.tpa = arp.spa;
+arp.spa = <var>VIP</var>;
+outport = inport;
+flags.loopback = 1;
+output;
+        </pre>
+
+        <p>
+          These flows are required if an ARP request is sent for the
+          <var>VIP</var>. This enables CMS to have VIP allocated from
+          the same subnet prefix as the clients.
+        </p>
+
+        <p>
+          For IPv6 the similar flow is added with the following action
+        </p>
+
+        <pre>
+nd_na {
+    eth.dst = eth.src;
+    eth.src = <var>E</var>;
+    ip6.src = <var>VIP</var>;
+    nd.target = <var>VIP</var>;
+    nd.tll = <var>E</var>;
+    outport = inport;
+    flags.loopback = 1;
+    output;
+};
+        </pre>
+      </li>
+
+      <li>
         One priority-0 fallback flow that matches all packets and advances to
         the next table.
       </li>

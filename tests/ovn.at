@@ -37524,3 +37524,112 @@ wait_for_ports_up
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([Logical Switch lb_vip_mac  - IPv4])
+AT_KEYWORDS([lb])
+ovn_start
+
+net_add n1
+
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+check ovs-vsctl -- add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=sw0-p1 \
+    options:tx_pcap=hv1/vif1-tx.pcap \
+    options:rxq_pcap=hv1/vif1-rx.pcap \
+    ofport-request=1
+check ovs-vsctl -- add-port br-int hv1-vif2 -- \
+    set interface hv1-vif2 external-ids:iface-id=sw0-p2 \
+    options:tx_pcap=hv1/vif2-tx.pcap \
+    options:rxq_pcap=hv1/vif2-rx.pcap \
+    ofport-request=2
+
+sim_add hv2
+as hv2
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.2
+check ovs-vsctl -- add-port br-int hv2-vif1 -- \
+    set interface hv2-vif1 external-ids:iface-id=sw1-p1 \
+    options:tx_pcap=hv2/vif1-tx.pcap \
+    options:rxq_pcap=hv2/vif1-rx.pcap \
+    ofport-request=1
+
+check ovn-nbctl ls-add sw0
+
+check ovn-nbctl lsp-add sw0 sw0-p1
+check ovn-nbctl lsp-set-addresses sw0-p1 "50:54:00:00:00:03 10.0.0.3"
+check ovn-nbctl lsp-set-port-security sw0-p1 "50:54:00:00:00:03 10.0.0.3"
+
+# Create the second logical switch with one port
+check ovn-nbctl ls-add sw1
+check ovn-nbctl lsp-add sw1 sw1-p1
+check ovn-nbctl lsp-set-addresses sw1-p1 "40:54:00:00:00:03 20.0.0.3"
+check ovn-nbctl lsp-set-port-security sw1-p1 "40:54:00:00:00:03 20.0.0.3"
+
+OVN_SW0_ID=$(ovn-nbctl --bare --column _uuid find logical_switch name=sw0)
+OVN_SW1_ID=$(ovn-nbctl --bare --column _uuid find logical_switch name=sw1)
+
+# Create a logical router and attach both logical switches
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24
+check ovn-nbctl lsp-add sw0 sw0-lr0
+check ovn-nbctl lsp-set-type sw0-lr0 router
+check ovn-nbctl lsp-set-addresses sw0-lr0 router
+check ovn-nbctl lsp-set-options sw0-lr0 router-port=lr0-sw0
+check ovn-nbctl set Logical_Switch ${OVN_SW0_ID} other_config:lb_vip_mac=00:00:00:00:ff:01
+
+check ovn-nbctl lrp-add lr0 lr0-sw1 00:00:00:00:ff:02 20.0.0.1/24
+check ovn-nbctl lsp-add sw1 sw1-lr0
+check ovn-nbctl lsp-set-type sw1-lr0 router
+check ovn-nbctl lsp-set-addresses sw1-lr0 router
+check ovn-nbctl lsp-set-options sw1-lr0 router-port=lr0-sw1
+check ovn-nbctl set Logical_Switch ${OVN_SW1_ID} other_config:lb_vip_mac=00:00:00:00:ff:02
+
+check ovn-nbctl lb-add lb1 10.0.0.10:80 10.0.0.3:80,20.0.0.3:80
+OVN_LB_ID=$(ovn-nbctl --bare --column _uuid find load_balancer name=lb1)
+
+check ovn-nbctl --wait=sb ls-lb-add sw0 lb1
+check ovn-nbctl --wait=sb ls-lb-add sw1 lb1
+
+OVN_POPULATE_ARP
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
+AT_CAPTURE_FILE([sbflows])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows > sbflows
+   ovn-sbctl dump-flows sw0 | grep ct_lb_mark | grep priority=120 | sed 's/table=..//'], 0,
+  [dnl
+  (ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg1 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark;)
+  (ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg0[[1]] = 0; ct_lb_mark(backends=10.0.0.3:80,20.0.0.3:80);)
+])
+
+AT_CAPTURE_FILE([sbflows-arp])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows sw0 | grep 00:00:00:00:ff:01 | grep 10.0.0.10 | grep priority=130 | sed 's/table=..//'], 0,
+  [dnl
+  (ls_in_arp_rsp      ), priority=130  , match=(arp.tpa == 10.0.0.10 && arp.op == 1), action=(eth.dst = eth.src; eth.src = 00:00:00:00:ff:01; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = 00:00:00:00:ff:01; arp.tpa = arp.spa; arp.spa = 10.0.0.10; outport = inport; flags.loopback = 1; output;)
+])
+
+AT_CAPTURE_FILE([sbflows])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows > sbflows
+   ovn-sbctl dump-flows sw1 | grep ct_lb_mark | grep priority=120 | sed 's/table=..//'], 0,
+  [dnl
+  (ls_in_pre_stateful ), priority=120  , match=(reg0[[2]] == 1 && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg1 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark;)
+  (ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg0[[1]] = 0; ct_lb_mark(backends=10.0.0.3:80,20.0.0.3:80);)
+])
+
+AT_CAPTURE_FILE([sbflows-arp2])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows sw1 | grep 00:00:00:00:ff:02 | grep 10.0.0.10 | grep priority=130 | sed 's/table=..//'], 0,
+  [dnl
+  (ls_in_arp_rsp      ), priority=130  , match=(arp.tpa == 10.0.0.10 && arp.op == 1), action=(eth.dst = eth.src; eth.src = 00:00:00:00:ff:02; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = 00:00:00:00:ff:02; arp.tpa = arp.spa; arp.spa = 10.0.0.10; outport = inport; flags.loopback = 1; output;)
+])
+
+OVN_CLEANUP([hv1], [hv2])
+AT_CLEANUP
+])

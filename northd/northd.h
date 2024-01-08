@@ -262,6 +262,8 @@ struct ovn_datapath {
     bool has_vtep_lports;
     bool has_arp_proxy_port;
 
+    char *lb_vip_mac;
+
     /* IPAM data. */
     struct ipam_info ipam_info;
 
