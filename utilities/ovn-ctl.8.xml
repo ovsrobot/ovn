@@ -156,6 +156,7 @@
     <p><code>--db-ic-sb-cluster-remote-addr=<var>IP ADDRESS</var></code></p>
     <p><code>--db-ic-sb-cluster-remote-port=<var>PORT NUMBER</var></code></p>
     <p><code>--db-ic-sb-cluster-remote-proto=<var>PROTO (tcp/ssl)</var></code></p>
+    <p><code>--db-cluster-skip-upgrade=<var>yes|no</var></code></p>
 
     <h1> Probe interval options </h1>
     <p><code>--db-nb-probe-interval-to-active=<var>Time in milliseconds</var></code></p>
@@ -324,4 +325,14 @@
            start_northd
       </code>
     </p>
+    <h2>Avoiding automatic clustered OVN database schema upgrade</h2>
+    <p>
+      If you desire more controll over clustered DB schema upgrade, you can
+      opt-out of automatic on-start upgrade attempts with
+      <code>--db-cluster-skip-upgrade</code>.
+    </p>
+    <h3>Start OVN NB (or SB) clustered database on host with IP x.x.x.x without schema upgrade</h3>
+    <p><code># ovn-ctl start_nb_ovsdb --db-nb-cluster-local-addr=x.x.x.x --db-cluster-skip-upgrade=yes</code></p>
+    <h3>Trigger clustered DB schema upgrade manually</h3>
+    <p><code># ovsdb-client -t 30 convert unix:/var/run/ovn/ovnnb_db.sock /usr/local/share/ovn/ovn-nb.ovsschema</code></p>
 </manpage>
