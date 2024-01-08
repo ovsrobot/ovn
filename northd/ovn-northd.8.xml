@@ -448,10 +448,13 @@
 
     <p>
       This table also has a priority-110 flow with the match
-      <code>eth.dst == <var>E</var></code> for all logical switch
-      datapaths to move traffic to the next table. Where <var>E</var>
-      is the service monitor mac defined in the
+      <code>eth.dst == <var>E</var> || ip4.dst == <var>I</var></code> for all
+      logical switch datapaths to move traffic to the next table. Where
+      <var>E</var> is the service monitor mac defined in the
       <ref column="options:svc_monitor_mac" table="NB_Global"
+      db="OVN_Northbound"/> column of <ref table="NB_Global"
+      db="OVN_Northbound"/> table and <var>I</var> is the service monitor
+      IP defined in the <ref column="options:svc_monitor_ip4" table="NB_Global"
       db="OVN_Northbound"/> column of <ref table="NB_Global"
       db="OVN_Northbound"/> table.
     </p>
@@ -515,10 +518,13 @@
 
     <p>
       This table also has a priority-110 flow with the match
-      <code>eth.dst == <var>E</var></code> for all logical switch
-      datapaths to move traffic to the next table. Where <var>E</var>
-      is the service monitor mac defined in the
+      <code>eth.dst == <var>E</var> || ip4.dst == <var>I</var></code> for all
+      logical switch datapaths to move traffic to the next table. Where
+      <var>E</var> is the service monitor mac defined in the
       <ref column="options:svc_monitor_mac" table="NB_Global"
+      db="OVN_Northbound"/> column of <ref table="NB_Global"
+      db="OVN_Northbound"/> table and <var>I</var> is the service monitor
+      IP defined in the <ref column="options:svc_monitor_ip4" table="NB_Global"
       db="OVN_Northbound"/> column of <ref table="NB_Global"
       db="OVN_Northbound"/> table.
     </p>
@@ -820,11 +826,14 @@
     <ul>
       <li>
         A priority 34000 logical flow is added for each logical switch datapath
-        with the match <code>eth.dst = <var>E</var></code> to allow the service
-        monitor reply packet destined to <code>ovn-controller</code>
-        that sets the allow bit, where <var>E</var> is the
-        service monitor mac defined in the
+        with the match <code>eth.dst = <var>E</var> || ip4.dst == <var>I</var>
+        </code> to allow the service monitor reply packet destined to
+        <code>ovn-controller</code> that sets the allow bit, where <var>E</var>
+        is the service monitor mac defined in the
         <ref column="options:svc_monitor_mac" table="NB_Global"
+        db="OVN_Northbound"/> column of <ref table="NB_Global"
+        db="OVN_Northbound"/> table and <var>I</var> is the service monitor IP
+        defined in the <ref column="options:svc_monitor_ip4" table="NB_Global"
         db="OVN_Northbound"/> column of <ref table="NB_Global"
         db="OVN_Northbound"/> table.
       </li>
@@ -1883,10 +1892,15 @@ output;
     <ul>
       <li>
         A priority-110 flow with the match
-        <code>eth.src == <var>E</var></code> for all logical switch
-        datapaths and applies the action <code>handle_svc_check(inport)</code>.
-        Where <var>E</var> is the service monitor mac defined in the
+        <code>eth.src == <var>E</var> || ip4.dst == <var>I</var></code> for
+        all logical switch datapaths and applies the action
+        <code>handle_svc_check(inport)</code>. Where <var>E</var> is the
+        service monitor mac defined in the
         <ref column="options:svc_monitor_mac" table="NB_Global"
+        db="OVN_Northbound"/> column of <ref table="NB_Global"
+        db="OVN_Northbound"/> table and <var>I</var> is the
+        service monitor IP defined in the
+        <ref column="options:svc_monitor_ip4" table="NB_Global"
         db="OVN_Northbound"/> column of <ref table="NB_Global"
         db="OVN_Northbound"/> table.
       </li>

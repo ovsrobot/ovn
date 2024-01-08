@@ -82,6 +82,7 @@ static bool use_common_zone = false;
 static char svc_monitor_mac[ETH_ADDR_STRLEN + 1];
 static struct eth_addr svc_monitor_mac_ea;
 
+static char *svc_monitor_ip4 = NULL;
 /* If this option is 'true' northd will make use of ct.inv match fields.
  * Otherwise, it will avoid using it.  The default is true. */
 static bool use_ct_inv_match = true;
@@ -7197,7 +7198,8 @@ build_pre_acls(struct ovn_datapath *od,
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 0, "1", "next;");
 
     ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 110,
-                  "eth.dst == $svc_monitor_mac", "next;");
+                  "eth.dst == $svc_monitor_mac || ip4.dst == $svc_monitor_ip4",
+                  "next;");
 
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110,
                   "eth.src == $svc_monitor_mac", "next;");
@@ -7370,7 +7372,8 @@ build_pre_lb(struct ovn_datapath *od, const struct shash *meter_groups,
 
     /* Do not send service monitor packets to conntrack. */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 110,
-                  "eth.dst == $svc_monitor_mac", "next;");
+                  "eth.dst == $svc_monitor_mac || ip4.dst == $svc_monitor_ip4",
+                  "next;");
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 110,
                   "eth.src == $svc_monitor_mac", "next;");
 
@@ -8238,7 +8241,7 @@ build_acls(struct ovn_datapath *od, const struct chassis_features *features,
         /* Add a 34000 priority flow to advance the service monitor reply
         * packets to skip applying ingress ACLs. */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, 34000,
-                    "eth.dst == $svc_monitor_mac",
+                    "eth.dst == $svc_monitor_mac || ip4.dst == $svc_monitor_ip4",
                     REGBIT_ACL_VERDICT_ALLOW" = 1; next;");
 
         /* Add a 34000 priority flow to advance the service monitor packets
@@ -10325,7 +10328,8 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
     ovs_assert(od->nbs);
 
     ovn_lflow_metered(lflows, od, S_SWITCH_IN_L2_LKUP, 110,
-                      "eth.dst == $svc_monitor_mac && (tcp || icmp || icmp6)",
+                      "(eth.dst == $svc_monitor_mac || ip4.dst == $svc_monitor_ip4)"
+                      " && (tcp || icmp || icmp6)",
                       "handle_svc_check(inport);",
                       copp_meter_get(COPP_SVC_MONITOR, od->nbs->copp,
                                      meter_groups));
@@ -17891,6 +17895,22 @@ ovnnb_db_run(struct northd_input *input_data,
         smap_replace(&options, "svc_monitor_mac", svc_monitor_mac);
     }
 
+    const char *monitor_ip4 = smap_get(&nb->options, "svc_monitor_ip4");
+    if (monitor_ip4) {
+        struct sockaddr_storage svc_mon_src_addr;
+        if (inet_parse_address(monitor_ip4, &svc_mon_src_addr)) {
+            struct ds src_ip_s = DS_EMPTY_INITIALIZER;
+            ss_format_address_nobracks(&svc_mon_src_addr, &src_ip_s);
+            svc_monitor_ip4 = ds_steal_cstr(&src_ip_s);
+        } else {
+            free(svc_monitor_ip4);
+            svc_monitor_ip4 = NULL;
+        }
+    } else {
+        free(svc_monitor_ip4);
+        svc_monitor_ip4 = NULL;
+    }
+
     char *max_tunid = xasprintf("%d",
         get_ovn_max_dp_key_local(input_data->sbrec_chassis_table));
     smap_replace(&options, "max_tunid", max_tunid);
@@ -18325,4 +18345,10 @@ northd_get_datapath_for_port(const struct hmap *ls_ports,
     const struct ovn_port *op = ovn_port_find(ls_ports, port_name);
 
     return op ? op->od : NULL;
+}
+
+const char *
+northd_get_svc_monitor_ip4(void)
+{
+    return svc_monitor_ip4;
 }
