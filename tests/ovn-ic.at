@@ -1274,3 +1274,50 @@ OVN_CLEANUP_IC([az1], [az2])
 
 AT_CLEANUP
 ])
+
+AT_SETUP([ovn-ic -- sync ISB status to INB])
+ovn_init_ic_db
+net_add n1
+
+ovn_start az1
+sim_add gw-az1
+as gw-az1
+
+check ovs-vsctl add-br br-phys
+ovn_az_attach az1 n1 br-phys 192.168.1.1
+check ovs-vsctl set open . external-ids:ovn-is-interconn=true
+as az1
+
+# pause ovn-ic instance
+check ovn-appctl -t ic/ovn-ic pause
+
+# run sync command in the background this commands
+# supposed to stuck since ovn-ic is paused.
+$(ovn-ic-nbctl --wait=sb sync &)
+
+for i in {1..5}; do
+    set -- $(ovn-ic-nbctl get ic_nb_global . nb_ic_cfg sb_ic_cfg)
+    AS_VAR_SET([ic_nb_cfg], [$1])
+    AS_VAR_SET([ic_sb_cfg], [$2])
+    if test $ic_nb_cfg -gt $ic_sb_cfg; then
+        sleep 1
+    else
+        break
+    fi
+done
+
+# if ic_nb_cfg equal to ic_sb_cfg that mean both zero
+# or both 1 which is a not correct and the test must fail.
+AT_FAIL_IF([test $ic_nb_cfg == $ic_sb_cfg])
+
+# resume ovn-ic instance
+check ovn-appctl -t ic/ovn-ic resume
+set -- $(ovn-ic-nbctl get ic_nb_global . nb_ic_cfg sb_ic_cfg)
+AS_VAR_SET([ic_nb_cfg], [$1])
+AS_VAR_SET([ic_sb_cfg], [$2])
+AT_FAIL_IF([test $ic_nb_cfg != 1])
+AT_FAIL_IF([test $ic_nb_cfg != 1])
+
+OVN_CLEANUP_IC([az1])
+AT_CLEANUP
+])
