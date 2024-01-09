@@ -1286,11 +1286,15 @@ fill_ipv6_prefix_state(struct ovsdb_idl_txn *ovnsb_idl_txn,
             continue;
         }
 
+        /* To reach this point, the port binding must be a logical router
+         * port. LRPs are configured with a single MAC that is always non-NULL.
+         * Therefore, we can always safely extract pb->mac[0] since it will be
+         * non-NULL
+         */
+        ovs_assert(pb->n_mac == 1);
         struct lport_addresses c_addrs;
-        for (size_t j = 0; j < pb->n_mac; j++) {
-            if (extract_lsp_addresses(pb->mac[j], &c_addrs)) {
-                    break;
-            }
+        if (!extract_lsp_addresses(pb->mac[0], &c_addrs)) {
+            continue;
         }
 
         pfd = shash_find_data(&ipv6_prefixd, pb->logical_port);
