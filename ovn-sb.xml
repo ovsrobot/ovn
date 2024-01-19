@@ -3925,6 +3925,9 @@ tcp.flags = RST;
     <column name="datapath">
       The logical datapath to which the logical port belongs.
     </column>
+    <column name="chassis_name">
+      The name of the chassis that inserted this record.
+    </column>
   </table>
 
   <table name="DHCP_Options" title="DHCP Options supported by native OVN DHCP">

@@ -180,6 +180,7 @@ struct pinctrl {
     bool mac_binding_can_timestamp;
     bool fdb_can_timestamp;
     bool dns_supports_ovn_owned;
+    bool mac_binding_has_chassis_name;
 };
 
 static struct pinctrl pinctrl;
@@ -204,7 +205,8 @@ static void run_put_mac_bindings(
     struct ovsdb_idl_txn *ovnsb_idl_txn,
     struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
     struct ovsdb_idl_index *sbrec_port_binding_by_key,
-    struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip)
+    struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
+    const struct sbrec_chassis *chassis)
     OVS_REQUIRES(pinctrl_mutex);
 static void wait_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn);
 static void send_mac_binding_buffered_pkts(struct rconn *swconn)
@@ -3591,6 +3593,13 @@ pinctrl_update(const struct ovsdb_idl *idl, const char *br_int_name)
         notify_pinctrl_handler();
     }
 
+    bool mac_binding_has_chassis_name =
+        sbrec_server_has_mac_binding_table_col_chassis_name(idl);
+    if (mac_binding_has_chassis_name != pinctrl.mac_binding_has_chassis_name) {
+        pinctrl.mac_binding_has_chassis_name = mac_binding_has_chassis_name;
+        notify_pinctrl_handler();
+    }
+
     ovs_mutex_unlock(&pinctrl_mutex);
 }
 
@@ -3621,7 +3630,8 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
     ovs_mutex_lock(&pinctrl_mutex);
     run_put_mac_bindings(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
                          sbrec_port_binding_by_key,
-                         sbrec_mac_binding_by_lport_ip);
+                         sbrec_mac_binding_by_lport_ip,
+                         chassis);
     run_put_vport_bindings(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
                            sbrec_port_binding_by_key, chassis);
     send_garp_rarp_prepare(ovnsb_idl_txn, sbrec_port_binding_by_datapath,
@@ -4285,7 +4295,8 @@ mac_binding_add_to_sb(struct ovsdb_idl_txn *ovnsb_idl_txn,
                       const char *logical_port,
                       const struct sbrec_datapath_binding *dp,
                       struct eth_addr ea, const char *ip,
-                      bool update_only)
+                      bool update_only,
+                      const struct sbrec_chassis *chassis)
 {
     /* Convert ethernet argument to string form for database. */
     char mac_string[ETH_ADDR_STRLEN + 1];
@@ -4302,6 +4313,9 @@ mac_binding_add_to_sb(struct ovsdb_idl_txn *ovnsb_idl_txn,
         sbrec_mac_binding_set_logical_port(b, logical_port);
         sbrec_mac_binding_set_ip(b, ip);
         sbrec_mac_binding_set_datapath(b, dp);
+        if (pinctrl.mac_binding_has_chassis_name) {
+            sbrec_mac_binding_set_chassis_name(b, chassis->name);
+        }
     }
 
     if (strcmp(b->mac, mac_string)) {
@@ -4323,7 +4337,8 @@ send_garp_locally(struct ovsdb_idl_txn *ovnsb_idl_txn,
                   struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
                   const struct hmap *local_datapaths,
                   const struct sbrec_port_binding *in_pb,
-                  struct eth_addr ea, ovs_be32 ip)
+                  struct eth_addr ea, ovs_be32 ip,
+                  const struct sbrec_chassis *chassis)
 {
     if (!ovnsb_idl_txn) {
         return;
@@ -4351,7 +4366,7 @@ send_garp_locally(struct ovsdb_idl_txn *ovnsb_idl_txn,
         ip_format_masked(ip, OVS_BE32_MAX, &ip_s);
         mac_binding_add_to_sb(ovnsb_idl_txn, sbrec_mac_binding_by_lport_ip,
                               remote->logical_port, remote->datapath,
-                              ea, ds_cstr(&ip_s), update_only);
+                              ea, ds_cstr(&ip_s), update_only, chassis);
         ds_destroy(&ip_s);
     }
 }
@@ -4361,7 +4376,8 @@ run_put_mac_binding(struct ovsdb_idl_txn *ovnsb_idl_txn,
                     struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                     struct ovsdb_idl_index *sbrec_port_binding_by_key,
                     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
-                    const struct mac_binding *mb)
+                    const struct mac_binding *mb,
+                    const struct sbrec_chassis *chassis)
 {
     /* Convert logical datapath and logical port key into lport. */
     const struct sbrec_port_binding *pb = lport_lookup_by_key(
@@ -4384,7 +4400,7 @@ run_put_mac_binding(struct ovsdb_idl_txn *ovnsb_idl_txn,
     ipv6_format_mapped(&mb->ip, &ip_s);
     mac_binding_add_to_sb(ovnsb_idl_txn, sbrec_mac_binding_by_lport_ip,
                           pb->logical_port, pb->datapath, mb->mac,
-                          ds_cstr(&ip_s), false);
+                          ds_cstr(&ip_s), false, chassis);
     ds_destroy(&ip_s);
 }
 
@@ -4394,7 +4410,8 @@ static void
 run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
                      struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                      struct ovsdb_idl_index *sbrec_port_binding_by_key,
-                     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip)
+                     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
+                     const struct sbrec_chassis *chassis)
     OVS_REQUIRES(pinctrl_mutex)
 {
     if (!ovnsb_idl_txn) {
@@ -4409,7 +4426,8 @@ run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
             run_put_mac_binding(ovnsb_idl_txn,
                                 sbrec_datapath_binding_by_key,
                                 sbrec_port_binding_by_key,
-                                sbrec_mac_binding_by_lport_ip, mb);
+                                sbrec_mac_binding_by_lport_ip, mb,
+                                chassis);
             ovn_mac_binding_remove(mb, &put_mac_bindings);
         }
     }
@@ -4552,7 +4570,8 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
                       const struct sbrec_port_binding *binding_rec,
                       struct shash *nat_addresses,
                       long long int garp_max_timeout,
-                      bool garp_continuous)
+                      bool garp_continuous,
+                      const struct sbrec_chassis *chassis)
 {
     volatile struct garp_rarp_data *garp_rarp = NULL;
 
@@ -4592,7 +4611,8 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
                     send_garp_locally(ovnsb_idl_txn,
                                       sbrec_mac_binding_by_lport_ip,
                                       local_datapaths, binding_rec, laddrs->ea,
-                                      laddrs->ipv4_addrs[i].addr);
+                                      laddrs->ipv4_addrs[i].addr,
+                                      chassis);
 
                 }
                 free(name);
@@ -4661,7 +4681,8 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
                       binding_rec->tunnel_key);
         if (ip) {
             send_garp_locally(ovnsb_idl_txn, sbrec_mac_binding_by_lport_ip,
-                              local_datapaths, binding_rec, laddrs.ea, ip);
+                              local_datapaths, binding_rec, laddrs.ea, ip,
+                              chassis);
         }
 
         destroy_lport_addresses(&laddrs);
@@ -6080,7 +6101,8 @@ send_garp_rarp_prepare(struct ovsdb_idl_txn *ovnsb_idl_txn,
             send_garp_rarp_update(ovnsb_idl_txn,
                                   sbrec_mac_binding_by_lport_ip,
                                   local_datapaths, pb, &nat_addresses,
-                                  garp_max_timeout, garp_continuous);
+                                  garp_max_timeout, garp_continuous,
+                                  chassis);
         }
     }
 
@@ -6092,7 +6114,8 @@ send_garp_rarp_prepare(struct ovsdb_idl_txn *ovnsb_idl_txn,
         if (pb) {
             send_garp_rarp_update(ovnsb_idl_txn, sbrec_mac_binding_by_lport_ip,
                                   local_datapaths, pb, &nat_addresses,
-                                  garp_max_timeout, garp_continuous);
+                                  garp_max_timeout, garp_continuous,
+                                  chassis);
         }
     }
 

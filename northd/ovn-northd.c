@@ -109,7 +109,7 @@ static const char *rbac_port_binding_update[] =
      "options"};
 
 static const char *rbac_mac_binding_auth[] =
-    {""};
+    {"chassis_name"};
 static const char *rbac_mac_binding_update[] =
     {"logical_port", "ip", "mac", "datapath", "timestamp"};
 
