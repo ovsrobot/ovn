@@ -352,6 +352,57 @@ OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CLEANUP
 ])
 
+# Check that the connection to the Southbound database
+# is not dropped when probe-interval is set and the controller
+# is in pause state.
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller - check sbdb connection while pause])
+AT_KEYWORDS([ovn])
+ovn_start
+
+net_add n1
+sim_add hv
+as hv
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+ovs-vsctl -- add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=sw0-p1 \
+    options:tx_pcap=hv1/vif1-tx.pcap \
+    options:rxq_pcap=hv1/vif1-rx.pcap \
+    ofport-request=1
+
+ovs-vsctl set open . external_ids:ovn-remote-probe-interval=100000
+ovn-sbctl set connection . inactivity_probe=1
+
+ovn-nbctl ls-add sw0
+check ovn-nbctl lsp-add sw0 sw0-p1
+check ovn-nbctl lsp-set-addresses sw0-p1 "50:54:00:00:00:03 10.0.0.3"
+check ovn-nbctl lsp-set-port-security sw0-p1 "50:54:00:00:00:03 10.0.0.3"
+ovn-nbctl --wait=hv sync
+
+sleep_controller hv
+# Trigger DB change to make SBDB connect to controller.
+check ovn-nbctl lsp-del sw0-p1
+
+# wait for 2 sec to give enough time to the SBDB to drop the connection
+# if there is no answer from the controller. The connection should not
+# be dropped since we keep handle the idl messages from SBDB even if we
+# in pause state.
+sleep 2
+wake_up_controller hv
+
+check ovn-nbctl lsp-add sw0 sw0-p1
+check ovn-nbctl lsp-set-addresses sw0-p1 "50:54:00:00:00:03 10.0.0.3"
+check ovn-nbctl lsp-set-port-security sw0-p1 "50:54:00:00:00:03 10.0.0.3"
+ovn-nbctl --wait=hv sync
+
+OVS_WAIT_UNTIL([test 0 = `cat hv/ovn-controller.log| grep -c "OVNSB commit failed, force recompute next time"`])
+OVS_WAIT_UNTIL([test 0 = `cat hv/ovn-controller.log| grep -c "connection closed by peer"`])
+OVN_CLEANUP([hv])
+AT_CLEANUP
+])
+
 # Checks that ovn-controller recreates its chassis record when deleted externally.
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn-controller - Chassis self record])

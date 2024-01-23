@@ -5557,12 +5557,22 @@ main(int argc, char *argv[])
             simap_destroy(&usage);
         }
 
-        /* If we're paused just run the unixctl server and skip most of the
-         * processing loop.
+        /* If we're paused just run the unixctl-server/unconditional IDL and
+         *  skip most of the processing loop.
          */
         if (paused) {
             unixctl_server_run(unixctl);
+            int ovnsb_seq = ovsdb_idl_get_seqno(ovnsb_idl_loop.idl);
+            ovsdb_idl_run(ovnsb_idl_loop.idl);
+            int new_ovnsb_seq = ovsdb_idl_get_seqno(ovnsb_idl_loop.idl);
+            /* If the IDL content has changed while the controller is
+             * in pause state, trigger a recompute.
+             */
+            if (new_ovnsb_seq != ovnsb_seq) {
+                engine_set_force_recompute(true);
+            }
             unixctl_server_wait(unixctl);
+            ovsdb_idl_wait(ovnsb_idl_loop.idl);
             goto loop_done;
         }
 
@@ -6032,7 +6042,6 @@ main(int argc, char *argv[])
             OVS_NOT_REACHED();
         }
 
-        ovsdb_idl_track_clear(ovnsb_idl_loop.idl);
         ovsdb_idl_track_clear(ovs_idl_loop.idl);
 
         lflow_cache_run(ctrl_engine_ctx.lflow_cache);
@@ -6040,6 +6049,7 @@ main(int argc, char *argv[])
 
 loop_done:
         memory_wait();
+        ovsdb_idl_track_clear(ovnsb_idl_loop.idl);
         poll_block();
         if (should_service_stop()) {
             exit_args.exiting = true;

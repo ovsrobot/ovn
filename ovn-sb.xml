@@ -4308,7 +4308,7 @@ tcp.flags = RST;
       <column name="inactivity_probe">
         Maximum number of milliseconds of idle time on connection to the client
         before sending an inactivity probe message.  If Open vSwitch does not
-        communicate with the client for the specified number of seconds, it
+        communicate with the client for the specified number of milliseconds,it
         will send a probe.  If a response is not received for the same
         additional amount of time, Open vSwitch assumes the connection has been
         broken and attempts to reconnect.  Default is implementation-specific.
