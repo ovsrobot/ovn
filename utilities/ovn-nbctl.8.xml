@@ -482,6 +482,9 @@
           <code>burst=</code><var>burst</var> specifies the burst rate
           limit in kilobits.  <code>dscp</code> and/or <code>rate</code>
           are required arguments.
+          If <code>mark=</code><var>mark</var> is specified, then matching
+          packets will be marked (through <code>pkt.mark</code>).
+          <var>mark</var> must be a positive integer.
         </p>
 
         <p>
