@@ -1025,6 +1025,20 @@ prefix_is_link_local(struct in6_addr *prefix, unsigned int plen)
 }
 
 static bool
+compare_ipv6_prefixes(const struct in6_addr *s_prefix,
+                      const struct in6_addr *d_prefix2, int plen)
+{
+    struct in6_addr mask = ipv6_create_mask(plen);
+    for (int i = 0; i < (plen/8); i++) {
+        if ((s_prefix->s6_addr[i] & mask.s6_addr[i]) ^
+            (d_prefix2->s6_addr[i] & mask.s6_addr[i])) {
+                return false;
+            }
+    }
+    return true;
+}
+
+static bool
 prefix_is_black_listed(const struct smap *nb_options,
                        struct in6_addr *prefix,
                        unsigned int plen)
@@ -1064,12 +1078,8 @@ prefix_is_black_listed(const struct smap *nb_options,
                 continue;
             }
         } else {
-            struct in6_addr mask = ipv6_create_mask(bl_plen);
-            for (int i = 0; i < 16 && mask.s6_addr[i] != 0; i++) {
-                if ((prefix->s6_addr[i] & mask.s6_addr[i])
-                    != (bl_prefix.s6_addr[i] & mask.s6_addr[i])) {
-                    continue;
-                }
+            if (!compare_ipv6_prefixes(prefix, &bl_prefix, bl_plen)) {
+                continue;
             }
         }
         matched = true;
