@@ -45,11 +45,12 @@ struct sbrec_igmp_group *igmp_mrouter_create(
     const struct sbrec_datapath_binding *datapath,
     const struct sbrec_chassis *chassis);
 
-void igmp_group_update_ports(const struct sbrec_igmp_group *g,
+void igmp_group_update(const struct sbrec_igmp_group *g,
                              struct ovsdb_idl_index *datapaths,
                              struct ovsdb_idl_index *port_bindings,
                              const struct mcast_snooping *ms,
-                             const struct mcast_group *mc_group)
+                             const struct mcast_group *mc_group,
+                             const char *protocol)
     OVS_REQ_RDLOCK(ms->rwlock);
 void
 igmp_mrouter_update_ports(const struct sbrec_igmp_group *g,

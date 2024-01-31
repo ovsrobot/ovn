@@ -180,6 +180,7 @@ struct pinctrl {
     bool mac_binding_can_timestamp;
     bool fdb_can_timestamp;
     bool dns_supports_ovn_owned;
+    bool igmp_support_protocol;
 };
 
 static struct pinctrl pinctrl;
@@ -3586,8 +3587,18 @@ pinctrl_update(const struct ovsdb_idl *idl, const char *br_int_name)
     if (dns_supports_ovn_owned != pinctrl.dns_supports_ovn_owned) {
         pinctrl.dns_supports_ovn_owned = dns_supports_ovn_owned;
 
-        /* Notify pinctrl_handler that fdb timestamp column
+        /* Notify pinctrl_handler that dns ovn_owned column
        * availability has changed. */
+        notify_pinctrl_handler();
+    }
+
+    bool igmp_support_proto =
+            sbrec_server_has_igmp_group_table_col_protocol(idl);
+    if (igmp_support_proto != pinctrl.igmp_support_protocol) {
+        pinctrl.igmp_support_protocol = igmp_support_proto;
+
+        /* Notify pinctrl_handler that igmp protocol column
+         * availability has changed. */
         notify_pinctrl_handler();
     }
 
@@ -5400,9 +5411,18 @@ ip_mcast_sync(struct ovsdb_idl_txn *ovnsb_idl_txn,
                                                local_dp->datapath, chassis);
             }
 
-            igmp_group_update_ports(sbrec_igmp, sbrec_datapath_binding_by_key,
-                                    sbrec_port_binding_by_key, ip_ms->ms,
-                                    mc_group);
+            /* Set Group protocol if supported */
+            if (pinctrl.igmp_support_protocol) {
+                igmp_group_update(sbrec_igmp, sbrec_datapath_binding_by_key,
+                                  sbrec_port_binding_by_key, ip_ms->ms,
+                                  mc_group,
+                                  mcast_snooping_group_protocol_str(
+                                  mc_group->protocol_version));
+            } else {
+                igmp_group_update(sbrec_igmp, sbrec_datapath_binding_by_key,
+                                  sbrec_port_binding_by_key, ip_ms->ms,
+                                  mc_group, NULL);
+            }
         }
 
         /* Mrouters. */

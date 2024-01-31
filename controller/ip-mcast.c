@@ -107,11 +107,12 @@ igmp_mrouter_create(struct ovsdb_idl_txn *idl_txn,
 }
 
 void
-igmp_group_update_ports(const struct sbrec_igmp_group *g,
+igmp_group_update(const struct sbrec_igmp_group *g,
                         struct ovsdb_idl_index *datapaths,
                         struct ovsdb_idl_index *port_bindings,
                         const struct mcast_snooping *ms OVS_UNUSED,
-                        const struct mcast_group *mc_group)
+                        const struct mcast_group *mc_group,
+                        const char *protocol)
     OVS_REQ_RDLOCK(ms->rwlock)
 {
     struct igmp_group_port *old_ports_storage =
@@ -149,6 +150,11 @@ igmp_group_update_ports(const struct sbrec_igmp_group *g,
     struct igmp_group_port *igmp_port;
     HMAP_FOR_EACH_POP (igmp_port, hmap_node, &old_ports) {
         sbrec_igmp_group_update_ports_delvalue(g, igmp_port->port);
+    }
+
+    /* set Group protocol */
+    if (protocol) {
+         sbrec_igmp_group_set_protocol(g, protocol);
     }
 
     free(old_ports_storage);
