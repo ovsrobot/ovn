@@ -10772,6 +10772,12 @@ build_ecmp_route_flow(struct lflow_table *lflows, struct ovn_datapath *od,
     ds_destroy(&actions);
 }
 
+static inline bool
+lrouter_use_common_zone(const struct ovn_datapath *od)
+{
+    return !od->is_gw_router && use_common_zone;
+}
+
 static void
 add_route(struct lflow_table *lflows, struct ovn_datapath *od,
           const struct ovn_port *op, const char *lrp_addr_s,
@@ -10796,6 +10802,9 @@ add_route(struct lflow_table *lflows, struct ovn_datapath *od,
     build_route_match(op_inport, rtb_id, network_s, plen, is_src_route,
                       is_ipv4, &match, &priority, ofs);
 
+    bool use_ct = false;
+    struct ds target_net = DS_EMPTY_INITIALIZER;
+    struct ds snat_port_match = DS_EMPTY_INITIALIZER;
     struct ds common_actions = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
     if (is_discard_route) {
@@ -10808,16 +10817,61 @@ add_route(struct lflow_table *lflows, struct ovn_datapath *od,
         } else {
             ds_put_format(&common_actions, "ip%s.dst", is_ipv4 ? "4" : "6");
         }
+
+        /* To enable direct connectivity from external networks to Logical IPs
+         * of VMs/Containers in the SNATed networks, we need to track
+         * connections initiated from external networks.  This allows SNAT
+         * rules to avoid SNATing packets in "reply" direction. */
+        if (od->nbr && od->nbr->n_nat) {
+            ds_put_format(&target_net, "%s/%d", network_s, plen);
+            for (int i = 0; i < od->nbr->n_nat; i++) {
+                const struct nbrec_nat *nat = od->nbr->nat[i];
+                if (strcmp(nat->type, "snat") ||
+                    strcmp(nat->logical_ip, ds_cstr(&target_net)) ||
+                    lrouter_use_common_zone(od)) {
+                    continue;
+                }
+
+                /* Initiate connection tracking for traffic destined to
+                 * SNATed network. */
+                use_ct = true;
+
+                /* XXX: Need to figure out what is appropraite priority for these rules.
+                        All they require is to be after any existing specific rules
+                        and before the default rule.*/
+
+                /* Commit new connections initiated from the outside of
+                 * SNATed network to CT. */
+                ds_put_format(&snat_port_match,
+                              "outport == %s && ct.new",
+                              op->json_key);
+                ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_ARP_REQUEST, 5,
+                                        ds_cstr(&snat_port_match),
+                                        "ct_commit; output;", stage_hint);
+                ds_clear(&snat_port_match);
+
+                /* Initiate connection tracking for traffic from SNATed
+                 * network to enable rules in S_ROUTER_OUT_SNAT disregard
+                 * traffic in "reply" direction. */
+                ds_put_format(&snat_port_match, "inport == %s", op->json_key);
+                ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_POST_UNDNAT,
+                                        5, ds_cstr(&snat_port_match),
+                                        "ct_next;", stage_hint);
+                break;
+            }
+        }
+
         ds_put_format(&common_actions, "; "
                       "%s = %s; "
                       "eth.src = %s; "
                       "outport = %s; "
                       "flags.loopback = 1; "
-                      "next;",
+                      "%s",
                       is_ipv4 ? REG_SRC_IPV4 : REG_SRC_IPV6,
                       lrp_addr_s,
                       op->lrp_networks.ea_s,
-                      op->json_key);
+                      op->json_key,
+                      use_ct ? "ct_next;" : "next;");
         ds_put_format(&actions, "ip.ttl--; %s", ds_cstr(&common_actions));
     }
 
@@ -10833,6 +10887,8 @@ add_route(struct lflow_table *lflows, struct ovn_datapath *od,
                                 ds_cstr(&common_actions),\
                                 stage_hint, lflow_ref);
     }
+    ds_destroy(&snat_port_match);
+    ds_destroy(&target_net);
     ds_destroy(&match);
     ds_destroy(&common_actions);
     ds_destroy(&actions);
@@ -10932,12 +10988,6 @@ struct lrouter_nat_lb_flows_ctx {
     struct lflow_table *lflows;
     const struct shash *meter_groups;
 };
-
-static inline bool
-lrouter_use_common_zone(const struct ovn_datapath *od)
-{
-    return !od->is_gw_router && use_common_zone;
-}
 
 static void
 build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
@@ -14627,7 +14677,9 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
     }
     ds_put_cstr(match, " && (!ct.trk || !ct.rpl)");
 
-    ds_put_format(actions, "ct_snat(%s", nat->external_ip);
+    /* ct_commit is needed here otherwise replies to the SNATed traffic
+     * look like "new" traffic in S_ROUTER_IN_ARP_REQUEST*/
+    ds_put_format(actions, "ct_commit; ct_snat(%s", nat->external_ip);
     if (nat->external_port_range[0]) {
         ds_put_format(actions, ",%s", nat->external_port_range);
     }
