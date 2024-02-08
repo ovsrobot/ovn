@@ -13470,9 +13470,6 @@ build_egress_delivery_flows_for_lrouter_port(
     ds_put_format(match, "outport == %s", op->json_key);
     ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_DELIVERY, 100,
                   ds_cstr(match), "output;", lflow_ref);
-
-    ovn_lflow_add_default_drop(lflows, op->od, S_ROUTER_OUT_DELIVERY,
-                               lflow_ref);
 }
 
 static void
@@ -14838,9 +14835,9 @@ lrouter_check_nat_entry(const struct ovn_datapath *od,
 }
 
 /* NAT, Defrag and load balancing. */
-static void build_lr_nat_defrag_and_lb_default_flows(struct ovn_datapath *od,
-                                                struct lflow_table *lflows,
-                                                struct lflow_ref *lflow_ref)
+static void build_lr_nat_defrag_and_lb_default_flows(
+    struct ovn_datapath *od, struct lflow_table *lflows,
+    struct lflow_ref *lflow_ref)
 {
     ovs_assert(od->nbr);
 
@@ -14866,6 +14863,12 @@ static void build_lr_nat_defrag_and_lb_default_flows(struct ovn_datapath *od,
      * packet would go through conntrack - which is not required. */
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 120, "nd_ns", "next;",
                   lflow_ref);
+
+    /* Default drop rule in lr_out_delivery stage.  See
+     * build_egress_delivery_flows_for_lrouter_port() which adds a rule
+     * for each router port. */
+    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_OUT_DELIVERY,
+                               lflow_ref);
 }
 
 static void
