@@ -2451,7 +2451,36 @@ physical_run(struct physical_ctx *p_ctx,
                               p_ctx->n_encap_ips,
                               p_ctx->encap_ips,
                               flow_table, &ofpacts);
+
+        if (!local_binding_get_primary_pb(p_ctx->local_bindings,
+                                          binding->logical_port)) {
+            continue;
+        }
+
+        /* Table 80, priority 100.
+         * =======================
+         *
+         * Process ICMP{4,6} error packets too big locally generalted from the
+         * kernel in order to lookup proper ct_zone. */
+        struct match match = MATCH_CATCHALL_INITIALIZER;
+        match_set_metadata(&match, htonll(binding->datapath->tunnel_key));
+        match_set_reg(&match, MFF_LOG_INPORT - MFF_REG0, binding->tunnel_key);
+
+        ofpbuf_clear(&ofpacts);
+        struct zone_ids zone_ids = get_zone_ids(binding, p_ctx->ct_zones);
+        put_zones_ofpacts(&zone_ids, &ofpacts);
+        put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, &ofpacts);
+        ofctrl_add_flow(flow_table, OFTABLE_CT_ZONE_LOOKUP, 100, 0,
+                        &match, &ofpacts, hc_uuid);
     }
+
+    /* Default flow for CT_ZONE_LOOKUP Table. */
+    struct match ct_look_def_match;
+    match_init_catchall(&ct_look_def_match);
+    ofpbuf_clear(&ofpacts);
+    put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, &ofpacts);
+    ofctrl_add_flow(flow_table, OFTABLE_CT_ZONE_LOOKUP, 0, 0,
+                    &ct_look_def_match, &ofpacts, hc_uuid);
 
     /* Handle output to multicast groups, in tables 40 and 41. */
     const struct sbrec_multicast_group *mc;
@@ -2511,7 +2540,7 @@ physical_run(struct physical_ctx *p_ctx,
         /* Add specif flows for E/W ICMPv{4,6} packets if tunnelled packets
          * do not fit path MTU.
          */
-        put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, &ofpacts);
+        put_resubmit(OFTABLE_CT_ZONE_LOOKUP, &ofpacts);
 
         /* IPv4 */
         match_init_catchall(&match);
