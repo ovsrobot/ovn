@@ -185,6 +185,8 @@ start_ovsdb__() {
     local ovn_db_election_timer
     local relay_mode
     local cluster_db_upgrade
+    local ovn_db_ssl_protocols
+    local ovn_db_ssl_ciphers
     eval db_pid_file=\$DB_${DB}_PIDFILE
     eval cluster_local_addr=\$DB_${DB}_CLUSTER_LOCAL_ADDR
     eval cluster_local_port=\$DB_${DB}_CLUSTER_LOCAL_PORT
@@ -214,6 +216,8 @@ start_ovsdb__() {
     eval relay_mode=\$RELAY_MODE
     eval relay_remote=\$DB_${DB}_REMOTE
     eval cluster_db_upgrade=\$DB_CLUSTER_SCHEMA_UPGRADE
+    eval ovn_db_ssl_protocols=\$OVN_${DB}_DB_SSL_PROTOCOLS
+    eval ovn_db_ssl_ciphers=\$OVN_${DB}_DB_SSL_CIPHERS
 
     ovn_install_dir "$OVN_RUNDIR"
     ovn_install_dir "$ovn_logdir"
@@ -313,8 +317,17 @@ $cluster_remote_port
         set "$@" --ca-cert=db:$schema_name,SSL,ca_cert
     fi
 
-    set "$@" --ssl-protocols=db:$schema_name,SSL,ssl_protocols
-    set "$@" --ssl-ciphers=db:$schema_name,SSL,ssl_ciphers
+    if test X"$ovn_db_ssl_protocols" != X; then
+        set "$@" --ssl-protocols=$ovn_db_ssl_protocols
+    else
+        set "$@" --ssl-protocols=db:$schema_name,SSL,ssl_protocols
+    fi
+
+    if test X"$ovn_db_ssl_ciphers" != X; then
+        set "$@" --ssl-ciphers=$ovn_db_ssl_ciphers
+    else
+        set "$@" --ssl-ciphers=db:$schema_name,SSL,ssl_ciphers
+    fi
 
     if test X"$create_insecure_remote" = Xyes; then
         set "$@" --remote=ptcp:$port:$addr
@@ -878,18 +891,26 @@ set_defaults () {
     OVN_NB_DB_SSL_KEY=""
     OVN_NB_DB_SSL_CERT=""
     OVN_NB_DB_SSL_CA_CERT=""
+    OVN_NB_DB_SSL_PROTOCOLS=""
+    OVN_NB_DB_SSL_CIPHERS=""
 
     OVN_SB_DB_SSL_KEY=""
     OVN_SB_DB_SSL_CERT=""
     OVN_SB_DB_SSL_CA_CERT=""
+    OVN_SB_DB_SSL_PROTOCOLS=""
+    OVN_SB_DB_SSL_CIPHERS=""
 
     OVN_IC_NB_DB_SSL_KEY=""
     OVN_IC_NB_DB_SSL_CERT=""
     OVN_IC_NB_DB_SSL_CA_CERT=""
+    OVN_IC_NB_DB_SSL_PROTOCOLS=""
+    OVN_IC_NB_DB_SSL_CIPHERS=""
 
     OVN_IC_SB_DB_SSL_KEY=""
     OVN_IC_SB_DB_SSL_CERT=""
     OVN_IC_SB_DB_SSL_CA_CERT=""
+    OVN_IC_SB_DB_SSL_PROTOCOLS=""
+    OVN_IC_SB_DB_SSL_CIPHERS=""
 
     RELAY_MODE=no
     DB_SB_RELAY_REMOTE=
