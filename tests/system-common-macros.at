@@ -438,7 +438,8 @@ chown root:dhcpd /var/lib/dhcp /var/lib/dhcp/dhcpd6.leases
 chmod 775 /var/lib/dhcp
 chmod 664 /var/lib/dhcp/dhcpd6.leases
 
-NS_CHECK_EXEC([server], [tcpdump -nni s1 > pkt.pcap &])
+NETNS_DAEMONIZE([server], [tcpdump -nni s1 > pkt.pcap 2>server-tcpdump.stderr], [server-tcpdump.pid])
+OVS_WAIT_UNTIL([grep "listening" server-tcpdump.stderr])
 
 NETNS_DAEMONIZE([server], [dhcpd -6 -f s1 > dhcpd.log 2>&1], [dhcpd.pid])
 ovn-nbctl --wait=hv sync
@@ -462,9 +463,11 @@ ovn-nbctl list logical_router_port rp-public > /tmp/rp-public
 ovn-nbctl set logical_router_port rp-sw0 options:prefix=false
 ovn-nbctl set logical_router_port rp-sw1 options:prefix=false
 # Renew message
-NS_CHECK_EXEC([server], [tcpdump -c 1 -nni s1 ip6[[48:1]]=0x05 and ip6[[113:4]]=0x${prefix} > renew.pcap &])
+NETNS_DAEMONIZE([server], [tcpdump -c 1 -nni s1 ip6[[48:1]]=0x05 and ip6[[113:4]]=0x${prefix} > renew.pcap 2>renew-tcpdump.stderr], [renew-tcpdump.pid])
+OVS_WAIT_UNTIL([grep "listening" renew-tcpdump.stderr])
 # Reply message with Status OK
-NS_CHECK_EXEC([server], [tcpdump -c 1 -nni s1 ip6[[48:1]]=0x07 and ip6[[81:4]]=0x${prefix} > reply.pcap &])
+NETNS_DAEMONIZE([server], [tcpdump -c 1 -nni s1 ip6[[48:1]]=0x07 and ip6[[81:4]]=0x${prefix} > reply.pcap 2>reply-tcpdump.stderr], [reply-tcpdump.pid])
+OVS_WAIT_UNTIL([grep "listening" reply-tcpdump.stderr])
 
 OVS_WAIT_UNTIL([
     total_pkts=$(cat renew.pcap | wc -l)
@@ -475,8 +478,6 @@ OVS_WAIT_UNTIL([
     total_pkts=$(cat reply.pcap | wc -l)
     test "${total_pkts}" = "1"
 ])
-
-kill $(pidof tcpdump)
 
 ovn-nbctl set logical_router_port rp-sw0 options:prefix=false
 ovn-nbctl clear logical_router_port rp-sw0 ipv6_prefix
