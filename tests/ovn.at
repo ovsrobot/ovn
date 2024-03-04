@@ -1661,6 +1661,40 @@ reg1[0] = put_dhcp_opts(offerip=1.2.3.4, domain_name=1.2.3.4);
 reg1[0] = put_dhcp_opts(offerip=1.2.3.4, domain_search_list=1.2.3.4);
     DHCPv4 option domain_search_list requires string value.
 
+#dhcp_relay_req_chk
+reg9[7] = dhcp_relay_req_chk(192.168.1.1, 172.16.1.1);
+    encodes as controller(userdata=00.00.00.1c.00.00.00.00.80.01.08.08.00.00.00.07.c0.a8.01.01.ac.10.01.01,pause)
+
+reg9[7] = dhcp_relay_req_chk(192.168.1.1,172.16.1.1);
+    formats as reg9[7] = dhcp_relay_req_chk(192.168.1.1, 172.16.1.1);
+    encodes as controller(userdata=00.00.00.1c.00.00.00.00.80.01.08.08.00.00.00.07.c0.a8.01.01.ac.10.01.01,pause)
+
+reg9[7..8] = dhcp_relay_req_chk(192.168.1.1, 172.16.1.1);
+    Cannot use 2-bit field reg9[7..8] where 1-bit field is required.
+
+reg9[7] = dhcp_relay_req_chk("192.168.1.1", "172.16.1.1");
+    Syntax error at `"192.168.1.1"' expecting IPv4 dhcp relay and server ips.
+
+reg9[7] = dhcp_relay_req_chk(192.168.1, 172.16.1.1);
+    Invalid numeric constant.
+
+#dhcp_relay_resp_chk
+reg9[8] = dhcp_relay_resp_chk(192.168.1.1, 172.16.1.1);
+    encodes as controller(userdata=00.00.00.1d.00.00.00.00.80.01.08.08.00.00.00.08.c0.a8.01.01.ac.10.01.01,pause)
+
+reg9[8] = dhcp_relay_resp_chk(192.168.1.1,172.16.1.1);
+    formats as reg9[8] = dhcp_relay_resp_chk(192.168.1.1, 172.16.1.1);
+    encodes as controller(userdata=00.00.00.1d.00.00.00.00.80.01.08.08.00.00.00.08.c0.a8.01.01.ac.10.01.01,pause)
+
+reg9[7..8] = dhcp_relay_resp_chk(192.168.1.1, 172.16.1.1);
+    Cannot use 2-bit field reg9[7..8] where 1-bit field is required.
+
+reg9[8] = dhcp_relay_resp_chk("192.168.1.1", "172.16.1.1");
+    Syntax error at `"192.168.1.1"' expecting IPv4 dhcp relay and server ips.
+
+reg9[8] = dhcp_relay_resp_chk(192.168.1, 172.16.1.1);
+    Invalid numeric constant.
+
 # nd_ns
 nd_ns { nd.target = xxreg0; output; };
     encodes as controller(userdata=00.00.00.09.00.00.00.00.00.1c.00.18.00.80.00.00.00.00.00.00.00.01.de.10.80.00.3e.10.00.00.00.00.ff.ff.00.10.00.00.23.20.00.0e.ff.f8.40.00.00.00)
@@ -22081,7 +22115,7 @@ eth_dst=00000000ff01
 ip_src=$(ip_to_hex 10 0 0 10)
 ip_dst=$(ip_to_hex 172 168 0 101)
 send_icmp_packet 1 1 $eth_src $eth_dst $ip_src $ip_dst c4c9 0000000000000000000000
-AT_CHECK_UNQUOTED([as hv1 ovs-ofctl dump-flows br-int metadata=0x$lr0_dp_key | awk '/table=28, n_packets=1, n_bytes=45/{print $7" "$8}'],[0],[dnl
+AT_CHECK_UNQUOTED([as hv1 ovs-ofctl dump-flows br-int metadata=0x$lr0_dp_key | awk '/table=31, n_packets=1, n_bytes=45/{print $7" "$8}'],[0],[dnl
 priority=80,ip,reg15=0x$lr0_public_dp_key,metadata=0x$lr0_dp_key,nw_src=10.0.0.10 actions=drop
 ])
 
@@ -28349,7 +28383,7 @@ ovn-sbctl dump-flows > sbflows
 AT_CAPTURE_FILE([sbflows])
 AT_CAPTURE_FILE([offlows])
 OVS_WAIT_UNTIL([
-    as hv1 ovs-ofctl dump-flows br-int table=23 > offlows
+    as hv1 ovs-ofctl dump-flows br-int table=24 > offlows
     test $(grep -c "load:0x64->NXM_NX_PKT_MARK" offlows) = 1 && \
     test $(grep -c "load:0x3->NXM_NX_PKT_MARK" offlows) = 1 && \
     test $(grep -c "load:0x4->NXM_NX_PKT_MARK" offlows) = 1 && \
@@ -28447,12 +28481,12 @@ send_ipv4_pkt hv1 hv1-vif1 505400000003 00000000ff01 \
     c3ad 83dc
 
 OVS_WAIT_UNTIL([
-    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=23 | \
+    test 1 -eq $(as hv1 ovs-ofctl dump-flows br-int table=24 | \
     grep "load:0x2->NXM_NX_PKT_MARK" -c)
 ])
 
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=23 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=24 | \
     grep "load:0x64->NXM_NX_PKT_MARK" -c)
 ])
 
@@ -29145,23 +29179,23 @@ check ovn-nbctl --wait=hv sync
 
 # Ensure ECMP symmetric reply flows are not present on any hypervisor.
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=17 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=18 | \
     grep "priority=100" | \
     grep "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_LABEL\\[[80..95\\]]))" -c)
 ])
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=25 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=26 | \
     grep "priority=200" | \
     grep "actions=move:NXM_NX_CT_LABEL\\[[32..79\\]]->NXM_OF_ETH_DST\\[[\\]]" -c)
 ])
 
 AT_CHECK([
-    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=17 | \
+    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=18 | \
     grep "priority=100" | \
     grep "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_LABEL\\[[80..95\\]]))" -c)
 ])
 AT_CHECK([
-    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=25 | \
+    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=26 | \
     grep "priority=200" | \
     grep "actions=move:NXM_NX_CT_LABEL\\[[32..79\\]]->NXM_OF_ETH_DST\\[[\\]]" -c)
 ])
@@ -29179,11 +29213,11 @@ AT_CAPTURE_FILE([hv2flows])
 
 AT_CHECK([
     for hv in 1 2; do
-        grep table=17 hv${hv}flows | \
+        grep table=18 hv${hv}flows | \
         grep "priority=100" | \
         grep -c "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],.*exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_MARK\\[[16..31\\]]))"
 
-        grep table=25 hv${hv}flows | \
+        grep table=28 hv${hv}flows | \
         grep "priority=200" | \
         grep -c "move:NXM_NX_CT_LABEL\\[[\\]]->NXM_NX_XXREG1\\[[\\]],move:NXM_NX_XXREG1\\[[32..79\\]]->NXM_OF_ETH_DST"
     done; :], [0], [dnl
@@ -29271,23 +29305,23 @@ check ovn-nbctl --wait=hv sync
 
 # Ensure ECMP symmetric reply flows are not present on any hypervisor.
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=17 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=18 | \
     grep "priority=100" | \
     grep "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_LABEL\\[[80..95\\]]))" -c)
 ])
 AT_CHECK([
-    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=25 | \
+    test 0 -eq $(as hv1 ovs-ofctl dump-flows br-int table=28 | \
     grep "priority=200" | \
     grep "actions=move:NXM_NX_CT_LABEL\\[[32..79\\]]->NXM_OF_ETH_DST\\[[\\]]" -c)
 ])
 
 AT_CHECK([
-    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=17 | \
+    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=18 | \
     grep "priority=100" | \
     grep "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_MARK\\[[16..31\\]]))" -c)
 ])
 AT_CHECK([
-    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=25 | \
+    test 0 -eq $(as hv2 ovs-ofctl dump-flows br-int table=28 | \
     grep "priority=200" | \
     grep "actions=move:NXM_NX_CT_LABEL\\[[\\]]->NXM_OF_ETH_DST\\[[\\]]" -c)
 ])
@@ -29304,11 +29338,11 @@ AT_CAPTURE_FILE([hv2flows])
 
 AT_CHECK([
     for hv in 1 2; do
-        grep table=17 hv${hv}flows | \
+        grep table=18 hv${hv}flows | \
         grep "priority=100" | \
         grep -c "ct(commit,zone=NXM_NX_REG11\\[[0..15\\]],.*exec(move:NXM_OF_ETH_SRC\\[[\\]]->NXM_NX_CT_LABEL\\[[32..79\\]],load:0x[[0-9]]->NXM_NX_CT_MARK\\[[16..31\\]]))"
 
-        grep table=25 hv${hv}flows | \
+        grep table=28 hv${hv}flows | \
         grep "priority=200" | \
         grep -c "move:NXM_NX_CT_LABEL\\[[\\]]->NXM_NX_XXREG1\\[[\\]],move:NXM_NX_XXREG1\\[[32..79\\]]->NXM_OF_ETH_DST"
     done; :], [0], [dnl
@@ -29810,7 +29844,7 @@ if test X"$1" = X"DGP"; then
 else
     prio=2
 fi
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=25, n_packets=1,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=28, n_packets=1,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
 1
 ])
 
@@ -29829,13 +29863,13 @@ AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep "actions=controller" | grep 
 
 if test X"$1" = X"DGP"; then
     # The packet dst should be resolved once for E/W centralized NAT purpose.
-    AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=25, n_packets=1,.* priority=100,reg0=0xa000101,reg15=.*metadata=0x${sw_key} actions=mod_dl_dst:00:00:00:00:01:01,resubmit" -c], [0], [dnl
+    AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=28, n_packets=1,.* priority=100,reg0=0xa000101,reg15=.*metadata=0x${sw_key} actions=mod_dl_dst:00:00:00:00:01:01,resubmit" -c], [0], [dnl
 1
 ])
 fi
 
 # The packet should've been finally dropped in the lr_in_arp_resolve stage.
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=25, n_packets=2,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=28, n_packets=2,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
 1
 ])
 OVN_CLEANUP([hv1])
@@ -34875,7 +34909,7 @@ check ovn-nbctl set nb_global . options:use_common_zone="true"
 check ovn-nbctl --wait=hv sync
 # Use constants so that if tables or registers change, this test can
 # be updated easily.
-DNAT_TABLE=15
+DNAT_TABLE=16
 SNAT_TABLE=45
 DNAT_ZONE_REG="NXM_NX_REG11[[0..15]]"
 SNAT_ZONE_REG="NXM_NX_REG12[[0..15]]"
@@ -38351,3 +38385,222 @@ OVS_WAIT_UNTIL([test 1 = $(as hv ovs-ofctl dump-flows br-int | grep -E "pkt_mark
 OVN_CLEANUP([hv])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([DHCP RELAY])
+ovn_start
+net_add n1
+
+AT_CHECK([ovn-nbctl ls-add ls0])
+AT_CHECK([ovn-nbctl lsp-add ls0 vif0])
+AT_CHECK([ovn-nbctl lsp-set-addresses vif0 "50:54:00:00:00:10"])
+AT_CHECK([ovn-nbctl lsp-add ls0 lrp1-attachment])
+AT_CHECK([ovn-nbctl lsp-set-type lrp1-attachment router])
+AT_CHECK([ovn-nbctl lsp-set-addresses lrp1-attachment 50:54:00:00:00:01])
+AT_CHECK([ovn-nbctl lsp-set-options lrp1-attachment router-port=lrp1])
+
+AT_CHECK([ovn-nbctl lr-add lr0])
+AT_CHECK([ovn-nbctl lrp-add lr0 lrp1 50:54:00:00:00:01 192.168.1.1/24])
+AT_CHECK([ovn-nbctl lrp-add lr0 lrp2 50:54:00:00:00:02 172.16.1.254/24])
+
+AT_CHECK([ovn-nbctl ls-add ls-ext])
+AT_CHECK([ovn-nbctl lsp-add ls-ext lrp2-attachment])
+AT_CHECK([ovn-nbctl lsp-set-type lrp2-attachment router])
+AT_CHECK([ovn-nbctl lsp-set-addresses lrp2-attachment 50:54:00:00:00:02])
+AT_CHECK([ovn-nbctl lsp-set-options lrp2-attachment router-port=lrp2])
+AT_CHECK([ovn-nbctl lsp-add ls-ext ln_port])
+AT_CHECK([ovn-nbctl lsp-set-addresses ln_port unknown])
+AT_CHECK([ovn-nbctl lsp-set-type ln_port localnet])
+AT_CHECK([ovn-nbctl lsp-set-options ln_port network_name=physnet1])
+
+dhcp_relay=$(ovn-nbctl create DHCP_Relay servers=172.16.1.1)
+AT_CHECK([ovn-nbctl set Logical_Router_port lrp1 dhcp_relay=$dhcp_relay])
+AT_CHECK([ovn-nbctl set Logical_Switch ls0 other_config:dhcp_relay_port=lrp1-attachment])
+
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl -- add-port br-int vif0 -- \
+    set interface vif0 external-ids:iface-id=vif0 \
+    options:tx_pcap=hv1/vif0-tx.pcap \
+    options:rxq_pcap=hv1/vif0-rx.pcap \
+    ofport-request=1
+ovs-vsctl -- add-port br-phys ext0 -- \
+    set interface ext0 \
+    options:tx_pcap=hv1/ext0-tx.pcap \
+    options:rxq_pcap=hv1/ext0-rx.pcap \
+    ofport-request=2
+
+ovs-vsctl set open . external_ids:ovn-bridge-mappings=physnet1:br-phys
+
+wait_for_ports_up
+AT_CHECK([ovn-nbctl --wait=hv sync])
+
+send_dhcp_packet() {
+    src_mac=${1}
+    src_ip=${2}
+    dst_mac=${3}
+    dst_ip=${4}
+    op_code=${5}
+    msg_type=${6}
+    yiaddr=$7
+    giaddr=${8}
+    sid=${9}
+    iface=${10}
+    #echo "ARGS: ${1} ${2} ${3} ${4} ${5} ${6} ${7} ${8} ${9} ${10}"
+    echo "ARGS: $@"
+    if [[ $op_code == "01" ]]; then
+        ip_len=0111
+        udp_len=00fd
+        src_port=0044
+    else
+        ip_len=011d
+        udp_len=0109
+        src_port=0043
+    fi
+    flags=0000
+
+    local pkt=${dst_mac}${src_mac}08004510${ip_len}0000000080110000${src_ip}${dst_ip}
+    # udp header and dhcp header
+    pkt=${pkt}${src_port}0043${udp_len}0000
+    pkt=${pkt}${op_code}0106006359aa760000${flags}00000000${yiaddr}00000000${giaddr}${src_mac}
+    # client hardware padding
+    pkt=${pkt}00000000000000000000
+    # server hostname
+    pkt=${pkt}0000000000000000000000000000000000000000000000000000000000000000
+    pkt=${pkt}0000000000000000000000000000000000000000000000000000000000000000
+    # boot file name
+    pkt=${pkt}0000000000000000000000000000000000000000000000000000000000000000
+    pkt=${pkt}0000000000000000000000000000000000000000000000000000000000000000
+    pkt=${pkt}0000000000000000000000000000000000000000000000000000000000000000
+    pkt=${pkt}0000000000000000000000000000000000000000000000000000000000000000
+    # dhcp magic cookie
+    pkt=${pkt}63825363
+    # dhcp message type
+    pkt=${pkt}3501${msg_type}
+    # dhcp server identifier and subnet mask options
+    if  [[ $op_code == "02" ]]; then
+        pkt=${pkt}3604${sid}
+        pkt=${pkt}0104ffffff00
+    fi
+    # dhcp pad option
+    pkt=${pkt}00
+    # dhcp end option
+    pkt=${pkt}ff
+
+    tcpdump_hex "-- sending DHCP pkt on hv1-$iface" $pkt
+
+    ovs-appctl netdev-dummy/receive $iface $pkt
+}
+
+
+# Check that there is commit_fdb_local_fdb() flow added by ovn-northd for vif0 and localnet
+ovn-sbctl dump-flows > lflows
+AT_CAPTURE_FILE([lflows])
+
+# ====================================================
+# Send DHCP valid discovery
+src_mac="505400000010"
+src_ip=`ip_to_hex 0.0.0.0`
+dst_mac="ffffffffffff"
+dst_ip=`ip_to_hex 255.255.255.255`
+yiaddr=`ip_to_hex 0.0.0.0`
+giaddr=`ip_to_hex 0.0.0.0`
+sid=$src_ip
+# send packet
+send_dhcp_packet $src_mac $src_ip $dst_mac $dst_ip 01 01 $yiaddr $giaddr $sid vif0
+
+ovs-ofctl dump-flows br-int table=12 > pflows1_dhcp_relay_req
+AT_CAPTURE_FILE([pflows1_dhcp_relay_req])
+
+AT_CHECK([cat pflows1_dhcp_relay_req | grep -v NXST | grep 255.255.255.255 | grep resubmit |
+cut -d ' ' -f5-5 | sed "s/,//"], [0], [dnl
+n_packets=1
+])
+
+# ====================================================
+# Send DHCP discovery with giaddr set
+giaddr=`ip_to_hex 192.168.1.1`
+# send packet
+send_dhcp_packet $src_mac $src_ip $dst_mac $dst_ip 01 01 $yiaddr $giaddr $sid vif0
+
+ovs-ofctl dump-flows br-int table=12 > pflows2_dhcp_relay_req
+AT_CAPTURE_FILE([pflows2_dhcp_relay_req])
+
+AT_CHECK([cat pflows2_dhcp_relay_req | grep -v NXST | grep 255.255.255.255 | grep drop |
+cut -d ' ' -f5-5 | sed "s/,//"], [0], [dnl
+n_packets=1
+])
+
+# ====================================================
+# Send DHCP valid offer
+src_mac="50540000001f"
+src_ip=`ip_to_hex 172.16.1.1`
+dst_mac="505400000002"
+dst_ip=`ip_to_hex 192.168.1.1`
+yiaddr=`ip_to_hex 192.168.1.10`
+giaddr=`ip_to_hex 192.168.1.1`
+sid=$src_ip
+# send packet
+send_dhcp_packet $src_mac $src_ip $dst_mac $dst_ip 02 02 $yiaddr $giaddr $sid ext0
+
+ovs-ofctl dump-flows br-int table=27 > pflows1_dhcp_relay_resp
+AT_CAPTURE_FILE([pflows1_dhcp_relay_resp])
+
+AT_CHECK([cat pflows1_dhcp_relay_resp | grep -v NXST | grep 172.16.1.1 | grep resubmit |
+cut -d ' ' -f5-5 | sed "s/,//"], [0], [dnl
+n_packets=1
+])
+# ====================================================
+# Send DHCP offer with incorrect giaddr
+giaddr=`ip_to_hex 192.168.1.10`
+# send packet
+send_dhcp_packet $src_mac $src_ip $dst_mac $dst_ip 02 02 $yiaddr $giaddr $sid ext0
+
+ovs-ofctl dump-flows br-int table=27 > pflows2_dhcp_relay_resp
+AT_CAPTURE_FILE([pflows2_dhcp_relay_resp])
+
+AT_CHECK([cat pflows2_dhcp_relay_resp | grep -v NXST | grep 172.16.1.1 | grep drop |
+cut -d ' ' -f5-5 | sed "s/,//"], [0], [dnl
+n_packets=1
+])
+
+giaddr=`ip_to_hex 192.168.1.1`
+
+# ====================================================
+# Send DHCP offer with yiaddr outside of the subnet
+yiaddr=`ip_to_hex 192.168.2.10`
+# send packet
+send_dhcp_packet $src_mac $src_ip $dst_mac $dst_ip 02 02 $yiaddr $giaddr $sid ext0
+
+ovs-ofctl dump-flows br-int table=27 > pflows2_dhcp_relay_resp
+AT_CAPTURE_FILE([pflows2_dhcp_relay_resp])
+
+AT_CHECK([cat pflows2_dhcp_relay_resp | grep -v NXST | grep 172.16.1.1 | grep drop |
+cut -d ' ' -f5-5 | sed "s/,//"], [0], [dnl
+n_packets=2
+])
+
+yiaddr=`ip_to_hex 192.168.1.10`
+
+# ====================================================
+# Send DHCP offer with differnt server identifier
+sid=`ip_to_hex 172.16.1.100`
+# send packet
+send_dhcp_packet $src_mac $src_ip $dst_mac $dst_ip 02 02 $yiaddr $giaddr $sid ext0
+
+ovs-ofctl dump-flows br-int table=27 > pflows2_dhcp_relay_resp
+AT_CAPTURE_FILE([pflows2_dhcp_relay_resp])
+
+AT_CHECK([cat pflows2_dhcp_relay_resp | grep -v NXST | grep 172.16.1.1 | grep drop |
+cut -d ' ' -f5-5 | sed "s/,//"], [0], [dnl
+n_packets=3
+])
+
+sid=`ip_to_hex 172.16.1.1`
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
