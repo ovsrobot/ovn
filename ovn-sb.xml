@@ -1405,6 +1405,8 @@
         <dt><code>ct_commit { ct_mark=<var>value[/mask]</var>; };</code></dt>
         <dt><code>ct_commit { ct_label=<var>value[/mask]</var>; };</code></dt>
         <dt><code>ct_commit { ct_mark=<var>value[/mask]</var>; ct_label=<var>value[/mask]</var>; };</code></dt>
+        <dt><code>ct_commit(snat);</code></dt>
+        <dt><code>ct_commit(dnat);</code></dt>
         <dd>
           <p>
             Commit the flow to the connection tracking entry associated with it
@@ -1419,6 +1421,13 @@
             Registers and other named fields can be used for <var>value</var>.
             <code>ct_mark</code> and <code>ct_label</code> may be sub-addressed
             in order to have specific bits set.
+          </p>
+
+          <p>
+            Parameters <code>ct_commit(snat)</code> or <code>ct_commit(dnat)
+            </code> can be used to explicitly specify into which zone should be
+            connection committed. Without this parameter, the connection is
+            committed to the default zone for the Datapath.
           </p>
 
           <p>
