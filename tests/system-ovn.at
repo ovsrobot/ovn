@@ -6175,6 +6175,10 @@ OVS_WAIT_UNTIL([
 test $(ovs-ofctl dump-flows br-int | grep -c 'table=OFTABLE_ECMP_NH, n_packets') -eq 0
 ])
 
+# Flush connection tracking entries
+ovn-nbctl --wait=hv lr-route-del R1
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(172.16.0.1)])
+
 ovs-ofctl dump-flows br-int
 
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
