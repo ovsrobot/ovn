@@ -34,6 +34,8 @@ struct northd_input {
     const struct nbrec_chassis_template_var_table
         *nbrec_chassis_template_var_table;
     const struct nbrec_mirror_table *nbrec_mirror_table;
+    const struct nbrec_logical_router_static_route_table
+        *nbrec_static_route_table;
 
     /* Southbound table references */
     const struct sbrec_datapath_binding_table *sbrec_datapath_binding_table;
@@ -50,6 +52,7 @@ struct northd_input {
     const struct sbrec_chassis_template_var_table
         *sbrec_chassis_template_var_table;
     const struct sbrec_mirror_table *sbrec_mirror_table;
+    const struct sbrec_ecmp_nexthop_table *sbrec_ecmp_nexthop_table;
 
     /* Northd lb data node inputs*/
     const struct hmap *lbs;

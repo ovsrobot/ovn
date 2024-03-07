@@ -61,7 +61,8 @@ static unixctl_cb_func chassis_features_list;
     NB_NODE(meter, "meter") \
     NB_NODE(bfd, "bfd") \
     NB_NODE(static_mac_binding, "static_mac_binding") \
-    NB_NODE(chassis_template_var, "chassis_template_var")
+    NB_NODE(chassis_template_var, "chassis_template_var") \
+    NB_NODE(logical_router_static_route, "logical_router_static_route")
 
     enum nb_engine_node {
 #define NB_NODE(NAME, NAME_STR) NB_##NAME,
@@ -101,7 +102,8 @@ static unixctl_cb_func chassis_features_list;
     SB_NODE(fdb, "fdb") \
     SB_NODE(static_mac_binding, "static_mac_binding") \
     SB_NODE(chassis_template_var, "chassis_template_var") \
-    SB_NODE(logical_dp_group, "logical_dp_group")
+    SB_NODE(logical_dp_group, "logical_dp_group") \
+    SB_NODE(ecmp_nexthop, "ecmp_nexthop")
 
 enum sb_engine_node {
 #define SB_NODE(NAME, NAME_STR) SB_##NAME,
@@ -180,6 +182,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_northd, &en_nb_mirror, NULL);
     engine_add_input(&en_northd, &en_nb_static_mac_binding, NULL);
     engine_add_input(&en_northd, &en_nb_chassis_template_var, NULL);
+    engine_add_input(&en_northd, &en_nb_logical_router_static_route, NULL);
 
     engine_add_input(&en_northd, &en_sb_chassis, NULL);
     engine_add_input(&en_northd, &en_sb_mirror, NULL);
@@ -192,6 +195,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_northd, &en_sb_fdb, NULL);
     engine_add_input(&en_northd, &en_sb_static_mac_binding, NULL);
     engine_add_input(&en_northd, &en_sb_chassis_template_var, NULL);
+    engine_add_input(&en_northd, &en_sb_ecmp_nexthop, NULL);
     engine_add_input(&en_northd, &en_global_config,
                      northd_global_config_handler);
 

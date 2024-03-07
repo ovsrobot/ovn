@@ -16654,6 +16654,101 @@ sync_mirrors(struct ovsdb_idl_txn *ovnsb_txn,
     shash_destroy(&sb_mirrors);
 }
 
+struct sb_ecmp_nexthop_entry {
+    struct hmap_node hmap_node;
+    const struct sbrec_ecmp_nexthop *sb_ecmp_nexthop;
+};
+
+static struct sb_ecmp_nexthop_entry *
+sb_ecmp_nexthop_lookup(const struct hmap *map, const char *nexthop)
+{
+    uint32_t hash = hash_string(nexthop, 0);
+    struct sb_ecmp_nexthop_entry *enh_e;
+
+    HMAP_FOR_EACH_WITH_HASH (enh_e, hmap_node, hash, map) {
+        if (!strcmp(enh_e->sb_ecmp_nexthop->nexthop, nexthop)) {
+            return enh_e;
+        }
+    }
+    return NULL;
+}
+
+#define NEXTHOP_IDS_LEN	65535
+static void
+sync_ecmp_symmetric_reply_nexthop(struct ovsdb_idl_txn *ovnsb_txn,
+        const struct nbrec_logical_router_static_route_table *nbrec_sr_table,
+        const struct sbrec_ecmp_nexthop_table *sbrec_ecmp_nextop_table)
+{
+    unsigned long *nexthop_ids = bitmap_allocate(NEXTHOP_IDS_LEN);
+    struct hmap sb_only = HMAP_INITIALIZER(&sb_only);
+    const struct sbrec_ecmp_nexthop *sb_ecmp_nexthop;
+    struct sb_ecmp_nexthop_entry *enh_e;
+    int id;
+
+    SBREC_ECMP_NEXTHOP_TABLE_FOR_EACH (sb_ecmp_nexthop,
+                                       sbrec_ecmp_nextop_table) {
+        uint32_t hash = hash_string(sb_ecmp_nexthop->nexthop, 0);
+        enh_e = xmalloc(sizeof *enh_e);
+        enh_e->sb_ecmp_nexthop = sb_ecmp_nexthop;
+        hmap_insert(&sb_only, &enh_e->hmap_node, hash);
+    }
+
+    const struct nbrec_logical_router_static_route *r;
+    NBREC_LOGICAL_ROUTER_STATIC_ROUTE_TABLE_FOR_EACH (r, nbrec_sr_table) {
+        if (!smap_get_bool(&r->options, "ecmp_symmetric_reply", false)) {
+            continue;
+        }
+
+        id = smap_get_int(&r->options, "nexthop-id", -1);
+        if (id < 0) {
+            continue;
+        }
+        bitmap_set1(nexthop_ids, id);
+    }
+    NBREC_LOGICAL_ROUTER_STATIC_ROUTE_TABLE_FOR_EACH (r, nbrec_sr_table) {
+        if (!smap_get_bool(&r->options, "ecmp_symmetric_reply", false)) {
+            continue;
+        }
+
+        id = smap_get_int(&r->options, "nexthop-id", -1);
+        if (id < 0) {
+            id = bitmap_scan(nexthop_ids, 0, 1, NEXTHOP_IDS_LEN);
+            if (id == NEXTHOP_IDS_LEN) {
+                continue;
+            }
+            bitmap_set1(nexthop_ids, id);
+
+            struct smap options = SMAP_INITIALIZER(&options);
+            smap_clone(&options, &r->options);
+            smap_add_format(&options, "nexthop-id", "%d", id);
+            nbrec_logical_router_static_route_set_options(r, &options);
+            smap_destroy(&options);
+        }
+
+        enh_e = sb_ecmp_nexthop_lookup(&sb_only, r->nexthop);
+        if (!enh_e) {
+            sb_ecmp_nexthop = sbrec_ecmp_nexthop_insert(ovnsb_txn);
+            sbrec_ecmp_nexthop_set_nexthop(sb_ecmp_nexthop, r->nexthop);
+
+            struct smap options = SMAP_INITIALIZER(&options);
+            smap_add_format(&options, "nexthop-id", "%d", id);
+            sbrec_ecmp_nexthop_set_options(sb_ecmp_nexthop, &options);
+            smap_destroy(&options);
+        } else {
+            hmap_remove(&sb_only, &enh_e->hmap_node);
+            free(enh_e);
+        }
+    }
+
+    HMAP_FOR_EACH_POP (enh_e, hmap_node, &sb_only) {
+        sbrec_ecmp_nexthop_delete(enh_e->sb_ecmp_nexthop);
+        free(enh_e);
+    }
+    hmap_destroy(&sb_only);
+
+    bitmap_free(nexthop_ids);
+}
+
 /*
  * struct 'dns_info' is used to sync the DNS records between OVN Northbound db
  * and Southbound db.
@@ -17334,6 +17429,9 @@ ovnnb_db_run(struct northd_input *input_data,
                      &data->ls_datapaths.datapaths);
     sync_template_vars(ovnsb_txn, input_data->nbrec_chassis_template_var_table,
                        input_data->sbrec_chassis_template_var_table);
+    sync_ecmp_symmetric_reply_nexthop(ovnsb_txn,
+                                      input_data->nbrec_static_route_table,
+                                      input_data->sbrec_ecmp_nexthop_table);
 
     cleanup_stale_fdb_entries(input_data->sbrec_fdb_table,
                               &data->ls_datapaths.datapaths);
