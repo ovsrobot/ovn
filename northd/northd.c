@@ -10600,15 +10600,22 @@ add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
      * ds_put_cstr() call. The previous contents are needed.
      */
     ds_put_cstr(&match, " && !ct.rpl && (ct.new || ct.est)");
+    struct ds nexthop_label = DS_EMPTY_INITIALIZER;
+    int id = smap_get_int(&st_route->options, "nexthop-id", -1);
+    if (id > 0) {
+        ds_put_format(&nexthop_label, "ct_label.label = %d;", id);
+    }
     ds_put_format(&actions,
             "ct_commit { ct_label.ecmp_reply_eth = eth.src; "
-            " %s = %" PRId64 ";}; "
+            " %s = %" PRId64 "; %s }; "
             "next;",
-            ct_ecmp_reply_port_match, out_port->sb->tunnel_key);
+            ct_ecmp_reply_port_match, out_port->sb->tunnel_key,
+            ds_cstr(&nexthop_label));
     ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_ECMP_STATEFUL, 100,
                             ds_cstr(&match), ds_cstr(&actions),
                             &st_route->header_,
                             lflow_ref);
+    ds_destroy(&nexthop_label);
 
     /* Bypass ECMP selection if we already have ct_label information
      * for where to route the packet.
