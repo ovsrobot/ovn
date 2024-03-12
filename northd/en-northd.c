@@ -76,6 +76,8 @@ northd_get_input_data(struct engine_node *node,
         EN_OVSDB_GET(engine_get_input("NB_chassis_template_var", node));
     input_data->nbrec_mirror_table =
         EN_OVSDB_GET(engine_get_input("NB_mirror", node));
+    input_data->nbrec_static_route_table =
+        EN_OVSDB_GET(engine_get_input("NB_logical_router_static_route", node));
 
     input_data->sbrec_datapath_binding_table =
         EN_OVSDB_GET(engine_get_input("SB_datapath_binding", node));
@@ -101,6 +103,8 @@ northd_get_input_data(struct engine_node *node,
         EN_OVSDB_GET(engine_get_input("SB_chassis_template_var", node));
     input_data->sbrec_mirror_table =
         EN_OVSDB_GET(engine_get_input("SB_mirror", node));
+    input_data->sbrec_ecmp_nh_table =
+        EN_OVSDB_GET(engine_get_input("SB_ecmp_nexthop", node));
 
     struct ed_type_lb_data *lb_data =
         engine_get_input_data("lb_data", node);
