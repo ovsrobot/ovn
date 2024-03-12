@@ -10558,14 +10558,16 @@ find_static_route_outport(struct ovn_datapath *od, const struct hmap *lr_ports,
 }
 
 static void
-add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
-                               struct ovn_datapath *od,
-                               bool ct_masked_mark,
-                               const char *port_ip,
-                               struct ovn_port *out_port,
-                               const struct parsed_route *route,
-                               struct ds *route_match,
-                               struct lflow_ref *lflow_ref)
+add_ecmp_symmetric_reply_flows(
+        struct lflow_table *lflows,
+        struct ovn_datapath *od,
+        bool ct_masked_mark,
+        const char *port_ip,
+        struct ovn_port *out_port,
+        const struct parsed_route *route,
+        struct ds *route_match,
+        struct lflow_ref *lflow_ref,
+        const struct sbrec_ecmp_nexthop_table *sbrec_ecmp_nh_table)
 {
     const struct nbrec_logical_router_static_route *st_route = route->route;
     struct ds match = DS_EMPTY_INITIALIZER;
@@ -10601,15 +10603,28 @@ add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
      * ds_put_cstr() call. The previous contents are needed.
      */
     ds_put_cstr(&match, " && !ct.rpl && (ct.new || ct.est)");
+    struct ds nexthop_label = DS_EMPTY_INITIALIZER;
+
+    const struct sbrec_ecmp_nexthop *sb_ecmp_nexthop;
+    SBREC_ECMP_NEXTHOP_TABLE_FOR_EACH (sb_ecmp_nexthop, sbrec_ecmp_nh_table) {
+        if (!strcmp(st_route->nexthop, sb_ecmp_nexthop->nexthop)) {
+            int id = sb_ecmp_nexthop->id;
+            ds_put_format(&nexthop_label, "ct_label.label = %d;", id);
+            break;
+        }
+    }
+
     ds_put_format(&actions,
             "ct_commit { ct_label.ecmp_reply_eth = eth.src; "
-            " %s = %" PRId64 ";}; "
+            " %s = %" PRId64 "; %s }; "
             "next;",
-            ct_ecmp_reply_port_match, out_port->sb->tunnel_key);
+            ct_ecmp_reply_port_match, out_port->sb->tunnel_key,
+            ds_cstr(&nexthop_label));
     ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_ECMP_STATEFUL, 100,
                             ds_cstr(&match), ds_cstr(&actions),
                             &st_route->header_,
                             lflow_ref);
+    ds_destroy(&nexthop_label);
 
     /* Bypass ECMP selection if we already have ct_label information
      * for where to route the packet.
@@ -10660,10 +10675,12 @@ add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
 }
 
 static void
-build_ecmp_route_flow(struct lflow_table *lflows, struct ovn_datapath *od,
-                      bool ct_masked_mark, const struct hmap *lr_ports,
-                      struct ecmp_groups_node *eg,
-                      struct lflow_ref *lflow_ref)
+build_ecmp_route_flow(
+        struct lflow_table *lflows, struct ovn_datapath *od,
+        bool ct_masked_mark, const struct hmap *lr_ports,
+        struct ecmp_groups_node *eg,
+        struct lflow_ref *lflow_ref,
+        const struct sbrec_ecmp_nexthop_table *sbrec_ecmp_nh_table)
 
 {
     bool is_ipv4 = IN6_IS_ADDR_V4MAPPED(&eg->prefix);
@@ -10721,7 +10738,7 @@ build_ecmp_route_flow(struct lflow_table *lflows, struct ovn_datapath *od,
             add_ecmp_symmetric_reply_flows(lflows, od, ct_masked_mark,
                                            lrp_addr_s, out_port,
                                            route_, &route_match,
-                                           lflow_ref);
+                                           lflow_ref, sbrec_ecmp_nh_table);
         }
         ds_clear(&match);
         ds_put_format(&match, REG_ECMP_GROUP_ID" == %"PRIu16" && "
@@ -12581,7 +12598,8 @@ build_static_route_flows_for_lrouter(
         struct ovn_datapath *od, const struct chassis_features *features,
         struct lflow_table *lflows, const struct hmap *lr_ports,
         const struct hmap *bfd_connections,
-        struct lflow_ref *lflow_ref)
+        struct lflow_ref *lflow_ref,
+        const struct sbrec_ecmp_nexthop_table *sbrec_ecmp_nh_table)
 {
     ovs_assert(od->nbr);
     ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_IP_ROUTING_ECMP,
@@ -12630,7 +12648,7 @@ build_static_route_flows_for_lrouter(
         /* add a flow in IP_ROUTING, and one flow for each member in
          * IP_ROUTING_ECMP. */
         build_ecmp_route_flow(lflows, od, features->ct_no_masked_label,
-                              lr_ports, group, lflow_ref);
+                              lr_ports, group, lflow_ref, sbrec_ecmp_nh_table);
     }
     const struct unique_routes_node *ur;
     HMAP_FOR_EACH (ur, hmap_node, &unique_routes) {
@@ -15541,6 +15559,7 @@ struct lswitch_flow_build_info {
     struct ds actions;
     size_t thread_lflow_counter;
     const char *svc_monitor_mac;
+    const struct sbrec_ecmp_nexthop_table *sbrec_ecmp_nh_table;
 };
 
 /* Helper function to combine all lflow generation which is iterated by
@@ -15588,7 +15607,7 @@ build_lswitch_and_lrouter_iterate_by_lr(struct ovn_datapath *od,
     build_static_route_flows_for_lrouter(od, lsi->features,
                                          lsi->lflows, lsi->lr_ports,
                                          lsi->bfd_connections,
-                                         NULL);
+                                         NULL, lsi->sbrec_ecmp_nh_table);
     build_mcast_lookup_flows_for_lrouter(od, lsi->lflows, &lsi->match,
                                          &lsi->actions, NULL);
     build_ingress_policy_flows_for_lrouter(od, lsi->lflows, lsi->lr_ports,
@@ -15905,7 +15924,8 @@ build_lswitch_and_lrouter_flows(
     const struct hmap *svc_monitor_map,
     const struct hmap *bfd_connections,
     const struct chassis_features *features,
-    const char *svc_monitor_mac)
+    const char *svc_monitor_mac,
+    const struct sbrec_ecmp_nexthop_table *sbrec_ecmp_nh_table)
 {
 
     char *svc_check_match = xasprintf("eth.dst == %s", svc_monitor_mac);
@@ -15939,6 +15959,7 @@ build_lswitch_and_lrouter_flows(
             lsiv[index].svc_check_match = svc_check_match;
             lsiv[index].thread_lflow_counter = 0;
             lsiv[index].svc_monitor_mac = svc_monitor_mac;
+            lsiv[index].sbrec_ecmp_nh_table = sbrec_ecmp_nh_table;
             ds_init(&lsiv[index].match);
             ds_init(&lsiv[index].actions);
 
@@ -15981,6 +16002,7 @@ build_lswitch_and_lrouter_flows(
             .svc_monitor_mac = svc_monitor_mac,
             .match = DS_EMPTY_INITIALIZER,
             .actions = DS_EMPTY_INITIALIZER,
+            .sbrec_ecmp_nh_table = sbrec_ecmp_nh_table,
         };
 
         /* Combined build - all lflow generation from lswitch and lrouter
@@ -16140,7 +16162,8 @@ void build_lflows(struct ovsdb_idl_txn *ovnsb_txn,
                                     input_data->svc_monitor_map,
                                     input_data->bfd_connections,
                                     input_data->features,
-                                    input_data->svc_monitor_mac);
+                                    input_data->svc_monitor_mac,
+                                    input_data->sbrec_ecmp_nh_table);
 
     if (parallelization_state == STATE_INIT_HASH_SIZES) {
         parallelization_state = STATE_USE_PARALLELIZATION;

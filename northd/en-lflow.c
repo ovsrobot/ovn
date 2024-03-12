@@ -62,6 +62,8 @@ lflow_get_input_data(struct engine_node *node,
         EN_OVSDB_GET(engine_get_input("SB_igmp_group", node));
     lflow_input->sbrec_logical_dp_group_table =
         EN_OVSDB_GET(engine_get_input("SB_logical_dp_group", node));
+    lflow_input->sbrec_ecmp_nh_table =
+        EN_OVSDB_GET(engine_get_input("SB_ecmp_nexthop", node));
 
     lflow_input->sbrec_mcast_group_by_name_dp =
            engine_ovsdb_node_get_index(
