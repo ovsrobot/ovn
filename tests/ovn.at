@@ -1349,6 +1349,13 @@ ct_commit(ct_label=18446744073709551615);
 ct_commit(ct_label=18446744073709551616);
     Decimal constants must be less than 2**64.
 
+ct_commit(dnat);
+    encodes as ct(commit,zone=NXM_NX_REG13[0..15])
+    has prereqs ip
+ct_commit(snat);
+    encodes as ct(commit,zone=NXM_NX_REG13[0..15])
+    has prereqs ip
+
 ct_mark = 12345
     Field ct_mark is not modifiable.
 ct_label = 0xcafe

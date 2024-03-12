@@ -259,11 +259,20 @@ struct ovnact_ct_next {
     uint8_t ltable;                /* Logical table ID of next table. */
 };
 
+/* Conntrack zone to be used for commiting CT entries by the action.
+ * DEFAULT uses default zone for given datapath. */
+enum ovnact_ct_zone {
+    OVNACT_CT_ZONE_DEFAULT,
+    OVNACT_CT_ZONE_SNAT,
+    OVNACT_CT_ZONE_DNAT,
+};
+
 /* OVNACT_CT_COMMIT_V1. */
 struct ovnact_ct_commit_v1 {
     struct ovnact ovnact;
     uint32_t ct_mark, ct_mark_mask;
     ovs_be128 ct_label, ct_label_mask;
+    enum ovnact_ct_zone zone;
 };
 
 /* Type of NAT used for the particular action.

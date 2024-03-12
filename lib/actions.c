@@ -707,6 +707,7 @@ static void
 parse_ct_commit_v1_arg(struct action_context *ctx,
                        struct ovnact_ct_commit_v1 *cc)
 {
+    cc->zone = OVNACT_CT_ZONE_DEFAULT;
     if (lexer_match_id(ctx->lexer, "ct_mark")) {
         if (!lexer_force_match(ctx->lexer, LEX_T_EQUALS)) {
             return;
@@ -737,6 +738,10 @@ parse_ct_commit_v1_arg(struct action_context *ctx,
             return;
         }
         lexer_get(ctx->lexer);
+    } else if (lexer_match_id(ctx->lexer, "snat")) {
+        cc->zone = OVNACT_CT_ZONE_SNAT;
+    } else if (lexer_match_id(ctx->lexer, "dnat")) {
+        cc->zone = OVNACT_CT_ZONE_DNAT;
     } else {
         lexer_syntax_error(ctx->lexer, NULL);
     }
@@ -800,6 +805,18 @@ format_CT_COMMIT_V1(const struct ovnact_ct_commit_v1 *cc, struct ds *s)
             ds_put_hex(s, &cc->ct_label_mask, sizeof cc->ct_label_mask);
         }
     }
+    if (cc->zone != OVNACT_CT_ZONE_DEFAULT) {
+        if (ds_last(s) != '(') {
+            ds_put_cstr(s, ", ");
+        }
+
+        if (cc->zone == OVNACT_CT_ZONE_SNAT) {
+            ds_put_cstr(s, "snat");
+        } else if (cc->zone == OVNACT_CT_ZONE_DNAT) {
+            ds_put_cstr(s, "dnat");
+        }
+    }
+
     if (!ds_chomp(s, '(')) {
         ds_put_char(s, ')');
     }
@@ -814,7 +831,17 @@ encode_CT_COMMIT_V1(const struct ovnact_ct_commit_v1 *cc,
     struct ofpact_conntrack *ct = ofpact_put_CT(ofpacts);
     ct->flags = NX_CT_F_COMMIT;
     ct->recirc_table = NX_CT_RECIRC_NONE;
-    ct->zone_src.field = mf_from_id(MFF_LOG_CT_ZONE);
+
+    if (ep->is_switch) {
+        ct->zone_src.field = mf_from_id(MFF_LOG_CT_ZONE);
+    } else {
+        if (cc->zone == OVNACT_CT_ZONE_SNAT) {
+            ct->zone_src.field = mf_from_id(MFF_LOG_SNAT_ZONE);
+        } else {
+            ct->zone_src.field = mf_from_id(MFF_LOG_DNAT_ZONE);
+        }
+    }
+
     ct->zone_src.ofs = 0;
     ct->zone_src.n_bits = 16;
 
