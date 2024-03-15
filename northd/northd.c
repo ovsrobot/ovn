@@ -9362,8 +9362,14 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
 }
 
 
-/* Ingress table 25: Add IP multicast flows learnt from IGMP/MLD
- * (priority 90). */
+/* Ingress table 27: Add IP multicast flows learnt from IGMP/MLD
+ * (priority 90).
+ *
+ * Ingress table 27: Transit switch add IP multicast flows learnt
+ * from IGMP/MLD to forward traffic explicitly to the ports that are
+ * part of the IGMP/MLD group, and ignore MROUTERAS Ports.
+ * (priority 95).
+ */
 static void
 build_lswitch_ip_mcast_igmp_mld(struct ovn_igmp_group *igmp_group,
                                 struct lflow_table *lflows,
@@ -9376,6 +9382,9 @@ build_lswitch_ip_mcast_igmp_mld(struct ovn_igmp_group *igmp_group,
 
         ds_clear(match);
         ds_clear(actions);
+
+        bool transit_switch =
+            ovn_datapath_is_transit_switch(igmp_group->datapath);
 
         struct mcast_switch_info *mcast_sw_info =
             &igmp_group->datapath->mcast_info.sw;
@@ -9422,7 +9431,7 @@ build_lswitch_ip_mcast_igmp_mld(struct ovn_igmp_group *igmp_group,
         }
 
         /* Also flood traffic to all multicast routers with relay enabled. */
-        if (mcast_sw_info->flood_relay) {
+        if (mcast_sw_info->flood_relay && !transit_switch) {
             ds_put_cstr(actions,
                         "clone { "
                             "outport = \""MC_MROUTER_FLOOD "\"; "
@@ -9440,7 +9449,8 @@ build_lswitch_ip_mcast_igmp_mld(struct ovn_igmp_group *igmp_group,
                       igmp_group->mcgroup.name);
 
         ovn_lflow_add(lflows, igmp_group->datapath, S_SWITCH_IN_L2_LKUP,
-                      90, ds_cstr(match), ds_cstr(actions), NULL);
+                      transit_switch? 95 : 90, ds_cstr(match),
+                      ds_cstr(actions), NULL);
     }
 }
 

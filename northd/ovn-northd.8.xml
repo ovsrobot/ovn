@@ -1934,6 +1934,13 @@ output;
       </li>
 
       <li>
+        Priority-95 flows for transit switches only that forward registered
+        IP multicast traffic to their corresponding multicast group , which
+        <code>ovn-northd</code> creates based on learnt
+        <ref table="IGMP_Group" db="OVN_Southbound"/> entries.
+      </li>
+
+      <li>
         Priority-90 flows that forward registered IP multicast traffic to
         their corresponding multicast group, which <code>ovn-northd</code>
         creates based on learnt <ref table="IGMP_Group" db="OVN_Southbound"/>
