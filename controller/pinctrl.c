@@ -1139,9 +1139,7 @@ compose_prefixd_packet(struct dp_packet *b, struct ipv6_prefixd_state *pfd)
         eth_dst = (struct eth_addr) ETH_ADDR_C(33,33,00,01,00,02);
         ipv6_parse("ff02::1:2", &ipv6_dst);
     }
-    if (ipv6_addr_is_set(&pfd->prefix)) {
-        payload += sizeof(struct dhcpv6_opt_ia_prefix);
-    }
+    payload += sizeof(struct dhcpv6_opt_ia_prefix);
 
     eth_compose(b, eth_dst, pfd->ea, ETH_TYPE_IPV6, IPV6_HEADER_LEN);
 
@@ -1191,23 +1189,38 @@ compose_prefixd_packet(struct dp_packet *b, struct ipv6_prefixd_state *pfd)
     ia_pd->opt.code = htons(DHCPV6_OPT_IA_PD);
     int opt_len = sizeof(struct dhcpv6_opt_ia_na) -
                   sizeof(struct dhcpv6_opt_header);
-    if (ipv6_addr_is_set(&pfd->prefix)) {
-        opt_len += sizeof(struct dhcpv6_opt_ia_prefix);
-    }
+    opt_len += sizeof(struct dhcpv6_opt_ia_prefix);
     ia_pd->opt.len = htons(opt_len);
     ia_pd->iaid = htonl(pfd->aid);
     ia_pd->t1 = OVS_BE32_MAX;
     ia_pd->t2 = OVS_BE32_MAX;
+    struct dhcpv6_opt_ia_prefix *ia_prefix =
+        (struct dhcpv6_opt_ia_prefix *)(ia_pd + 1);
+    ia_prefix->opt.code = htons(DHCPV6_OPT_IA_PREFIX);
+    ia_prefix->opt.len = htons(sizeof(struct dhcpv6_opt_ia_prefix) -
+                               sizeof(struct dhcpv6_opt_header));
     if (ipv6_addr_is_set(&pfd->prefix)) {
-        struct dhcpv6_opt_ia_prefix *ia_prefix =
-            (struct dhcpv6_opt_ia_prefix *)(ia_pd + 1);
-        ia_prefix->opt.code = htons(DHCPV6_OPT_IA_PREFIX);
-        ia_prefix->opt.len = htons(sizeof(struct dhcpv6_opt_ia_prefix) -
-                                   sizeof(struct dhcpv6_opt_header));
         ia_prefix->plife_time = OVS_BE32_MAX;
         ia_prefix->vlife_time = OVS_BE32_MAX;
         ia_prefix->plen = pfd->plen;
         ia_prefix->ipv6 = pfd->prefix;
+    } else {
+        /* The prefix we obtain is used to fill the ``ipv6_ra_prefixes``
+         * option for configuration of instances through SLAAC.
+         *
+         * As discussed in RFC 7421 the interface identifier is 64 bits long,
+         * and client implementations refrain from performing SLAAC with any
+         * other prefix length.
+         *
+         * The DHCPv6 server is at liberty to offer whichever prefix length it
+         * wants, so make sure new requests are for a prefix length of 64 so
+         * that it is suitable.
+         *
+         * A future improvement might be to adjust the requested prefix length
+         * to the number of downstream LRPs we have and then allocate to the
+         * downstream LRPs from that larger delegated prefix. */
+        ia_prefix->ipv6 = in6addr_any;
+        ia_prefix->plen = 64;
     }
 
     uint32_t csum = packet_csum_pseudoheader6(dp_packet_l3(b));
