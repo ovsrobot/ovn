@@ -1630,7 +1630,9 @@ priority=1100,ip,reg15=0x$port_key,metadata=0x$dp_key,nw_src=10.0.0.8 actions=lo
 done
 
 reprocess_count_new=$(read_counter consider_logical_flow)
-AT_CHECK([echo $(($reprocess_count_new - $reprocess_count_old))], [0], [10
+# First 2 reprocess are due to change from 1 IP in AS to 2.
+# Last 5 is due to overlap in IP addresses between as1 and as2.
+AT_CHECK([echo $(($reprocess_count_new - $reprocess_count_old))], [0], [7
 ])
 
 # Remove the IPs from as1 and as2, 1 IP each time.
@@ -1653,9 +1655,9 @@ for i in $(seq 10); do
 done
 
 reprocess_count_new=$(read_counter consider_logical_flow)
-# In this case the as1 and as2 are merged to a single OR expr, so we lose track of
-# address set information - can't handle deletion incrementally.
-AT_CHECK([echo $(($reprocess_count_new - $reprocess_count_old))], [0], [10
+# First 5 are due to overlap in IP addresses between as1 and as2.
+# Last 2 are due to change from 2 IP in AS to 1.
+AT_CHECK([echo $(($reprocess_count_new - $reprocess_count_old))], [0], [7
 ])
 
 OVN_CLEANUP([hv1])
@@ -1822,7 +1824,7 @@ priority=1100,ip,reg15=0x$port_key,metadata=0x$dp_key,nw_src=10.0.0.5 actions=co
 priority=1100,ip,reg15=0x$port_key,metadata=0x$dp_key,nw_src=10.10.10.10 actions=conjunction,2/2)
 ])
 reprocess_count_new=$(read_counter consider_logical_flow)
-AT_CHECK([echo $(($reprocess_count_new - $reprocess_count_old))], [0], [1
+AT_CHECK([echo $(($reprocess_count_new - $reprocess_count_old))], [0], [0
 ])
 
 # Delete 2 IPs
@@ -1842,7 +1844,7 @@ priority=1100,ip,reg15=0x$port_key,metadata=0x$dp_key,nw_src=10.0.0.3 actions=co
 priority=1100,ip,reg15=0x$port_key,metadata=0x$dp_key,nw_src=10.10.10.10 actions=conjunction,2/2)
 ])
 reprocess_count_new=$(read_counter consider_logical_flow)
-AT_CHECK([echo $(($reprocess_count_new - $reprocess_count_old))], [0], [1
+AT_CHECK([echo $(($reprocess_count_new - $reprocess_count_old))], [0], [0
 ])
 
 OVN_CLEANUP([hv1])
