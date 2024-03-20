@@ -34942,7 +34942,7 @@ check ovn-nbctl set nb_global . options:use_common_zone="true"
 check ovn-nbctl --wait=hv sync
 # Use constants so that if tables or registers change, this test can
 # be updated easily.
-DNAT_TABLE=15
+DNAT_TABLE=16
 SNAT_TABLE=45
 DNAT_ZONE_REG="NXM_NX_REG11[[0..15]]"
 SNAT_ZONE_REG="NXM_NX_REG12[[0..15]]"
