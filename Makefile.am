@@ -108,7 +108,6 @@ EXTRA_DIST = \
 	Vagrantfile-FreeBSD \
 	.mailmap \
 	TODO.rst \
-	TODO_SPLIT.rst \
 	ovn-architecture.7.xml \
 	ovn-nb.ovsschema \
 	ovn-nb.xml \

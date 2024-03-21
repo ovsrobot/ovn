@@ -39,8 +39,7 @@ in userspace and therefore requires no kernel modules to be installed.
 
 Until recently, OVN code lived within the Open vSwitch codebase. OVN has
 recently been split into its own repo. There is much to do to complete this
-split entirely. See the TODO_SPLIT.rst file for a list of known tasks that
-need to be completed.
+split entirely.
 
 What's here?
 ------------
