@@ -37684,7 +37684,7 @@ tpa=$(ip_to_hex 10 0 0 10)
 send_garp 1 1 $eth_src $eth_dst $spa $tpa
 
 OVS_WAIT_UNTIL([test 1 = `cat hv1/ovn-controller.log | grep "pinctrl received  packet-in" | \
-grep opcode=BIND_VPORT | grep OF_Table_ID=28 | wc -l`])
+grep opcode=BIND_VPORT | grep OF_Table_ID=$(ovn-debug lflow-stage-to-oftable ls_in_arp_rsp) | wc -l`])
 
 sleep_controller hv1
 
