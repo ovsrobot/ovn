@@ -12,6 +12,10 @@ Post v24.03.0
     flow table id.
     "lflow-stage-to-oftable STAGE_NAME" that converts stage name into OpenFlow
     table id.
+  - Allow Static Routes where the address families of ip_prefix and nexthop
+    diverge (e.g. IPv4 packets over IPv6 links). This is currently limited to
+    nexthops that have their mac addresses prepopulated (so
+    dynamic_neigh_routers must be false).
 
 OVN v24.03.0 - 01 Mar 2024
 --------------------------

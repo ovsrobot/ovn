@@ -10238,18 +10238,6 @@ parsed_routes_add(struct ovn_datapath *od, const struct hmap *lr_ports,
         return NULL;
     }
 
-    /* Verify that ip_prefix and nexthop have same address familiy. */
-    if (valid_nexthop) {
-        if (IN6_IS_ADDR_V4MAPPED(&prefix) != IN6_IS_ADDR_V4MAPPED(&nexthop)) {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-            VLOG_WARN_RL(&rl, "Address family doesn't match between 'ip_prefix'"
-                         " %s and 'nexthop' %s in static route "UUID_FMT,
-                         route->ip_prefix, route->nexthop,
-                         UUID_ARGS(&route->header_.uuid));
-            return NULL;
-        }
-    }
-
     /* Verify that ip_prefix and nexthop are on the same network. */
     if (!is_discard_route &&
         !find_static_route_outport(od, lr_ports, route,
@@ -10666,7 +10654,7 @@ build_ecmp_route_flow(struct lflow_table *lflows, struct ovn_datapath *od,
                       struct lflow_ref *lflow_ref)
 
 {
-    bool is_ipv4 = IN6_IS_ADDR_V4MAPPED(&eg->prefix);
+    bool is_ipv4_network = IN6_IS_ADDR_V4MAPPED(&eg->prefix);
     uint16_t priority;
     struct ecmp_route_list_node *er;
     struct ds route_match = DS_EMPTY_INITIALIZER;
@@ -10675,7 +10663,8 @@ build_ecmp_route_flow(struct lflow_table *lflows, struct ovn_datapath *od,
     int ofs = !strcmp(eg->origin, ROUTE_ORIGIN_CONNECTED) ?
         ROUTE_PRIO_OFFSET_CONNECTED: ROUTE_PRIO_OFFSET_STATIC;
     build_route_match(NULL, eg->route_table_id, prefix_s, eg->plen,
-                      eg->is_src_route, is_ipv4, &route_match, &priority, ofs);
+                      eg->is_src_route, is_ipv4_network, &route_match,
+                      &priority, ofs);
     free(prefix_s);
 
     struct ds actions = DS_EMPTY_INITIALIZER;
@@ -10708,7 +10697,11 @@ build_ecmp_route_flow(struct lflow_table *lflows, struct ovn_datapath *od,
         /* Find the outgoing port. */
         const char *lrp_addr_s = NULL;
         struct ovn_port *out_port = NULL;
-        if (!find_static_route_outport(od, lr_ports, route, is_ipv4,
+        bool is_ipv4_gateway = is_ipv4_network;
+        if (route->nexthop && route->nexthop[0]) {
+          is_ipv4_gateway = strchr(route->nexthop, '.') ? true : false;
+        }
+        if (!find_static_route_outport(od, lr_ports, route, is_ipv4_gateway,
                                        &lrp_addr_s, &out_port)) {
             continue;
         }
@@ -10733,9 +10726,9 @@ build_ecmp_route_flow(struct lflow_table *lflows, struct ovn_datapath *od,
                       "eth.src = %s; "
                       "outport = %s; "
                       "next;",
-                      is_ipv4 ? REG_NEXT_HOP_IPV4 : REG_NEXT_HOP_IPV6,
+                      is_ipv4_gateway ? REG_NEXT_HOP_IPV4 : REG_NEXT_HOP_IPV6,
                       route->nexthop,
-                      is_ipv4 ? REG_SRC_IPV4 : REG_SRC_IPV6,
+                      is_ipv4_gateway ? REG_SRC_IPV4 : REG_SRC_IPV6,
                       lrp_addr_s,
                       out_port->lrp_networks.ea_s,
                       out_port->json_key);
@@ -10757,13 +10750,18 @@ add_route(struct lflow_table *lflows, struct ovn_datapath *od,
           const struct ovsdb_idl_row *stage_hint, bool is_discard_route,
           int ofs, struct lflow_ref *lflow_ref)
 {
-    bool is_ipv4 = strchr(network_s, '.') ? true : false;
+    bool is_ipv4_network = strchr(network_s, '.') ? true : false;
+    bool is_ipv4_gateway = is_ipv4_network;
     struct ds match = DS_EMPTY_INITIALIZER;
     uint16_t priority;
     const struct ovn_port *op_inport = NULL;
 
+    if (gateway && gateway[0]) {
+        is_ipv4_gateway = strchr(gateway, '.') ? true : false;
+    }
+
     /* IPv6 link-local addresses must be scoped to the local router port. */
-    if (!is_ipv4) {
+    if (!is_ipv4_network) {
         struct in6_addr network;
         ovs_assert(ipv6_parse(network_s, &network));
         if (in6_is_lla(&network)) {
@@ -10771,7 +10769,7 @@ add_route(struct lflow_table *lflows, struct ovn_datapath *od,
         }
     }
     build_route_match(op_inport, rtb_id, network_s, plen, is_src_route,
-                      is_ipv4, &match, &priority, ofs);
+                      is_ipv4_network, &match, &priority, ofs);
 
     struct ds common_actions = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
@@ -10779,11 +10777,12 @@ add_route(struct lflow_table *lflows, struct ovn_datapath *od,
         ds_put_cstr(&actions, debug_drop_action());
     } else {
         ds_put_format(&common_actions, REG_ECMP_GROUP_ID" = 0; %s = ",
-                      is_ipv4 ? REG_NEXT_HOP_IPV4 : REG_NEXT_HOP_IPV6);
+                      is_ipv4_gateway ? REG_NEXT_HOP_IPV4 : REG_NEXT_HOP_IPV6);
         if (gateway && gateway[0]) {
             ds_put_cstr(&common_actions, gateway);
         } else {
-            ds_put_format(&common_actions, "ip%s.dst", is_ipv4 ? "4" : "6");
+            ds_put_format(&common_actions, "ip%s.dst",
+                          is_ipv4_network ? "4" : "6");
         }
         ds_put_format(&common_actions, "; "
                       "%s = %s; "
@@ -10791,7 +10790,7 @@ add_route(struct lflow_table *lflows, struct ovn_datapath *od,
                       "outport = %s; "
                       "flags.loopback = 1; "
                       "next;",
-                      is_ipv4 ? REG_SRC_IPV4 : REG_SRC_IPV6,
+                      is_ipv4_gateway ? REG_SRC_IPV4 : REG_SRC_IPV6,
                       lrp_addr_s,
                       op->lrp_networks.ea_s,
                       op->json_key);
