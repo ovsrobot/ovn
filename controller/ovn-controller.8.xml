@@ -30,6 +30,18 @@
     </p>
 
     <h1>Options</h1>
+    <dl>
+      <dt><code>--br-int-remote=<var>remote-socket</var></code></dt>
+      <dd>
+        Connection to the br-int management interface. Otherwise, the default
+        is <code>unix:@RUNDIR@/<var>BR_INT_NAME</var>.mgmt</code>.
+      </dd>
+      <dt><code>--br-int-remote-probe-interval=<var>interval</var></code></dt>
+      <dd>
+        Probe interval in seconds, with <code>0</code> meaning disabled.
+        Otherwise, the default is <code>0</code>.
+      </dd>
+    </dl>
 
     <h2>Daemon Options</h2>
     <xi:include href="lib/daemon.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>

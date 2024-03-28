@@ -122,7 +122,13 @@ static unixctl_cb_func debug_ignore_startup_delay;
 #define OVS_NB_CFG_TS_NAME "ovn-nb-cfg-ts"
 #define OVS_STARTUP_TS_NAME "ovn-startup-ts"
 
-static char *parse_options(int argc, char *argv[]);
+struct br_int_remote {
+    char *target;
+    int probe_interval;
+    bool use_unix_socket;
+};
+
+static char *parse_options(int argc, char *argv[], struct br_int_remote *);
 OVS_NO_RETURN static void usage(void);
 
 /* SSL options */
@@ -5052,11 +5058,30 @@ check_northd_version(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
     return true;
 }
 
+static void
+br_int_remote_update(struct br_int_remote *remote,
+                         const struct ovsrec_bridge *br_int)
+{
+    if (!remote->use_unix_socket || !br_int) {
+        return;
+    }
+
+    char *target = xasprintf("unix:%s/%s.mgmt", ovs_rundir(), br_int->name);
+    if (!remote->target || strcmp(remote->target, target)) {
+        free(remote->target);
+        remote->target = xstrdup(target);
+    }
+    free(target);
+}
+
 int
 main(int argc, char *argv[])
 {
     struct unixctl_server *unixctl;
     struct ovn_exit_args exit_args = {0};
+    struct br_int_remote br_int_remote = (struct br_int_remote) {
+            .use_unix_socket = true
+    };
     int retval;
 
     /* Read from system-id-override file once on startup. */
@@ -5065,7 +5090,7 @@ main(int argc, char *argv[])
     ovs_cmdl_proctitle_init(argc, argv);
     ovn_set_program_name(argv[0]);
     service_start(&argc, &argv);
-    char *ovs_remote = parse_options(argc, argv);
+    char *ovs_remote = parse_options(argc, argv, &br_int_remote);
     fatal_ignore_sigpipe();
 
     daemonize_start(true, false);
@@ -5666,6 +5691,11 @@ main(int argc, char *argv[])
                        ovsrec_server_has_datapath_table(ovs_idl_loop.idl)
                        ? &br_int_dp
                        : NULL);
+        br_int_remote_update(&br_int_remote, br_int);
+        statctrl_update_swconn(br_int_remote.target,
+                               br_int_remote.probe_interval);
+        pinctrl_update_swconn(br_int_remote.target,
+                              br_int_remote.probe_interval);
 
         /* Enable ACL matching for double tagged traffic. */
         if (ovs_idl_txn) {
@@ -5720,7 +5750,8 @@ main(int argc, char *argv[])
             if (ovs_idl_txn
                 && ovs_feature_support_run(br_int_dp ?
                                            &br_int_dp->capabilities : NULL,
-                                           br_int ? br_int->name : NULL)) {
+                                           br_int_remote.target,
+                                           br_int_remote.probe_interval)) {
                 VLOG_INFO("OVS feature set changed, force recompute.");
                 engine_set_force_recompute(true);
                 if (ovs_feature_set_discovered()) {
@@ -5738,7 +5769,8 @@ main(int argc, char *argv[])
 
             if (br_int) {
                 ct_zones_data = engine_get_data(&en_ct_zones);
-                if (ofctrl_run(br_int, ovs_table,
+                if (ofctrl_run(br_int_remote.target,
+                               br_int_remote.probe_interval, ovs_table,
                                ct_zones_data ? &ct_zones_data->pending
                                              : NULL)) {
                     static struct vlog_rate_limit rl
@@ -5855,7 +5887,7 @@ main(int argc, char *argv[])
                         }
                         stopwatch_start(PINCTRL_RUN_STOPWATCH_NAME,
                                         time_msec());
-                        pinctrl_update(ovnsb_idl_loop.idl, br_int->name);
+                        pinctrl_update(ovnsb_idl_loop.idl);
                         pinctrl_run(ovnsb_idl_txn,
                                     sbrec_datapath_binding_by_key,
                                     sbrec_port_binding_by_datapath,
@@ -5909,7 +5941,6 @@ main(int argc, char *argv[])
                     }
 
                     if (mac_cache_data) {
-                        statctrl_update(br_int->name);
                         statctrl_run(ovnsb_idl_txn, mac_cache_data);
                     }
 
@@ -6028,13 +6059,6 @@ main(int argc, char *argv[])
             }
 
             binding_wait();
-        }
-
-        if (!northd_version_match && br_int) {
-            /* Set the integration bridge name to pinctrl so that the pinctrl
-             * thread can handle any packet-ins when we are not processing
-             * any DB updates due to version mismatch. */
-            pinctrl_set_br_int_name(br_int->name);
         }
 
         unixctl_server_run(unixctl);
@@ -6169,6 +6193,7 @@ loop_done:
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
 
     ovs_feature_support_destroy();
+    free(br_int_remote.target);
     free(ovs_remote);
     free(file_system_id);
     free(cli_system_id);
@@ -6181,7 +6206,7 @@ loop_done:
 }
 
 static char *
-parse_options(int argc, char *argv[])
+parse_options(int argc, char *argv[], struct br_int_remote *br_int_remote)
 {
     enum {
         OPT_PEER_CA_CERT = UCHAR_MAX + 1,
@@ -6190,6 +6215,8 @@ parse_options(int argc, char *argv[])
         OVN_DAEMON_OPTION_ENUMS,
         SSL_OPTION_ENUMS,
         OPT_ENABLE_DUMMY_VIF_PLUG,
+        BR_INT_REMOTE,
+        BR_INT_PROBE_INTERVAL,
     };
 
     static struct option long_options[] = {
@@ -6203,6 +6230,9 @@ parse_options(int argc, char *argv[])
         {"chassis", required_argument, NULL, 'n'},
         {"enable-dummy-vif-plug", no_argument, NULL,
          OPT_ENABLE_DUMMY_VIF_PLUG},
+        {"br-int-remote", required_argument, NULL, BR_INT_REMOTE},
+        {"br-int-probe-interval", required_argument, NULL,
+         BR_INT_PROBE_INTERVAL},
         {NULL, 0, NULL, 0}
     };
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
@@ -6262,6 +6292,16 @@ parse_options(int argc, char *argv[])
         case 'n':
             free(cli_system_id);
             cli_system_id = xstrdup(optarg);
+            break;
+
+        case BR_INT_REMOTE:
+            free(br_int_remote->target);
+            br_int_remote->target = xstrdup(optarg);
+            br_int_remote->use_unix_socket = false;
+            break;
+
+        case BR_INT_PROBE_INTERVAL:
+            str_to_int(optarg, 10, &br_int_remote->probe_interval);
             break;
 
         case '?':

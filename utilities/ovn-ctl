@@ -617,6 +617,12 @@ start_controller () {
     if test X"$OVN_CONTROLLER_SSL_CIPHERS" != X; then
         set "$@" --ssl-ciphers=$OVN_CONTROLLER_SSL_CIPHERS
     fi
+    if test X"$OVN_CONTROLLER_BR_INT_REMOTE" != X; then
+        set "$@" --br-int-remote=$OVN_CONTROLLER_BR_INT_REMOTE
+    fi
+    if test "$OVN_CONTROLLER_BR_INT_PROBE_INTERVAL" != 0; then
+        set "$@" --br-int-probe-interval=$OVN_CONTROLLER_BR_INT_PROBE_INTERVAL
+    fi
 
     [ "$OVN_USER" != "" ] && set "$@" --user "$OVN_USER"
 
@@ -831,6 +837,8 @@ set_defaults () {
     OVN_USER=
 
     OVN_CONTROLLER_LOG="-vconsole:emer -vsyslog:err -vfile:info"
+    OVN_CONTROLLER_BR_INT_REMOTE=""
+    OVN_CONTROLLER_BR_INT_PROBE_INTERVAL=0
     OVN_NORTHD_LOG="-vconsole:emer -vsyslog:err -vfile:info"
     OVN_NORTHD_LOGFILE=""
     OVN_NORTHD_N_THREADS=1
@@ -1041,6 +1049,8 @@ Options:
   --ovn-controller-ssl-bootstrap-ca-cert=CERT Bootstrapped OVN Southbound SSL CA certificate file
   --ovn-controller-ssl-protocols=PROTOCOLS OVN Southbound SSL protocols
   --ovn-controller-ssl-ciphers=CIPHERS OVN Southbound SSL cipher list
+  --ovn-controller-br-int-remote=REMOTE Active or passive connection to br-int
+  --ovn-controller-br-int-probe-interval=INTERVAL Probe interval in seconds for the br-int connection
   --ovn-nb-db-ssl-key=KEY OVN Northbound DB SSL private key file
   --ovn-nb-db-ssl-cert=CERT OVN Northbound DB SSL certificate file
   --ovn-nb-db-ssl-ca-cert=CERT OVN Northbound DB SSL CA certificate file

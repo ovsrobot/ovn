@@ -12,6 +12,12 @@ Post v24.03.0
     flow table id.
     "lflow-stage-to-oftable STAGE_NAME" that converts stage name into OpenFlow
     table id.
+  - Add option to ovn-controller called "--br-int-remote=REMOTE" that allows
+    to specify connection method to integration bridge for ovn-controller,
+    defaulting to the unix socket.
+  - Add option to ovn-controller called "--br-int-probe-interval=INTERVAL"
+    that sets probe interval for integration bridge connection,
+    disabled by default.
 
 OVN v24.03.0 - 01 Mar 2024
 --------------------------
