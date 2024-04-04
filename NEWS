@@ -13,6 +13,9 @@ Post v24.03.0
     "lflow-stage-to-oftable STAGE_NAME" that converts stage name into OpenFlow
     table id.
   - Rename the ovs-sandbox script to ovn-sandbox.
+  - Added new global config option NB_Global:options:disable_vxlan_mode to
+    extend available tunnel IDs space for datapaths from 4095 to 16711680.
+    For more details see man ovn-nb for mentioned option.
 
 OVN v24.03.0 - 01 Mar 2024
 --------------------------

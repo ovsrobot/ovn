@@ -381,6 +381,18 @@
         of SB changes would be very noticeable.
       </column>
 
+      <column name="options" key="disable_vxlan_mode">
+        Be default if at least one chassis in OVN cluster has VXLAN encap,
+        northd will run in a `vxlan mode`, which means it splits 24-bit
+        VXLAN VNI for datapath and port tunnel IDs allocation evenly.  Maximum
+        datapaths count in this mode is 4095 and maximum ports per datapath is
+        2047.  Rest of IDs are used for multicast groups.
+        In case VXLAN encaps are needed on chassis only to support HW VTEP
+        functionality, and main encap type is GENEVE or STT, set this option to
+        `false` to use defaults -- 16-bit space for datapath tunnel IDS and 15
+        bits for port tunnel IDs.
+      </column>
+
       <group title="Options for configuring interconnection route advertisement">
         <p>
           These options control how routes are advertised between OVN
