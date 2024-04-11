@@ -4346,7 +4346,6 @@ ls_port_create(struct ovsdb_idl_txn *ovnsb_txn, struct hmap *ls_ports,
         if (op->sb) {
             sbrec_port_binding_delete(op->sb);
         }
-        ovs_list_remove(&op->list);
         ovn_port_destroy(ls_ports, op);
         return NULL;
     }
