@@ -4322,6 +4322,9 @@ ls_port_init(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
     }
     /* Assign new tunnel ids where needed. */
     if (!ovn_port_allocate_key(sbrec_chassis_table, op)) {
+        if (!sb) {
+            sbrec_port_binding_delete(op->sb);
+        }
         return false;
     }
     ovn_port_update_sbrec(ovnsb_txn, sbrec_chassis_by_name,
@@ -4345,9 +4348,6 @@ ls_port_create(struct ovsdb_idl_txn *ovnsb_txn, struct hmap *ls_ports,
     if (!ls_port_init(op, ovnsb_txn, od, sb,
                       sbrec_mirror_table, sbrec_chassis_table,
                       sbrec_chassis_by_name, sbrec_chassis_by_hostname)) {
-        if (op->sb) {
-            sbrec_port_binding_delete(op->sb);
-        }
         ovn_port_destroy(ls_ports, op);
         return NULL;
     }
@@ -4551,8 +4551,8 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                                 ni->sbrec_chassis_table,
                                 ni->sbrec_chassis_by_name,
                                 ni->sbrec_chassis_by_hostname)) {
-                if (op->sb) {
-                    sbrec_port_binding_delete(op->sb);
+                if (sb) {
+                    sbrec_port_binding_delete(sb);
                 }
                 ovn_port_destroy(&nd->ls_ports, op);
                 goto fail;
