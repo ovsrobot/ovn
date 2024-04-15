@@ -794,6 +794,64 @@ encode_CT_COMMIT_V2(const struct ovnact_nest *on,
 }
 
 static void
+parse_CT_COMMIT_TO_ZONE(struct action_context *ctx)
+{
+    add_prerequisite(ctx, "ip");
+
+    struct ovnact_ct_commit_nat *ct_commit =
+        ovnact_put_CT_COMMIT_TO_ZONE(ctx->ovnacts);
+
+    lexer_force_match(ctx->lexer, LEX_T_LPAREN);
+
+    if (lexer_match_id(ctx->lexer, "dnat")) {
+        ct_commit->dnat_zone = true;
+    } else if (lexer_match_id(ctx->lexer, "snat")) {
+        ct_commit->dnat_zone = false;
+    } else {
+        lexer_syntax_error(ctx->lexer, "expecting parameter 'dnat' or 'snat'");
+    }
+
+    lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+}
+
+static void
+format_CT_COMMIT_TO_ZONE(const struct ovnact_ct_commit_nat *ct_commit,
+                         struct ds *s)
+{
+    ds_put_format(s, "ct_commit_to_zone(%s);",
+                  ct_commit->dnat_zone ? "dnat" : "snat");
+
+}
+
+static void
+encode_CT_COMMIT_TO_ZONE(const struct ovnact_ct_commit_nat *ct_commit,
+                         const struct ovnact_encode_params *ep,
+                         struct ofpbuf *ofpacts)
+{
+    struct ofpact_conntrack *ct = ofpact_put_CT(ofpacts);
+    ct->flags = NX_CT_F_COMMIT;
+    ct->recirc_table = NX_CT_RECIRC_NONE;
+    ct->zone_src.ofs = 0;
+    ct->zone_src.n_bits = 16;
+
+    if (ep->is_switch) {
+        ct->zone_src.field = mf_from_id(MFF_LOG_CT_ZONE);
+    } else {
+        ct->zone_src.field = mf_from_id(ct_commit->dnat_zone
+                                        ? MFF_LOG_DNAT_ZONE
+                                        : MFF_LOG_SNAT_ZONE);
+    }
+
+    size_t set_field_offset = ofpacts->size;
+    ofpbuf_pull(ofpacts, set_field_offset);
+    ofpacts->header = ofpbuf_push_uninit(ofpacts, set_field_offset);
+    ct = ofpacts->header;
+    ofpact_finish(ofpacts, &ct->ofpact);
+
+
+}
+
+static void
 parse_ct_nat(struct action_context *ctx, const char *name,
              enum ovnact_ct_nat_type type, struct ovnact_ct_nat *cn)
 {
@@ -5306,6 +5364,8 @@ parse_action(struct action_context *ctx)
         parse_CT_NEXT(ctx);
     } else if (lexer_match_id(ctx->lexer, "ct_commit")) {
         parse_CT_COMMIT(ctx);
+    } else if (lexer_match_id(ctx->lexer, "ct_commit_to_zone")) {
+        parse_CT_COMMIT_TO_ZONE(ctx);
     } else if (lexer_match_id(ctx->lexer, "ct_dnat")) {
         parse_CT_DNAT(ctx);
     } else if (lexer_match_id(ctx->lexer, "ct_snat")) {

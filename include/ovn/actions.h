@@ -68,6 +68,7 @@ struct collector_set_ids;
     OVNACT(CT_NEXT,           ovnact_ct_next)         \
     /* CT_COMMIT_V1 is not supported anymore. */      \
     OVNACT(CT_COMMIT_V2,      ovnact_nest)            \
+    OVNACT(CT_COMMIT_TO_ZONE, ovnact_ct_commit_nat)   \
     OVNACT(CT_DNAT,           ovnact_ct_nat)          \
     OVNACT(CT_SNAT,           ovnact_ct_nat)          \
     OVNACT(CT_DNAT_IN_CZONE,  ovnact_ct_nat)          \

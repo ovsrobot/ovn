@@ -1432,6 +1432,30 @@
           </p>
         </dd>
 
+        <dt><code>ct_commit_to_zone(dnat);</code></dt>
+        <dt><code>ct_commit_to_zone(snat);</code></dt>
+        <dd>
+          <p>
+            Commit the flow to the specific zone in the connection tracker.
+            Similar to the <code>ct_commit</code> action, this action requires
+            previous call to <code>ct_next</code> to initialize connection
+            tracking state.
+          </p>
+
+          <p>
+            If you want processing to continue in the next table, you must
+            execute the <code>next</code> action after
+            <code>ct_commit_to_zone</code>.
+          </p>
+
+          <p>
+            Note that this action is meaningful only in the Logical Router
+            Datapath as the Logical Switch Datapath does not use separate
+            connection tracking zones. Using this action in Logical Switch
+            Datapath falls back to committing the flow into the switch's
+            default zone.
+          </p>
+        </dd>
         <dt><code>ct_dnat;</code></dt>
         <dt><code>ct_dnat(<var>IP</var>);</code></dt>
         <dd>
