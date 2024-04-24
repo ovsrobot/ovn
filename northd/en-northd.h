@@ -19,5 +19,13 @@ bool northd_nb_logical_switch_handler(struct engine_node *, void *data);
 bool northd_nb_logical_router_handler(struct engine_node *, void *data);
 bool northd_sb_port_binding_handler(struct engine_node *, void *data);
 bool northd_lb_data_handler(struct engine_node *, void *data);
+void *en_bfd_consumer_init(struct engine_node *node OVS_UNUSED,
+                           struct engine_arg *arg OVS_UNUSED);
+void en_bfd_consumer_cleanup(void *data);
+void en_bfd_consumer_run(struct engine_node *node, void *data);
+void *en_bfd_init(struct engine_node *node OVS_UNUSED,
+                  struct engine_arg *arg OVS_UNUSED);
+void en_bfd_cleanup(void *data);
+void en_bfd_run(struct engine_node *node, void *data);
 
 #endif /* EN_NORTHD_H */
