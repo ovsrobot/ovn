@@ -23,6 +23,7 @@
 #include "northd/en-port-group.h"
 #include "northd/ipam.h"
 #include "openvswitch/hmap.h"
+#include "simap.h"
 #include "ovs-thread.h"
 
 struct northd_input {
@@ -160,6 +161,23 @@ struct northd_data {
     struct northd_tracked_data trk_data;
 };
 
+struct route_policy {
+    struct hmap_node key_node;
+    const struct nbrec_logical_router_policy *rule;
+    size_t n_valid_nexthops;
+    char **valid_nexthops;
+};
+
+struct bfd_consumer_data {
+    struct hmap parsed_routes;
+    struct hmap route_policies;
+    struct simap route_tables;
+};
+
+struct bfd_data {
+    struct hmap bfd_connections;
+};
+
 struct lr_nat_table;
 
 struct lflow_input {
@@ -190,6 +208,9 @@ struct lflow_input {
     const struct hmap *svc_monitor_map;
     bool ovn_internal_version_changed;
     const char *svc_monitor_mac;
+    struct hmap *parsed_routes;
+    struct hmap *route_policies;
+    struct simap *route_tables;
 };
 
 extern int parallelization_state;
@@ -661,6 +682,18 @@ struct ovn_port {
     struct lflow_ref *stateful_lflow_ref;
 };
 
+struct parsed_route {
+    struct hmap_node key_node;
+    struct in6_addr prefix;
+    unsigned int plen;
+    bool is_src_route;
+    uint32_t route_table_id;
+    uint32_t hash;
+    const struct nbrec_logical_router_static_route *route;
+    bool ecmp_symmetric_reply;
+    bool is_discard_route;
+};
+
 void ovnnb_db_run(struct northd_input *input_data,
                   struct northd_data *data,
                   struct ovsdb_idl_txn *ovnnb_txn,
@@ -681,6 +714,17 @@ void northd_destroy(struct northd_data *data);
 void northd_init(struct northd_data *data);
 void northd_indices_create(struct northd_data *data,
                            struct ovsdb_idl *ovnsb_idl);
+
+struct parsed_route *parsed_routes_add(struct ovn_datapath *,
+        const struct hmap *, struct hmap *, struct simap *,
+        const struct nbrec_logical_router_static_route *,
+        const struct hmap *);
+uint32_t get_route_table_id(struct simap *, const char *);
+void bfd_consumer_init(struct bfd_consumer_data *);
+void bfd_consumer_destroy(struct bfd_consumer_data *);
+
+void bfd_init(struct bfd_data *);
+void bfd_destroy(struct bfd_data *);
 
 struct lflow_table;
 struct lr_stateful_tracked_data;
@@ -719,7 +763,9 @@ bool northd_handle_lb_data_changes(struct tracked_lb_data *,
                                    struct hmap *lbgrp_datapaths_map,
                                    struct northd_tracked_data *);
 
-void build_bfd_table(struct ovsdb_idl_txn *ovnsb_txn,
+void build_route_policies(struct ovn_datapath *, struct hmap *, struct hmap *,
+                          struct hmap *);
+bool build_bfd_table(struct ovsdb_idl_txn *ovnsb_txn,
                      const struct nbrec_bfd_table *,
                      const struct sbrec_bfd_table *,
                      const struct hmap *lr_ports,
