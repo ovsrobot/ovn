@@ -115,8 +115,8 @@ en_global_config_run(struct engine_node *node , void *data)
                      config_data->svc_monitor_mac);
     }
 
-    char *max_tunid = xasprintf("%d",
-        get_ovn_max_dp_key_local(sbrec_chassis_table));
+    init_vxlan_mode(sbrec_chassis_table);
+    char *max_tunid = xasprintf("%d", get_ovn_max_dp_key_local());
     smap_replace(options, "max_tunid", max_tunid);
     free(max_tunid);
 
