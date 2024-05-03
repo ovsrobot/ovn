@@ -886,8 +886,14 @@ join_datapaths(const struct nbrec_logical_switch_table *nbrec_ls_table,
 }
 
 void
-init_vxlan_mode(const struct sbrec_chassis_table *sbrec_chassis_table)
+init_vxlan_mode(const struct smap *nb_options,
+                const struct sbrec_chassis_table *sbrec_chassis_table)
 {
+    if (smap_get_bool(nb_options, "disable_vxlan_mode", false)) {
+        vxlan_mode = false;
+        return;
+    }
+
     const struct sbrec_chassis *chassis;
     SBREC_CHASSIS_TABLE_FOR_EACH (chassis, sbrec_chassis_table) {
         for (int i = 0; i < chassis->n_encaps; i++) {
@@ -17596,7 +17602,7 @@ ovnnb_db_run(struct northd_input *input_data,
     use_common_zone = smap_get_bool(input_data->nb_options, "use_common_zone",
                                     false);
 
-    init_vxlan_mode(input_data->sbrec_chassis_table);
+    init_vxlan_mode(input_data->nb_options, input_data->sbrec_chassis_table);
 
     build_datapaths(ovnsb_txn,
                     input_data->nbrec_logical_switch_table,

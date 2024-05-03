@@ -792,7 +792,8 @@ lr_has_multiple_gw_ports(const struct ovn_datapath *od)
 }
 
 void
-init_vxlan_mode(const struct sbrec_chassis_table *sbrec_chassis_table);
+init_vxlan_mode(const struct smap *nb_options,
+                const struct sbrec_chassis_table *sbrec_chassis_table);
 
 uint32_t get_ovn_max_dp_key_local(void);
 

@@ -17,6 +17,10 @@ Post v24.03.0
     external-ids, the option is no longer needed as it became effectively
     "true" for all scenarios.
   - Added DHCPv4 relay support.
+  - Added new global config option NB_Global:options:disable_vxlan_mode to
+    extend available tunnel IDs space for datapaths from 4095 to 16711680
+    when running in "VXLAN mode".  For more details see man ovn-nb(5) for
+    mentioned option.
 
 OVN v24.03.0 - 01 Mar 2024
 --------------------------
