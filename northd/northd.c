@@ -11544,9 +11544,14 @@ lrouter_dnat_and_snat_is_stateless(const struct nbrec_nat *nat)
 }
 
 static inline uint16_t
-lrouter_nat_get_priority(const struct ovn_datapath *od, bool is_dnat,
+lrouter_nat_get_priority(const struct ovn_datapath *od,
+                         const struct nbrec_nat *nat, bool is_dnat,
                          uint16_t prefix_len)
 {
+    if (nat->match[0]) {
+        return 300 + nat->priority;
+    }
+
     if (is_dnat) {
         return 100;
     }
@@ -11608,7 +11613,7 @@ lrouter_nat_add_ext_ip_match(const struct ovn_datapath *od,
          *
          */
         uint16_t priority =
-                lrouter_nat_get_priority(od, is_src, cidr_bits) + 2;
+                lrouter_nat_get_priority(od, nat, is_src, cidr_bits) + 2;
 
         ds_clone(&match_exempt, match);
         ds_put_format(&match_exempt, " && ip%s.%s == $%s",
@@ -14561,6 +14566,7 @@ build_lrouter_in_dnat_flow(struct lflow_table *lflows,
     const char *nat_action = lrouter_use_common_zone(od)
                              ? "ct_dnat_in_czone"
                              : "ct_dnat";
+    uint16_t priority = lrouter_nat_get_priority(od, nat, true, cidr_bits);
 
     ds_put_format(match, "ip && ip%c.dst == %s", is_v6 ? '6' : '4',
                   nat->external_ip);
@@ -14607,8 +14613,11 @@ build_lrouter_in_dnat_flow(struct lflow_table *lflows,
         ds_put_format(actions, ");");
     }
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT,
-                            lrouter_nat_get_priority(od, true, cidr_bits),
+    if (!lrouter_use_common_zone(od) && nat->match[0]) {
+        ds_put_format(match, " && (%s)", nat->match);
+    }
+
+    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, priority,
                             ds_cstr(match), ds_cstr(actions),
                             &nat->header_, lflow_ref);
 }
@@ -14751,7 +14760,7 @@ build_lrouter_out_snat_stateless_flow(struct lflow_table *lflows,
 
     ds_clear(actions);
 
-    uint16_t priority = lrouter_nat_get_priority(od, false, cidr_bits);
+    uint16_t priority = lrouter_nat_get_priority(od, nat, false, cidr_bits);
     build_lrouter_out_snat_match(lflows, od, nat, match, distributed_nat,
                                  cidr_bits, is_v6, l3dgw_port, lflow_ref,
                                  false);
@@ -14763,6 +14772,10 @@ build_lrouter_out_snat_stateless_flow(struct lflow_table *lflows,
 
     ds_put_format(actions, "ip%c.src=%s; next;",
                   is_v6 ? '6' : '4', nat->external_ip);
+
+    if (nat->match[0]) {
+        ds_put_format(match, " && (%s)", nat->match);
+    }
 
     ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_SNAT,
                             priority, ds_cstr(match),
@@ -14786,7 +14799,7 @@ build_lrouter_out_snat_in_czone_flow(struct lflow_table *lflows,
 
     ds_clear(actions);
 
-    uint16_t priority = lrouter_nat_get_priority(od, false, cidr_bits);
+    uint16_t priority = lrouter_nat_get_priority(od, nat, false, cidr_bits);
     struct ds zone_actions = DS_EMPTY_INITIALIZER;
 
     build_lrouter_out_snat_match(lflows, od, nat, match, distributed_nat,
@@ -14845,7 +14858,7 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
 
     ds_clear(actions);
 
-    uint16_t priority = lrouter_nat_get_priority(od, false, cidr_bits);
+    uint16_t priority = lrouter_nat_get_priority(od, nat, false, cidr_bits);
 
     build_lrouter_out_snat_match(lflows, od, nat, match, distributed_nat,
                                  cidr_bits, is_v6, l3dgw_port, lflow_ref,
@@ -14863,6 +14876,10 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
         ds_put_format(actions, ",%s", nat->external_port_range);
     }
     ds_put_format(actions, ");");
+
+    if (nat->match[0]) {
+        ds_put_format(match, " && (%s)", nat->match);
+    }
 
     ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_SNAT,
                             priority, ds_cstr(match),
