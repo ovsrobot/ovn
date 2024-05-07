@@ -1077,12 +1077,32 @@ struct ovn_port_routable_addresses {
 
 static bool lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *);
 
+/* This function returns true if 'op' is a gateway router port.
+ * False otherwise.
+ * For 'op' to be a gateway router port.
+ *  1. op->nbrp->gateway_chassis or op->nbrp->ha_chassis_group should
+ *     be configured.
+ *  2. op->cr_port should not be NULL.  If op->nbrp->gateway_chassis or
+ *     op->nbrp->ha_chassis_group is set by the user, northd WILL create
+ *     a chassis resident port in the SB port binding.
+ *     See join_logical_ports().
+ */
 static bool
 is_l3dgw_port(const struct ovn_port *op)
 {
-    return op->cr_port;
+    return op->cr_port && op->nbrp &&
+           (op->nbrp->n_gateway_chassis || op->nbrp->ha_chassis_group);
 }
 
+/* This function returns true if 'op' is a chassis resident
+ * derived port. False otherwise.
+ * There are 2 ways to check if 'op' is chassis resident port.
+ *  1. op->sb->type is "chassisresident"
+ *  2. op->l3dgw_port is not NULL.  If op->l3dgw_port is set,
+ *     it means 'op' is derived from the gateway port (op->l3dgw_port).
+ *
+ * This function uses the (2) method as it doesn't involve strcmp().
+ */
 static bool
 is_cr_port(const struct ovn_port *op)
 {
