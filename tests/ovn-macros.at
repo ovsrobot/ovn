@@ -101,6 +101,7 @@ m4_define([OVN_CLEANUP_SBOX],[
         /receive tunnel port not found*/d
         /Failed to locate tunnel to reach main chassis/d
         /Transaction causes multiple rows.*MAC_Binding/d
+        /received packet on unknown port/d
     " $sbox])
 ])
 
