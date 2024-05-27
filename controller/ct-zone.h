@@ -43,6 +43,7 @@ struct ct_zone_ctx {
 
 struct ct_zone {
     uint16_t zone;
+    int64_t limit;
 };
 
 /* States to move through when a new conntrack zone has been allocated. */
@@ -70,12 +71,19 @@ void ct_zones_update(const struct sset *local_lports,
                      const struct hmap *local_datapaths,
                      struct ct_zone_ctx *ctx);
 void ct_zones_commit(const struct ovsrec_bridge *br_int,
+                     const struct ovsrec_datapath *ovs_dp,
+                     struct ovsdb_idl_txn *ovs_idl_txn,
                      struct shash *pending_ct_zones);
 void ct_zones_pending_clear_commited(struct shash *pending);
 bool ct_zone_handle_dp_update(struct ct_zone_ctx *ctx,
-                              const struct sbrec_datapath_binding *dp);
-bool ct_zone_handle_port_update(struct ct_zone_ctx *ctx, const char *name,
+                              const struct sbrec_datapath_binding *dp,
+                              struct ovsdb_idl_index *pb_by_dp);
+bool ct_zone_handle_port_update(struct ct_zone_ctx *ctx,
+                                const struct sbrec_port_binding *pb,
                                 bool updated, int *scan_start);
 uint16_t ct_zone_find_zone(const struct shash *ct_zones, const char *name);
+void ct_zones_sync_limit(struct ct_zone_ctx *ctx,
+                         const struct hmap *local_datapaths,
+                         struct ovsdb_idl_index *pb_by_dp);
 
 #endif /* controller/ct-zone.h */
