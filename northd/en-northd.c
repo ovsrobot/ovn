@@ -237,6 +237,71 @@ northd_global_config_handler(struct engine_node *node, void *data OVS_UNUSED)
 }
 
 void
+en_bfd_consumer_run(struct engine_node *node, void *data)
+{
+
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    struct bfd_data *bfd_data = engine_get_input_data("bfd", node);
+    const struct nbrec_bfd_table *nbrec_bfd_table =
+        EN_OVSDB_GET(engine_get_input("NB_bfd", node));
+    struct bfd_consumer_data *bfd_consumer_data = data;
+    enum engine_node_state state = EN_UNCHANGED;
+
+    struct ovn_datapath *od;
+    HMAP_FOR_EACH (od, key_node, &northd_data->lr_datapaths.datapaths) {
+        for (int i = 0; i < od->nbr->n_ports; i++) {
+            const char *route_table_name =
+                smap_get(&od->nbr->ports[i]->options, "route_table");
+            get_route_table_id(&bfd_consumer_data->route_tables,
+                               route_table_name);
+        }
+
+        if (build_parsed_routes(od, &northd_data->lr_ports,
+                                &bfd_consumer_data->parsed_routes,
+                                &bfd_consumer_data->route_tables,
+                                &bfd_data->bfd_connections)) {
+            state = EN_UPDATED;
+        }
+
+        if (build_route_policies(od, &northd_data->lr_ports,
+                                 &bfd_data->bfd_connections,
+                                 &bfd_consumer_data->route_policies)) {
+            state = EN_UPDATED;
+        }
+    }
+
+    if (bfd_cleanup_connections(nbrec_bfd_table,
+                                &bfd_data->bfd_connections)) {
+        state = EN_UPDATED;
+    }
+
+    engine_set_node_state(node, state);
+}
+
+void
+en_bfd_run(struct engine_node *node, void *data)
+{
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    const struct engine_context *eng_ctx = engine_get_context();
+    struct bfd_data *bfd_data = data;
+    const struct nbrec_bfd_table *nbrec_bfd_table =
+        EN_OVSDB_GET(engine_get_input("NB_bfd", node));
+    const struct sbrec_bfd_table *sbrec_bfd_table =
+        EN_OVSDB_GET(engine_get_input("SB_bfd", node));
+
+    bfd_destroy(data);
+    bfd_init(data);
+    if (build_bfd_table(eng_ctx->ovnsb_idl_txn,
+                        nbrec_bfd_table, sbrec_bfd_table,
+                        &northd_data->lr_ports,
+                        &bfd_data->bfd_connections)) {
+        engine_set_node_state(node, EN_UPDATED);
+    } else {
+        engine_set_node_state(node, EN_UNCHANGED);
+    }
+}
+
+void
 *en_northd_init(struct engine_node *node OVS_UNUSED,
                 struct engine_arg *arg OVS_UNUSED)
 {
@@ -244,6 +309,26 @@ void
 
     northd_init(data);
 
+    return data;
+}
+
+void
+*en_bfd_consumer_init(struct engine_node *node OVS_UNUSED,
+                      struct engine_arg *arg OVS_UNUSED)
+{
+    struct bfd_consumer_data *data = xzalloc(sizeof *data);
+
+    bfd_consumer_init(data);
+    return data;
+}
+
+void
+*en_bfd_init(struct engine_node *node OVS_UNUSED,
+             struct engine_arg *arg OVS_UNUSED)
+{
+    struct bfd_data *data = xzalloc(sizeof *data);
+
+    bfd_init(data);
     return data;
 }
 
@@ -258,4 +343,16 @@ en_northd_clear_tracked_data(void *data_)
 {
     struct northd_data *data = data_;
     destroy_northd_data_tracked_changes(data);
+}
+
+void
+en_bfd_consumer_cleanup(void *data)
+{
+    bfd_consumer_destroy(data);
+}
+
+void
+en_bfd_cleanup(void *data)
+{
+    bfd_destroy(data);
 }
