@@ -3036,13 +3036,16 @@ check ovs-vsctl \
     -- add-port br-int vif2 \
     -- set Interface vif2 external_ids:iface-id=lsp2
 
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
 AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_CT_ZONE_LOOKUP | \
-          sed -e 's/cookie=0x.*, duration=.*, table/cookie=??, duration=??, table/' | \
           sed -e 's/actions=load:0x.*->NXM_NX_REG13/actions=load:0x?->NXM_NX_REG13/' | \
-          grep -v NXST_FLOW |sort], [0], [dnl
- cookie=??, duration=??, table=OFTABLE_CT_ZONE_LOOKUP, n_packets=0, n_bytes=0, idle_age=0, priority=0 actions=resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
- cookie=??, duration=??, table=OFTABLE_CT_ZONE_LOOKUP, n_packets=0, n_bytes=0, idle_age=0, priority=100,reg14=0x1,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
- cookie=??, duration=??, table=OFTABLE_CT_ZONE_LOOKUP, n_packets=0, n_bytes=0, idle_age=0, priority=100,reg14=0x2,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
+          grep -v NXST_FLOW | \
+          awk '{print $7, $8}' | sort], [0], [dnl
+priority=0 actions=resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
+priority=100,reg14=0x1,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
+priority=100,reg14=0x2,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
 ])
 
 check ovn-nbctl lsp-add ls1 lsp3 \
@@ -3051,24 +3054,27 @@ check ovs-vsctl \
     -- add-port br-int vif3 \
     -- set Interface vif3 external_ids:iface-id=lsp3
 
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
 AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_CT_ZONE_LOOKUP | \
-          sed -e 's/cookie=0x.*, duration=.*, table/cookie=??, duration=??, table/' | \
           sed -e 's/actions=load:0x.*->NXM_NX_REG13/actions=load:0x?->NXM_NX_REG13/' | \
-          grep -v NXST_FLOW |sort], [0], [dnl
- cookie=??, duration=??, table=OFTABLE_CT_ZONE_LOOKUP, n_packets=0, n_bytes=0, idle_age=0, priority=0 actions=resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
- cookie=??, duration=??, table=OFTABLE_CT_ZONE_LOOKUP, n_packets=0, n_bytes=0, idle_age=0, priority=100,reg14=0x1,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
- cookie=??, duration=??, table=OFTABLE_CT_ZONE_LOOKUP, n_packets=0, n_bytes=0, idle_age=0, priority=100,reg14=0x2,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
- cookie=??, duration=??, table=OFTABLE_CT_ZONE_LOOKUP, n_packets=0, n_bytes=0, idle_age=0, priority=100,reg14=0x3,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
+          grep -v NXST_FLOW | \
+          awk '{print $7, $8}' | sort], [0], [dnl
+priority=0 actions=resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
+priority=100,reg14=0x1,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
+priority=100,reg14=0x2,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
+priority=100,reg14=0x3,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
 ])
 
-check ovn-nbctl lsp-del lsp3
+check ovn-nbctl --wait=hv lsp-del lsp3
 AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_CT_ZONE_LOOKUP | \
-          sed -e 's/cookie=0x.*, duration=.*, table/cookie=??, duration=??, table/' | \
-          sed -e 's/actions=load:0x.*->NXM_NX_REG13/actions=load:0x?->NXM_NX_REG13/' |
-          grep -v NXST_FLOW |sort], [0], [dnl
- cookie=??, duration=??, table=OFTABLE_CT_ZONE_LOOKUP, n_packets=0, n_bytes=0, idle_age=0, priority=0 actions=resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
- cookie=??, duration=??, table=OFTABLE_CT_ZONE_LOOKUP, n_packets=0, n_bytes=0, idle_age=0, priority=100,reg14=0x1,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
- cookie=??, duration=??, table=OFTABLE_CT_ZONE_LOOKUP, n_packets=0, n_bytes=0, idle_age=0, priority=100,reg14=0x2,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
+          sed -e 's/actions=load:0x.*->NXM_NX_REG13/actions=load:0x?->NXM_NX_REG13/' | \
+          grep -v NXST_FLOW | \
+          awk '{print $7, $8}' | sort], [0], [dnl
+priority=0 actions=resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
+priority=100,reg14=0x1,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
+priority=100,reg14=0x2,metadata=0x1 actions=load:0x?->NXM_NX_REG13[[0..15]],load:0x2->NXM_NX_REG11[[]],load:0x1->NXM_NX_REG12[[]],resubmit(,OFTABLE_LOG_INGRESS_PIPELINE)
 ])
 
 OVN_CLEANUP([hv1])
