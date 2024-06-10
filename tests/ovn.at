@@ -2465,6 +2465,47 @@ OVN_CLEANUP([hv-1],[hv-2])
 AT_CLEANUP
 ])
 
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ACLs -- stateful and drop])
+ovn_start
+check ovn-nbctl ls-add sw0
+check ovn-nbctl lsp-add sw0 sw0-port1
+check ovn-nbctl lsp-set-addresses sw0-port1 "50:54:00:00:00:01 192.168.0.2"
+
+check ovn-nbctl --label=1 acl-add sw0 from-lport 1001 'tcp' allow-related
+check ovn-nbctl acl-add sw0 from-lport 1001 'udp' drop
+
+ovn-nbctl --wait=hv sync
+
+net_add n1
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl add-port br-int p1 -- \
+    set Interface p1 external_ids:iface-id=sw0-port1
+
+wait_for_ports_up
+
+acl_eval_table=$(ovn-debug lflow-stage-to-oftable ls_in_acl_eval)
+acl_action_table=$(ovn-debug lflow-stage-to-oftable ls_in_acl_action)
+
+ovn-sbctl --uuid lflow-list sw0 >lflows
+ovs-ofctl dump-flows br-int table=$acl_eval_table >pflows
+AT_CAPTURE_FILE([lflows])
+AT_CAPTURE_FILE([pflows])
+
+
+AT_CHECK_UNQUOTED([cat pflows | grep -v NXST |  grep "NXM_NX_CT_MARK" | cut -d ' ' -f8-10 | sort], [0], [dnl
+priority=2001,udp,reg0=0x400/0x400,metadata=0x1 actions=load:0x1->OXM_OF_PKT_REG4[[49]],ct(commit,zone=NXM_NX_REG13[[0..15]],nat(src),exec(load:0x1->NXM_NX_CT_MARK[[0]])),resubmit(,$acl_action_table)
+priority=2001,udp6,reg0=0x400/0x400,metadata=0x1 actions=load:0x1->OXM_OF_PKT_REG4[[49]],ct(commit,zone=NXM_NX_REG13[[0..15]],nat(src),exec(load:0x1->NXM_NX_CT_MARK[[0]])),resubmit(,$acl_action_table)
+])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
 # 3 hypervisors, one logical switch, 3 logical ports per hypervisor
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([3 HVs, 1 LS, 3 lports/HV])
