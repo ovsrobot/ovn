@@ -37,8 +37,12 @@ struct ct_zone_ctx {
     struct shash pending;              /* Pending entries,
                                         * 'struct ct_zone_pending_entry'
                                         * by name. */
-    struct simap current;              /* Current CT zones mapping
-                                        * (zone id by name). */
+    struct shash current;              /* Current CT zones mapping
+                                        * (struct ct_zone by name). */
+};
+
+struct ct_zone {
+    uint16_t zone;
 };
 
 /* States to move through when a new conntrack zone has been allocated. */
@@ -47,10 +51,12 @@ enum ct_zone_pending_state {
     CT_ZONE_OF_SENT,      /* Sent and waiting for confirmation on flush. */
     CT_ZONE_DB_QUEUED,    /* Waiting for DB transaction to open. */
     CT_ZONE_DB_SENT,      /* Sent and waiting for confirmation from DB. */
+    CT_ZONE_STATE_NEW,    /* Indication that the pending state was just
+                           * created. Must remain last in the enum. */
 };
 
 struct ct_zone_pending_entry {
-    int zone;
+    struct ct_zone ct_zone;
     bool add;             /* Is the entry being added? */
     ovs_be32 of_xid;      /* Transaction id for barrier. */
     enum ct_zone_pending_state state;
@@ -70,5 +76,6 @@ bool ct_zone_handle_dp_update(struct ct_zone_ctx *ctx,
                               const struct sbrec_datapath_binding *dp);
 bool ct_zone_handle_port_update(struct ct_zone_ctx *ctx, const char *name,
                                 bool updated, int *scan_start);
+uint16_t ct_zone_find_zone(const struct shash *ct_zones, const char *name);
 
 #endif /* controller/ct-zone.h */
