@@ -798,6 +798,7 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     ovsdb_idl_add_column(ovs_idl, &ovsrec_ssl_col_private_key);
     ovsdb_idl_add_table(ovs_idl, &ovsrec_table_datapath);
     ovsdb_idl_add_column(ovs_idl, &ovsrec_datapath_col_capabilities);
+    ovsdb_idl_add_column(ovs_idl, &ovsrec_datapath_col_ct_zones);
     ovsdb_idl_add_table(ovs_idl, &ovsrec_table_flow_sample_collector_set);
     ovsdb_idl_add_table(ovs_idl, &ovsrec_table_qos);
     ovsdb_idl_add_column(ovs_idl, &ovsrec_qos_col_other_config);
@@ -806,6 +807,8 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     ovsdb_idl_add_table(ovs_idl, &ovsrec_table_queue);
     ovsdb_idl_add_column(ovs_idl, &ovsrec_queue_col_other_config);
     ovsdb_idl_add_column(ovs_idl, &ovsrec_queue_col_external_ids);
+    ovsdb_idl_add_table(ovs_idl, &ovsrec_table_ct_zone);
+    ovsdb_idl_add_column(ovs_idl, &ovsrec_ct_zone_col_limit);
 
     chassis_register_ovs_idl(ovs_idl);
     encaps_register_ovs_idl(ovs_idl);
@@ -2218,6 +2221,10 @@ en_ct_zones_run(struct engine_node *node, void *data)
     struct ed_type_ct_zones *ct_zones_data = data;
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
+    struct ovsdb_idl_index *sbrec_port_binding_by_datapath =
+            engine_ovsdb_node_get_index(
+                    engine_get_input("SB_port_binding", node),
+                    "datapath");
 
     const struct ovsrec_open_vswitch_table *ovs_table =
         EN_OVSDB_GET(engine_get_input("OVS_open_vswitch", node));
@@ -2231,6 +2238,8 @@ en_ct_zones_run(struct engine_node *node, void *data)
     ct_zones_restore(&ct_zones_data->ctx, ovs_table, dp_table, br_int);
     ct_zones_update(&rt_data->local_lports, &rt_data->local_datapaths,
                     &ct_zones_data->ctx);
+    ct_zones_sync_limit(&ct_zones_data->ctx, &rt_data->local_datapaths,
+                        sbrec_port_binding_by_datapath);
 
     ct_zones_data->recomputed = true;
     engine_set_node_state(node, EN_UPDATED);
@@ -2248,6 +2257,10 @@ ct_zones_datapath_binding_handler(struct engine_node *node, void *data)
         engine_get_input_data("runtime_data", node);
     const struct sbrec_datapath_binding_table *dp_table =
         EN_OVSDB_GET(engine_get_input("SB_datapath_binding", node));
+    struct ovsdb_idl_index *sbrec_port_binding_by_datapath =
+            engine_ovsdb_node_get_index(
+                    engine_get_input("SB_port_binding", node),
+                    "datapath");
 
     SBREC_DATAPATH_BINDING_TABLE_FOR_EACH_TRACKED (dp, dp_table) {
         if (!get_local_datapath(&rt_data->local_datapaths,
@@ -2261,7 +2274,8 @@ ct_zones_datapath_binding_handler(struct engine_node *node, void *data)
             return false;
         }
 
-        if (!ct_zone_handle_dp_update(&ct_zones_data->ctx, dp)) {
+        if (!ct_zone_handle_dp_update(&ct_zones_data->ctx, dp,
+                                      sbrec_port_binding_by_datapath)) {
             return false;
         }
     }
@@ -2309,8 +2323,8 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
             bool port_updated =
                     t_lport->tracked_type != TRACKED_RESOURCE_REMOVED;
             updated |= ct_zone_handle_port_update(&ct_zones_data->ctx,
-                                                  t_lport->pb->logical_port,
-                                                  port_updated, &scan_start);
+                                                  t_lport->pb, port_updated,
+                                                  &scan_start);
         }
     }
 
@@ -5152,6 +5166,9 @@ main(int argc, char *argv[])
                      ct_zones_datapath_binding_handler);
     engine_add_input(&en_ct_zones, &en_runtime_data,
                      ct_zones_runtime_data_handler);
+    /* The CT node just needs the index for port bindings by name. The data
+     * for ports are processed in the runtime handler. */
+    engine_add_input(&en_ct_zones, &en_sb_port_binding, engine_noop_handler);
 
     engine_add_input(&en_ovs_interface_shadow, &en_ovs_interface,
                      ovs_interface_shadow_ovs_interface_handler);
@@ -5556,7 +5573,7 @@ main(int argc, char *argv[])
                         if (ct_zones_data) {
                             stopwatch_start(CT_ZONE_COMMIT_STOPWATCH_NAME,
                                             time_msec());
-                            ct_zones_commit(br_int,
+                            ct_zones_commit(br_int, br_int_dp, ovs_idl_txn,
                                             &ct_zones_data->ctx.pending);
                             stopwatch_stop(CT_ZONE_COMMIT_STOPWATCH_NAME,
                                            time_msec());
