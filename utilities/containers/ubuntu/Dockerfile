@@ -80,7 +80,7 @@ COPY $CONTAINERS_PATH/py-requirements.txt /tmp/py-requirements.txt
 ENV PIP_BREAK_SYSTEM_PACKAGES 1
 
 # Update and install pip dependencies
-RUN python3 -m pip install --upgrade pip \
+RUN python3 -m pip install --upgrade --user pip \
     && \
     python3 -m pip install wheel \
     && \
