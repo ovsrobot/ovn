@@ -33,6 +33,7 @@ RUN apt update -y \
         llvm-dev \
         ncat \
         net-tools \
+        ninja-build \
         python3-dev \
         python3-pip \
         selinux-policy-dev \
@@ -44,8 +45,6 @@ RUN apt update -y \
     apt autoremove \
     && \
     apt clean
-
-ENV PATH "${PATH}:${HOME}/bin:${HOME}/.local/bin"
 
 WORKDIR /workspace
 

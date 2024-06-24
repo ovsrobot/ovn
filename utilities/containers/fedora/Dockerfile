@@ -27,6 +27,7 @@ RUN dnf -y update \
         libcap-ng-devel \
         libtool \
         net-tools \
+        ninja-build \
         nmap-ncat \
         numactl-devel \
         openssl \
@@ -44,8 +45,6 @@ RUN dnf -y update \
         which \
     && \
     dnf clean all
-
-ENV PATH "${PATH}:${HOME}/bin:${HOME}/.local/bin"
 
 WORKDIR /workspace
 
