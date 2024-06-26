@@ -2192,7 +2192,7 @@ en_ct_zones_init(struct engine_node *node OVS_UNUSED,
     struct ed_type_ct_zones *data = xzalloc(sizeof *data);
 
     shash_init(&data->ctx.pending);
-    simap_init(&data->ctx.current);
+    shash_init(&data->ctx.current);
 
     return data;
 }
@@ -2209,7 +2209,7 @@ en_ct_zones_cleanup(void *data)
 {
     struct ed_type_ct_zones *ct_zones_data = data;
 
-    simap_destroy(&ct_zones_data->ctx.current);
+    shash_destroy_free_data(&ct_zones_data->ctx.current);
     shash_destroy_free_data(&ct_zones_data->ctx.pending);
 }
 
@@ -4336,7 +4336,7 @@ static void init_physical_ctx(struct engine_node *node,
 
     struct ed_type_ct_zones *ct_zones_data =
         engine_get_input_data("ct_zones", node);
-    struct simap *ct_zones = &ct_zones_data->ctx.current;
+    struct shash *ct_zones = &ct_zones_data->ctx.current;
 
     parse_encap_ips(ovs_table, &p_ctx->n_encap_ips, &p_ctx->encap_ips);
     p_ctx->sbrec_port_binding_by_name = sbrec_port_binding_by_name;
@@ -6056,12 +6056,13 @@ static void
 ct_zone_list(struct unixctl_conn *conn, int argc OVS_UNUSED,
              const char *argv[] OVS_UNUSED, void *ct_zones_)
 {
-    struct simap *ct_zones = ct_zones_;
+    struct shash *ct_zones = ct_zones_;
     struct ds ds = DS_EMPTY_INITIALIZER;
-    struct simap_node *zone;
+    struct shash_node *node;
 
-    SIMAP_FOR_EACH(zone, ct_zones) {
-        ds_put_format(&ds, "%s %d\n", zone->name, zone->data);
+    SHASH_FOR_EACH (node, ct_zones) {
+        struct ct_zone *ct_zone = node->data;
+        ds_put_format(&ds, "%s %d\n", node->name, ct_zone->zone);
     }
 
     unixctl_command_reply(conn, ds_cstr(&ds));
