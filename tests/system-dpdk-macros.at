@@ -77,7 +77,8 @@ $1";/EAL: No \(available\|free\) .*hugepages reported/d
 /netdev_linux.*obtaining netdev stats via vport failed/d
 /qdisc_create_multiq(): Could not add multiq qdisc (2): No such file or directory/d
 /tap_mp_req_on_rxtx(): Failed to send start req to secondary/d
-/tap_nl_dump_ext_ack(): Specified qdisc kind is unknown/d"])
+/tap_nl_dump_ext_ack(): Specified qdisc kind is unknown/d
+/EAL: eal_memalloc_alloc_seg_bulk(): couldn't find suitable memseg_list/d"])
    AT_CHECK([:; $2])
 ])
 
