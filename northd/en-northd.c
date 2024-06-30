@@ -236,6 +236,154 @@ northd_global_config_handler(struct engine_node *node, void *data OVS_UNUSED)
     return true;
 }
 
+bool
+route_policies_northd_change_handler(struct engine_node *node,
+                                     void *data OVS_UNUSED)
+{
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    if (!northd_has_tracked_data(&northd_data->trk_data)) {
+        return false;
+    }
+
+    /* This node uses the below data from the en_northd engine node.
+     * See (lr_stateful_get_input_data())
+     *   1. northd_data->lr_datapaths
+     *      This data gets updated when a logical router is created or deleted.
+     *      northd engine node presently falls back to full recompute when
+     *      this happens and so does this node.
+     *      Note: When we add I-P to the created/deleted logical routers, we
+     *      need to revisit this handler.
+     *
+     *      This node also accesses the route policies of the logical router.
+     *      When these route policies get updated, en_northd engine recomputes
+     *      and so does this node.
+     *      Note: When we add I-P to handle route policies changes, we need
+     *      to revisit this handler.
+     */
+    return true;
+}
+
+void
+en_route_policies_run(struct engine_node *node, void *data)
+{
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    struct route_policies_data *route_policies_data = data;
+
+    route_policies_destroy(data);
+    route_policies_init(data);
+
+    struct ovn_datapath *od;
+    HMAP_FOR_EACH (od, key_node, &northd_data->lr_datapaths.datapaths) {
+        build_route_policies(od, &northd_data->lr_ports,
+                             &route_policies_data->route_policies);
+    }
+
+    engine_set_node_state(node, EN_UPDATED);
+}
+
+bool
+static_routes_northd_change_handler(struct engine_node *node,
+                                    void *data OVS_UNUSED)
+{
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    if (!northd_has_tracked_data(&northd_data->trk_data)) {
+        return false;
+    }
+
+    /* This node uses the below data from the en_northd engine node.
+     * See (lr_stateful_get_input_data())
+     *   1. northd_data->lr_datapaths
+     *      This data gets updated when a logical router is created or deleted.
+     *      northd engine node presently falls back to full recompute when
+     *      this happens and so does this node.
+     *      Note: When we add I-P to the created/deleted logical routers, we
+     *      need to revisit this handler.
+     *
+     *      This node also accesses the static routes of the logical router.
+     *      When these static routes gets updated, en_northd engine recomputes
+     *      and so does this node.
+     *      Note: When we add I-P to handle static routes changes, we need
+     *      to revisit this handler.
+     */
+    return true;
+}
+
+void
+en_static_routes_run(struct engine_node *node, void *data)
+{
+
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    struct static_routes_data *static_routes_data = data;
+
+    static_routes_destroy(data);
+    static_routes_init(data);
+
+    struct ovn_datapath *od;
+    HMAP_FOR_EACH (od, key_node, &northd_data->lr_datapaths.datapaths) {
+        for (int i = 0; i < od->nbr->n_ports; i++) {
+            const char *route_table_name =
+                smap_get(&od->nbr->ports[i]->options, "route_table");
+            get_route_table_id(&static_routes_data->route_tables,
+                               route_table_name);
+        }
+
+        build_parsed_routes(od, &northd_data->lr_ports,
+                            &static_routes_data->parsed_routes,
+                            &static_routes_data->route_tables);
+    }
+
+    engine_set_node_state(node, EN_UPDATED);
+}
+
+bool
+bfd_northd_change_handler(struct engine_node *node,
+                          void *data OVS_UNUSED)
+{
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    if (!northd_has_tracked_data(&northd_data->trk_data)) {
+        return false;
+    }
+
+    /* This node uses the below data from the en_northd engine node.
+     * See (lr_stateful_get_input_data())
+     *   1. northd_data->lr_datapaths
+     *      This data gets updated when a logical router is created or deleted.
+     *      northd engine node presently falls back to full recompute when
+     *      this happens and so does this node.
+     *      Note: When we add I-P to the created/deleted logical routers, we
+     *      need to revisit this handler.
+     */
+    return true;
+}
+
+void
+en_bfd_run(struct engine_node *node, void *data)
+{
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    struct bfd_data *bfd_data = data;
+    const struct engine_context *eng_ctx = engine_get_context();
+    const struct nbrec_bfd_table *nbrec_bfd_table =
+        EN_OVSDB_GET(engine_get_input("NB_bfd", node));
+    const struct sbrec_bfd_table *sbrec_bfd_table =
+        EN_OVSDB_GET(engine_get_input("SB_bfd", node));
+    struct engine_node *nb_lr_sr_node =
+        engine_get_input("NB_logical_router_static_route", node);
+    const struct nbrec_logical_router_static_route_table *
+        nbrec_static_route_table = EN_OVSDB_GET(nb_lr_sr_node);
+    struct engine_node *nb_lr_policy_node =
+        engine_get_input("NB_logical_router_policy", node);
+    const struct nbrec_logical_router_policy_table *
+        nbrec_router_policy_table = EN_OVSDB_GET(nb_lr_policy_node);
+
+    bfd_destroy(data);
+    bfd_init(data);
+    build_bfd_table(eng_ctx->ovnsb_idl_txn,
+                    nbrec_bfd_table, sbrec_bfd_table,
+                    nbrec_static_route_table, nbrec_router_policy_table,
+                    &northd_data->lr_ports, &bfd_data->bfd_connections);
+    engine_set_node_state(node, EN_UPDATED);
+}
+
 void
 *en_northd_init(struct engine_node *node OVS_UNUSED,
                 struct engine_arg *arg OVS_UNUSED)
@@ -244,6 +392,36 @@ void
 
     northd_init(data);
 
+    return data;
+}
+
+void
+*en_route_policies_init(struct engine_node *node OVS_UNUSED,
+                        struct engine_arg *arg OVS_UNUSED)
+{
+    struct route_policies_data *data = xzalloc(sizeof *data);
+
+    route_policies_init(data);
+    return data;
+}
+
+void
+*en_static_routes_init(struct engine_node *node OVS_UNUSED,
+                      struct engine_arg *arg OVS_UNUSED)
+{
+    struct static_routes_data *data = xzalloc(sizeof *data);
+
+    static_routes_init(data);
+    return data;
+}
+
+void
+*en_bfd_init(struct engine_node *node OVS_UNUSED,
+             struct engine_arg *arg OVS_UNUSED)
+{
+    struct bfd_data *data = xzalloc(sizeof *data);
+
+    bfd_init(data);
     return data;
 }
 
@@ -258,4 +436,22 @@ en_northd_clear_tracked_data(void *data_)
 {
     struct northd_data *data = data_;
     destroy_northd_data_tracked_changes(data);
+}
+
+void
+en_route_policies_cleanup(void *data)
+{
+    route_policies_destroy(data);
+}
+
+void
+en_static_routes_cleanup(void *data)
+{
+    static_routes_destroy(data);
+}
+
+void
+en_bfd_cleanup(void *data)
+{
+    bfd_destroy(data);
 }
