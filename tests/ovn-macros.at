@@ -249,7 +249,7 @@ ovn_start_northd() {
     local name=${d_prefix}northd${suffix}
     echo "${prefix}starting $name"
     test -d "$ovs_base/$name" || mkdir "$ovs_base/$name"
-    as $name start_daemon ovn-northd $northd_args -vjsonrpc \
+    as $name start_daemon ovn-northd $northd_args \
                --ovnnb-db=$OVN_NB_DB --ovnsb-db=$OVN_SB_DB
 }
 

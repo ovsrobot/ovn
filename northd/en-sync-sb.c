@@ -20,6 +20,7 @@
 
 /* OVS includes. */
 #include "lib/svec.h"
+#include "lib/uuidset.h"
 #include "openvswitch/util.h"
 
 /* OVN includes. */
@@ -232,6 +233,7 @@ struct sb_lb_table {
     struct hmap entries; /* Stores struct sb_lb_record. */
     struct hmap ls_dp_groups;
     struct hmap lr_dp_groups;
+    struct uuidset sb_entries;
 };
 
 struct ed_type_sync_to_sb_lb_data {
@@ -347,16 +349,29 @@ sync_to_sb_lb_northd_handler(struct engine_node *node, void *data_)
 }
 
 bool
-sync_to_sb_lb_sb_load_balancer(struct engine_node *node, void *data OVS_UNUSED)
+sync_to_sb_lb_sb_load_balancer(struct engine_node *node, void *data_)
 {
     const struct sbrec_load_balancer_table *sb_load_balancer_table =
         EN_OVSDB_GET(engine_get_input("SB_load_balancer", node));
+    struct ed_type_sync_to_sb_lb_data *data = data_;
 
-    /* The only reason to handle SB.Load_Balancer updates is to detect
+    /* The reasons to handle SB.Load_Balancer updates is to detect
      * spurious records being created in clustered databases due to
-     * lack of indexing on the SB.Load_Balancer table.  All other changes
-     * are valid and performed by northd, the only write-client for
-     * this table. */
+     * lack of indexing on the SB.Load_Balancer table.  The other reason might
+     * be when someone removes the SB row while the NB row is still valid.
+     * All other changes are valid and performed by northd. */
+
+    const struct sbrec_load_balancer *sb_lb;
+    SBREC_LOAD_BALANCER_TABLE_FOR_EACH_TRACKED (sb_lb,
+                                                sb_load_balancer_table) {
+        if (sbrec_load_balancer_is_deleted(sb_lb) &&
+            uuidset_find(&data->sb_lbs.sb_entries, &sb_lb->header_.uuid)) {
+            VLOG_WARN("A SB LB for \"%s\" is deleted but the NB LB entry "
+                      "still exists.", sb_lb->name);
+            return false;
+        }
+    }
+
     if (check_sb_lb_duplicates(sb_load_balancer_table)) {
         return false;
     }
@@ -626,6 +641,7 @@ sb_lb_table_init(struct sb_lb_table *sb_lbs)
     hmap_init(&sb_lbs->entries);
     ovn_dp_groups_init(&sb_lbs->ls_dp_groups);
     ovn_dp_groups_init(&sb_lbs->lr_dp_groups);
+    uuidset_init(&sb_lbs->sb_entries);
 }
 
 static void
@@ -638,6 +654,7 @@ sb_lb_table_clear(struct sb_lb_table *sb_lbs)
 
     ovn_dp_groups_clear(&sb_lbs->ls_dp_groups);
     ovn_dp_groups_clear(&sb_lbs->lr_dp_groups);
+    uuidset_clear(&sb_lbs->sb_entries);
 }
 
 static void
@@ -647,6 +664,7 @@ sb_lb_table_destroy(struct sb_lb_table *sb_lbs)
     hmap_destroy(&sb_lbs->entries);
     ovn_dp_groups_destroy(&sb_lbs->ls_dp_groups);
     ovn_dp_groups_destroy(&sb_lbs->lr_dp_groups);
+    uuidset_destroy(&sb_lbs->sb_entries);
 }
 
 static struct sb_lb_record *
@@ -693,6 +711,8 @@ sb_lb_table_build_and_sync(
         const char *nb_lb_uuid = smap_get(&sbrec_lb->external_ids, "lb_id");
         struct uuid lb_uuid;
         if (!nb_lb_uuid || !uuid_from_string(&lb_uuid, nb_lb_uuid)) {
+            uuidset_find_and_delete(&sb_lbs->sb_entries,
+                                    &sbrec_lb->header_.uuid);
             sbrec_load_balancer_delete(sbrec_lb);
             continue;
         }
@@ -711,6 +731,8 @@ sb_lb_table_build_and_sync(
             hmap_insert(&sb_lbs->entries, &sb_lb->key_node,
                         uuid_hash(&sb_lb->lb_dps->lb->nlb->header_.uuid));
         } else {
+            uuidset_find_and_delete(&sb_lbs->sb_entries,
+                                    &sbrec_lb->header_.uuid);
             sbrec_load_balancer_delete(sbrec_lb);
         }
     }
@@ -769,6 +791,8 @@ sync_sb_lb_record(struct sb_lb_record *sb_lb,
 
         sbrec_lr_dp_group = sbrec_lb->lr_datapath_group;
     }
+
+    uuidset_insert(&sb_lbs->sb_entries, &sb_lb->sb_uuid);
 
     if (lb_dps->n_nb_ls) {
         sb_lb->ls_dpg = ovn_dp_group_get(&sb_lbs->ls_dp_groups,
@@ -931,6 +955,8 @@ sync_changed_lbs(struct sb_lb_table *sb_lbs,
                 sbrec_load_balancer_table_get_for_uuid(sb_lb_table,
                                                        &sb_lb->sb_uuid);
             if (sbrec_lb) {
+                uuidset_find_and_delete(&sb_lbs->sb_entries,
+                                        &sbrec_lb->header_.uuid);
                 sbrec_load_balancer_delete(sbrec_lb);
             }
 
@@ -965,6 +991,8 @@ sync_changed_lbs(struct sb_lb_table *sb_lbs,
                 sbrec_load_balancer_table_get_for_uuid(sb_lb_table,
                                                        &sb_lb->sb_uuid);
             if (sbrec_lb) {
+                uuidset_find_and_delete(&sb_lbs->sb_entries,
+                                        &sbrec_lb->header_.uuid);
                 sbrec_load_balancer_delete(sbrec_lb);
             }
 

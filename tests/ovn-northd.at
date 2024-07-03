@@ -12721,3 +12721,41 @@ AT_CHECK([ovn-sbctl dump-flows lr | grep lr_in_dnat | ovn_strip_lflows], [0], [d
 
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([LB re-sync])
+ovn_start
+
+check ovn-sbctl chassis-add hv1 geneve 127.0.0.1
+
+check ovn-nbctl lr-add lr -- \
+    lrp-add lr lr-ls 02:ac:10:01:00:01 172.16.1.1/24
+
+check ovn-nbctl ls-add ls -- \
+    lsp-add ls ls-lr -- \
+    lsp-set-type ls-lr router -- \
+    lsp-set-addresses ls-lr router -- \
+    lsp-set-options ls-lr router-port=lr-ls
+
+check ovn-nbctl lb-add lb 172.16.10.10 192.168.10.10
+check ovn-nbctl --wait=sb lr-lb-add lr lb
+
+check_row_count Load_Balancer 1
+
+check ovn-sbctl --all destroy Load_Balancer
+check ovn-nbctl --wait=sb sync
+check_row_count Load_Balancer 1
+
+check ovn-nbctl --wait=sb lb-del lb
+wait_row_count Load_Balancer 0
+
+check ovn-nbctl lb-add lb 172.16.10.10 192.168.10.10
+check ovn-nbctl --wait=sb lr-lb-add lr lb
+check_row_count Load_Balancer 1
+
+check ovn-sbctl --all destroy Load_Balancer
+check ovn-nbctl --wait=sb sync
+check_row_count Load_Balancer 1
+
+AT_CLEANUP
+])
