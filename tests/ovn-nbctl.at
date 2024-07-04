@@ -1670,6 +1670,7 @@ AT_CHECK([ovn-nbctl show lr0 | uuidfilt], [0], [dnl
 router <0> (lr0)
     port lrp0
         mac: "00:00:00:01:02:03"
+        ipv6-lla: "fe80::0200:00ff:fe01:0203"
         networks: [["192.168.1.1/24"]]
 ])
 
