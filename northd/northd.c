@@ -6839,7 +6839,6 @@ build_acl_log_related_flows(const struct ovn_datapath *od,
 static void
 build_acls(const struct ls_stateful_record *ls_stateful_rec,
            const struct ovn_datapath *od,
-           const struct chassis_features *features,
            struct lflow_table *lflows,
            const struct ls_port_group_table *ls_port_groups,
            const struct shash *meter_groups,
@@ -6982,15 +6981,10 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
          * related traffic such as an ICMP Port Unreachable through
          * that's generated from a non-listening UDP port.  */
         const char *ct_in_acl_action =
-            features->ct_lb_related
-            ? REGBIT_ACL_HINT_ALLOW_REL" = 1; "
-              REGBIT_ACL_VERDICT_ALLOW" = 1; ct_commit_nat;"
-            : REGBIT_ACL_HINT_ALLOW_REL" = 1; "
-              REGBIT_ACL_VERDICT_ALLOW" = 1; next;";
+            REGBIT_ACL_HINT_ALLOW_REL" = 1; "
+            REGBIT_ACL_VERDICT_ALLOW" = 1; ct_commit_nat;";
         const char *ct_out_acl_action =
-            features->ct_lb_related
-            ? REGBIT_ACL_VERDICT_ALLOW" = 1; ct_commit_nat;"
-            : REGBIT_ACL_VERDICT_ALLOW" = 1; next;";
+            REGBIT_ACL_VERDICT_ALLOW" = 1; ct_commit_nat;";
         ds_clear(&match);
         ds_put_format(&match, "!ct.est && ct.rel && !ct.new%s "
                               "&& ct_mark.blocked == 0",
@@ -15177,7 +15171,7 @@ build_lrouter_nat_defrag_and_lb(
      * a dynamically negotiated FTP data channel), but will allow
      * related traffic such as an ICMP Port Unreachable through
      * that's generated from a non-listening UDP port.  */
-    if (lr_stateful_rec->has_lb_vip && features->ct_lb_related) {
+    if (lr_stateful_rec->has_lb_vip) {
         ds_clear(match);
 
         ds_put_cstr(match, "ct.rel && !ct.est && !ct.new");
@@ -15197,18 +15191,16 @@ build_lrouter_nat_defrag_and_lb(
         ds_truncate(match, match_len);
         ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 50, ds_cstr(match),
                       "ct_commit_nat;", lflow_ref);
-    }
 
-    /* Ingress DNAT (Priority 50/70).
-     *
-     * Pass the traffic that is already established to the next table with
-     * proper flags set.
-     */
-    if (lr_stateful_rec->has_lb_vip) {
+        /* Ingress DNAT (Priority 50/70).
+         *
+         * Pass the traffic that is already established to the next table with
+         * proper flags set.
+         */
         ds_clear(match);
 
         ds_put_cstr(match, "ct.est && !ct.rel && !ct.new && ct_mark.natted");
-        size_t match_len = match->length;
+        match_len = match->length;
 
         ds_put_cstr(match, " && ct_mark.skip_snat == 1");
         ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 70, ds_cstr(match),
@@ -15768,7 +15760,6 @@ static void
 build_ls_stateful_flows(const struct ls_stateful_record *ls_stateful_rec,
                         const struct ovn_datapath *od,
                         const struct ls_port_group_table *ls_pgs,
-                        const struct chassis_features *features,
                         const struct shash *meter_groups,
                         struct lflow_table *lflows)
 {
@@ -15778,8 +15769,8 @@ build_ls_stateful_flows(const struct ls_stateful_record *ls_stateful_rec,
                                  ls_stateful_rec->lflow_ref);
     build_acl_hints(ls_stateful_rec, od, lflows,
                     ls_stateful_rec->lflow_ref);
-    build_acls(ls_stateful_rec, od, features, lflows, ls_pgs,
-               meter_groups, ls_stateful_rec->lflow_ref);
+    build_acls(ls_stateful_rec, od, lflows, ls_pgs, meter_groups,
+               ls_stateful_rec->lflow_ref);
     build_lb_hairpin(ls_stateful_rec, od, lflows, ls_stateful_rec->lflow_ref);
 }
 
@@ -16093,7 +16084,7 @@ build_lflows_thread(void *arg)
                                            &od->nbs->header_.uuid));
                     build_ls_stateful_flows(ls_stateful_rec, od,
                                             lsi->ls_port_groups,
-                                            lsi->features, lsi->meter_groups,
+                                            lsi->meter_groups,
                                             lsi->lflows);
                 }
             }
@@ -16312,7 +16303,7 @@ build_lswitch_and_lrouter_flows(
             ovs_assert(uuid_equals(&ls_stateful_rec->nbs_uuid,
                                    &od->nbs->header_.uuid));
             build_ls_stateful_flows(ls_stateful_rec, od, lsi.ls_port_groups,
-                                    lsi.features, lsi.meter_groups,
+                                    lsi.meter_groups,
                                     lsi.lflows);
         }
         stopwatch_stop(LFLOWS_LS_STATEFUL_STOPWATCH_NAME, time_msec());
@@ -16825,7 +16816,6 @@ lflow_handle_ls_stateful_changes(struct ovsdb_idl_txn *ovnsb_txn,
         /* Generate new lflows. */
         build_ls_stateful_flows(ls_stateful_rec, od,
                                 lflow_input->ls_port_groups,
-                                lflow_input->features,
                                 lflow_input->meter_groups,
                                 lflows);
 
