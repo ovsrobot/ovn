@@ -2802,6 +2802,26 @@ check_row_count nb:ACL 0
 
 dnl ---------------------------------------------------------------------
 
+OVN_NBCTL_TEST([acl_sampling], [ACL sampling operations], [
+check ovn-nbctl ls-add ls
+sample1=$(ovn-nbctl create sample metadata=4301)
+sample2=$(ovn-nbctl create sample metadata=4302)
+check_row_count nb:Sample 2
+
+check ovn-nbctl --sample-new=$sample1 acl-add ls from-lport 1 1 allow-related
+check_column "$sample1" nb:ACL sample_new priority=1
+
+check ovn-nbctl --sample-est=$sample2 acl-add ls from-lport 2 1 allow-related
+check_column "" nb:ACL sample_new priority=2
+check_column "$sample2" nb:ACL sample_est priority=2
+
+check ovn-nbctl --sample-new=$sample1 --sample-est=$sample2 acl-add ls from-lport 3 1 allow-related
+check_column "$sample1" nb:ACL sample_new priority=3
+check_column "$sample2" nb:ACL sample_est priority=3
+])
+
+dnl ---------------------------------------------------------------------
+
 AT_SETUP([ovn-nbctl - daemon retry connection])
 OVN_NBCTL_TEST_START daemon
 pid=$(cat ovsdb-server.pid)
