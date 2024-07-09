@@ -29,7 +29,8 @@ static void ct_zone_add_pending(struct shash *pending_ct_zones,
                                 int zone, bool add, const char *name);
 static int ct_zone_get_snat(const struct sbrec_datapath_binding *dp);
 static bool ct_zone_assign_unused(struct ct_zone_ctx *ctx,
-                                  const char *zone_name, int *scan_start);
+                                  const char *zone_name,
+                                  int *scan_start, int scan_stop);
 static bool ct_zone_remove(struct ct_zone_ctx *ctx,
                            struct simap_node *ct_zone);
 
@@ -89,10 +90,11 @@ ct_zones_restore(struct ct_zone_ctx *ctx,
 
 void
 ct_zones_update(const struct sset *local_lports,
+                const struct ovsrec_open_vswitch_table *ovs_table,
                 const struct hmap *local_datapaths, struct ct_zone_ctx *ctx)
 {
+    int min_ct_zone = 1, max_ct_zone = MAX_CT_ZONES + 1;
     struct simap_node *ct_zone;
-    int scan_start = 1;
     const char *user;
     struct sset all_users = SSET_INITIALIZER(&all_users);
     struct simap req_snat_zones = SIMAP_INITIALIZER(&req_snat_zones);
@@ -131,9 +133,18 @@ ct_zones_update(const struct sset *local_lports,
         free(snat);
     }
 
+    const struct ovsrec_open_vswitch *cfg =
+        ovsrec_open_vswitch_table_first(ovs_table);
+    if (cfg) {
+        min_ct_zone = smap_get_int(&cfg->external_ids, "ct_zone_min_val", 1);
+        max_ct_zone = smap_get_int(&cfg->external_ids, "ct_zone_max_val",
+                                   MAX_CT_ZONES + 1);
+    }
+
     /* Delete zones that do not exist in above sset. */
     SIMAP_FOR_EACH_SAFE (ct_zone, &ctx->current) {
-        if (!sset_contains(&all_users, ct_zone->name)) {
+        if (!sset_contains(&all_users, ct_zone->name) ||
+            ct_zone->data < min_ct_zone || ct_zone->data > max_ct_zone) {
             ct_zone_remove(ctx, ct_zone);
         } else if (!simap_find(&req_snat_zones, ct_zone->name)) {
             bitmap_set1(unreq_snat_zones_map, ct_zone->data);
@@ -195,7 +206,7 @@ ct_zones_update(const struct sset *local_lports,
             continue;
         }
 
-        ct_zone_assign_unused(ctx, user, &scan_start);
+        ct_zone_assign_unused(ctx, user, &min_ct_zone, max_ct_zone);
     }
 
     simap_destroy(&req_snat_zones);
@@ -296,11 +307,19 @@ ct_zone_handle_dp_update(struct ct_zone_ctx *ctx,
 /* Returns "true" if there was an update to the context. */
 bool
 ct_zone_handle_port_update(struct ct_zone_ctx *ctx, const char *name,
-                           bool updated, int *scan_start)
+                           bool updated, int *scan_start,
+                           int min_ct_zone, int max_ct_zone)
 {
     struct simap_node *ct_zone = simap_find(&ctx->current, name);
+
+    if (ct_zone &&
+        (ct_zone->data < min_ct_zone || ct_zone->data > max_ct_zone)) {
+        ct_zone_remove(ctx, ct_zone);
+        ct_zone = NULL;
+    }
+
     if (updated && !ct_zone) {
-        ct_zone_assign_unused(ctx, name, scan_start);
+        ct_zone_assign_unused(ctx, name, scan_start, max_ct_zone);
         return true;
     } else if (!updated && ct_zone_remove(ctx, ct_zone)) {
         return true;
@@ -312,11 +331,11 @@ ct_zone_handle_port_update(struct ct_zone_ctx *ctx, const char *name,
 
 static bool
 ct_zone_assign_unused(struct ct_zone_ctx *ctx, const char *zone_name,
-                      int *scan_start)
+                      int *scan_start, int scan_stop)
 {
     /* We assume that there are 64K zones and that we own them all. */
-    int zone = bitmap_scan(ctx->bitmap, 0, *scan_start, MAX_CT_ZONES + 1);
-    if (zone == MAX_CT_ZONES + 1) {
+    int zone = bitmap_scan(ctx->bitmap, 0, *scan_start, scan_stop);
+    if (zone == scan_stop) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         VLOG_WARN_RL(&rl, "exhausted all ct zones");
         return false;
