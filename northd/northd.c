@@ -11026,24 +11026,25 @@ static void
 build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
                                      enum lrouter_nat_lb_flow_type type,
                                      struct ovn_datapath *od,
-                                     struct lflow_ref *lflow_ref)
+                                     struct lflow_ref *lflow_ref,
+                                     struct ovn_port *dgp)
 {
-    struct ovn_port *dgp = od->l3dgw_ports[0];
-
-    const char *undnat_action;
+    struct ds undnat_action = DS_EMPTY_INITIALIZER;
+    struct ds dnat_action = DS_EMPTY_INITIALIZER;
+    struct ds snat_action = DS_EMPTY_INITIALIZER;
 
     switch (type) {
     case LROUTER_NAT_LB_FLOW_FORCE_SNAT:
-        undnat_action = "flags.force_snat_for_lb = 1; next;";
+        ds_put_format(&undnat_action, "flags.force_snat_for_lb = 1; next;");
         break;
     case LROUTER_NAT_LB_FLOW_SKIP_SNAT:
-        undnat_action = "flags.skip_snat_for_lb = 1; next;";
+        ds_put_format(&undnat_action, "flags.skip_snat_for_lb = 1; next;");
         break;
     case LROUTER_NAT_LB_FLOW_NORMAL:
     case LROUTER_NAT_LB_FLOW_MAX:
-        undnat_action = lrouter_use_common_zone(od)
-                        ? "ct_dnat_in_czone;"
-                        : "ct_dnat;";
+        ds_put_format(&undnat_action, "%s",
+                      lrouter_use_common_zone(od) ? "ct_dnat_in_czone;"
+                      : "ct_dnat;");
         break;
     }
 
@@ -11051,6 +11052,31 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
     size_t new_match_len = ctx->new_match->length;
     size_t undnat_match_len = ctx->undnat_match->length;
 
+    /* Change the logic to create LB NAT rules when we are using DGPs.
+     * 1. Remove the ct action from the lr_out_undenat NAT rule.
+     * 2. Add the LB backend IPs as a destination action of the lr_in_dnat
+     *    NAT rule with cumulative effect because any backend dst IP used in
+     *    the action list will redirect the packet to the ct_lb pipeline.
+     * 3. Add a new lr_out_snat NAT rule with the LB VIP as source IP
+     *    action to perform the NAT stateless pipeline completely.
+     */
+    if (od->n_l3dgw_ports > 1) {
+        ds_clear(&undnat_action);
+        ds_put_format(&undnat_action, "next;");
+
+        for (size_t i = 0; i < ctx->lb_vip->n_backends; i++) {
+            struct ovn_lb_backend *backend = &ctx->lb_vip->backends[i];
+            bool ipv6 = !IN6_IS_ADDR_V4MAPPED(&backend->ip);
+            ds_put_format(&dnat_action, "%s.dst=%s;", ipv6 ? "ip6" : "ip4",
+                          backend->ip_str);
+        }
+
+        ds_put_format(&snat_action, "%s.src=%s; next;",
+                      ctx->lb_vip->address_family == AF_INET6 ? "ip6" : "ip4",
+                      ctx->lb_vip->vip_str);
+
+    }
+    ds_put_format(&dnat_action, "%s", ctx->new_action[type]);
 
     const char *meter = NULL;
 
@@ -11060,11 +11086,11 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
 
     if (ctx->lb_vip->n_backends || !ctx->lb_vip->empty_backend_rej) {
         ds_put_format(ctx->new_match, " && is_chassis_resident(%s)",
-                      od->l3dgw_ports[0]->cr_port->json_key);
+                      dgp->cr_port->json_key);
     }
 
     ovn_lflow_add_with_hint__(ctx->lflows, od, S_ROUTER_IN_DNAT, ctx->prio,
-                              ds_cstr(ctx->new_match), ctx->new_action[type],
+                              ds_cstr(ctx->new_match), ds_cstr(&dnat_action),
                               NULL, meter, &ctx->lb->nlb->header_,
                               lflow_ref);
 
@@ -11093,9 +11119,17 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
                   " && is_chassis_resident(%s)", dgp->json_key, dgp->json_key,
                   dgp->cr_port->json_key);
     ovn_lflow_add_with_hint(ctx->lflows, od, S_ROUTER_OUT_UNDNAT, 120,
-                            ds_cstr(ctx->undnat_match), undnat_action,
-                            &ctx->lb->nlb->header_,
+                            ds_cstr(ctx->undnat_match),
+                            ds_cstr(&undnat_action), &ctx->lb->nlb->header_,
                             lflow_ref);
+
+    if (od->n_l3dgw_ports > 1) {
+        ovn_lflow_add_with_hint(ctx->lflows, od, S_ROUTER_OUT_SNAT, 120,
+                                ds_cstr(ctx->undnat_match),
+                                ds_cstr(&snat_action), &ctx->lb->nlb->header_,
+                                lflow_ref);
+    }
+
     ds_truncate(ctx->undnat_match, undnat_match_len);
 }
 
@@ -11263,8 +11297,11 @@ build_lrouter_nat_flows_for_lb(
         if (!od->n_l3dgw_ports) {
             bitmap_set1(gw_dp_bitmap[type], index);
         } else {
-            build_distr_lrouter_nat_flows_for_lb(&ctx, type, od,
-                                                 lb_dps->lflow_ref);
+            for (size_t i = 0; i < od->n_l3dgw_ports; i++) {
+                struct ovn_port *dgp = od->l3dgw_ports[i];
+                build_distr_lrouter_nat_flows_for_lb(&ctx, type, od,
+                                                     lb_dps->lflow_ref, dgp);
+            }
         }
 
         if (lb->affinity_timeout) {
