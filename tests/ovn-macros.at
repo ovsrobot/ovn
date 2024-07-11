@@ -1049,6 +1049,10 @@ ovn_strip_lflows() {
      sed 's/table=[[0-9]]\{1,2\}\s\?/table=??/g' | sort
 }
 
+ovn_strip_collector_set() {
+    sed 's/collector_set=[[0-9]]*,\?/collector_set=??,/g'
+}
+
 OVS_END_SHELL_HELPERS
 
 m4_define([OVN_POPULATE_ARP], [AT_CHECK(ovn_populate_arp__, [0], [ignore])])
