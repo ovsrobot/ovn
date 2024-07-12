@@ -329,6 +329,9 @@ ct.trk = ct_state[5]
 ct_label = NXM_NX_CT_LABEL
 ct_label.ecmp_reply_eth = ct_label[32..79]
 ct_label.label = ct_label[96..127]
+ct_label.obs_domain_id = ct_label[88..95]
+ct_label.obs_point_id = ct_label[96..127]
+ct_label.obs_unused = ct_label[0..87]
 ct_mark = NXM_NX_CT_MARK
 ct_mark.blocked = ct_mark[0]
 ct_mark.ecmp_reply_port = ct_mark[16..31]
@@ -1354,6 +1357,12 @@ ct_commit(ct_label=18446744073709551615);
     Syntax error at `(' expecting `;'.
 ct_commit(ct_label=18446744073709551616);
     Syntax error at `(' expecting `;'.
+
+# Observation domain and point id.
+ct_commit {ct_label.obs_domain_id = 42; ct_label.obs_point_id = reg2; };
+    formats as ct_commit { ct_label.obs_domain_id = 42; ct_label.obs_point_id = reg2; };
+    encodes as ct(commit,zone=NXM_NX_REG13[[0..15]],exec(set_field:0x2a0000000000000000000000/0xff0000000000000000000000->ct_label,move:NXM_NX_XXREG0[[32..63]]->NXM_NX_CT_LABEL[[96..127]]))
+    has prereqs ip
 
 ct_mark = 12345
     Field ct_mark is not modifiable.

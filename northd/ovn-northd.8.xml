@@ -900,6 +900,32 @@
       </li>
 
       <li>
+        For each ACL with sample_new configured a priority 1100 flow is
+        installed that additionally matches on the saved observation_point_id
+        value.  This flow also generates a <code>sample()</code> action along
+        with the usual action processing for the type of ACL.
+      </li>
+
+      <li>
+        For each ACL with sample_est configured a priority 1200 flow is
+        installed that additionally matches on the saved observation_point_id
+        value for established traffic in the original direction.  This flow
+        also generates a <code>sample()</code> action along with the usual
+        action processing for the type of ACL.
+      </li>
+
+      <li>
+        For each ACL with sample_est configured a priority 1200 flow is
+        installed that additionally matches on the saved observation_point_id
+        value for established traffic in the reply direction.  This flow also
+        generates a <code>sample()</code> action along with the usual action
+        processing for the type of ACL.  Note: this flow is installed in the
+        opposite pipeline (in the ingress pipeline for ACLs applied in the
+        egress direction and in the egress pipeline for ACLs applied in the
+        ingress direction).
+      </li>
+
+      <li>
         If any ACLs have tiers configured on them, then three priority 500
         flows are installed. If the current tier counter is 0, 1, or 2, then
         the current tier counter is incremented by one and the packet is sent
