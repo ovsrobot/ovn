@@ -3939,6 +3939,17 @@ sync_pb_for_lrp(struct ovn_port *op,
         }
         if (chassis_name) {
             smap_add(&new, "l3gateway-chassis", chassis_name);
+            if (smap_get_bool(&op->nbrp->options, "maintain-vrf", false)) {
+                smap_add(&new, "maintain-vrf", "true");
+            }
+            if (smap_get_bool(&op->nbrp->options,
+                              "redistribute-nat", false)) {
+                smap_add(&new, "redistribute-nat", "true");
+            }
+            if (smap_get_bool(&op->nbrp->options,
+                              "redistribute-lb-vips", false)) {
+                smap_add(&new, "redistribute-lb-vips", "true");
+            }
         }
     }
 

@@ -3451,6 +3451,45 @@ or
           <ref column="options" key="gateway_mtu"/> option.
         </p>
       </column>
+
+      <column name="options" key="redistribute-lb-vips">
+        <p>
+          Redistribute host routes to Load Balancer VIPs local to this chassis.
+
+          This option currently only works on gateway routers (routers that
+          have <ref column="options" key="chassis" table="Logical_Router"/>
+          set).
+        </p>
+      </column>
+
+      <column name="options" key="redistribute-nat">
+        <p>
+          Redistribute host routes to <code>dnat_and_snat</code> NAT records
+          associated with logical ports local to this chassis.
+
+          This option currently only works on gateway routers (routers that
+          have <ref column="options" key="chassis" table="Logical_Router"/>
+          set).
+        </p>
+      </column>
+
+      <column name="options" key="maintain-vrf">
+        <p>
+          Maintain a VRF in the system for exporting host routes to NAT
+          addresses (see <ref column="options" key="redistribute-nat"/>
+          option) and Load Balancer VIPs (see <ref column="options"
+          key="redistribute-lb-vips"/> option).
+
+          Route table ID to use can be influenced by setting the
+          <ref column="options" key="requested-tnl-key"/> option.  If not
+          set, <code>ovn-northd</code> will allocate one.
+
+          This option currently only works on gateway routers (routers that
+          have <ref column="options" key="chassis" table="Logical_Router"/>
+          set).
+        </p>
+      </column>
+
     </group>
 
     <group title="Attachment">
