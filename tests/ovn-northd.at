@@ -2887,7 +2887,7 @@ for i in {1..4097..1}; do
     cmd="${cmd} -- ls-add lsw-${i}"
 done
 
-check $cmd
+eval $cmd
 
 check_row_count nb:Logical_Switch 4097
 wait_row_count sb:Datapath_Binding 4095
