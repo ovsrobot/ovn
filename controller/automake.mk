@@ -52,7 +52,9 @@ controller_ovn_controller_SOURCES = \
 	controller/ct-zone.c \
 	controller/route-exchange-netlink.h \
 	controller/route-exchange-netlink-private.h \
-	controller/route-exchange-netlink.c
+	controller/route-exchange-netlink.c \
+	controller/route-exchange.h \
+	controller/route-exchange.c
 
 controller_ovn_controller_LDADD = lib/libovn.la $(OVS_LIBDIR)/libopenvswitch.la
 man_MANS += controller/ovn-controller.8
