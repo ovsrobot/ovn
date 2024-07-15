@@ -69,6 +69,9 @@ m4_define([ADD_VETH],
       NS_CHECK_EXEC([$2], [ip link set dev $1 up])
       if test -n "$5"; then
         NS_CHECK_EXEC([$2], [ip link set dev $1 address $5])
+        # Toggle the interface down/up to get an IPv6 LLA that matches its MAC addr.
+        NS_CHECK_EXEC([$2], [ip link set down $1])
+        NS_CHECK_EXEC([$2], [ip link set up $1])
       fi
       if test -n "$6"; then
         NS_CHECK_EXEC([$2], [ip route add $6 dev $1])
