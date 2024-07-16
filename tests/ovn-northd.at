@@ -12721,3 +12721,48 @@ AT_CHECK([ovn-sbctl dump-flows lr | grep lr_in_dnat | ovn_strip_lflows], [0], [d
 
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([BGP control plane mirroring])
+ovn_start
+
+check ovn-sbctl chassis-add hv1 geneve 127.0.0.1
+
+check ovn-nbctl lr-add lr -- \
+    lrp-add lr lr-ls 02:ac:10:01:00:01 172.16.1.1/24
+check ovn-nbctl --wait=sb set logical_router lr options:chassis=hv1
+
+check ovn-nbctl ls-add ls -- \
+    lsp-add ls ls-lr -- \
+    lsp-set-type ls-lr router -- \
+    lsp-set-addresses ls-lr router -- \
+    lsp-set-options ls-lr router-port=lr-ls
+
+check ovn-nbctl lsp-add ls lsp-bgp -- \
+    lsp-set-addresses lsp-bgp unknown
+
+# By default, no rules related to BGP mirroring are present
+AT_CHECK([ovn-sbctl dump-flows ls | grep ls_in_l2_lkup  | grep "tcp.dst == 179" | wc -l], [0], [0
+])
+
+AT_CHECK([ovn-sbctl dump-flows ls | grep ls_in_check_port_sec | grep -E "priority=80|priority=81" | wc -l], [0], [0
+])
+
+# Set "lsp-bgp" port as target of BGP control plane mirrored traffic
+check ovn-nbctl --wait=sb set logical_router_port lr-ls options:bgp-mirror=lsp-bgp
+
+# Check that BGP control plane traffic is redirected to "lsp-bgp"
+AT_CHECK([ovn-sbctl dump-flows ls | grep ls_in_l2_lkup | grep "tcp.dst == 179" | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=100  , match=(ip4.dst == 172.16.1.1 && tcp.dst == 179), action=(outport = "lsp-bgp"; output;)
+  table=??(ls_in_l2_lkup      ), priority=100  , match=(ip6.dst == fe80::ac:10ff:fe01:1 && tcp.dst == 179), action=(outport = "lsp-bgp"; output;)
+])
+
+# Check that only BGP-related traffic is accepted on "lsp-bgp" port
+AT_CHECK([ovn-sbctl dump-flows ls | grep ls_in_check_port_sec | grep -E "priority=80|priority=81" | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_check_port_sec), priority=80   , match=(inport == "lsp-bgp"), action=(reg0[[15]] = 1; next;)
+  table=??(ls_in_check_port_sec), priority=81   , match=(inport == "lsp-bgp" && ip4.src == 172.16.1.1 && tcp.src == 179), action=(reg0[[15]] = check_in_port_sec(); next;)
+  table=??(ls_in_check_port_sec), priority=81   , match=(inport == "lsp-bgp" && ip6.src == fe80::ac:10ff:fe01:1 && tcp.src == 179), action=(reg0[[15]] = check_in_port_sec(); next;)
+])
+
+AT_CLEANUP
+])
