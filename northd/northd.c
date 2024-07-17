@@ -11026,10 +11026,9 @@ static void
 build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
                                      enum lrouter_nat_lb_flow_type type,
                                      struct ovn_datapath *od,
+                                     struct ovn_port *dgp,
                                      struct lflow_ref *lflow_ref)
 {
-    struct ovn_port *dgp = od->l3dgw_ports[0];
-
     const char *undnat_action;
 
     switch (type) {
@@ -11060,7 +11059,7 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
 
     if (ctx->lb_vip->n_backends || !ctx->lb_vip->empty_backend_rej) {
         ds_put_format(ctx->new_match, " && is_chassis_resident(%s)",
-                      od->l3dgw_ports[0]->cr_port->json_key);
+                      dgp->cr_port->json_key);
     }
 
     ovn_lflow_add_with_hint__(ctx->lflows, od, S_ROUTER_IN_DNAT, ctx->prio,
@@ -11263,8 +11262,11 @@ build_lrouter_nat_flows_for_lb(
         if (!od->n_l3dgw_ports) {
             bitmap_set1(gw_dp_bitmap[type], index);
         } else {
-            build_distr_lrouter_nat_flows_for_lb(&ctx, type, od,
-                                                 lb_dps->lflow_ref);
+            for (int i = 0; i < od->n_l3dgw_ports; i++) {
+                struct ovn_port *dgp = od->l3dgw_ports[i];
+                build_distr_lrouter_nat_flows_for_lb(&ctx, type, od, dgp,
+                                                     lb_dps->lflow_ref);
+            }
         }
 
         if (lb->affinity_timeout) {
