@@ -259,3 +259,14 @@ en_northd_clear_tracked_data(void *data_)
     struct northd_data *data = data_;
     destroy_northd_data_tracked_changes(data);
 }
+
+bool
+sb_fdb_change_handler(struct engine_node *node, void *data)
+{
+    struct northd_data *nd = data;
+    const struct sbrec_fdb_table *sbrec_fdb_table =
+        EN_OVSDB_GET(engine_get_input("SB_fdb", node));
+    cleanup_stale_fdb_entries(sbrec_fdb_table, &nd->ls_datapaths.datapaths);
+    engine_set_node_state(node, EN_UPDATED);
+    return true;
+}

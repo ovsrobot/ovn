@@ -3270,7 +3270,7 @@ cleanup_sb_ha_chassis_groups(
     }
 }
 
-static void
+void
 cleanup_stale_fdb_entries(const struct sbrec_fdb_table *sbrec_fdb_table,
                           struct hmap *ls_datapaths)
 {

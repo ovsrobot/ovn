@@ -731,6 +731,8 @@ bool sync_pbs_for_northd_changed_ovn_ports(
     struct tracked_ovn_ports *,
     const struct lr_stateful_table *);
 
+void cleanup_stale_fdb_entries(const struct sbrec_fdb_table *sbrec_fdb_table,
+                          struct hmap *ls_datapaths);
 static inline bool
 northd_has_tracked_data(struct northd_tracked_data *trk_nd_changes) {
     return trk_nd_changes->type != NORTHD_TRACKED_NONE;
