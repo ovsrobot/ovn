@@ -10706,7 +10706,7 @@ add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
      * NOTE: we purposely are not clearing match before this
      * ds_put_cstr() call. The previous contents are needed.
      */
-    ds_put_cstr(&match, " && !ct.rpl && (ct.new || ct.est)");
+    ds_put_cstr(&match, " && (ct.new || ct.est)");
     ds_put_format(&actions,
             "ct_commit { ct_label.ecmp_reply_eth = eth.src; "
             " %s = %" PRId64 ";}; "
@@ -10721,7 +10721,7 @@ add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
      * for where to route the packet.
      */
     ds_put_format(&ecmp_reply,
-                  "ct.rpl && %s == %"PRId64,
+                  "%s == %"PRId64,
                   ct_ecmp_reply_port_match, out_port->sb->tunnel_key);
     ds_clear(&match);
     ds_put_format(&match, "%s && %s", ds_cstr(&ecmp_reply),
