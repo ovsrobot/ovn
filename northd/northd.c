@@ -3939,6 +3939,28 @@ sync_pb_for_lrp(struct ovn_port *op,
         }
         if (chassis_name) {
             smap_add(&new, "l3gateway-chassis", chassis_name);
+            if (smap_get_bool(&op->nbrp->options, "maintain-vrf", false)) {
+                smap_add(&new, "maintain-vrf", "true");
+            }
+            if (smap_get_bool(&op->nbrp->options,
+                              "redistribute-nat", false)) {
+                smap_add(&new, "redistribute-nat", "true");
+
+                size_t n_nats = 0;
+                char **nats = NULL;
+                nats = get_nat_addresses(op, &n_nats, false, false, NULL);
+                sbrec_port_binding_set_nat_addresses(op->sb,
+                                                     (const char **) nats,
+                                                     n_nats);
+                for (size_t i = 0; i < n_nats; i++) {
+                    free(nats[i]);
+                }
+                free(nats);
+            }
+            if (smap_get_bool(&op->nbrp->options,
+                              "redistribute-lb-vips", false)) {
+                smap_add(&new, "redistribute-lb-vips", "true");
+            }
         }
     }
 
