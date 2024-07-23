@@ -62,7 +62,8 @@ void ct_zones_restore(struct ct_zone_ctx *ctx,
                       const struct ovsrec_bridge *br_int);
 void ct_zones_update(const struct sset *local_lports,
                      const struct hmap *local_datapaths,
-                     struct ct_zone_ctx *ctx);
+                     struct ct_zone_ctx *ctx,
+                     struct ovsrec_open_vswitch_table *ovs_table);
 void ct_zones_commit(const struct ovsrec_bridge *br_int,
                      struct shash *pending_ct_zones);
 void ct_zones_pending_clear_commited(struct shash *pending);

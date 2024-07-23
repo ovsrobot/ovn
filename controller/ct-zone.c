@@ -89,7 +89,8 @@ ct_zones_restore(struct ct_zone_ctx *ctx,
 
 void
 ct_zones_update(const struct sset *local_lports,
-                const struct hmap *local_datapaths, struct ct_zone_ctx *ctx)
+                const struct hmap *local_datapaths, struct ct_zone_ctx *ctx,
+                struct ovsrec_open_vswitch_table *ovs_table)
 {
     struct simap_node *ct_zone;
     int scan_start = 1;
@@ -102,6 +103,27 @@ ct_zones_update(const struct sset *local_lports,
     const char *local_lport;
     SSET_FOR_EACH (local_lport, local_lports) {
         sset_add(&all_users, local_lport);
+    }
+
+    /* Add local_loprt name which are supposed to come up on the
+     * chassis and might need ct-zone reservation in advance. 
+     * The data is picked up from ovs_vswitch table. */
+    const struct ovsrec_open_vswitch *cfg;
+    cfg = ovsrec_open_vswitch_table_first(ovs_table);
+    if (cfg) {
+        char *reserve_ct_zone_request_list = smap_get(&cfg->external_ids,
+                                                      "reserve_ct_zones");
+        if (reserve_ct_zone_request_list) {
+            char *duplicate_reserve_list = xstrdup(reserve_ct_zone_request_list);
+            char *reserve_port;
+            char *save_ptr = NULL;
+            for (reserve_port = strtok_r(duplicate_reserve_list, ",", 
+                 &save_ptr); reserve_port != NULL; 
+                 reserve_port = strtok_r(NULL, ",", &save_ptr)) {
+                   sset_add(&all_users, reserve_port);
+            }
+            free(duplicate_reserve_list);
+        }
     }
 
     /* Local patched datapath (gateway routers) need zones assigned. */

@@ -2231,7 +2231,7 @@ en_ct_zones_run(struct engine_node *node, void *data)
 
     ct_zones_restore(&ct_zones_data->ctx, ovs_table, dp_table, br_int);
     ct_zones_update(&rt_data->local_lports, &rt_data->local_datapaths,
-                    &ct_zones_data->ctx);
+                    &ct_zones_data->ctx, ovs_table);
 
     ct_zones_data->recomputed = true;
     engine_set_node_state(node, EN_UPDATED);
