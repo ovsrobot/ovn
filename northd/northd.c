@@ -4524,7 +4524,7 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
     bool ls_had_only_router_ports = (od->n_router_ports
             && (od->n_router_ports == hmap_count(&od->ports)));
 
-    struct ovn_port *op;
+    struct ovn_port *op, *op_v;
     HMAP_FOR_EACH (op, dp_node, &od->ports) {
         op->visited = false;
     }
@@ -4547,6 +4547,23 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 goto fail;
             }
             add_op_to_northd_tracked_ports(&trk_lsps->created, op);
+
+            /*
+             * Update old virtual ports that had this VIF as parent port
+             * this code handles cases where the virtual port was created
+             * before the parent port or when the parent port was recreated.
+             */
+            if (!strcmp(new_nbsp->type, "")) {
+                for (size_t i = 0; i < changed_ls->n_ports; i++) {
+                    op_v = ovn_port_find_in_datapath(od, changed_ls->ports[i]);
+                    if (op_v && !strcmp(op_v->nbsp->type, "virtual") &&
+                        strstr(smap_get_def(&op_v->nbsp->options,
+                               "virtual-parents", ""), new_nbsp->name)) {
+                        add_op_to_northd_tracked_ports(&trk_lsps->updated,
+                                                       op_v);
+                    }
+                }
+            }
         } else if (ls_port_has_changed(new_nbsp)) {
             /* Existing port updated */
             bool temp = false;
