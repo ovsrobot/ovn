@@ -26,12 +26,28 @@ ct_zone_restore(const struct sbrec_datapath_binding_table *dp_table,
                 struct ct_zone_ctx *ctx, const char *name, int zone);
 static void ct_zone_add_pending(struct shash *pending_ct_zones,
                                 enum ct_zone_pending_state state,
-                                int zone, bool add, const char *name);
+                                struct ct_zone *zone, bool add,
+                                const char *name);
 static int ct_zone_get_snat(const struct sbrec_datapath_binding *dp);
 static bool ct_zone_assign_unused(struct ct_zone_ctx *ctx,
                                   const char *zone_name, int *scan_start);
-static bool ct_zone_remove(struct ct_zone_ctx *ctx,
-                           struct simap_node *ct_zone);
+static bool ct_zone_remove(struct ct_zone_ctx *ctx, const char *name);
+static void ct_zone_add(struct ct_zone_ctx *ctx, const char *name,
+                        uint16_t zone, bool set_pending);
+
+void
+ct_zone_ctx_init(struct ct_zone_ctx *ctx)
+{
+    shash_init(&ctx->pending);
+    shash_init(&ctx->current);
+}
+
+void
+ct_zone_ctx_destroy(struct ct_zone_ctx *ctx)
+{
+    shash_destroy_free_data(&ctx->current);
+    shash_destroy_free_data(&ctx->pending);
+}
 
 void
 ct_zones_restore(struct ct_zone_ctx *ctx,
@@ -47,7 +63,8 @@ ct_zones_restore(struct ct_zone_ctx *ctx,
         struct ct_zone_pending_entry *ctpe = pending_node->data;
 
         if (ctpe->add) {
-            ct_zone_restore(dp_table, ctx, pending_node->name, ctpe->zone);
+            ct_zone_restore(dp_table, ctx, pending_node->name,
+                            ctpe->ct_zone.zone);
         }
     }
 
@@ -91,7 +108,6 @@ void
 ct_zones_update(const struct sset *local_lports,
                 const struct hmap *local_datapaths, struct ct_zone_ctx *ctx)
 {
-    struct simap_node *ct_zone;
     int scan_start = 1;
     const char *user;
     struct sset all_users = SSET_INITIALIZER(&all_users);
@@ -132,12 +148,14 @@ ct_zones_update(const struct sset *local_lports,
     }
 
     /* Delete zones that do not exist in above sset. */
-    SIMAP_FOR_EACH_SAFE (ct_zone, &ctx->current) {
-        if (!sset_contains(&all_users, ct_zone->name)) {
-            ct_zone_remove(ctx, ct_zone);
-        } else if (!simap_find(&req_snat_zones, ct_zone->name)) {
-            bitmap_set1(unreq_snat_zones_map, ct_zone->data);
-            simap_put(&unreq_snat_zones, ct_zone->name, ct_zone->data);
+    struct shash_node *node;
+    SHASH_FOR_EACH_SAFE (node, &ctx->current) {
+        struct ct_zone *ct_zone = node->data;
+        if (!sset_contains(&all_users, node->name)) {
+            ct_zone_remove(ctx, node->name);
+        } else if (!simap_find(&req_snat_zones, node->name)) {
+            bitmap_set1(unreq_snat_zones_map, ct_zone->zone);
+            simap_put(&unreq_snat_zones, node->name, ct_zone->zone);
         }
     }
 
@@ -152,7 +170,7 @@ ct_zones_update(const struct sset *local_lports,
             struct simap_node *unreq_node;
             SIMAP_FOR_EACH_SAFE (unreq_node, &unreq_snat_zones) {
                 if (unreq_node->data == snat_req_node->data) {
-                    simap_find_and_delete(&ctx->current, unreq_node->name);
+                    ct_zone_remove(ctx, unreq_node->name);
                     simap_delete(&unreq_snat_zones, unreq_node);
                 }
             }
@@ -163,26 +181,12 @@ ct_zones_update(const struct sset *local_lports,
             bitmap_set0(unreq_snat_zones_map, snat_req_node->data);
         }
 
-        struct simap_node *node = simap_find(&ctx->current,
-                                             snat_req_node->name);
-        if (node) {
-            if (node->data != snat_req_node->data) {
-                /* Zone request has changed for this node. delete old entry and
-                 * create new one*/
-                ct_zone_add_pending(&ctx->pending, CT_ZONE_OF_QUEUED,
-                                    snat_req_node->data, true,
-                                    snat_req_node->name);
-                bitmap_set0(ctx->bitmap, node->data);
-            }
-            bitmap_set1(ctx->bitmap, snat_req_node->data);
-            node->data = snat_req_node->data;
-        } else {
-            ct_zone_add_pending(&ctx->pending, CT_ZONE_OF_QUEUED,
-                                snat_req_node->data, true,
-                                snat_req_node->name);
-            bitmap_set1(ctx->bitmap, snat_req_node->data);
-            simap_put(&ctx->current, snat_req_node->name, snat_req_node->data);
+        struct ct_zone *ct_zone = shash_find_data(&ctx->current,
+                                                  snat_req_node->name);
+        if (node && ct_zone->zone != snat_req_node->data) {
+            ct_zone_remove(ctx, snat_req_node->name);
         }
+        ct_zone_add(ctx, snat_req_node->name, snat_req_node->data, true);
     }
 
     /* xxx This is wasteful to assign a zone to each port--even if no
@@ -191,7 +195,7 @@ ct_zones_update(const struct sset *local_lports,
     /* Assign a unique zone id for each logical port and two zones
      * to a gateway router. */
     SSET_FOR_EACH (user, &all_users) {
-        if (simap_contains(&ctx->current, user)) {
+        if (shash_find(&ctx->current, user)) {
             continue;
         }
 
@@ -222,7 +226,7 @@ ct_zones_commit(const struct ovsrec_bridge *br_int,
 
         char *user_str = xasprintf("ct-zone-%s", iter->name);
         if (ctzpe->add) {
-            char *zone_str = xasprintf("%"PRId32, ctzpe->zone);
+            char *zone_str = xasprintf("%"PRIu16, ctzpe->ct_zone.zone);
             struct smap_node *node =
                     smap_get_node(&br_int->external_ids, user_str);
             if (!node || strcmp(node->value, zone_str)) {
@@ -281,12 +285,17 @@ ct_zone_handle_dp_update(struct ct_zone_ctx *ctx,
      * or not.  If so, then fall back to full recompute of
      * ct_zone engine. */
     char *snat_dp_zone_key = alloc_nat_zone_key(name, "snat");
-    struct simap_node *simap_node =
-            simap_find(&ctx->current, snat_dp_zone_key);
+    struct shash_node *node = shash_find(&ctx->current, snat_dp_zone_key);
     free(snat_dp_zone_key);
-    if (!simap_node || simap_node->data != req_snat_zone) {
-        /* There is no entry yet or the requested snat zone has changed.
-         * Trigger full recompute of ct_zones engine. */
+
+    if (!node) {
+        return false;
+    }
+
+    struct ct_zone *ct_zone = node->data;
+    if (ct_zone->zone != req_snat_zone) {
+        /* The requested snat zone has changed. Trigger full recompute of
+         * ct_zones engine. */
         return false;
     }
 
@@ -298,15 +307,22 @@ bool
 ct_zone_handle_port_update(struct ct_zone_ctx *ctx, const char *name,
                            bool updated, int *scan_start)
 {
-    struct simap_node *ct_zone = simap_find(&ctx->current, name);
-    if (updated && !ct_zone) {
+    struct shash_node *node = shash_find(&ctx->current, name);
+    if (updated && !node) {
         ct_zone_assign_unused(ctx, name, scan_start);
         return true;
-    } else if (!updated && ct_zone_remove(ctx, ct_zone)) {
+    } else if (!updated && node && ct_zone_remove(ctx, node->name)) {
         return true;
     }
 
     return false;
+}
+
+uint16_t
+ct_zone_find_zone(const struct shash *ct_zones, const char *name)
+{
+    struct ct_zone *ct_zone = shash_find_data(ct_zones, name);
+    return ct_zone ? ct_zone->zone : 0;
 }
 
 
@@ -323,31 +339,51 @@ ct_zone_assign_unused(struct ct_zone_ctx *ctx, const char *zone_name,
     }
 
     *scan_start = zone + 1;
+    ct_zone_add(ctx, zone_name, zone, true);
 
-    ct_zone_add_pending(&ctx->pending, CT_ZONE_OF_QUEUED,
-                        zone, true, zone_name);
-
-    bitmap_set1(ctx->bitmap, zone);
-    simap_put(&ctx->current, zone_name, zone);
     return true;
 }
 
 static bool
-ct_zone_remove(struct ct_zone_ctx *ctx, struct simap_node *ct_zone)
+ct_zone_remove(struct ct_zone_ctx *ctx, const char *name)
 {
-    if (!ct_zone) {
+    struct shash_node *node = shash_find(&ctx->current, name);
+    if (!node) {
         return false;
     }
 
-    VLOG_DBG("removing ct zone %"PRId32" for '%s'", ct_zone->data,
-             ct_zone->name);
+    struct ct_zone *ct_zone = node->data;
+
+    VLOG_DBG("removing ct zone %"PRIu16" for '%s'", ct_zone->zone, name);
 
     ct_zone_add_pending(&ctx->pending, CT_ZONE_OF_QUEUED,
-                        ct_zone->data, false, ct_zone->name);
-    bitmap_set0(ctx->bitmap, ct_zone->data);
-    simap_delete(&ctx->current, ct_zone);
+                        ct_zone, false, name);
+    bitmap_set0(ctx->bitmap, ct_zone->zone);
+    shash_delete(&ctx->current, node);
+    free(ct_zone);
 
     return true;
+}
+
+static void
+ct_zone_add(struct ct_zone_ctx *ctx, const char *name, uint16_t zone,
+            bool set_pending)
+{
+    VLOG_DBG("assigning ct zone %"PRIu16" for '%s'", zone, name);
+
+    struct ct_zone *ct_zone = shash_find_data(&ctx->current, name);
+    if (!ct_zone) {
+        ct_zone = xmalloc(sizeof *ct_zone);
+        shash_add(&ctx->current, name, ct_zone);
+    }
+
+    ct_zone->zone = zone;
+
+    if (set_pending) {
+        ct_zone_add_pending(&ctx->pending, CT_ZONE_OF_QUEUED,
+                            ct_zone, true, name);
+    }
+    bitmap_set1(ctx->bitmap, zone);
 }
 
 static int
@@ -359,27 +395,29 @@ ct_zone_get_snat(const struct sbrec_datapath_binding *dp)
 static void
 ct_zone_add_pending(struct shash *pending_ct_zones,
                     enum ct_zone_pending_state state,
-                    int zone, bool add, const char *name)
+                    struct ct_zone *zone, bool add, const char *name)
 {
-    VLOG_DBG("%s ct zone %"PRId32" for '%s'",
-             add ? "assigning" : "removing", zone, name);
-
-    struct ct_zone_pending_entry *pending = xmalloc(sizeof *pending);
-    *pending = (struct ct_zone_pending_entry) {
-        .state = state,
-        .zone = zone,
-        .add = add,
-    };
-
     /* Its important that we add only one entry for the key 'name'.
      * Replace 'pending' with 'existing' and free up 'existing'.
      * Otherwise, we may end up in a continuous loop of adding
      * and deleting the zone entry in the 'external_ids' of
      * integration bridge.
      */
-    struct ct_zone_pending_entry *existing =
-            shash_replace(pending_ct_zones, name, pending);
-    free(existing);
+    struct ct_zone_pending_entry *entry =
+            shash_find_data(pending_ct_zones, name);
+
+    if (!entry) {
+        entry = xmalloc(sizeof *entry);
+        entry->state = state;
+
+        shash_add(pending_ct_zones, name, entry);
+    }
+
+    *entry = (struct ct_zone_pending_entry) {
+        .ct_zone = *zone,
+        .state = MIN(entry->state, state),
+        .add = add,
+    };
 }
 
 /* Replaces a UUID prefix from 'uuid_zone' (if any) with the
@@ -420,19 +458,20 @@ ct_zone_restore(const struct sbrec_datapath_binding_table *dp_table,
         VLOG_DBG("ct zone %"PRId32" replace uuid name '%s' with '%s'",
                  zone, name, new_name);
 
+        struct ct_zone ct_zone = {
+            .zone = zone,
+        };
         /* Make sure we remove the uuid one in the next OvS DB commit without
          * flush. */
         ct_zone_add_pending(&ctx->pending, CT_ZONE_DB_QUEUED,
-                            zone, false, name);
+                            &ct_zone, false, name);
         /* Store the zone in OvS DB with name instead of uuid without flush.
          * */
         ct_zone_add_pending(&ctx->pending, CT_ZONE_DB_QUEUED,
-                            zone, true, new_name);
+                            &ct_zone, true, new_name);
         current_name = new_name;
     }
 
-    simap_put(&ctx->current, current_name, zone);
-    bitmap_set1(ctx->bitmap, zone);
-
+    ct_zone_add(ctx, current_name, zone, false);
     free(new_name);
 }
