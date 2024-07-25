@@ -481,4 +481,8 @@ void ovn_exit_args_finish(struct ovn_exit_args *exit_args);
 bool ovn_update_swconn_at(struct rconn *swconn, const char *target,
                           int probe_interval, const char *where);
 
+bool extract_addresses_with_port(const char *addresses,
+                                 struct lport_addresses *laddrs,
+                                 char **lport);
+
 #endif /* OVN_UTIL_H */
