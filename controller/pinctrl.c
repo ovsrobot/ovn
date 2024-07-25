@@ -6428,11 +6428,15 @@ get_nat_addresses_and_keys(struct ovsdb_idl_index *sbrec_port_binding_by_name,
         const struct sbrec_port_binding *pb;
 
         pb = lport_lookup_by_name(sbrec_port_binding_by_name, gw_port);
-        if (!pb) {
+        if (!pb || !pb->datapath) {
             continue;
         }
 
-        if (pb->n_nat_addresses) {
+        /* We only want to consider nat_addresses column for LS datapaths. */
+        const char *logical_switch = smap_get(&pb->datapath->external_ids,
+                                              "logical-switch");
+
+        if (pb->n_nat_addresses && logical_switch) {
             for (int i = 0; i < pb->n_nat_addresses; i++) {
                 consider_nat_address(sbrec_port_binding_by_name,
                                      pb->nat_addresses[i], pb,

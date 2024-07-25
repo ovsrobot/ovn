@@ -12459,3 +12459,45 @@ AT_CHECK([ovn-sbctl dump-flows lr | grep lr_in_dnat | ovn_strip_lflows], [0], [d
 
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([check route-exchange redistribute-nat option])
+ovn_start
+
+ovn-nbctl lr-add R1
+ovn-nbctl set Logical_Router R1 options:chassis=hv1
+ovn-nbctl lrp-add R1 R1-S1 02:ac:10:01:00:01 172.16.1.1/24
+
+ovn-nbctl ls-add S1
+ovn-nbctl lsp-add S1 S1-R1
+ovn-nbctl lsp-set-type S1-R1 router
+ovn-nbctl lsp-set-addresses S1-R1 02:ac:10:01:00:01
+ovn-nbctl --wait=sb lsp-set-options S1-R1 \
+    router-port=R1-S1 \
+    nat-addresses="router"
+
+ovn-nbctl lr-nat-add R1 snat 172.16.1.1 10.0.0.0/24
+ovn-nbctl lr-nat-add R1 dnat 172.16.1.2 10.0.0.1
+ovn-nbctl --wait=sb sync
+
+AT_CHECK([dnl
+ovn-sbctl get Port_Binding S1-R1 nat_addresses | grep -q 172.16.1.2], [0])
+AT_CHECK([dnl
+ovn-sbctl get Port_Binding R1-S1 nat_addresses | grep -q 172.16.1.2], [1])
+
+ovn-nbctl --wait=sb lrp-set-options R1-S1 redistribute-nat=true
+
+AT_CHECK([dnl
+ovn-sbctl get Port_Binding S1-R1 nat_addresses | grep -q 172.16.1.2], [0])
+AT_CHECK([dnl
+ovn-sbctl get Port_Binding R1-S1 nat_addresses | grep -q 172.16.1.2], [0])
+
+ovn-nbctl --wait=sb lrp-set-options R1-S1 redistribute-nat=false
+
+AT_CHECK([dnl
+ovn-sbctl get Port_Binding S1-R1 nat_addresses | grep -q 172.16.1.2], [0])
+AT_CHECK([dnl
+ovn-sbctl get Port_Binding R1-S1 nat_addresses | grep -q 172.16.1.2], [1])
+
+AT_CLEANUP
+])

@@ -3594,14 +3594,63 @@ tcp.flags = RST;
         The <code>chassis</code> in which the port resides.
       </column>
 
+      <column name="options" key="redistribute-lb-vips">
+        <p>
+          The value is copied from the column
+          <ref table="Logical_Router_Port" column="options"
+               db="OVN_Northbound"/> and when configured the
+          <code>ovn-controller</code> will redistribute host routes to Load
+          Balancer VIPs that are local to its chassis and associated with the
+          LR datapath.
+        </p>
+      </column>
+
+      <column name="options" key="redistribute-nat">
+        <p>
+          The value is copied from the column
+          <ref table="Logical_Router_Port" column="options"
+               db="OVN_Northbound"/> and when configured the
+          <code>ovn-controller</code> will redistribute host routes to
+          <ref table="NAT" db="OVN_Northbound"/> records associated with
+          logical ports local to this chassis in relateion to the LR datapath.
+        </p>
+      </column>
+
+      <column name="options" key="maintain-vrf">
+        <p>
+          The value is copied from the column
+          <ref table="Logical_Router_Port" column="options"
+               db="OVN_Northbound"/> and when configured the
+          <code>ovn-controller</code> will maintain a VRF in the system for
+          exporting host routes to NAT addresses (see
+          <ref column="options" key="redistribute-nat"/> option) and Load
+          Balancer VIPs (see <ref column="options" key="redistribute-lb-vips"/>
+          option).
+        </p>
+      </column>
+
       <column name="nat_addresses">
         MAC address of the <code>l3gateway</code> port followed by a list of
-        SNAT and DNAT external IP addresses.  This is used to send gratuitous
+        SNAT and DNAT external IP addresses.
+
+        Both sides of a LRP-LSP peer relationship have records in the
+        <ref table="Port_Binding"/> table.
+
+        When the record is associated with a
+        <ref table="Datapath_Binding" column="external_ids"
+             key="logical-switch"/> record, this is used to send gratuitous
         ARPs for SNAT and DNAT external IP addresses via <code>localnet</code>.
         Example: <code>80:fa:5b:06:72:b7 158.36.44.22 158.36.44.24</code>.
         This would result in generation of gratuitous ARPs for IP addresses
         158.36.44.22 and 158.36.44.24 with a MAC address of 80:fa:5b:06:72:b7.
         This is used in OVS version 2.8 and later versions.
+
+        When the record is associated with a
+        <ref table="Datapath_Binding" column="external_ids"
+             key="logical-router"/> record, this is used to redistribute host
+        routes to <ref table="NAT" db="OVN_Northbound"/> records associated
+        with logical ports local to this chassis in relateion to the LR
+        datapath.
       </column>
     </group>
 

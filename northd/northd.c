@@ -3912,6 +3912,8 @@ sync_pb_for_lrp(struct ovn_port *op,
     smap_init(&new);
 
     const char *chassis_name = smap_get(&op->od->nbr->options, "chassis");
+    bool redistribute_nat = smap_get_bool(&op->nbrp->options,
+                                          "redistribute-nat", false);
     if (is_cr_port(op)) {
         const struct lr_stateful_record *lr_stateful_rec =
             lr_stateful_table_find_by_index(lr_stateful_table, op->od->index);
@@ -3950,6 +3952,28 @@ sync_pb_for_lrp(struct ovn_port *op,
         }
         if (chassis_name) {
             smap_add(&new, "l3gateway-chassis", chassis_name);
+            if (smap_get_bool(&op->nbrp->options, "maintain-vrf", false)) {
+                smap_add(&new, "maintain-vrf", "true");
+            }
+            if (redistribute_nat) {
+                smap_add(&new, "redistribute-nat", "true");
+
+                size_t n_nats = 0;
+                char **nats = NULL;
+                nats = get_nat_addresses(op, &n_nats, false, false, NULL,
+                                         true);
+                sbrec_port_binding_set_nat_addresses(op->sb,
+                                                     (const char **) nats,
+                                                     n_nats);
+                for (size_t i = 0; i < n_nats; i++) {
+                    free(nats[i]);
+                }
+                free(nats);
+            }
+            if (smap_get_bool(&op->nbrp->options,
+                              "redistribute-lb-vips", false)) {
+                smap_add(&new, "redistribute-lb-vips", "true");
+            }
         }
     }
 
@@ -3960,6 +3984,10 @@ sync_pb_for_lrp(struct ovn_port *op,
 
     sbrec_port_binding_set_options(op->sb, &new);
     smap_destroy(&new);
+
+    if (!chassis_name || !redistribute_nat) {
+        sbrec_port_binding_set_nat_addresses(op->sb, NULL, 0);
+    }
 }
 
 static void ovn_update_ipv6_options(struct hmap *lr_ports);

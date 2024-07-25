@@ -3467,6 +3467,51 @@ or
           <ref column="options" key="gateway_mtu"/> option.
         </p>
       </column>
+
+      <column name="options" key="redistribute-lb-vips">
+        <p>
+          When configured the <code>ovn-controller</code> will redistribute
+          host routes to Load Balancer VIPs that are local to its chassis and
+          associated with the LR datapath.
+
+          This option only works on gateway routers (routers that have
+          <ref column="options" key="chassis" table="Logical_Router"/> set)
+          when OVN is built on a system with Netlink support.
+        </p>
+      </column>
+
+      <column name="options" key="redistribute-nat">
+        <p>
+          When configured the <code>ovn-controller</code> will redistribute
+          host routes to NAT records associated with logical ports local to
+          its chassis in relateion to the LR datapath.
+
+          This option only works on gateway routers (routers that have
+          <ref column="options" key="chassis" table="Logical_Router"/> set)
+          when OVN is built on a system with Netlink support.
+        </p>
+      </column>
+
+      <column name="options" key="maintain-vrf">
+        <p>
+          When configured the <code>ovn-controller</code> will maintain a VRF
+          in the system for exporting host routes to NAT addresses (see
+          <ref column="options" key="redistribute-nat"/> option) and Load
+          Balancer VIPs (see <ref column="options" key="redistribute-lb-vips"/>
+          option).
+
+          Route table ID to use can be influenced by setting the
+          <ref column="options" key="requested-tnl-key"
+               table="Logical_Router"/> option in the
+          <ref table="Logical_Router"/> table. If not set,
+          <code>ovn-northd</code> will allocate one.
+
+          This option only works on gateway routers (routers that have
+          <ref column="options" key="chassis" table="Logical_Router"/> set)
+          when OVN is built on a system with Netlink support.
+        </p>
+      </column>
+
     </group>
 
     <group title="Attachment">
