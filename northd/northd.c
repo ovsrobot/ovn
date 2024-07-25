@@ -4525,6 +4525,8 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             && (od->n_router_ports == hmap_count(&od->ports)));
 
     struct ovn_port *op;
+    struct ovs_list exist_virtual_ports;
+    ovs_list_init(&exist_virtual_ports);
     HMAP_FOR_EACH (op, dp_node, &od->ports) {
         op->visited = false;
     }
@@ -4588,6 +4590,8 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 delete_fdb_entry(ni->sbrec_fdb_by_dp_and_port, od->tunnel_key,
                                  old_tunnel_key);
             }
+        } else if (!strcmp(op->nbsp->type, "virtual")) {
+            ovs_list_push_back(&exist_virtual_ports, &op->list);
         }
         op->visited = true;
     }
@@ -4627,6 +4631,30 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             add_op_to_northd_tracked_ports(&trk_lsps->updated, op);
         }
     }
+
+    /*
+     * Update old virtual ports that have new created VIF as parent port
+     * this code handles cases where the virtual port was created
+     * before the parent port or when the parent port was recreated.
+     */
+     if (!ovs_list_is_empty(&exist_virtual_ports)) {
+         struct hmapx_node *hmapx_node;
+         struct ovn_port *new_op;
+         LIST_FOR_EACH (op, list, &exist_virtual_ports) {
+             ovs_list_remove(&op->list);
+             HMAPX_FOR_EACH (hmapx_node, &trk_lsps->created) {
+                 new_op = hmapx_node->data;
+                 if (strstr(smap_get_def(&op->nbsp->options,
+                     "virtual-parents", ""), new_op->nbsp->name)) {
+                     add_op_to_northd_tracked_ports(&trk_lsps->updated, op);
+                     /* Can stop the loop cause we have at lest one new parent
+                      * created, no need to check the rest.
+                      */
+                     break;
+                 }
+             }
+         }
+     }
 
     return true;
 
