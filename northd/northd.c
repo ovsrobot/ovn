@@ -496,7 +496,7 @@ ovn_datapath_find(const struct hmap *datapaths,
     return ovn_datapath_find_(datapaths, uuid);
 }
 
-static struct ovn_datapath *
+struct ovn_datapath *
 ovn_datapath_find_by_key(struct hmap *datapaths, uint32_t dp_key)
 {
     struct ovn_datapath *od;
@@ -3300,13 +3300,12 @@ delete_fdb_entry(struct ovsdb_idl_index *sbrec_fdb_by_dp_and_port,
     sbrec_fdb_index_set_dp_key(target, dp_key);
     sbrec_fdb_index_set_port_key(target, port_key);
 
-    struct sbrec_fdb *fdb_e = sbrec_fdb_index_find(sbrec_fdb_by_dp_and_port,
-                                                   target);
-    sbrec_fdb_index_destroy_row(target);
-
-    if (fdb_e) {
+    struct sbrec_fdb *fdb_e;
+    while ((fdb_e = sbrec_fdb_index_find(sbrec_fdb_by_dp_and_port,
+                                           target))) {
         sbrec_fdb_delete(fdb_e);
     }
+    sbrec_fdb_index_destroy_row(target);
 }
 
 struct service_monitor_info {
