@@ -10242,6 +10242,7 @@ struct parsed_route {
     uint32_t route_table_id;
     uint32_t hash;
     const struct nbrec_logical_router_static_route *route;
+    const char *ecmp_selection_fields;
     bool ecmp_symmetric_reply;
     bool is_discard_route;
 };
@@ -10352,6 +10353,12 @@ parsed_routes_add(struct ovn_datapath *od, const struct hmap *lr_ports,
     pr->ecmp_symmetric_reply = smap_get_bool(&route->options,
                                              "ecmp_symmetric_reply", false);
     pr->is_discard_route = is_discard_route;
+    pr->ecmp_selection_fields = NULL;
+    const char *ecmp_selection_fields = smap_get(&route->options,
+                                                 "ecmp_selection_fields");
+    if (ecmp_selection_fields) {
+        pr->ecmp_selection_fields = ecmp_selection_fields;
+    }
     ovs_list_insert(routes, &pr->list_node);
     return pr;
 }
@@ -10381,6 +10388,7 @@ struct ecmp_groups_node {
     const char *origin;
     uint32_t route_table_id;
     uint16_t route_count;
+    char *selection_fields;
     struct ovs_list route_list; /* Contains ecmp_route_list_node */
 };
 
@@ -10397,6 +10405,34 @@ ecmp_groups_add_route(struct ecmp_groups_node *group,
     struct ecmp_route_list_node *er = xmalloc(sizeof *er);
     er->route = route;
     er->id = ++group->route_count;
+
+    if (route->ecmp_selection_fields) {
+        if (group->selection_fields) {
+            struct sset current_field_set;
+            struct sset field_set;
+
+            sset_from_delimited_string(&current_field_set,
+                                       group->selection_fields, ",");
+            sset_from_delimited_string(&field_set,
+                                       route->ecmp_selection_fields, ",");
+
+            const char *field;
+            SSET_FOR_EACH(field, &field_set) {
+                sset_add(&current_field_set, field);
+            }
+
+            group->selection_fields = xasprintf("%s",
+                                                sset_join(&current_field_set,
+                                                          ",", ""));
+
+            sset_destroy(&field_set);
+            sset_destroy(&current_field_set);
+        } else {
+            group->selection_fields = xasprintf("%s",
+                                                route->ecmp_selection_fields);
+        }
+    }
+
     ovs_list_insert(&group->route_list, &er->list_node);
 }
 
@@ -10419,6 +10455,7 @@ ecmp_groups_add(struct hmap *ecmp_groups,
     eg->is_src_route = route->is_src_route;
     eg->origin = smap_get_def(&route->route->options, "origin", "");
     eg->route_table_id = route->route_table_id;
+    eg->selection_fields = NULL;
     ovs_list_init(&eg->route_list);
     ecmp_groups_add_route(eg, route);
 
@@ -10734,19 +10771,28 @@ build_ecmp_route_flow(struct lflow_table *lflows, struct ovn_datapath *od,
                       eg->is_src_route, is_ipv4, &route_match, &priority, ofs);
     free(prefix_s);
 
-    struct ds actions = DS_EMPTY_INITIALIZER;
-    ds_put_format(&actions, "ip.ttl--; flags.loopback = 1; %s = %"PRIu16
-                  "; %s = select(", REG_ECMP_GROUP_ID, eg->id,
-                  REG_ECMP_MEMBER_ID);
-
+    struct ds values = DS_EMPTY_INITIALIZER;
     bool is_first = true;
     LIST_FOR_EACH (er, list_node, &eg->route_list) {
         if (is_first) {
             is_first = false;
         } else {
-            ds_put_cstr(&actions, ", ");
+            ds_put_cstr(&values, ", ");
         }
-        ds_put_format(&actions, "%"PRIu16, er->id);
+        ds_put_format(&values, "%"PRIu16, er->id);
+    }
+
+    struct ds actions = DS_EMPTY_INITIALIZER;
+    if (eg->selection_fields) {
+        ds_put_format(&actions, "ip.ttl--; flags.loopback = 1; %s = %"PRIu16
+                      "; %s = select(values=%s", REG_ECMP_GROUP_ID, eg->id,
+                      REG_ECMP_MEMBER_ID, ds_cstr(&values));
+
+        ds_put_format(&actions, "; hash_fields=\"%s\"", eg->selection_fields);
+    } else {
+        ds_put_format(&actions, "ip.ttl--; flags.loopback = 1; %s = %"PRIu16
+                      "; %s = select(%s", REG_ECMP_GROUP_ID, eg->id,
+                      REG_ECMP_MEMBER_ID, ds_cstr(&values));
     }
 
     ds_put_cstr(&actions, ");");
