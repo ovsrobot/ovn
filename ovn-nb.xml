@@ -3456,6 +3456,20 @@ or
         </p>
       </column>
 
+      <column name="options" key="bgp-mirror" type='{"type": "string"}'>
+        <p>
+          This option expects a name of a Logical Switch Port that's present
+          in the peer's Logical Switch. If set, it causes any traffic
+          that's destined for Logical Router Port's IP addresses (including
+          its IPv6 LLA) and the default BGP port (TCP 179), to be mirrored
+          to the specified Logical Switch Port.
+
+          This allows external BGP daemon to be bound to a port in OVN's
+          Logical Switch and act as if it was listening on Logical Router
+          Port's IP address.
+        </p>
+      </column>
+
       <column name="options" key="gateway_mtu_bypass">
         <p>
           When configured, represents a match expression, in the same
