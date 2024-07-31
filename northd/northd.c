@@ -144,7 +144,19 @@ static bool vxlan_mode;
 #define REGBIT_ACL_VERDICT_ALLOW "reg8[16]"
 #define REGBIT_ACL_VERDICT_DROP "reg8[17]"
 #define REGBIT_ACL_VERDICT_REJECT "reg8[18]"
+#define REGBIT_ACL_OBS_STAGE "reg8[19..20]"
 #define REG_ACL_TIER "reg8[30..31]"
+
+enum acl_observation_stage {
+    ACL_OBS_FROM_LPORT,
+    ACL_OBS_FROM_LPORT_AFTER_LB,
+    ACL_OBS_TO_LPORT,
+    ACL_OBS_STAGE_MAX
+};
+
+/* enum acl_observation_stage_t values must fit in the 2 bits of
+ * REGBIT_ACL_OBS_STAGE .*/
+BUILD_ASSERT_DECL(ACL_OBS_STAGE_MAX < (1 << 2));
 
 /* Indicate that this packet has been recirculated using egress
  * loopback.  This allows certain checks to be bypassed, such as a
@@ -189,6 +201,8 @@ static bool vxlan_mode;
  * domain and point ID. */
 #define REG_OBS_POINT_ID_NEW "reg3"
 #define REG_OBS_POINT_ID_EST "reg9"
+#define REG_OBS_COLLECTOR_ID_NEW "reg8[0..7]"
+#define REG_OBS_COLLECTOR_ID_EST "reg8[8..15]"
 
 /* Register used for temporarily store ECMP eth.src to avoid masked ct_label
  * access. It doesn't really occupy registers because the content of the
@@ -216,7 +230,9 @@ static bool vxlan_mode;
  * | R1 |         ORIG_DIP_IPV4 (>= IN_PRE_STATEFUL)   | R |        (>= IN_LB_AFF_CHECK &&     |
  * +----+----------------------------------------------+ E |         <= IN_LB_AFF_LEARN)       |
  * | R2 |         ORIG_TP_DPORT (>= IN_PRE_STATEFUL)   | G |                                   |
- * +----+----------------------------------------------+ 0 |                                   |
+ * |    |         REG_OBS_COLLECTOR_ID_EST             | 0 |                                   |
+ * |    |      (>= ACL_EVAL* && <= ACL_ACTION*)        |   |                                   |
+ * +----+----------------------------------------------+   |                                   |
  * | R3 |             OBS_POINT_ID_NEW                 |   |                                   |
  * |    |       (>= ACL_EVAL* && <= ACL_ACTION*)       |   |                                   |
  * +----+----------------------------------------------+---+-----------------------------------+
@@ -228,12 +244,13 @@ static bool vxlan_mode;
  * +----+----------------------------------------------+ G |                                   |
  * | R7 |                   UNUSED                     | 1 |                                   |
  * +----+----------------------------------------------+---+-----------------------------------+
- * |    |              LB_AFF_MATCH_PORT               |
- * |    |  (>= IN_LB_AFF_CHECK && <= IN_LB_AFF_LEARN)  |
- * +----+----------------------------------------------+
- * | R9 |              OBS_POINT_ID_EST                |
- * |    |       (>= ACL_EVAL* && <= ACL_ACTION*)       |
- * +----+----------------------------------------------+
+ * | R8 |              LB_AFF_MATCH_PORT               | X |      REG_OBS_COLLECTOR_ID_NEW     |
+ * |    |  (>= IN_LB_AFF_CHECK && <= IN_LB_AFF_LEARN)  | R |      REG_OBS_COLLECTOR_ID_EST     |
+ * |    |                                              | E |  (>= ACL_EVAL* && <= ACL_ACTION*) |
+ * +----+----------------------------------------------+ G +-----------------------------------+
+ * | R9 |              OBS_POINT_ID_EST                | 4 |                                   |
+ * |    |       (>= ACL_EVAL* && <= ACL_ACTION*)       |   |                                   |
+ * +----+----------------------------------------------+---+-----------------------------------+
  *
  * Logical Router pipeline:
  * +-----+---------------------------+---+-----------------+---+------------------------------------+
@@ -6532,7 +6549,8 @@ build_acl_sample_action(struct ds *actions, const struct nbrec_acl *acl,
 static void
 build_acl_sample_label_action(struct ds *actions, const struct nbrec_acl *acl,
                               const struct nbrec_sample *sample_new,
-                              const struct nbrec_sample *sample_est)
+                              const struct nbrec_sample *sample_est,
+                              enum acl_observation_stage obs_stage)
 {
     if (!acl->label && !sample_new && !sample_est) {
         return;
@@ -6540,6 +6558,8 @@ build_acl_sample_label_action(struct ds *actions, const struct nbrec_acl *acl,
 
     uint32_t point_id_new = 0;
     uint32_t point_id_est = 0;
+    uint8_t collector_id_new = 0;
+    uint8_t collector_id_est = 0;
 
     if (acl->label) {
         point_id_new = acl->label;
@@ -6547,16 +6567,27 @@ build_acl_sample_label_action(struct ds *actions, const struct nbrec_acl *acl,
     } else {
         if (sample_new) {
             point_id_new = sample_new->metadata;
+            if (sample_new->n_collectors == 1) {
+                collector_id_new = sample_new->collectors[0]->set_id;
+            }
         }
         if (sample_est) {
             point_id_est = sample_est->metadata;
+            if (sample_est->n_collectors == 1) {
+                collector_id_est = sample_est->collectors[0]->set_id;
+            }
         }
     }
 
     ds_put_format(actions, REGBIT_ACL_LABEL" = 1; "
                            REG_OBS_POINT_ID_NEW " = %"PRIu32"; "
-                           REG_OBS_POINT_ID_EST " = %"PRIu32"; ",
-                  point_id_new, point_id_est);
+                           REG_OBS_POINT_ID_EST " = %"PRIu32"; "
+                           REG_OBS_COLLECTOR_ID_NEW " = %"PRIu8"; "
+                           REG_OBS_COLLECTOR_ID_EST " = %"PRIu8"; "
+                           REGBIT_ACL_OBS_STAGE " = %"PRIu8"; ",
+                  point_id_new, point_id_est,
+                  collector_id_new, collector_id_est,
+                  (uint8_t) obs_stage);
 }
 
 /* This builds an ACL logical flow specific match that selects traffic
@@ -6604,17 +6635,16 @@ build_acl_sample_label_match(struct ds *match, const struct nbrec_acl *acl,
 }
 
 /* This builds a logical flow that samples and forwards/drops traffic
- * that hit a stateless ACL ("pass" or "allow-stateless") that has sampling
- * enabled.
+ * that hit a stateless/stateful ACL that has sampling enabled.
  */
 static void
-build_acl_sample_new_stateless_flows(const struct ovn_datapath *od,
-                                     struct lflow_table *lflows,
-                                     enum ovn_stage stage,
-                                     struct ds *match, struct ds *actions,
-                                     const struct nbrec_acl *acl,
-                                     uint8_t sample_domain_id,
-                                     struct lflow_ref *lflow_ref)
+build_acl_sample_new_flows(const struct ovn_datapath *od,
+                           struct lflow_table *lflows,
+                           enum ovn_stage stage,
+                           struct ds *match, struct ds *actions,
+                           const struct nbrec_acl *acl,
+                           uint8_t sample_domain_id, bool stateful,
+                           struct lflow_ref *lflow_ref)
 {
     if (!acl->sample_new) {
         return;
@@ -6623,36 +6653,7 @@ build_acl_sample_new_stateless_flows(const struct ovn_datapath *od,
     ds_clear(actions);
     ds_clear(match);
 
-    ds_put_cstr(match, "ip && ");
-    build_acl_sample_register_match(match, acl, acl->sample_new);
-
-    build_acl_sample_action(actions, acl, acl->sample_new, sample_domain_id);
-
-    ovn_lflow_add(lflows, od, stage, 1100, ds_cstr(match),
-                  ds_cstr(actions), lflow_ref);
-}
-
-/* This builds a logical flow that samples and forwards/drops traffic
- * that created a new conntrack entry and hit a stateful ACL that has sampling
- * enabled.
- */
-static void
-build_acl_sample_new_stateful_flows(const struct ovn_datapath *od,
-                                    struct lflow_table *lflows,
-                                    enum ovn_stage stage,
-                                    struct ds *match, struct ds *actions,
-                                    const struct nbrec_acl *acl,
-                                    uint8_t sample_domain_id,
-                                    struct lflow_ref *lflow_ref)
-{
-    if (!acl->sample_new) {
-        return;
-    }
-
-    ds_clear(actions);
-    ds_clear(match);
-
-    ds_put_cstr(match, "ip && ct.new && ");
+    ds_put_format(match, "ip %s&& ", stateful ? "&& ct.new " : "");
     build_acl_sample_register_match(match, acl, acl->sample_new);
 
     build_acl_sample_action(actions, acl, acl->sample_new, sample_domain_id);
@@ -6753,6 +6754,101 @@ build_acl_sample_est_stateful_flows(const struct ovn_datapath *od,
 
 static void build_acl_reject_action(struct ds *actions, bool is_ingress);
 
+/* This builds a generic logical flow that samples traffic
+ * that hit a stateless/stateful ACL that has sampling enabled with
+ * single collector and all chassis supporting the sample with match action.
+ */
+static void
+build_acl_sample_generic_new_flows(const struct ovn_datapath *od,
+                                   struct lflow_table *lflows,
+                                   enum ovn_stage stage,
+                                   enum acl_observation_stage obs_stage,
+                                   struct ds *match, struct ds *actions,
+                                   const struct nbrec_sample_collector *coll,
+                                   uint8_t sample_domain_id, bool stateful,
+                                   struct lflow_ref *lflow_ref)
+{
+    ds_clear(match);
+    ds_clear(actions);
+
+    ds_put_format(match, "ip %s&& "REG_OBS_COLLECTOR_ID_NEW" == %"PRIu8" && "
+                         REGBIT_ACL_OBS_STAGE " == %"PRIu8,
+                         stateful ? "&& ct.new " : "",
+                         (uint8_t) coll->set_id,
+                         (uint8_t) obs_stage);
+
+    ds_put_format(actions, "sample(probability=%"PRIu16","
+                           "collector_set=%"PRIu8","
+                           "obs_domain=%"PRIu32","
+                           "obs_point="REG_OBS_POINT_ID_NEW");"
+                           " next;",
+                           (uint16_t) coll->probability,
+                           (uint8_t) coll->set_id,
+                           sample_domain_id);
+
+    ovn_lflow_add(lflows, od, stage, stateful ? 1000 : 900, ds_cstr(match),
+                  ds_cstr(actions), lflow_ref);
+}
+
+/* This builds a generic logical flow that samples established traffic
+ * that hit a stateful ACL that has sampling enabled with
+ * single collector and all chassis supporting the sample with match action.
+ */
+static void
+build_acl_sample_generic_est_flows(const struct ovn_datapath *od,
+                                   struct lflow_table *lflows,
+                                   enum ovn_stage stage,
+                                   enum acl_observation_stage obs_stage,
+                                   struct ds *match, struct ds *actions,
+                                   const struct nbrec_sample_collector *coll,
+                                   uint8_t sample_domain_id,
+                                   struct lflow_ref *lflow_ref)
+{
+    ds_clear(match);
+    ds_clear(actions);
+
+    ds_put_cstr(match, "ip && ct.trk && (ct.est || ct.rel) && "
+                       "ct_label.obs_unused == 0 && ");
+
+    size_t match_len = match->length;
+    ds_put_format(match, "!ct.rpl && ct_mark.obs_collector_id == %"PRIu8" && "
+                         "ct_mark.obs_stage == %"PRIu8,
+                         (uint8_t) coll->set_id,
+                         (uint8_t) obs_stage);
+
+    ds_put_format(actions, "sample(probability=%"PRIu16","
+                           "collector_set=%"PRIu8","
+                           "obs_domain=%"PRIu32","
+                           "obs_point=ct_label.obs_point_id);"
+                           " next;",
+                           (uint16_t) coll->probability,
+                           (uint8_t) coll->set_id,
+                           sample_domain_id);
+
+    ovn_lflow_add(lflows, od, stage, 1000, ds_cstr(match),
+                  ds_cstr(actions), lflow_ref);
+
+    enum ovn_stage rpl_stage = (stage == S_SWITCH_OUT_ACL_SAMPLE
+                                ? S_SWITCH_IN_ACL_SAMPLE
+                                : S_SWITCH_OUT_ACL_SAMPLE);
+
+    ds_truncate(match, match_len);
+    ds_put_format(match, "ct.rpl && ct_mark.obs_collector_id == %"PRIu8,
+                  (uint8_t) coll->set_id);
+
+    ovn_lflow_add(lflows, od, rpl_stage, 1000, ds_cstr(match),
+                  ds_cstr(actions), lflow_ref);
+}
+
+/* Check if the smaple has only single collector and the sample action
+ * with registers is supported. */
+static bool
+acl_use_generic_sample_flows(const struct nbrec_sample *sample,
+                             const struct chassis_features *features)
+{
+    return sample && sample->n_collectors == 1 && features->sample_with_reg;
+}
+
 /* This builds all ACL sampling related logical flows:
  * - for packets creating new connections
  * - for packets that are part of an existing connection
@@ -6764,6 +6860,7 @@ build_acl_sample_flows(const struct ls_stateful_record *ls_stateful_rec,
                        const struct nbrec_acl *acl,
                        struct ds *match, struct ds *actions,
                        const struct sampling_app_table *sampling_apps,
+                       const struct chassis_features *features,
                        struct lflow_ref *lflow_ref)
 {
     bool should_sample_established =
@@ -6787,13 +6884,17 @@ build_acl_sample_flows(const struct ls_stateful_record *ls_stateful_rec,
 
     bool ingress = !strcmp(acl->direction, "from-lport") ? true : false;
     enum ovn_stage stage;
+    enum acl_observation_stage obs_stage;
 
     if (ingress && smap_get_bool(&acl->options, "apply-after-lb", false)) {
         stage = S_SWITCH_IN_ACL_AFTER_LB_SAMPLE;
+        obs_stage = ACL_OBS_FROM_LPORT_AFTER_LB;
     } else if (ingress) {
         stage = S_SWITCH_IN_ACL_SAMPLE;
+        obs_stage = ACL_OBS_FROM_LPORT;
     } else {
         stage = S_SWITCH_OUT_ACL_SAMPLE;
+        obs_stage = ACL_OBS_TO_LPORT;
     }
 
     uint8_t sample_new_domain_id =
@@ -6801,14 +6902,28 @@ build_acl_sample_flows(const struct ls_stateful_record *ls_stateful_rec,
     uint8_t sample_est_domain_id =
         sampling_app_get_id(sampling_apps, SAMPLING_APP_ACL_EST_TRAFFIC);
 
-    if (!stateful_match) {
-        build_acl_sample_new_stateless_flows(od, lflows, stage, match, actions,
-                                             acl, sample_new_domain_id,
-                                             lflow_ref);
+    if (acl_use_generic_sample_flows(acl->sample_new, features)) {
+        build_acl_sample_generic_new_flows(od, lflows, stage, obs_stage,
+                                           match, actions,
+                                           acl->sample_new->collectors[0],
+                                           sample_new_domain_id,
+                                           stateful_match, lflow_ref);
     } else {
-        build_acl_sample_new_stateful_flows(od, lflows, stage, match, actions,
-                                            acl, sample_new_domain_id,
-                                            lflow_ref);
+        build_acl_sample_new_flows(od, lflows, stage, match, actions,
+                                   acl, sample_new_domain_id, stateful_match,
+                                   lflow_ref);
+    }
+
+    if (!stateful_match) {
+        return;
+    }
+
+    if (acl_use_generic_sample_flows(acl->sample_est, features)) {
+        build_acl_sample_generic_est_flows(od, lflows, stage, obs_stage,
+                                           match, actions,
+                                           acl->sample_est->collectors[0],
+                                           sample_est_domain_id, lflow_ref);
+    } else {
         build_acl_sample_est_stateful_flows(od, lflows, stage, match, actions,
                                             acl, sample_est_domain_id,
                                             lflow_ref);
@@ -6840,13 +6955,17 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
 {
     bool ingress = !strcmp(acl->direction, "from-lport") ? true :false;
     enum ovn_stage stage;
+    enum acl_observation_stage obs_stage;
 
     if (ingress && smap_get_bool(&acl->options, "apply-after-lb", false)) {
         stage = S_SWITCH_IN_ACL_AFTER_LB_EVAL;
+        obs_stage = ACL_OBS_FROM_LPORT_AFTER_LB;
     } else if (ingress) {
         stage = S_SWITCH_IN_ACL_EVAL;
+        obs_stage = ACL_OBS_FROM_LPORT;
     } else {
         stage = S_SWITCH_OUT_ACL_EVAL;
+        obs_stage = ACL_OBS_TO_LPORT;
     }
 
     const char *verdict;
@@ -6880,7 +6999,8 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
         || !strcmp(acl->action, "allow-stateless")) {
 
         /* For stateless ACLs just sample "new" packets. */
-        build_acl_sample_label_action(actions, acl, acl->sample_new, NULL);
+        build_acl_sample_label_action(actions, acl, acl->sample_new, NULL,
+                                      obs_stage);
 
         ds_put_cstr(actions, "next;");
         ds_put_format(match, "(%s)", acl->match);
@@ -6919,7 +7039,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
 
         /* For stateful ACLs sample "new" and "established" packets. */
         build_acl_sample_label_action(actions, acl, acl->sample_new,
-                                      acl->sample_est);
+                                      acl->sample_est, obs_stage);
         ds_put_cstr(actions, "next;");
         ovn_lflow_add_with_hint(lflows, od, stage, priority,
                                 ds_cstr(match), ds_cstr(actions),
@@ -6943,7 +7063,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
 
         /* For stateful ACLs sample "new" and "established" packets. */
         build_acl_sample_label_action(actions, acl, acl->sample_new,
-                                      acl->sample_est);
+                                      acl->sample_est, obs_stage);
         ds_put_cstr(actions, "next;");
         ovn_lflow_add_with_hint(lflows, od, stage, priority,
                                 ds_cstr(match), ds_cstr(actions),
@@ -6963,7 +7083,8 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
         ds_truncate(actions, log_verdict_len);
 
         /* For drop ACLs just sample all packets as "new" packets. */
-        build_acl_sample_label_action(actions, acl, acl->sample_new, NULL);
+        build_acl_sample_label_action(actions, acl, acl->sample_new, NULL,
+                                      obs_stage);
         ds_put_cstr(actions, "next;");
         ovn_lflow_add_with_hint(lflows, od, stage, priority,
                                 ds_cstr(match), ds_cstr(actions),
@@ -6986,7 +7107,8 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
         ds_truncate(actions, log_verdict_len);
 
         /* For drop ACLs just sample all packets as "new" packets. */
-        build_acl_sample_label_action(actions, acl, acl->sample_new, NULL);
+        build_acl_sample_label_action(actions, acl, acl->sample_new, NULL,
+                                      obs_stage);
         ds_put_cstr(actions, "ct_commit { ct_mark.blocked = 1; }; next;");
         ovn_lflow_add_with_hint(lflows, od, stage, priority,
                                 ds_cstr(match), ds_cstr(actions),
@@ -7232,6 +7354,7 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
            const struct ls_port_group_table *ls_port_groups,
            const struct shash *meter_groups,
            const struct sampling_app_table *sampling_apps,
+           const struct chassis_features *features,
            struct lflow_ref *lflow_ref)
 {
     const char *default_acl_action = default_acl_drop
@@ -7424,7 +7547,8 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
                      meter_groups, ls_stateful_rec->max_acl_tier,
                      &match, &actions, lflow_ref);
         build_acl_sample_flows(ls_stateful_rec, od, lflows, acl,
-                               &match, &actions, sampling_apps, lflow_ref);
+                               &match, &actions, sampling_apps,
+                               features, lflow_ref);
     }
 
     const struct ls_port_group *ls_pg =
@@ -7443,7 +7567,7 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
                              &match, &actions, lflow_ref);
                 build_acl_sample_flows(ls_stateful_rec, od, lflows, acl,
                                        &match, &actions, sampling_apps,
-                                       lflow_ref);
+                                       features, lflow_ref);
             }
         }
     }
@@ -8106,6 +8230,8 @@ build_stateful(struct ovn_datapath *od, struct lflow_table *lflows,
     ds_put_cstr(&actions,
                  "ct_commit { "
                     "ct_mark.blocked = 0; "
+                    "ct_mark.obs_stage = " REGBIT_ACL_OBS_STAGE "; "
+                    "ct_mark.obs_collector_id = " REG_OBS_COLLECTOR_ID_EST "; "
                     "ct_label.obs_point_id = " REG_OBS_POINT_ID_EST "; "
                   "}; next;");
     ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 100,
@@ -16156,6 +16282,7 @@ build_ls_stateful_flows(const struct ls_stateful_record *ls_stateful_rec,
                         const struct ls_port_group_table *ls_pgs,
                         const struct shash *meter_groups,
                         const struct sampling_app_table *sampling_apps,
+                        const struct chassis_features *features,
                         struct lflow_table *lflows)
 {
     build_ls_stateful_rec_pre_acls(ls_stateful_rec, od, ls_pgs, lflows,
@@ -16165,7 +16292,7 @@ build_ls_stateful_flows(const struct ls_stateful_record *ls_stateful_rec,
     build_acl_hints(ls_stateful_rec, od, lflows,
                     ls_stateful_rec->lflow_ref);
     build_acls(ls_stateful_rec, od, lflows, ls_pgs, meter_groups,
-               sampling_apps, ls_stateful_rec->lflow_ref);
+               sampling_apps, features, ls_stateful_rec->lflow_ref);
     build_lb_hairpin(ls_stateful_rec, od, lflows, ls_stateful_rec->lflow_ref);
 }
 
@@ -16482,6 +16609,7 @@ build_lflows_thread(void *arg)
                                             lsi->ls_port_groups,
                                             lsi->meter_groups,
                                             lsi->sampling_apps,
+                                            lsi->features,
                                             lsi->lflows);
                 }
             }
@@ -16705,6 +16833,7 @@ build_lswitch_and_lrouter_flows(
             build_ls_stateful_flows(ls_stateful_rec, od, lsi.ls_port_groups,
                                     lsi.meter_groups,
                                     lsi.sampling_apps,
+                                    lsi.features,
                                     lsi.lflows);
         }
         stopwatch_stop(LFLOWS_LS_STATEFUL_STOPWATCH_NAME, time_msec());
@@ -17220,6 +17349,7 @@ lflow_handle_ls_stateful_changes(struct ovsdb_idl_txn *ovnsb_txn,
                                 lflow_input->ls_port_groups,
                                 lflow_input->meter_groups,
                                 lflow_input->sampling_apps,
+                                lflow_input->features,
                                 lflows);
 
         /* Sync the new flows to SB. */
