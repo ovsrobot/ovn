@@ -50,6 +50,9 @@ Post v24.03.0
   - A new LSP option "disable_garp_rarp" has been added to prevent OVN from
     sending GARP or RARP announcements when a VIF is created on a bridged
     logical switch.
+  - The NB_Global.debug_drop_domain_id configured value is now overridden by
+    the ID associated with the Sampling_App record created for drop sampling
+    (Sampling_App.name configured to be "drop-sampling").
 
 OVN v24.03.0 - 01 Mar 2024
 --------------------------
