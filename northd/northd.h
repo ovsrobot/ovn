@@ -789,4 +789,6 @@ is_vxlan_mode(const struct smap *nb_options,
 
 uint32_t get_ovn_max_dp_key_local(bool _vxlan_mode);
 
+void init_tracked_virtual_ports(void);
+void destroy_tracked_virtual_ports(void);
 #endif /* NORTHD_H */

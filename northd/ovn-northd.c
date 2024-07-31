@@ -891,6 +891,8 @@ main(int argc, char *argv[])
     /* Initialize incremental processing engine for ovn-northd */
     inc_proc_northd_init(&ovnnb_idl_loop, &ovnsb_idl_loop);
 
+    init_tracked_virtual_ports();
+
     unsigned int ovnnb_cond_seqno = UINT_MAX;
     unsigned int ovnsb_cond_seqno = UINT_MAX;
 
@@ -1079,6 +1081,7 @@ main(int argc, char *argv[])
         stopwatch_start(NORTHD_LOOP_STOPWATCH_NAME, time_msec());
     }
     inc_proc_northd_cleanup();
+    destroy_tracked_virtual_ports();
 
     ovsdb_idl_loop_destroy(&ovnnb_idl_loop);
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
