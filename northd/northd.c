@@ -3093,6 +3093,15 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
                                 "qdisc_queue_id", "%d", queue_id);
             }
 
+            if (smap_get_bool(&op->sb->options,
+                                "binding_request_pause", false)) {
+                long long int p_time = smap_get_ullong(&op->sb->options,
+                                "binding_request_pause_ts", 0);
+                smap_add_format(&options, "binding_request_pause_ts",
+                                "%lld", p_time);
+                smap_add(&options, "binding_request_pause", "true");
+            }
+
             if (smap_get_bool(&op->od->nbs->other_config, "vlan-passthru", false)) {
                 smap_add(&options, "vlan-passthru", "true");
             }
@@ -3828,6 +3837,90 @@ void destroy_tracked_virtual_ports(void) {
         remove_from_tracked_virtual_ports(vport->name);
     }
     hmap_destroy(&tracked_virtual_ports);
+}
+
+/*
+ * For every virtual port that send request to update thier virtual_parent
+ * This function will update the following Port_binding options if needed:
+ *
+ * 1. tracked_virtual_port record belongs to this virtual port was created
+ *    when this port created. This tracked struct have two main Fields:
+ *
+ *      a. First_bind_in_tframe: this field will be set to the time that
+ *         binding request were reicved for this vport for the first time
+ *         within a timeframe.
+ *
+ *      b. Bind_request_cnt: this filed will be incresses every time a binding
+ *         request recived for that virtual port.
+ *
+ *
+ *  2. For each binding request received for a specific virtual port
+ *     check if the time diff between now and the first time that a
+ *     binding request were recived for this port within a pre-define
+ *     timeframe is less than that timeframe.
+ *
+ *  3. If the previous condition true increase Bind_request_cnt and
+ *     check if the total recived binding request recived for this port
+ *     within a time fram exceeded the VPORT_MAX_BINDING_REQUEST_TRESHOLD
+ *     set the Port_binding options:
+ *
+ *       PB:OPTIONS:binding_request_pause=true
+ *       PB:OPTIONS:binding_request_pause_ts=time_now
+ *
+ *
+ *  4. When ovn-controller recived a new GARP for this virtual port
+ *     before sending a binding request update to northd  it will check
+ *     if the port have binding_request_pause=true, ovn-controller will do
+ *     the following:
+ *
+ *     If the PB:OPTIONS:binding_request_pause_ts + 10 seconds greater
+ *     than the time now (GARP processing time), drop the GARP packet.
+ *
+ *     Otherwise, set the PB:OPTIONS:binding_request_pause=false and resume
+ *     binding request handling on this virtual port.
+ *
+ *
+ */
+static void
+vport_binding_request_exceed_threshold(struct ovn_port *op)
+{
+    struct tracked_virtual_port * vport =
+                  find_tracked_virtual_port(op->key);
+    if (op->sb != NULL) {
+        /* This port already paused or not found ignore it */
+        if ((smap_get_bool(&op->sb->options, "binding_request_pause",
+             false) ==  true) || !vport) {
+            return;
+        }
+    }
+
+    long long int cur_time = time_msec();
+
+    /* Still in the range of the time frame. */
+    if ((vport->First_bind_in_tframe + VPORT_BINDING_TIMEFRAME) > cur_time) {
+        if (++vport->Bind_request_cnt > VPORT_MAX_BINDING_REQUEST_TRESHOLD) {
+            if (op->sb != NULL) {
+                static struct vlog_rate_limit rl =
+                    VLOG_RATE_LIMIT_INIT(1, 1);
+                VLOG_WARN_RL(&rl, "Pausing virtual port %s from sending"
+                    " binding requests for few seconds. "
+                    " This port was paused in order to reduce the load on the"
+                    " network.\n" , vport->name);
+                struct smap options;
+                smap_clone(&options, &op->sb->options);
+                smap_add(&options, "binding_request_pause", "true");
+                smap_add_format(&options, "binding_request_pause_ts", "%lld",
+                    cur_time);
+                sbrec_port_binding_set_options(op->sb, &options);
+            }
+        }
+    } else {
+        /* New Timeframe, that mean we had less than max binding
+         * request for this vport with it the past time frame.
+         */
+        vport->First_bind_in_tframe = cur_time;
+        vport->Bind_request_cnt = 0;
+    }
 }
 
 /* Syncs the SB port binding for the ovn_port 'op' of a logical switch port.
@@ -5018,6 +5111,11 @@ northd_handle_sb_port_binding_changes(
                 VLOG_WARN_RL(&rl, "A port-binding for %s is updated with a new"
                              "IDL row, which is unusual.", pb->logical_port);
                 return false;
+            }
+
+            if (sbrec_port_binding_is_updated(pb,
+                        SBREC_PORT_BINDING_COL_VIRTUAL_PARENT)) {
+                vport_binding_request_exceed_threshold(op);
             }
         }
     }
