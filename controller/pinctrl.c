@@ -7057,10 +7057,15 @@ struct put_vport_binding {
 
     /* This vport record Only relevant if "new_record" is true. */
     bool new_record;
+    /* The creation time in pinctrl thread */
+    long long int creation_time;
 };
 
 /* Contains "struct put_vport_binding"s. */
 static struct hmap put_vport_bindings;
+
+/* pause duration for port that set puased in northd. */
+#define PAUSE_DURATION 10000
 
 /*
  * Validate if the vport_binding record that was added
@@ -7145,7 +7150,7 @@ run_put_vport_binding(struct ovsdb_idl_txn *ovnsb_idl_txn OVS_UNUSED,
                       struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                       struct ovsdb_idl_index *sbrec_port_binding_by_key,
                       const struct sbrec_chassis *chassis,
-                      const struct put_vport_binding *vpb)
+                      struct put_vport_binding *vpb)
 {
     /* Convert logical datapath and logical port key into lport. */
     const struct sbrec_port_binding *pb = lport_lookup_by_key(
@@ -7157,6 +7162,35 @@ run_put_vport_binding(struct ovsdb_idl_txn *ovnsb_idl_txn OVS_UNUSED,
         VLOG_WARN_RL(&rl, "unknown logical port with datapath %"PRIu32" "
                      "and port %"PRIu32, vpb->dp_key, vpb->vport_key);
         return;
+    }
+
+    if (smap_get(&pb->options, "binding_request_pause")) {
+        long long int p_time = smap_get_ullong(&pb->options,
+                      "binding_request_pause_ts", 0);
+        /* Pause duration for this port still relevant, drop this
+         * binding request, and set vpb->new_record=false to make sure
+         * that it will be deleted from the list when flushing the list.
+         */
+        if ((p_time + PAUSE_DURATION) > vpb->creation_time) {
+            vpb->new_record = false;
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+            VLOG_DBG_RL(&rl,
+                         "Virtual lport %s drop binding request port "
+                         "in pause state\n", pb->logical_port);
+
+            return;
+        } else {
+            VLOG_INFO("Virtual lport %s binding requests paused "
+                       "for 10 seconds, resume binding requests handling.",
+                       pb->logical_port);
+            struct smap options;
+            smap_clone(&options, &pb->options);
+            smap_remove(&options, "binding_request_pause");
+            smap_remove(&options, "binding_request_pause_ts");
+            sbrec_port_binding_set_options(pb, &options);
+            smap_destroy(&options);
+
+        }
     }
 
     /* pinctrl module updates the port binding only for type 'virtual'. */
@@ -7187,7 +7221,7 @@ run_put_vport_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
         return;
     }
 
-    const struct put_vport_binding *vpb;
+    struct put_vport_binding *vpb;
     HMAP_FOR_EACH (vpb, hmap_node, &put_vport_bindings) {
         run_put_vport_binding(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
                               sbrec_port_binding_by_key, chassis, vpb);
@@ -7232,6 +7266,7 @@ pinctrl_handle_bind_vport(
     vpb->vport_key = vport_key;
     vpb->vport_parent_key = vport_parent_key;
     vpb->new_record = true;
+    vpb->creation_time = time_msec();
     notify_pinctrl_main();
 }
 
