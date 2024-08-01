@@ -3757,6 +3757,79 @@ build_lb_port_related_data(
     build_lswitch_lbs_from_lrouter(lr_datapaths, lb_dps_map, lb_group_dps_map);
 }
 
+/*
+ * These functions implements the binding request tracking for a virtual
+ * port which can be used to limit virtual port binding requests
+ * and avoid system overflow.
+ *
+ * Virtual port binding requests must not exceed
+ * VPORT_MAX_BINDING_REQUEST_TRESHOLD within a VPORT_BINDING_TIMEFRAME,
+ * otherwise, this vport must be defined as overflowed and should limit
+ * the binding request in this port for a certain time.
+ */
+#define VPORT_BINDING_TIMEFRAME 10000
+#define VPORT_MAX_BINDING_REQUEST_TRESHOLD 15
+
+static struct hmap tracked_virtual_ports;
+
+struct tracked_virtual_port {
+    struct hmap_node node;
+    /*
+     * Use port name instaed of ovn_port refrence to make
+     * sure that virtual port tracking data will be permanent accross
+     * northd loops and we can keep track the target ports.
+     */
+    char *name;
+    long long int First_bind_in_tframe;
+    size_t Bind_request_cnt;
+};
+
+static struct tracked_virtual_port *
+find_tracked_virtual_port(const char *name) {
+    struct tracked_virtual_port *vport;
+    HMAP_FOR_EACH (vport, node, &tracked_virtual_ports) {
+        if (!strcmp(name, vport->name)) {
+            return vport;
+        }
+    }
+    return NULL;
+}
+
+static void
+add_to_tracked_virtual_ports(const char *name) {
+    struct tracked_virtual_port *vport = find_tracked_virtual_port(name);
+    if (!vport) {
+        vport = xmalloc(sizeof *vport);
+        vport->name = xstrdup(name);
+        vport->First_bind_in_tframe = 0;
+        vport->Bind_request_cnt = 0;
+        hmap_insert(&tracked_virtual_ports, &vport->node,
+                                            hash_string(name, 0));
+    }
+}
+
+static void
+remove_from_tracked_virtual_ports(const char *name) {
+    struct tracked_virtual_port *vport = find_tracked_virtual_port(name);
+    if (vport) {
+        free(vport->name);
+        hmap_remove(&tracked_virtual_ports, &vport->node);
+        free(vport);
+    }
+}
+
+void init_tracked_virtual_ports(void) {
+    hmap_init(&tracked_virtual_ports);
+}
+
+void destroy_tracked_virtual_ports(void) {
+    struct tracked_virtual_port *vport;
+    HMAP_FOR_EACH_SAFE (vport, node, &tracked_virtual_ports) {
+        remove_from_tracked_virtual_ports(vport->name);
+    }
+    hmap_destroy(&tracked_virtual_ports);
+}
+
 /* Syncs the SB port binding for the ovn_port 'op' of a logical switch port.
  * Caller should make sure that the OVN SB IDL txn is not NULL.  Presently it
  * only syncs the nat column of port binding corresponding to the 'op->nbsp' */
@@ -4163,6 +4236,9 @@ build_ports(struct ovsdb_idl_txn *ovnsb_txn,
                               op, queue_id_bitmap,
                               &active_ha_chassis_grps);
         sbrec_port_binding_set_logical_port(op->sb, op->key);
+        if (!strcmp(op->sb->type, "virtual")) {
+            add_to_tracked_virtual_ports(op->sb->logical_port);
+        }
         ovs_list_remove(&op->list);
     }
 
@@ -4170,6 +4246,9 @@ build_ports(struct ovsdb_idl_txn *ovnsb_txn,
     if (!ovs_list_is_empty(&sb_only)) {
         LIST_FOR_EACH_SAFE (op, list, &sb_only) {
             ovs_list_remove(&op->list);
+            if (!strcmp(op->sb->type, "virtual")) {
+                remove_from_tracked_virtual_ports(op->sb->logical_port);
+            }
             sbrec_port_binding_delete(op->sb);
             ovn_port_destroy(ports, op);
         }
@@ -4554,6 +4633,12 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             if (!op) {
                 goto fail;
             }
+
+            if (!strcmp(new_nbsp->type, "virtual")) {
+                /* Add to virtual port tracking map */
+                add_to_tracked_virtual_ports(op->nbsp->name);
+            }
+
             add_op_to_northd_tracked_ports(&trk_lsps->created, op);
         } else if (ls_port_has_changed(new_nbsp)) {
             /* Existing port updated */
@@ -4614,6 +4699,9 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             add_op_to_northd_tracked_ports(&trk_lsps->deleted, op);
             hmap_remove(&nd->ls_ports, &op->key_node);
             hmap_remove(&od->ports, &op->dp_node);
+            if (!strcmp(op->sb->type, "virtual")) {
+                remove_from_tracked_virtual_ports(op->sb->logical_port);
+            }
             sbrec_port_binding_delete(op->sb);
             delete_fdb_entry(ni->sbrec_fdb_by_dp_and_port, od->tunnel_key,
                                 op->tunnel_key);
