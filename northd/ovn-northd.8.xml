@@ -285,6 +285,21 @@
       </li>
 
       <li>
+        For each logical port that's defined as a target of BGP redirecting
+        (via <code>bgp-redirect</code> option set on Logical Router Port), a
+        filter is set in place that disallows any traffic entering this port
+        that does not originate from Logical Router Port's IPs and default BGP
+        port (TCP 179). This filtering is achieved by two rules. First rule has
+        priority 81, it matches on <code>inport == <var>BGP_MIRROR_PORT</var>
+        &amp;&amp; ip.src == <var>LRP_IP</var> &amp;&amp; tcp.src == 179</code>
+        and allows traffic further with <code>REGBIT_PORT_SEC_DROP" =
+        check_in_port_sec(); next;</code>. Second rule with priority 80 matches
+        the rest of the traffic from that port and sets
+        <code>REGBIT_PORT_SEC_DROP" = 1; next;"</code> so that the packets are
+        dropped in the next stage.
+      </li>
+
+      <li>
         For each (enabled) vtep logical port, a priority 70 flow is added which
         matches on all packets and applies the action
         <code>next(pipeline=ingress, table=S_SWITCH_IN_L3_LKUP) = 1;</code>
@@ -1947,6 +1962,14 @@ output;
         A priority-100 flow that forwards all DHCP broadcast packets coming
         from VIFs to the logical router port's MAC when DHCP relay is enabled
         on the logical switch.
+      </li>
+
+      <li>
+        For any logical port that's defined as a target of BGP redirecting (via
+        <code>bgp-redirect</code> option set on Logical Router Port), a
+        priority-100 flow is added that redirects traffic for Logical Router
+        Port IPs (including IPv6 LLA) and TCP port 179, to the targeted
+        logical port.
       </li>
 
       <li>

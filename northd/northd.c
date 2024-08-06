@@ -13012,6 +13012,113 @@ build_arp_resolve_flows_for_lrp(struct ovn_port *op,
     }
 }
 
+static void
+build_bgp_redirect_rule__(
+        const char *s_addr, const char *bgp_port_name, bool is_ipv6,
+        struct ovn_port *ls_peer, struct lflow_table *lflows,
+        struct ds *match, struct ds *actions)
+{
+    int ip_ver = is_ipv6 ? 6 : 4;
+    /* Redirect packets in the input pipeline destined for LR's IP to
+     * the port specified in 'bgp-redirect' option.
+     */
+    ds_clear(match);
+    ds_clear(actions);
+    ds_put_format(match, "ip%d.dst == %s && tcp.dst == 179", ip_ver, s_addr);
+    ds_put_format(actions, "outport = \"%s\"; output;", bgp_port_name);
+    ovn_lflow_add(lflows, ls_peer->od, S_SWITCH_IN_L2_LKUP, 100,
+                  ds_cstr(match),
+                  ds_cstr(actions),
+                  ls_peer->lflow_ref);
+
+
+    /* Drop any traffic originating from 'bgp-redirect' port that does
+     * not originate from BGP daemon port. This blocks unnecessary
+     * traffic like ARP broadcasts or IPv6 router solicitation packets
+     * from the dummy 'bgp-redirect' port.
+     */
+    ds_clear(match);
+    ds_put_format(match, "inport == \"%s\"", bgp_port_name);
+    ovn_lflow_add(lflows, ls_peer->od, S_SWITCH_IN_CHECK_PORT_SEC, 80,
+                  ds_cstr(match),
+                  REGBIT_PORT_SEC_DROP " = 1; next;",
+                  ls_peer->lflow_ref);
+
+    ds_put_format(match,
+                  " && ip%d.src == %s && tcp.src == 179",
+                  ip_ver,
+                  s_addr);
+    ovn_lflow_add(lflows, ls_peer->od, S_SWITCH_IN_CHECK_PORT_SEC, 81,
+                  ds_cstr(match),
+                  REGBIT_PORT_SEC_DROP " = check_in_port_sec(); next;",
+                  ls_peer->lflow_ref);
+}
+
+static void
+build_lrouter_bgp_redirect(
+        struct ovn_port *op, struct lflow_table *lflows,
+        struct ds *match, struct ds *actions)
+{
+    /* LRP has to have a peer.*/
+    if (op->peer == NULL) {
+        return;
+    }
+    /* LRP has to have NB record.*/
+    if (op->nbrp == NULL) {
+        return;
+    }
+
+    /* Proceed only for LRPs that have 'bgp-redirect' option set. Value of this
+     * option is the name of LSP to which a BGP traffic will be redirected.
+     */
+    const char *bgp_port = smap_get(&op->nbrp->options, "bgp-redirect");
+    if (bgp_port == NULL) {
+        return;
+    }
+
+    /* Ensure that LSP, to which the BGP traffic is redirected, exists.*/
+    struct ovn_port *peer_lsp;
+    bool bgp_port_exists = false;
+    HMAP_FOR_EACH (peer_lsp, dp_node, &op->peer->od->ports) {
+        size_t peer_lsp_s = strlen(peer_lsp->key);
+        if (peer_lsp_s == strlen(bgp_port)
+            && !strncmp(peer_lsp->key, bgp_port, peer_lsp_s)){
+            bgp_port_exists = true;
+            break;
+        }
+    }
+
+    if (!bgp_port_exists) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_WARN_RL(&rl, "Option 'bgp-redirect' set on Logical Router Port "
+                          "'%s' refers to non-existent Logical Switch Port. "
+                          "BGP redirecting won't be configured.",
+                          op->key);
+        return;
+    }
+
+    if (op->cr_port != NULL) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_WARN_RL(&rl, "Option 'bgp-redirect' is not supported on"
+                          " Distributed Gateway Port '%s'", op->key);
+        return;
+    }
+
+    /* Mirror traffic destined for LRP's IPs and default BGP port
+     * to the port defined in 'bgp-redirect' option.
+     */
+    for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+        const char *ip_s = op->lrp_networks.ipv4_addrs[i].addr_s;
+        build_bgp_redirect_rule__(ip_s, bgp_port, false,  op->peer, lflows,
+                                  match, actions);
+    }
+    for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
+        const char *ip_s = op->lrp_networks.ipv6_addrs[i].addr_s;
+        build_bgp_redirect_rule__(ip_s, bgp_port, true, op->peer, lflows,
+                                  match, actions);
+    }
+}
+
 /* This function adds ARP resolve flows related to a LSP. */
 static void
 build_arp_resolve_flows_for_lsp(
@@ -15956,6 +16063,7 @@ build_lswitch_and_lrouter_iterate_by_lrp(struct ovn_port *op,
                                 lsi->meter_groups, op->lflow_ref);
     build_lrouter_icmp_packet_toobig_admin_flows(op, lsi->lflows, &lsi->match,
                                                  &lsi->actions, op->lflow_ref);
+    build_lrouter_bgp_redirect(op, lsi->lflows, &lsi->match, &lsi->actions);
 }
 
 static void *
