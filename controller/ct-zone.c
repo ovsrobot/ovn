@@ -183,6 +183,28 @@ ct_zones_update(const struct sset *local_lports,
         sset_add(&all_users, local_lport);
     }
 
+    /* Add local_loprt name which are supposed to come up on the
+     * chassis and might need ct-zone reservation in advance.
+     * The data is picked up from ovs_vswitch table. */
+    const struct ovsrec_open_vswitch *cfg;
+    cfg = ovsrec_open_vswitch_table_first(ovs_table);
+    if (cfg) {
+        const char *reserve_ct_zone_request_list = smap_get(
+                &cfg->external_id, "reserve_ct_zones");
+        if (reserve_ct_zone_request_list) {
+            char *duplicate_reserve_list = xstrdup(
+                    reserve_ct_zone_request_list);
+            char *reserve_port;
+            char *save_ptr = NULL;
+            for (reserve_port = strtok_r(duplicate_reserve_list, ",",
+                 &save_ptr); reserve_port != NULL;
+                 reserve_port = strtok_r(NULL, ",", &save_ptr)) {
+                   sset_add(&all_users, reserve_port);
+            }
+            free(duplicate_reserve_list);
+        }
+    }
+
     /* Local patched datapath (gateway routers) need zones assigned. */
     const struct local_datapath *ld;
     HMAP_FOR_EACH (ld, hmap_node, local_datapaths) {
