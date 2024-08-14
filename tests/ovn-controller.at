@@ -2535,6 +2535,7 @@ check_ovsdb_zone() {
 
 check ovs-vsctl add-port br-int ls0-hv1 -- set Interface ls0-hv1 external-ids:iface-id=ls0-hv1
 check ovs-vsctl add-port br-int ls0-hv2 -- set Interface ls0-hv2 external-ids:iface-id=ls0-hv2
+check ovs-vsctl set Open_vSwitch . external_ids:reserve_ct_zones=ls0-req-hv3,ls0-req-hv4
 
 check ovn-nbctl lr-add lr0
 
@@ -2560,17 +2561,25 @@ echo "$ct_zones"
 
 port1_zone=$(get_zone_num "$ct_zones" ls0-hv1)
 port2_zone=$(get_zone_num "$ct_zones" ls0-hv2)
-
+req_port3_zone=$(get_zone_num "$ct_zones" ls0-req-hv3)
+req_port4_zone=$(get_zone_num "$ct_zones" ls0-req-hv4)
 snat_zone=$(get_zone_num "$ct_zones" lr0_snat)
 echo "snat_zone is $snat_zone"
 
-check test "$port1_zone" -ne "$port2_zone"
-check test "$port2_zone" -ne "$snat_zone"
-check test "$port1_zone" -ne "$snat_zone"
+zone_list=$(seq(port1_zone, port2_zone, req_port2_zone, req_port4_zone, snat_zone))
+for i in $zone_list; do
+    for j in $zone_list; do
+        if ["$i" != "$j"]; then
+            check tests "$i" -ne "$j"
+        fi
+    done
+done
 
 OVS_WAIT_UNTIL([check_ovsdb_zone ls0-hv1 $port1_zone])
 OVS_WAIT_UNTIL([check_ovsdb_zone ls0-hv2 $port2_zone])
 OVS_WAIT_UNTIL([check_ovsdb_zone lr0_snat $snat_zone])
+OVS_WAIT_UNTIL([check_ovsdb_zone ls0-req-hv3 $req_port3_zone])
+OVS_WAIT_UNTIL([check_ovsdb_zone ls0-req-hv4 $req_port4_zone])
 
 # Now purposely request an SNAT zone for lr0 that conflicts with a zone
 # currently assigned to a logical port
@@ -2585,15 +2594,84 @@ echo "$ct_zones"
 port1_zone=$(get_zone_num "$ct_zones" ls0-hv1)
 port2_zone=$(get_zone_num "$ct_zones" ls0-hv2)
 snat_zone=$(get_zone_num "$ct_zones" lr0_snat)
+req_port3_zone=$(get_zone_num "$ct_zones" ls0-req-hv3)
+req_port4_zone=$(get_zone_num "$ct_zones" ls0-req-hv4)
 
 check test "$snat_zone" -eq "$snat_req_zone"
-check test "$port1_zone" -ne "$port2_zone"
-check test "$port2_zone" -ne "$snat_zone"
-check test "$port1_zone" -ne "$snat_zone"
+
+zone_list=$(seq(port1_zone, port2_zone, req_port2_zone, req_port4_zone, snat_zone))
+for i in $zone_list; do
+    for j in $zone_list; do
+        if ["$i" != "$j"]; then
+            check tests "$i" -ne "$j"
+        fi
+    done
+done
 
 OVS_WAIT_UNTIL([check_ovsdb_zone ls0-hv1 $port1_zone])
 OVS_WAIT_UNTIL([check_ovsdb_zone ls0-hv2 $port2_zone])
 OVS_WAIT_UNTIL([check_ovsdb_zone lr0_snat $snat_zone])
+OVS_WAIT_UNTIL([check_ovsdb_zone ls0-req-hv3 $req_port3_zone])
+OVS_WAIT_UNTIL([check_ovsdb_zone ls0-req-hv4 $req_port4_zone])
+
+# Add port named ls0-req-hv3 and check if same zone assigned
+# previously get assigned to it this time as well.
+
+check ovn-nbctl lsp-add ls0 ls0-req-hv3
+check ovs-vsctl -- add-port br-int hv3-vif3 -- \
+    set interface hv3-vif3 external-ids:iface-id=ls0-req-hv3
+ct_zones=$(ovn-appctl -t ovn-controller ct-zone-list)
+echo "$ct_zones"
+
+check ovn-nbctl --wait=hv sync
+
+req_port3_zone_new=$(get_zone_num "$ct_zones" ls0-req-hv3)
+
+check test "$req_port3_zone -eq $req_port3_zone_new"
+
+OVS_WAIT_UNTIL([check_ovsdb_zone ls0-hv1 $port1_zone])
+OVS_WAIT_UNTIL([check_ovsdb_zone ls0-hv2 $port2_zone])
+OVS_WAIT_UNTIL([check_ovsdb_zone lr0_snat $snat_zone])
+OVS_WAIT_UNTIL([check_ovsdb_zone ls0-req-hv3 $req_port3_zone])
+OVS_WAIT_UNTIL([check_ovsdb_zone ls0-req-hv4 $req_port4_zone])
+
+# Checks for two cases after removing entry from ovs_vswitch table -
+# 1. If port is already up, ct-zone should be reserved.
+# 2. If port is not up yet, ct-zone should not be reserved.
+
+check ovs-vsctl remove Open_vSwitch . external_ids reserve_ct_zones
+
+ct_zones=$(ovn-appctl -t ovn-controller ct-zone-list)
+echo "$ct_zones"
+
+req_port3_zone_after_delete=$(get_zone_num "$ct_zones" ls0-req-hv3)
+req_port4_zone_after_delete=$(get_zone_num "$ct_zones" ls0-req-hv4)
+
+check test "$req_port3_zone_new" -eq "$req_port3_zone_after_delete"
+check test "$req_port4_zone_after_delete" == ""
+
+# Checks for case when a ct-zone is reserved it comes up on that chassis, and
+# gets deleted, but its persisted in ovs_vswitch table, it should persist the
+# same zone throughout.
+
+check ovs-vsctl set Open_vSwitch . external_ids:reserve_ct_zones=ls0-req-hv5
+check ovn-nbctl lsp-add ls0 ls0-req-hv5
+check ovs-vsctl -- add-port br-int hv5-vif5 -- \
+    set interface hv5-vif5 external-ids:iface-id=ls0-req-hv5
+ct_zones=$(ovn-appctl -t ovn-controller ct-zone-list)
+echo "$ct_zones"
+req_port5_zone=$(get_zone_num "$ct_zones" ls0-req-hv5)
+
+check ovs-vsctl remove interface hv5-vif5 external_ids iface-id
+echo "$ct_zones"
+req_port5_zone_new=$(get_zone_num "$ct_zones" ls0-req-hv5)
+
+check test "req_port5_zone" -eq "req_port5_zone_new"
+
+OVS_WAIT_UNTIL([check_ovsdb_zone ls0-hv1 $port1_zone])
+OVS_WAIT_UNTIL([check_ovsdb_zone ls0-hv2 $port2_zone])
+OVS_WAIT_UNTIL([check_ovsdb_zone lr0_snat $snat_zone])
+OVS_WAIT_UNTIL([check_ovsdb_zone ls0-req-hv3 $req_port3_zone])
 
 # Now create a conflict in the OVSDB and restart ovn-controller.
 

@@ -632,7 +632,20 @@
           <code>external_ids:ovn-installed-ts</code>.
         </p>
       </dd>
-    </dl>
+
+      <dt>
+        <code>external-ids:reserve_ct_zones</code> in the <code>Bridge</code>
+        table
+      </dt>
+
+      <dd>
+        <p>
+          This key represents list of ports which are supposed to come up on
+          the chassis, and hence need advance reservation of ct-zones.
+          It is comma seprated list of port names.
+        </p>
+      </dd>
+   </dl>
 
     <h1>OVN Southbound Database Usage</h1>
 
