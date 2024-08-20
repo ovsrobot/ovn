@@ -154,7 +154,9 @@ bfd_calculate_chassis(
                 if (smap_get_bool(&ref_ch->other_config, "is-remote", false)) {
                     continue;
                 }
-                sset_add(&grp_chassis, ref_ch->name);
+                /* we have bfd_setup_required == true anyway, so we skip adding
+                 * it to an sset that we later move to another sset again. */
+                sset_add(bfd_chassis, ref_ch->name);
             }
         } else {
             /* This is not an HA chassis. Check if this chassis is present
