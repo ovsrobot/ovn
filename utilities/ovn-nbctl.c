@@ -4753,11 +4753,18 @@ nbctl_lr_route_add(struct ctl_context *ctx)
         nbrec_logical_router_static_route_set_route_table(route, route_table);
     }
 
-    if (ecmp_symmetric_reply) {
-        const struct smap options = SMAP_CONST1(&options,
-                                                "ecmp_symmetric_reply",
-                                                "true");
+    const char *ecmp_selection_fields = shash_find_data(&ctx->options,
+                                            "--ecmp-selection-fields");
+    if (ecmp_symmetric_reply || ecmp_selection_fields) {
+        struct smap options = SMAP_INITIALIZER(&options);
+        if (ecmp_symmetric_reply) {
+            smap_add(&options, "ecmp_symmetric_reply", "true");
+        }
+        if (ecmp_selection_fields) {
+            smap_add(&options, "ecmp_selection_fields", ecmp_selection_fields);
+        }
         nbrec_logical_router_static_route_set_options(route, &options);
+        smap_destroy(&options);
     }
 
     nbrec_logical_router_update_static_routes_addvalue(lr, route);
@@ -8090,7 +8097,7 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "lr-route-add", 3, 4, "ROUTER PREFIX NEXTHOP [PORT]",
       nbctl_pre_lr_route_add, nbctl_lr_route_add, NULL,
       "--may-exist,--ecmp,--ecmp-symmetric-reply,--policy=,"
-      "--route-table=,--bfd?", RW },
+      "--route-table=,--bfd?,--ecmp-selection-fields=", RW },
     { "lr-route-del", 1, 4, "ROUTER [PREFIX [NEXTHOP [PORT]]]",
       nbctl_pre_lr_route_del, nbctl_lr_route_del, NULL,
       "--if-exists,--policy=,--route-table=", RW },

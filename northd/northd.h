@@ -708,6 +708,7 @@ struct parsed_route {
     bool is_discard_route;
     const struct nbrec_logical_router *nbr;
     bool stale;
+    struct sset ecmp_selection_fields;
 };
 
 void ovnnb_db_run(struct northd_input *input_data,
