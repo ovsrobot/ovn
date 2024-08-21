@@ -19,6 +19,8 @@ import getopt
 import os
 import re
 import sys
+import functools
+from pathlib import Path
 
 RETURN_CHECK_INITIAL_STATE = 0
 RETURN_CHECK_STATE_WITH_RETURN = 1
@@ -582,6 +584,32 @@ def empty_return_with_brace(line):
     return False
 
 
+@functools.cache
+def load_excluded_words():
+    parent_dir = Path(__file__).parent
+    with open(parent_dir / "excluded_word_list.txt", "r") as f:
+        return [line.strip() for line in f]
+
+
+def contains_non_inclusive_words(line):
+    # This returns true if a word is found that falls afoul of our inclusive
+    # language guidelines. The list of words is sourced from the Tier 1, Tier 2,
+    # and Tier 3 word lists from https://inclusivenaming.org/word-lists/ .
+
+    excluded_words = load_excluded_words()
+
+    problem_found = False
+    for word in excluded_words:
+        match = re.search(rf'\b{word}\b', line, flags=re.IGNORECASE)
+        if match:
+            print_warning(
+                f"Non-inclusive word '{word}' found. Consider replacing."
+            )
+            problem_found = True
+
+    return problem_found
+
+
 file_checks = [
         {'regex': __regex_added_doc_rst,
          'check': check_new_docs_index},
@@ -668,6 +696,8 @@ checks = [
          lambda: print_warning("Use of hardcoded table=<NUMBER> or"
                                " resubmit=(,<NUMBER>) is discouraged in tests."
                                " Consider using MACRO instead.")},
+    {'regex': None, 'match_name': None,
+     'check': lambda x: contains_non_inclusive_words(x)},
 ]
 
 

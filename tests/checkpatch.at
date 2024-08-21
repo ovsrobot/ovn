@@ -642,5 +642,43 @@ try_checkpatch \
     #8 FILE: tests/something.at:1:
     C_H_E_C_K([as gw1 ovs-ofctl dump-flows br-int table=42 | grep "dl_dst=00:00:02:01:02:04" | wc -l], [0], [[1]])
 "
+AT_CLEANUP
 
+AT_SETUP([checkpatch - non-inclusive words])
+# This test does not extensively test every single word in the list of
+# non-inclusive words.
+
+# Try a simple exact match with a single word
+try_checkpatch \
+   "COMMON_PATCH_HEADER
+    +/* Let's be sure this change doesn't cripple our performance */
+    " \
+    "WARNING: Non-inclusive word 'cripple' found. Consider replacing.
+    #8 FILE: A.c:1:
+    /* Let's be sure this change doesn't cripple our performance */
+"
+
+# Put more than one word on the line, and use different forms of the word.
+try_checkpatch \
+   "COMMON_PATCH_HEADER
+    +/* The grandfathers are hallucinating again */
+    " \
+    "WARNING: Non-inclusive word 'grandfathers' found. Consider replacing.
+    WARNING: Non-inclusive word 'hallucinating' found. Consider replacing.
+    #8 FILE: A.c:1:
+    /* The grandfathers are hallucinating again */
+"
+
+# And finally, make sure punctuation, etc. don't interfere.
+try_checkpatch \
+   "COMMON_PATCH_HEADER
+    +/* Set up master/slave tribe, but don't abort! */
+    " \
+    "WARNING: Non-inclusive word 'abort' found. Consider replacing.
+    WARNING: Non-inclusive word 'master' found. Consider replacing.
+    WARNING: Non-inclusive word 'slave' found. Consider replacing.
+    WARNING: Non-inclusive word 'tribe' found. Consider replacing.
+    #8 FILE: A.c:1:
+    /* Set up master/slave tribe, but don't abort! */
+"
 AT_CLEANUP
