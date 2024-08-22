@@ -195,10 +195,6 @@ struct bfd_data {
     struct hmap bfd_connections;
 };
 
-struct ecmp_nexthop_data {
-    struct simap nexthops;
-};
-
 struct lr_nat_table;
 
 struct lflow_input {
@@ -741,12 +737,6 @@ void static_routes_destroy(struct static_routes_data *);
 
 void bfd_init(struct bfd_data *);
 void bfd_destroy(struct bfd_data *);
-
-void build_ecmp_nexthop_table(struct ovsdb_idl_txn *,
-                              struct hmap *, struct simap *,
-                              const struct sbrec_ecmp_nexthop_table *);
-void ecmp_nexthop_init(struct ecmp_nexthop_data *);
-void ecmp_nexthop_destroy(struct ecmp_nexthop_data *);
 
 struct lflow_table;
 struct lr_stateful_tracked_data;
