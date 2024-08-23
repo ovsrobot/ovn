@@ -31795,6 +31795,62 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([FDB cleanup when vif goes down])
+ovn_start
+
+net_add n1
+
+check ovn-nbctl ls-add ls0
+
+check ovn-nbctl lsp-add ls0 ln_port
+check ovn-nbctl lsp-set-addresses ln_port unknown
+check ovn-nbctl lsp-set-type ln_port localnet
+check ovn-nbctl lsp-set-options ln_port network_name=physnet1
+check ovn-nbctl set logical_switch_port ln_port options:localnet_learn_fdb=true
+
+check ovn-nbctl lsp-add ls0 vif0
+check ovn-nbctl lsp-set-addresses vif0 "00:00:00:00:10:10 192.168.10.10" unknown
+
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl -- add-port br-int vif0 -- \
+    set interface vif0 external-ids:iface-id=vif0 \
+    options:tx_pcap=hv1/vif0-tx.pcap \
+    options:rxq_pcap=hv1/vif0-rx.pcap \
+    ofport-request=1
+ovs-vsctl -- add-port br-phys ext0 -- \
+    set interface ext0 \
+    options:tx_pcap=hv1/ext0-tx.pcap \
+    options:rxq_pcap=hv1/ext0-rx.pcap \
+    ofport-request=2
+ovs-vsctl set open . external_ids:ovn-bridge-mappings=physnet1:br-phys
+
+
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+ls0_key=$(fetch_column datapath_binding tunnel_key external_ids:name=ls0)
+vif0_key=$(fetch_column port_binding tunnel_key logical_port=vif0)
+
+ovn-sbctl create FDB mac="00\:00\:00\:00\:10\:10" dp_key=$ls0_key port_key=$vif0_key
+ovn-sbctl create FDB mac="00\:00\:00\:00\:20\:20" dp_key=$ls0_key port_key=$vif0_key
+
+# vif going down should purge all relevant FDB entries
+ovs-vsctl del-port br-int vif0
+OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up vif0` = xdown])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_UNTIL([test $(ovn-sbctl list fdb | grep -c "00:00:00:00:10:10") = 0])
+OVS_WAIT_UNTIL([test $(ovn-sbctl list fdb | grep -c "00:00:00:00:20:20") = 0])
+
+# vif0 should not be a local datapath in hv1 as vif0 is down
+# Hence ln_port should not be a related port.
+OVN_CLEANUP([hv1
+ln_port])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([container port changed to normal port and then deleted])
 ovn_start
 
