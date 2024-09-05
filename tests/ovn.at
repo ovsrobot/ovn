@@ -7047,6 +7047,21 @@ compare_dhcp_packets 1
 
 # ----------------------------------------------------------------------
 
+# Send unicast DHCPDISCOVER.
+reset_pcap_file hv1-vif1 hv1/vif1
+reset_pcap_file hv1-vif2 hv1/vif2
+rm -f 1.expected
+rm -f 2.expected
+offer_ip=`ip_to_hex 10 0 0 4`
+server_ip=`ip_to_hex 10 0 0 1`
+ciaddr=`ip_to_hex 0 0 0 0`
+request_ip=0
+expected_dhcp_opts=330400000e100104ffffff0003040a00000136040a000001
+test_dhcp 2 1 f00000000001 01 0 $ciaddr $offer_ip $request_ip 0 1 $offer_ip $server_ip ff1000000001 $server_ip 02 $expected_dhcp_opts
+compare_dhcp_packets 1
+
+# ----------------------------------------------------------------------
+
 # ovs-ofctl also resumes the packets and this causes other ports to receive
 # the DHCP request packet. So reset the pcap files so that its easier to test.
 reset_pcap_file hv1-vif1 hv1/vif1
@@ -7061,7 +7076,7 @@ server_ip=`ip_to_hex 10 0 0 1`
 ciaddr=`ip_to_hex 0 0 0 0`
 request_ip=$offer_ip
 expected_dhcp_opts=330400000e100104ffffff0003040a00000136040a000001
-test_dhcp 2 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 05 $expected_dhcp_opts
+test_dhcp 3 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 05 $expected_dhcp_opts
 compare_dhcp_packets 2
 
 # ----------------------------------------------------------------------
@@ -7078,7 +7093,7 @@ server_ip=`ip_to_hex 10 0 0 1`
 ciaddr=`ip_to_hex 0 0 0 0`
 request_ip=`ip_to_hex 10 0 0 7`
 expected_dhcp_opts=""
-test_dhcp 3 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 06 $expected_dhcp_opts
+test_dhcp 4 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 06 $expected_dhcp_opts
 compare_dhcp_packets 2
 
 # ----------------------------------------------------------------------
@@ -7094,7 +7109,7 @@ rm -f 2.expected
 ciaddr=`ip_to_hex 0 0 0 0`
 offer_ip=0
 request_ip=0
-test_dhcp 4 2 f00000000002 09 0 $ciaddr $offer_ip $request_ip 0 0 1 1
+test_dhcp 5 2 f00000000002 09 0 $ciaddr $offer_ip $request_ip 0 0 1 1
 
 # NXT_RESUMEs should be 4.
 # vif1-tx.pcap should have received the DHCPv4 (invalid) request packet
@@ -7117,7 +7132,7 @@ request_ip=0
 src_ip=$offer_ip
 dst_ip=$server_ip
 expected_dhcp_opts=330400000e100104ffffff0003040a00000136040a000001
-test_dhcp 5 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 05 $expected_dhcp_opts
+test_dhcp 6 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 05 $expected_dhcp_opts
 compare_dhcp_packets 2
 
 # ----------------------------------------------------------------------
@@ -7136,7 +7151,7 @@ request_ip=0
 src_ip=$offer_ip
 dst_ip=`ip_to_hex 255 255 255 255`
 expected_dhcp_opts=330400000e100104ffffff0003040a00000136040a000001
-test_dhcp 6 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 05 $expected_dhcp_opts
+test_dhcp 7 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 05 $expected_dhcp_opts
 compare_dhcp_packets 2
 
 # ----------------------------------------------------------------------
@@ -7155,7 +7170,7 @@ request_ip=0
 src_ip=$offer_ip
 dst_ip=`ip_to_hex 255 255 255 255`
 expected_dhcp_opts=""
-test_dhcp 7 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 06 $expected_dhcp_opts
+test_dhcp 8 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 06 $expected_dhcp_opts
 compare_dhcp_packets 2
 
 # ----------------------------------------------------------------------
@@ -7174,7 +7189,7 @@ request_ip=0
 src_ip=$offer_ip
 dst_ip=`ip_to_hex 255 255 255 255`
 expected_dhcp_opts=""
-test_dhcp 8 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 06 $expected_dhcp_opts
+test_dhcp 9 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 06 $expected_dhcp_opts
 compare_dhcp_packets 2
 
 # ----------------------------------------------------------------------
@@ -7189,7 +7204,7 @@ rm -f 2.expected
 ciaddr=`ip_to_hex 0 0 0 0`
 src_ip=`ip_to_hex 10 0 0 6`
 dst_ip=`ip_to_hex 10 0 0 4`
-test_dhcp --no-resume 9 2 f00000000002 03 0 $ciaddr 0 0 0 1 $src_ip $dst_ip 1
+test_dhcp --no-resume 10 2 f00000000002 03 0 $ciaddr 0 0 0 1 $src_ip $dst_ip 1
 
 # vif1-tx.pcap should have received the DHCPv4 request packet
 OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [1.expected])
@@ -7207,7 +7222,7 @@ server_ip=`ip_to_hex 10 0 0 1`
 ciaddr=`ip_to_hex 0 0 0 0`
 request_ip=0
 expected_dhcp_opts=330400000e100104ffffff0003040a00000136040a000001
-test_dhcp 10 1 f00000000001 01 1 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 02 $expected_dhcp_opts
+test_dhcp 11 1 f00000000001 01 1 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 02 $expected_dhcp_opts
 compare_dhcp_packets 1
 
 # ----------------------------------------------------------------------
@@ -7223,7 +7238,7 @@ server_ip=`ip_to_hex 10 0 0 1`
 ciaddr=`ip_to_hex 10 0 0 6`
 request_ip=0
 expected_dhcp_opts=0
-test_dhcp 11 2 f00000000002 07 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001
+test_dhcp 12 2 f00000000002 07 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001
 
 # There is no reply for this. Check for the INFO log in ovn-controller.log
 OVS_WAIT_UNTIL(
@@ -7250,7 +7265,7 @@ dst_ip=$server_ip
 # In the expected_dhcp_opts we should not see 330400000e10 which is
 # dhcp lease time option and 0104ffffff00 which is subnet mask option.
 expected_dhcp_opts=03040a00000136040a000001
-test_dhcp 12 2 f00000000002 08 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 05 $expected_dhcp_opts
+test_dhcp 13 2 f00000000002 08 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 05 $expected_dhcp_opts
 compare_dhcp_packets 2
 
 # Now add the dhcp option T1 to the dhcp options.
@@ -7275,7 +7290,7 @@ dst_ip=$server_ip
 # In the expected_dhcp_opts we should not see 330400000e10 which is
 # dhcp lease time option.
 expected_dhcp_opts=3a0400000fa0330400000e100104ffffff0003040a00000136040a000001
-test_dhcp 13 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 05 $expected_dhcp_opts
+test_dhcp 14 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 05 $expected_dhcp_opts
 compare_dhcp_packets 2
 
 # ----------------------------------------------------------------------
@@ -7295,7 +7310,7 @@ dst_ip=$server_ip
 # In the expected_dhcp_opts we should not see 330400000e10 which is
 # dhcp lease time option and 0104ffffff00 which is subnet mask option.
 expected_dhcp_opts=03040a00000136040a000001
-test_dhcp 14 2 f00000000002 08 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 05 $expected_dhcp_opts
+test_dhcp 15 2 f00000000002 08 0 $ciaddr $offer_ip $request_ip 0 1 $src_ip $dst_ip ff1000000001 $server_ip 05 $expected_dhcp_opts
 compare_dhcp_packets 2
 
 # ----------------------------------------------------------------------
@@ -7321,7 +7336,7 @@ server_ip=`ip_to_hex 10 0 0 1`
 ciaddr=`ip_to_hex 0 0 0 0`
 request_ip=$offer_ip
 expected_dhcp_opts=330400000e100104ffffff0003040a00000136040a00000142040a0a0a0a
-test_dhcp 15 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 05 $expected_dhcp_opts
+test_dhcp 16 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 05 $expected_dhcp_opts
 compare_dhcp_packets 2
 
 # ----------------------------------------------------------------------
@@ -7347,7 +7362,7 @@ server_ip=`ip_to_hex 10 0 0 1`
 ciaddr=`ip_to_hex 0 0 0 0`
 request_ip=$offer_ip
 expected_dhcp_opts=330400000e100104ffffff0003040a00000136040a0000014210746573745f746674705f736572766572
-test_dhcp 16 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 05 $expected_dhcp_opts
+test_dhcp 17 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 05 $expected_dhcp_opts
 compare_dhcp_packets 2
 
 # ----------------------------------------------------------------------
@@ -7373,7 +7388,7 @@ server_ip=`ip_to_hex 10 0 0 1`
 ciaddr=`ip_to_hex 0 0 0 0`
 request_ip=$offer_ip
 expected_dhcp_opts=771305746573743103636f6d00057465737432c006330400000e100104ffffff0003040a00000136040a000001
-test_dhcp 17 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 05 $expected_dhcp_opts
+test_dhcp 18 2 f00000000002 03 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 05 $expected_dhcp_opts
 compare_dhcp_packets 2
 
 # ----------------------------------------------------------------------
@@ -7384,7 +7399,7 @@ server_ip=`ip_to_hex 10 0 0 1`
 ciaddr=`ip_to_hex 0 0 0 0`
 request_ip=0
 expected_dhcp_opts=""
-test_dhcp 18 1 f00000000001 04 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 02 $expected_dhcp_opts
+test_dhcp 19 1 f00000000001 04 0 $ciaddr $offer_ip $request_ip 0 0 ff1000000001 $server_ip 02 $expected_dhcp_opts
 OVS_WAIT_UNTIL(
     [test 1 -le $(grep -F -i -c 'DHCPDECLINE from f0:00:00:00:00:01, 10.0.0.4 duplicated' hv1/ovn-controller.log)
 ])
@@ -7413,7 +7428,7 @@ ciaddr=`ip_to_hex 0 0 0 0`
 request_ip=0
 boofile=4308626f6f7466696c65
 expected_dhcp_opts=${boofile}330400000e100104ffffff0003040a00000136040a000001
-test_dhcp 19 1 f00000000001 01 0 $ciaddr $offer_ip $request_ip 1 0 ff1000000001 $server_ip 02 $expected_dhcp_opts
+test_dhcp 20 1 f00000000001 01 0 $ciaddr $offer_ip $request_ip 1 0 ff1000000001 $server_ip 02 $expected_dhcp_opts
 compare_dhcp_packets 1
 
 # Test that ovn-controller pinctrl thread handles dhcp requests when it
@@ -7460,7 +7475,7 @@ ciaddr=`ip_to_hex 0 0 0 0`
 request_ip=0
 boofile=4308626f6f7466696c65
 expected_dhcp_opts=${boofile}330400000e100104ffffff0003040a00000136040a000001
-test_dhcp 20 1 f00000000001 01 0 $ciaddr $offer_ip $request_ip 1 0 ff1000000001 $server_ip 02 $expected_dhcp_opts
+test_dhcp 21 1 f00000000001 01 0 $ciaddr $offer_ip $request_ip 1 0 ff1000000001 $server_ip 02 $expected_dhcp_opts
 compare_dhcp_packets 1
 
 as hv1

@@ -2596,14 +2596,50 @@ pinctrl_handle_put_dhcp_opts(
     uint8_t msg_type = 0;
 
     switch (dhcp_opts.dhcp_msg_type) {
-    case DHCP_MSG_DISCOVER:
+    case DHCP_MSG_DISCOVER: {
         msg_type = DHCP_MSG_OFFER;
-        if (in_flow->nw_dst != htonl(INADDR_BROADCAST)) {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-            VLOG_WARN_RL(&rl, "DHCP DISCOVER must be Broadcast");
-            goto exit;
+        if (in_flow->nw_dst == htonl(INADDR_BROADCAST)) {
+            break;
         }
-        break;
+
+        const char *ptr = reply_dhcp_opts_ptr->data;
+        const char *ptr_end = ptr + reply_dhcp_opts_ptr->size;
+        ovs_be32 server_id = htonl(INADDR_BROADCAST);
+
+        while (ptr < ptr_end) {
+            struct dhcp_opt_header *in_dhcp_opt =
+                (struct dhcp_opt_header *) ptr;
+
+            /* RFC 2131 section 4.4.4.
+             * When the DHCP client knows the address of a DHCP server, in
+             * either INIT or REBOOTING state, the client may use that address
+             * in the DHCPDISCOVER or DHCPREQUEST rather than the IP broadcast
+             * address.
+             */
+            if (in_dhcp_opt->code == OVN_DHCP_OPT_CODE_SERVER_ID) {
+                server_id = get_unaligned_be32(DHCP_OPT_PAYLOAD(in_dhcp_opt));
+                break;
+            }
+
+            ptr += sizeof *in_dhcp_opt;
+            if (ptr > ptr_end) {
+                break;
+            }
+            ptr += in_dhcp_opt->len;
+            if (ptr > ptr_end) {
+                break;
+            }
+        }
+
+        if (in_flow->nw_dst == server_id) {
+            break;
+        }
+
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_WARN_RL(&rl, "DHCP DISCOVER invalid address: "IP_FMT,
+                     IP_ARGS(in_flow->nw_dst));
+        goto exit;
+    }
     case DHCP_MSG_REQUEST: {
         msg_type = DHCP_MSG_ACK;
         if (dhcp_opts.request_ip != *offer_ip) {
