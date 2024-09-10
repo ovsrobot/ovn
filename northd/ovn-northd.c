@@ -992,12 +992,14 @@ main(int argc, char *argv[])
                     VLOG_INFO("OVNNB commit failed, "
                               "force recompute next time.");
                     eng_ctx.recompute = true;
+                    poll_immediate_wake();
                 }
 
                 if (!ovsdb_idl_loop_commit_and_wait(&ovnsb_idl_loop)) {
                     VLOG_INFO("OVNSB commit failed, "
                               "force recompute next time.");
                     eng_ctx.recompute = true;
+                    poll_immediate_wake();
                 }
                 run_memory_trimmer(ovnnb_idl_loop.idl, activity);
             } else {

@@ -5816,6 +5816,7 @@ main(int argc, char *argv[])
         if (!ovsdb_idl_loop_commit_and_wait(&ovnsb_idl_loop)) {
             VLOG_INFO("OVNSB commit failed, force recompute next time.");
             engine_set_force_recompute(true);
+            poll_immediate_wake();
         }
 
         int ovs_txn_status = ovsdb_idl_loop_commit_and_wait(&ovs_idl_loop);
