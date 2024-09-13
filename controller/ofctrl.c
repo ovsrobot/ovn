@@ -45,6 +45,7 @@
 #include "ovn/actions.h"
 #include "lib/extend-table.h"
 #include "lib/lb.h"
+#include "lib/ovn-util.h"
 #include "openvswitch/poll-loop.h"
 #include "physical.h"
 #include "openvswitch/rconn.h"
@@ -392,6 +393,11 @@ static struct shash meter_bands;
 static void ofctrl_meter_bands_destroy(void);
 static void ofctrl_meter_bands_clear(void);
 
+static struct smap ecmp_nexthop;
+static void ecmp_nexthop_monitor_run(
+        const struct sbrec_ecmp_nexthop_table *enh_table,
+        struct ovs_list *msgs);
+
 /* MFF_* field ID for our Geneve option.  In S_TLV_TABLE_MOD_SENT, this is
  * the option we requested (we don't know whether we obtained it yet).  In
  * S_CLEAR_FLOWS or S_UPDATE_FLOWS, this is really the option we have. */
@@ -425,6 +431,7 @@ ofctrl_init(struct ovn_extend_table *group_table,
     tx_counter = rconn_packet_counter_create();
     hmap_init(&installed_lflows);
     hmap_init(&installed_pflows);
+    smap_init(&ecmp_nexthop);
     ovs_list_init(&flow_updates);
     ovn_init_symtab(&symtab);
     groups = group_table;
@@ -877,6 +884,7 @@ ofctrl_destroy(void)
     expr_symtab_destroy(&symtab);
     shash_destroy(&symtab);
     ofctrl_meter_bands_destroy();
+    smap_destroy(&ecmp_nexthop);
 }
 
 uint64_t
@@ -2307,6 +2315,68 @@ add_meter(struct ovn_extend_table_info *m_desired,
 }
 
 static void
+ecmp_nexthop_monitor_flush_ct_entry(const char *mac, struct ovs_list *msgs)
+{
+    struct eth_addr ea;
+    if (!ovs_scan(mac, ETH_ADDR_SCAN_FMT, ETH_ADDR_SCAN_ARGS(ea))) {
+        return;
+    }
+
+    ovs_u128 mask = {
+        /* ct_label.ecmp_reply_eth BITS[32-79] */
+        .u64.hi = 0x000000000000ffff,
+        .u64.lo = 0xffffffff00000000,
+    };
+
+    ovs_be32 lo = get_unaligned_be32((void *)&ea.be16[1]);
+    ovs_u128 nexthop = {
+        .u64.hi = ntohs(ea.be16[0]),
+        .u64.lo = (uint64_t) ntohl(lo) << 32,
+    };
+
+    struct ofp_ct_match match = {
+        .labels = nexthop,
+        .labels_mask = mask,
+    };
+    struct ofpbuf *msg = ofp_ct_match_encode(&match, NULL,
+                                             rconn_get_version(swconn));
+    ovs_list_push_back(msgs, &msg->list_node);
+}
+
+static void
+ecmp_nexthop_monitor_run(const struct sbrec_ecmp_nexthop_table *enh_table,
+                         struct ovs_list *msgs)
+{
+    struct sset ecmp_sb_only = SSET_INITIALIZER(&ecmp_sb_only);
+    struct simap mac_count = SIMAP_INITIALIZER(&mac_count);
+
+    struct smap_node *node;
+    SMAP_FOR_EACH_SAFE (node, &ecmp_nexthop) {
+        simap_increase(&mac_count, node->value, 1);
+    }
+
+    const struct sbrec_ecmp_nexthop *sbrec_ecmp_nexthop;
+    SBREC_ECMP_NEXTHOP_TABLE_FOR_EACH (sbrec_ecmp_nexthop, enh_table) {
+        smap_replace(&ecmp_nexthop, sbrec_ecmp_nexthop->nexthop,
+                     sbrec_ecmp_nexthop->mac);
+        sset_add(&ecmp_sb_only, sbrec_ecmp_nexthop->nexthop);
+    }
+
+    SMAP_FOR_EACH_SAFE (node, &ecmp_nexthop) {
+        /* Do not flush CT entries if the share the same mac address. */
+        if (!sset_contains(&ecmp_sb_only, node->key)) {
+            if (simap_get(&mac_count, node->value) == 1) {
+                ecmp_nexthop_monitor_flush_ct_entry(node->value, msgs);
+            }
+            smap_remove_node(&ecmp_nexthop, node);
+        }
+    }
+
+    sset_destroy(&ecmp_sb_only);
+    simap_destroy(&mac_count);
+}
+
+static void
 installed_flow_add(struct ovn_flow *d,
                    struct ofputil_bundle_ctrl_msg *bc,
                    struct ovs_list *msgs)
@@ -2664,6 +2734,7 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
            struct shash *pending_ct_zones,
            struct hmap *pending_lb_tuples,
            struct ovsdb_idl_index *sbrec_meter_by_name,
+           const struct sbrec_ecmp_nexthop_table *enh_table,
            uint64_t req_cfg,
            bool lflows_changed,
            bool pflows_changed)
@@ -2703,6 +2774,8 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
 
     /* OpenFlow messages to send to the switch to bring it up-to-date. */
     struct ovs_list msgs = OVS_LIST_INITIALIZER(&msgs);
+
+    ecmp_nexthop_monitor_run(enh_table, &msgs);
 
     /* Iterate through ct zones that need to be flushed. */
     struct shash_node *iter;
