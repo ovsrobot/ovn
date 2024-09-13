@@ -4936,6 +4936,9 @@ main(int argc, char *argv[])
         = ovsdb_idl_index_create2(ovnsb_idl_loop.idl,
                                   &sbrec_fdb_col_mac,
                                   &sbrec_fdb_col_dp_key);
+    struct ovsdb_idl_index *sbrec_ecmp_by_nexthop
+        = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
+                                  &sbrec_ecmp_nexthop_col_nexthop);
     struct ovsdb_idl_index *sbrec_mac_binding_by_datapath
         = mac_binding_by_datapath_index_create(ovnsb_idl_loop.idl);
     struct ovsdb_idl_index *sbrec_static_mac_binding_by_datapath
@@ -5642,6 +5645,7 @@ main(int argc, char *argv[])
                                     sbrec_igmp_group,
                                     sbrec_ip_multicast,
                                     sbrec_fdb_by_dp_key_mac,
+                                    sbrec_ecmp_by_nexthop,
                                     sbrec_dns_table_get(ovnsb_idl_loop.idl),
                                     sbrec_controller_event_table_get(
                                         ovnsb_idl_loop.idl),

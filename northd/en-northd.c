@@ -412,9 +412,13 @@ en_ecmp_nexthop_run(struct engine_node *node, void *data OVS_UNUSED)
         engine_get_input_data("static_routes", node);
     const struct sbrec_ecmp_nexthop_table *sbrec_ecmp_nexthop_table =
         EN_OVSDB_GET(engine_get_input("SB_ecmp_nexthop", node));
+    struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip =
+        engine_ovsdb_node_get_index(engine_get_input("SB_mac_binding", node),
+                                    "sbrec_mac_binding_by_lport_ip");
 
     build_ecmp_nexthop_table(eng_ctx->ovnsb_idl_txn,
                              &static_routes_data->parsed_routes,
+                             sbrec_mac_binding_by_lport_ip,
                              sbrec_ecmp_nexthop_table);
     engine_set_node_state(node, EN_UPDATED);
 }
