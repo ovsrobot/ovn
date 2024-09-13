@@ -10665,6 +10665,55 @@ build_bfd_map(const struct nbrec_bfd_table *nbrec_bfd_table,
     }
 }
 
+void
+build_ecmp_nexthop_table(
+        struct ovsdb_idl_txn *ovnsb_txn,
+        struct hmap *routes,
+        const struct sbrec_ecmp_nexthop_table *sbrec_ecmp_nexthop_table)
+{
+    if (!ovnsb_txn) {
+        return;
+    }
+
+    struct sset nb_nexthops_sset = SSET_INITIALIZER(&nb_nexthops_sset);
+    struct sset sb_nexthops_sset = SSET_INITIALIZER(&sb_nexthops_sset);
+
+    const struct sbrec_ecmp_nexthop *sb_ecmp_nexthop;
+    SBREC_ECMP_NEXTHOP_TABLE_FOR_EACH (sb_ecmp_nexthop,
+                                       sbrec_ecmp_nexthop_table) {
+        sset_add(&sb_nexthops_sset, sb_ecmp_nexthop->nexthop);
+    }
+
+    struct parsed_route *pr;
+    HMAP_FOR_EACH (pr, key_node, routes) {
+        if (!pr->ecmp_symmetric_reply) {
+            continue;
+        }
+
+        if (!pr->out_port) {
+            continue;
+        }
+
+        const struct nbrec_logical_router_static_route *r = pr->route;
+        if (!sset_contains(&sb_nexthops_sset, r->nexthop)) {
+            sb_ecmp_nexthop = sbrec_ecmp_nexthop_insert(ovnsb_txn);
+            sbrec_ecmp_nexthop_set_nexthop(sb_ecmp_nexthop, r->nexthop);
+            sbrec_ecmp_nexthop_set_port(sb_ecmp_nexthop, pr->out_port->key);
+        }
+        sset_add(&nb_nexthops_sset, r->nexthop);
+    }
+
+    SBREC_ECMP_NEXTHOP_TABLE_FOR_EACH_SAFE (sb_ecmp_nexthop,
+                                            sbrec_ecmp_nexthop_table) {
+        if (!sset_contains(&nb_nexthops_sset, sb_ecmp_nexthop->nexthop)) {
+            sbrec_ecmp_nexthop_delete(sb_ecmp_nexthop);
+        }
+    }
+
+    sset_destroy(&nb_nexthops_sset);
+    sset_destroy(&sb_nexthops_sset);
+}
+
 /* Returns a string of the IP address of the router port 'op' that
  * overlaps with 'ip_s".  If one is not found, returns NULL.
  *
@@ -11105,10 +11154,11 @@ parsed_routes_add(struct ovn_datapath *od, const struct hmap *lr_ports,
     }
 
     /* Verify that ip_prefix and nexthop are on the same network. */
+    struct ovn_port *out_port = NULL;
     if (!is_discard_route &&
         !find_static_route_outport(od, lr_ports, route,
                                    IN6_IS_ADDR_V4MAPPED(&prefix),
-                                   NULL, NULL)) {
+                                   NULL, &out_port)) {
         return;
     }
 
@@ -11151,6 +11201,7 @@ parsed_routes_add(struct ovn_datapath *od, const struct hmap *lr_ports,
     new_pr->hash = route_hash(new_pr);
     new_pr->route = route;
     new_pr->nbr = od->nbr;
+    new_pr->out_port = out_port;
     new_pr->ecmp_symmetric_reply = smap_get_bool(&route->options,
                                                  "ecmp_symmetric_reply",
                                                  false);

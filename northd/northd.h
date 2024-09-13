@@ -703,6 +703,7 @@ struct parsed_route {
     uint32_t route_table_id;
     uint32_t hash;
     const struct nbrec_logical_router_static_route *route;
+    struct ovn_port *out_port;
     bool ecmp_symmetric_reply;
     bool is_discard_route;
     const struct nbrec_logical_router *nbr;
@@ -744,6 +745,9 @@ void bfd_destroy(struct bfd_data *);
 
 void bfd_sync_init(struct bfd_sync_data *);
 void bfd_sync_destroy(struct bfd_sync_data *);
+
+void build_ecmp_nexthop_table(struct ovsdb_idl_txn *, struct hmap *,
+                              const struct sbrec_ecmp_nexthop_table *);
 
 struct lflow_table;
 struct lr_stateful_tracked_data;

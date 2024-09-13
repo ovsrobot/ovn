@@ -103,7 +103,8 @@ static unixctl_cb_func chassis_features_list;
     SB_NODE(fdb, "fdb") \
     SB_NODE(static_mac_binding, "static_mac_binding") \
     SB_NODE(chassis_template_var, "chassis_template_var") \
-    SB_NODE(logical_dp_group, "logical_dp_group")
+    SB_NODE(logical_dp_group, "logical_dp_group") \
+    SB_NODE(ecmp_nexthop, "ecmp_nexthop")
 
 enum sb_engine_node {
 #define SB_NODE(NAME, NAME_STR) SB_##NAME,
@@ -162,6 +163,7 @@ static ENGINE_NODE(route_policies, "route_policies");
 static ENGINE_NODE(static_routes, "static_routes");
 static ENGINE_NODE(bfd, "bfd");
 static ENGINE_NODE(bfd_sync, "bfd_sync");
+static ENGINE_NODE(ecmp_nexthop, "ecmp_nexthop");
 
 void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
                           struct ovsdb_idl_loop *sb)
@@ -264,6 +266,9 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_bfd_sync, &en_route_policies, NULL);
     engine_add_input(&en_bfd_sync, &en_northd, bfd_sync_northd_change_handler);
 
+    engine_add_input(&en_ecmp_nexthop, &en_sb_ecmp_nexthop, NULL);
+    engine_add_input(&en_ecmp_nexthop, &en_static_routes, NULL);
+
     engine_add_input(&en_sync_meters, &en_nb_acl, NULL);
     engine_add_input(&en_sync_meters, &en_nb_meter, NULL);
     engine_add_input(&en_sync_meters, &en_sb_meter, NULL);
@@ -334,6 +339,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_sync_from_sb, &en_sb_port_binding, NULL);
     engine_add_input(&en_sync_from_sb, &en_sb_ha_chassis_group, NULL);
 
+    engine_add_input(&en_northd_output, &en_ecmp_nexthop, NULL);
     engine_add_input(&en_northd_output, &en_sync_from_sb, NULL);
     engine_add_input(&en_northd_output, &en_sync_to_sb,
                      northd_output_sync_to_sb_handler);
