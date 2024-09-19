@@ -42,6 +42,7 @@
 #include "lib/ovn-sb-idl.h"
 #include "lib/ovn-util.h"
 #include "lib/lb.h"
+#include "lib/fdb.h"
 #include "lflow-mgr.h"
 #include "memory.h"
 #include "northd.h"
@@ -3396,22 +3397,6 @@ cleanup_stale_fdb_entries(const struct sbrec_fdb_table *sbrec_fdb_table,
             sbrec_fdb_delete(fdb_e);
         }
     }
-}
-
-static void
-delete_fdb_entries(struct ovsdb_idl_index *sbrec_fdb_by_dp_and_port,
-                 uint32_t dp_key, uint32_t port_key)
-{
-    struct sbrec_fdb *target =
-        sbrec_fdb_index_init_row(sbrec_fdb_by_dp_and_port);
-    sbrec_fdb_index_set_dp_key(target, dp_key);
-    sbrec_fdb_index_set_port_key(target, port_key);
-
-    struct sbrec_fdb *fdb_e;
-    SBREC_FDB_FOR_EACH_EQUAL (fdb_e, target, sbrec_fdb_by_dp_and_port) {
-        sbrec_fdb_delete(fdb_e);
-    }
-    sbrec_fdb_index_destroy_row(target);
 }
 
 struct service_monitor_info {

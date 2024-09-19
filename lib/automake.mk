@@ -49,7 +49,9 @@ lib_libovn_la_SOURCES = \
 	lib/stopwatch-names.h \
 	lib/vif-plug-provider.h \
 	lib/vif-plug-provider.c \
-	lib/vif-plug-providers/dummy/vif-plug-dummy.c
+	lib/vif-plug-providers/dummy/vif-plug-dummy.c \
+	lib/fdb.c \
+	lib/fdb.h
 nodist_lib_libovn_la_SOURCES = \
 	lib/ovn-dirs.c \
 	lib/ovn-nb-idl.c \

@@ -62,6 +62,7 @@
 #include "lflow.h"
 #include "ip-mcast.h"
 #include "ovn-sb-idl.h"
+#include "lib/fdb.h"
 
 VLOG_DEFINE_THIS_MODULE(pinctrl);
 
@@ -236,6 +237,7 @@ static void send_garp_rarp_prepare(
     struct ovsdb_idl_index *sbrec_port_binding_by_datapath,
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
+    struct ovsdb_idl_index *sbrec_fdb_by_dp_and_port,
     const struct ovsrec_bridge *,
     const struct sbrec_chassis *,
     const struct hmap *local_datapaths,
@@ -376,9 +378,6 @@ static void bfd_monitor_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                             OVS_REQUIRES(pinctrl_mutex);
 static void init_fdb_entries(void);
 static void destroy_fdb_entries(void);
-static const struct sbrec_fdb *fdb_lookup(
-    struct ovsdb_idl_index *sbrec_fdb_by_dp_key_mac,
-    uint32_t dp_key, const char *mac);
 static void run_put_fdb(struct ovsdb_idl_txn *ovnsb_idl_txn,
                         struct ovsdb_idl_index *sbrec_fdb_by_dp_key_mac,
             struct ovsdb_idl_index *sbrec_port_binding_by_key,
@@ -4146,6 +4145,7 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             struct ovsdb_idl_index *sbrec_igmp_groups,
             struct ovsdb_idl_index *sbrec_ip_multicast_opts,
             struct ovsdb_idl_index *sbrec_fdb_by_dp_key_mac,
+            struct ovsdb_idl_index *sbrec_fdb_by_dp_and_port,
             const struct sbrec_dns_table *dns_table,
             const struct sbrec_controller_event_table *ce_table,
             const struct sbrec_service_monitor_table *svc_mon_table,
@@ -4167,7 +4167,8 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                            sbrec_port_binding_by_key, chassis);
     send_garp_rarp_prepare(ovnsb_idl_txn, sbrec_port_binding_by_datapath,
                            sbrec_port_binding_by_name,
-                           sbrec_mac_binding_by_lport_ip, br_int, chassis,
+                           sbrec_mac_binding_by_lport_ip,
+                           sbrec_fdb_by_dp_and_port, br_int, chassis,
                            local_datapaths, active_tunnels, ovs_table);
     prepare_ipv6_ras(local_active_ports_ras, sbrec_port_binding_by_name);
     prepare_ipv6_prefixd(ovnsb_idl_txn, sbrec_port_binding_by_name,
@@ -5035,6 +5036,7 @@ struct garp_rarp_data {
                                   * announcement (in msecs). */
     uint32_t dp_key;             /* Datapath used to output this GARP. */
     uint32_t port_key;           /* Port to inject the GARP into. */
+    bool enabled;                /* is garp/rarp announcement enabled */
 };
 
 /* Contains GARPs/RARPs to be sent. Protected by pinctrl_mutex*/
@@ -5055,7 +5057,7 @@ destroy_send_garps_rarps(void)
 /* Runs with in the main ovn-controller thread context. */
 static void
 add_garp_rarp(const char *name, const struct eth_addr ea, ovs_be32 ip,
-              uint32_t dp_key, uint32_t port_key)
+              uint32_t dp_key, uint32_t port_key, bool enabled)
 {
     struct garp_rarp_data *garp_rarp = xmalloc(sizeof *garp_rarp);
     garp_rarp->ea = ea;
@@ -5064,6 +5066,7 @@ add_garp_rarp(const char *name, const struct eth_addr ea, ovs_be32 ip,
     garp_rarp->backoff = 1000; /* msec. */
     garp_rarp->dp_key = dp_key;
     garp_rarp->port_key = port_key;
+    garp_rarp->enabled = enabled;
     shash_add(&send_garp_rarp_data, name, garp_rarp);
 
     /* Notify pinctrl_handler so that it can wakeup and process
@@ -5082,6 +5085,8 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
                       bool garp_continuous)
 {
     volatile struct garp_rarp_data *garp_rarp = NULL;
+    bool is_garp_rarp_enabled = !smap_get_bool(&binding_rec->options,
+                                               "disable_garp_rarp", false);
 
     /* Skip localports as they don't need to be announced */
     if (!strcmp(binding_rec->type, "localport")) {
@@ -5105,6 +5110,7 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 if (garp_rarp) {
                     garp_rarp->dp_key = binding_rec->datapath->tunnel_key;
                     garp_rarp->port_key = binding_rec->tunnel_key;
+                    garp_rarp->enabled = is_garp_rarp_enabled;
                     if (garp_max_timeout != garp_rarp_max_timeout ||
                         garp_continuous != garp_rarp_continuous) {
                         /* reset backoff */
@@ -5115,7 +5121,8 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
                     add_garp_rarp(name, laddrs->ea,
                                   laddrs->ipv4_addrs[i].addr,
                                   binding_rec->datapath->tunnel_key,
-                                  binding_rec->tunnel_key);
+                                  binding_rec->tunnel_key,
+                                  is_garp_rarp_enabled);
                     send_garp_locally(ovnsb_idl_txn,
                                       sbrec_mac_binding_by_lport_ip,
                                       local_datapaths, binding_rec, laddrs->ea,
@@ -5135,6 +5142,7 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
                     if (garp_rarp) {
                         garp_rarp->dp_key = binding_rec->datapath->tunnel_key;
                         garp_rarp->port_key = binding_rec->tunnel_key;
+                        garp_rarp->enabled = is_garp_rarp_enabled;
                         if (garp_max_timeout != garp_rarp_max_timeout ||
                             garp_continuous != garp_rarp_continuous) {
                             /* reset backoff */
@@ -5144,7 +5152,8 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
                     } else {
                         add_garp_rarp(name, laddrs->ea,
                                       0, binding_rec->datapath->tunnel_key,
-                                      binding_rec->tunnel_key);
+                                      binding_rec->tunnel_key,
+                                      is_garp_rarp_enabled);
                     }
                     free(name);
             }
@@ -5160,6 +5169,7 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
     if (garp_rarp) {
         garp_rarp->dp_key = binding_rec->datapath->tunnel_key;
         garp_rarp->port_key = binding_rec->tunnel_key;
+        garp_rarp->enabled = is_garp_rarp_enabled;
         if (garp_max_timeout != garp_rarp_max_timeout ||
             garp_continuous != garp_rarp_continuous) {
             /* reset backoff */
@@ -5185,7 +5195,8 @@ send_garp_rarp_update(struct ovsdb_idl_txn *ovnsb_idl_txn,
         add_garp_rarp(binding_rec->logical_port,
                       laddrs.ea, ip,
                       binding_rec->datapath->tunnel_key,
-                      binding_rec->tunnel_key);
+                      binding_rec->tunnel_key,
+                      is_garp_rarp_enabled);
         if (ip) {
             send_garp_locally(ovnsb_idl_txn, sbrec_mac_binding_by_lport_ip,
                               local_datapaths, binding_rec, laddrs.ea, ip);
@@ -6548,6 +6559,10 @@ send_garp_rarp_run(struct rconn *swconn, long long int *send_garp_rarp_time)
     long long int current_time = time_msec();
     *send_garp_rarp_time = LLONG_MAX;
     SHASH_FOR_EACH (iter, &send_garp_rarp_data) {
+        struct garp_rarp_data *garp_rarp = iter->data;
+        if (!garp_rarp->enabled) {
+            continue;
+        }
         long long int next_announce = send_garp_rarp(swconn, iter->data,
                                                      current_time);
         if (*send_garp_rarp_time > next_announce) {
@@ -6563,6 +6578,7 @@ send_garp_rarp_prepare(struct ovsdb_idl_txn *ovnsb_idl_txn,
                        struct ovsdb_idl_index *sbrec_port_binding_by_datapath,
                        struct ovsdb_idl_index *sbrec_port_binding_by_name,
                        struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
+                       struct ovsdb_idl_index *sbrec_fdb_by_dp_and_port,
                        const struct ovsrec_bridge *br_int,
                        const struct sbrec_chassis *chassis,
                        const struct hmap *local_datapaths,
@@ -6598,12 +6614,18 @@ send_garp_rarp_prepare(struct ovsdb_idl_txn *ovnsb_idl_txn,
                                &nat_ip_keys, &local_l3gw_ports,
                                chassis, active_tunnels,
                                &nat_addresses);
+
     /* For deleted ports and deleted nat ips, remove from
      * send_garp_rarp_data. */
     struct shash_node *iter;
     SHASH_FOR_EACH_SAFE (iter, &send_garp_rarp_data) {
         if (!sset_contains(&localnet_vifs, iter->name) &&
             !sset_contains(&nat_ip_keys, iter->name)) {
+            struct garp_rarp_data *data = iter->data;
+            /* Cleanup FDB entries for inactive ports */
+            delete_fdb_entries(sbrec_fdb_by_dp_and_port,
+                               data->dp_key,
+                               data->port_key);
             send_garp_rarp_delete(iter->name);
         }
     }
@@ -6613,7 +6635,7 @@ send_garp_rarp_prepare(struct ovsdb_idl_txn *ovnsb_idl_txn,
     SSET_FOR_EACH (iface_id, &localnet_vifs) {
         const struct sbrec_port_binding *pb = lport_lookup_by_name(
             sbrec_port_binding_by_name, iface_id);
-        if (pb && !smap_get_bool(&pb->options, "disable_garp_rarp", false)) {
+        if (pb) {
             send_garp_rarp_update(ovnsb_idl_txn,
                                   sbrec_mac_binding_by_lport_ip,
                                   local_datapaths, pb, &nat_addresses,
@@ -6626,7 +6648,7 @@ send_garp_rarp_prepare(struct ovsdb_idl_txn *ovnsb_idl_txn,
     SSET_FOR_EACH (gw_port, &local_l3gw_ports) {
         const struct sbrec_port_binding *pb
             = lport_lookup_by_name(sbrec_port_binding_by_name, gw_port);
-        if (pb && !smap_get_bool(&pb->options, "disable_garp_rarp", false)) {
+        if (pb) {
             send_garp_rarp_update(ovnsb_idl_txn, sbrec_mac_binding_by_lport_ip,
                                   local_datapaths, pb, &nat_addresses,
                                   garp_max_timeout, garp_continuous);
@@ -8882,22 +8904,6 @@ static void
 destroy_fdb_entries(void)
 {
     hmap_destroy(&put_fdbs);
-}
-
-static const struct sbrec_fdb *
-fdb_lookup(struct ovsdb_idl_index *sbrec_fdb_by_dp_key_mac, uint32_t dp_key,
-           const char *mac)
-{
-    struct sbrec_fdb *fdb = sbrec_fdb_index_init_row(sbrec_fdb_by_dp_key_mac);
-    sbrec_fdb_index_set_dp_key(fdb, dp_key);
-    sbrec_fdb_index_set_mac(fdb, mac);
-
-    const struct sbrec_fdb *retval
-        = sbrec_fdb_index_find(sbrec_fdb_by_dp_key_mac, fdb);
-
-    sbrec_fdb_index_destroy_row(fdb);
-
-    return retval;
 }
 
 static void
