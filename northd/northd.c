@@ -10669,6 +10669,7 @@ void
 build_ecmp_nexthop_table(
         struct ovsdb_idl_txn *ovnsb_txn,
         struct hmap *routes,
+        struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
         const struct sbrec_ecmp_nexthop_table *sbrec_ecmp_nexthop_table)
 {
     if (!ovnsb_txn) {
@@ -10699,6 +10700,22 @@ build_ecmp_nexthop_table(
             sb_ecmp_nexthop = sbrec_ecmp_nexthop_insert(ovnsb_txn);
             sbrec_ecmp_nexthop_set_nexthop(sb_ecmp_nexthop, r->nexthop);
             sbrec_ecmp_nexthop_set_port(sb_ecmp_nexthop, pr->out_port->key);
+
+            struct sbrec_mac_binding *mb_index_row =
+                sbrec_mac_binding_index_init_row(
+                        sbrec_mac_binding_by_lport_ip);
+            sbrec_mac_binding_index_set_ip(mb_index_row, r->nexthop);
+            sbrec_mac_binding_index_set_logical_port(mb_index_row,
+                                                     pr->out_port->key);
+
+            const struct sbrec_mac_binding *mb =
+                sbrec_mac_binding_index_find(sbrec_mac_binding_by_lport_ip,
+                                             mb_index_row);
+            if (mb) {
+                sbrec_ecmp_nexthop_set_mac(sb_ecmp_nexthop, mb->mac);
+            }
+
+            sbrec_mac_binding_index_destroy_row(mb_index_row);
         }
         sset_add(&nb_nexthops_sset, r->nexthop);
     }
