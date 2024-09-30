@@ -85,7 +85,9 @@ bool ct_zone_handle_dp_update(struct ct_zone_ctx *ctx,
 bool ct_zone_handle_port_update(struct ct_zone_ctx *ctx,
                                 const struct sbrec_port_binding *pb,
                                 bool updated, int *scan_start,
-                                int min_ct_zone, int max_ct_zone);
+                                int min_ct_zone, int max_ct_zone,
+                                const struct ovsrec_open_vswitch_table
+                                *ovs_table);
 uint16_t ct_zone_find_zone(const struct shash *ct_zones, const char *name);
 void ct_zones_limits_sync(struct ct_zone_ctx *ctx,
                           const struct hmap *local_datapaths,

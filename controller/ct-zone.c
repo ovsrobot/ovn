@@ -183,6 +183,31 @@ ct_zones_update(const struct sset *local_lports,
         sset_add(&all_users, local_lport);
     }
 
+    /* Add local_lport name which are supposed to come up on the
+     * chassis and might need ct-zone reservation in advance.
+     * The data is picked up from ovs_vswitch table. */
+    const struct ovsrec_open_vswitch *cfg;
+    cfg = ovsrec_open_vswitch_table_first(ovs_table);
+
+    if (cfg) {
+        const char *reserve_ct_zone_request_list = smap_get(
+                &cfg->external_ids, "reserve_ct_zones");
+
+        if (reserve_ct_zone_request_list) {
+            char *dup_reserve = xstrdup(reserve_ct_zone_request_list);
+            char *reserve_port;
+            char *save_ptr = NULL;
+
+            for (reserve_port = strtok_r(dup_reserve, ",", &save_ptr);
+                 reserve_port != NULL;
+                 reserve_port = strtok_r(NULL, ",", &save_ptr)) {
+                   sset_add(&all_users, reserve_port);
+            }
+
+            free(dup_reserve);
+        }
+    }
+
     /* Local patched datapath (gateway routers) need zones assigned. */
     const struct local_datapath *ld;
     HMAP_FOR_EACH (ld, hmap_node, local_datapaths) {
@@ -400,9 +425,33 @@ bool
 ct_zone_handle_port_update(struct ct_zone_ctx *ctx,
                            const struct sbrec_port_binding *pb,
                            bool updated, int *scan_start,
-                           int min_ct_zone, int max_ct_zone)
+                           int min_ct_zone, int max_ct_zone,
+                           const struct ovsrec_open_vswitch_table *ovs_table)
 {
     struct shash_node *node = shash_find(&ctx->current, pb->logical_port);
+    bool is_reserved = false;
+    const struct ovsrec_open_vswitch *cfg;
+    cfg = ovsrec_open_vswitch_table_first(ovs_table);
+
+    if (cfg) {
+        const char *reserve_ct_zone_request_list = smap_get(
+                &cfg->external_ids, "reserve_ct_zones");
+
+        if (reserve_ct_zone_request_list) {
+            char *dup_reserve = xstrdup(reserve_ct_zone_request_list);
+            char *reserve_port;
+            char *save_ptr = NULL;
+
+            for (reserve_port = strtok_r(dup_reserve, ",", &save_ptr);
+                 reserve_port != NULL;
+                 reserve_port = strtok_r(NULL, ",", &save_ptr)) {
+                   is_reserved = true;
+                   break;
+            }
+
+            free(dup_reserve);
+        }
+    }
 
     if (node) {
         struct ct_zone *ct_zone = node->data;
@@ -418,6 +467,8 @@ ct_zone_handle_port_update(struct ct_zone_ctx *ctx,
                                   scan_start, max_ct_zone);
         }
         ct_zone_limit_update(ctx, pb->logical_port, ct_zone_get_pb_limit(pb));
+        return true;
+    } else if (node && is_reserved) {
         return true;
     } else if (node && ct_zone_remove(ctx, node->name)) {
         return true;
