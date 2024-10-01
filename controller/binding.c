@@ -1608,8 +1608,7 @@ consider_vif_lport_(const struct sbrec_port_binding *pb,
         /* Release the lport if there is no lbinding. */
        if (lbinding_set && !can_bind) {
             if_status_mgr_remove_ovn_installed(b_ctx_out->if_mgr,
-                               b_lport->lbinding->iface->name,
-                               &b_lport->lbinding->iface->header_.uuid);
+                                               b_lport->lbinding->iface);
         }
 
         if (!lbinding_set || !can_bind) {
@@ -1626,8 +1625,7 @@ consider_vif_lport_(const struct sbrec_port_binding *pb,
                                          pb->logical_port)) {
         update_lport_tracking(pb, b_ctx_out->tracked_dp_bindings, false);
         if_status_mgr_remove_ovn_installed(b_ctx_out->if_mgr,
-                           b_lport->lbinding->iface->name,
-                           &b_lport->lbinding->iface->header_.uuid);
+                                           b_lport->lbinding->iface);
     }
 
     return true;
@@ -2062,8 +2060,7 @@ build_local_bindings(struct binding_ctx_in *b_ctx_in,
                  * This can happen if iface-id was removed as we recompute.
                  */
                 if_status_mgr_remove_ovn_installed(b_ctx_out->if_mgr,
-                                                   iface_rec->name,
-                                                   &iface_rec->header_.uuid);
+                                                   iface_rec);
             }
         }
     }
@@ -2491,8 +2488,7 @@ consider_iface_release(const struct ovsrec_interface *iface_rec,
             }
             if (lbinding->iface && lbinding->iface->name) {
                 if_status_mgr_remove_ovn_installed(b_ctx_out->if_mgr,
-                                           lbinding->iface->name,
-                                           &lbinding->iface->header_.uuid);
+                                           lbinding->iface);
             }
 
         } else if (b_lport && b_lport->type == LP_LOCALPORT) {
@@ -2824,8 +2820,7 @@ handle_deleted_vif_lport(const struct sbrec_port_binding *pb,
     handle_deleted_lport(pb, b_ctx_in, b_ctx_out);
     if (lbinding && lbinding->iface && lbinding->iface->name) {
         if_status_mgr_remove_ovn_installed(b_ctx_out->if_mgr,
-                                           lbinding->iface->name,
-                                           &lbinding->iface->header_.uuid);
+                                           lbinding->iface);
     }
     return true;
 }
