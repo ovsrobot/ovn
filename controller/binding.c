@@ -3064,6 +3064,32 @@ handle_updated_port(struct binding_ctx_in *b_ctx_in,
     return handled;
 }
 
+bool
+binding_handle_postponed_ports(struct binding_ctx_in *b_ctx_in,
+                               struct binding_ctx_out *b_ctx_out)
+{
+    /* Also handle any postponed (throttled) ports. */
+    const char *port_name;
+    const struct sbrec_port_binding *pb;
+    bool handled = true;
+    struct sset postponed_ports = SSET_INITIALIZER(&postponed_ports);
+    sset_clone(&postponed_ports, b_ctx_out->postponed_ports);
+    SSET_FOR_EACH (port_name, &postponed_ports) {
+        pb = lport_lookup_by_name(b_ctx_in->sbrec_port_binding_by_name,
+                                  port_name);
+        if (!pb) {
+            continue;
+        }
+        handled = handle_updated_port(b_ctx_in, b_ctx_out, pb);
+        if (!handled) {
+            break;
+        }
+    }
+    sset_destroy(&postponed_ports);
+    cleanup_claimed_port_timestamps();
+    return handled;
+}
+
 /* Returns true if the port binding changes resulted in local binding
  * updates, false otherwise.
  */
@@ -3209,25 +3235,6 @@ delete_done:
             break;
         }
     }
-
-    /* Also handle any postponed (throttled) ports. */
-    const char *port_name;
-    struct sset postponed_ports = SSET_INITIALIZER(&postponed_ports);
-    sset_clone(&postponed_ports, b_ctx_out->postponed_ports);
-    SSET_FOR_EACH (port_name, &postponed_ports) {
-        pb = lport_lookup_by_name(b_ctx_in->sbrec_port_binding_by_name,
-                                  port_name);
-        if (!pb) {
-            sset_find_and_delete(b_ctx_out->postponed_ports, port_name);
-            continue;
-        }
-        handled = handle_updated_port(b_ctx_in, b_ctx_out, pb);
-        if (!handled) {
-            break;
-        }
-    }
-    sset_destroy(&postponed_ports);
-    cleanup_claimed_port_timestamps();
 
     if (handled) {
         /* There may be new local datapaths added by the above handling, so go

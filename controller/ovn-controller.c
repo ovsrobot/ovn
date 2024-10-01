@@ -1537,6 +1537,38 @@ runtime_data_ovs_interface_shadow_handler(struct engine_node *node, void *data)
 }
 
 static bool
+runtime_data_postponed_ports_handler(struct engine_node *node, void *data)
+{
+    struct ed_type_runtime_data *rt_data = data;
+    struct binding_ctx_in b_ctx_in;
+    struct binding_ctx_out b_ctx_out;
+    init_binding_ctx(node, rt_data, &b_ctx_in, &b_ctx_out);
+    if (!b_ctx_in.chassis_rec) {
+        return false;
+    }
+
+    rt_data->tracked = true;
+    b_ctx_out.tracked_dp_bindings = &rt_data->tracked_dp_bindings;
+
+    if (!binding_handle_postponed_ports(&b_ctx_in, &b_ctx_out)) {
+        return false;
+    }
+
+    rt_data->local_lports_changed = b_ctx_out.local_lports_changed;
+    rt_data->localnet_learn_fdb = b_ctx_out.localnet_learn_fdb;
+    rt_data->localnet_learn_fdb_changed = b_ctx_out.localnet_learn_fdb_changed;
+    if (b_ctx_out.related_lports_changed ||
+            b_ctx_out.non_vif_ports_changed ||
+            b_ctx_out.local_lports_changed ||
+            b_ctx_out.localnet_learn_fdb_changed ||
+            !hmap_is_empty(b_ctx_out.tracked_dp_bindings)) {
+        engine_set_node_state(node, EN_UPDATED);
+    }
+
+    return true;
+}
+
+static bool
 runtime_data_sb_port_binding_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data = data;
@@ -5174,9 +5206,10 @@ main(int argc, char *argv[])
                      runtime_data_sb_datapath_binding_handler);
     engine_add_input(&en_runtime_data, &en_sb_port_binding,
                      runtime_data_sb_port_binding_handler);
-    /* Reuse the same handler for any previously postponed ports. */
+    /* Run postponed_ports_handler after port_binding_handler in case port get
+     * deleted */
     engine_add_input(&en_runtime_data, &en_postponed_ports,
-                     runtime_data_sb_port_binding_handler);
+                     runtime_data_postponed_ports_handler);
     /* Run sb_ro_handler after port_binding_handler in case port get deleted */
     engine_add_input(&en_runtime_data, &en_sb_ro, runtime_data_sb_ro_handler);
 
