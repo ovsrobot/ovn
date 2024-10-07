@@ -91,7 +91,7 @@ sbctl_usage(void)
 usage: %s [OPTIONS] COMMAND [ARG...]\n\
 \n\
 General commands:\n\
-  show                        print overview of database contents\n\
+  show CHASSIS HOSTNAME ENCAP-IP  print overview of database contents\n\
 \n\
 Chassis commands:\n\
   chassis-add CHASSIS ENCAP-TYPE ENCAP-IP  create a new chassis named\n\
@@ -179,6 +179,8 @@ struct sbctl_context {
     /* Maps from chassis name to struct sbctl_chassis. */
     struct shash chassis;
     /* Maps from chassis name to struct sbctl_chassis_private. */
+    struct shash chassis_hostname;
+    /* Maps from chassis hostname to struct sbctl_chassis_private. */
     struct shash chassis_private;
     /* Maps from lport name to struct sbctl_port_binding. */
     struct shash port_bindings;
@@ -230,12 +232,13 @@ sbctl_context_get(struct ctl_context *ctx)
     const struct sbrec_chassis *chassis_rec;
     const struct sbrec_chassis_private *chassis_private_rec;
     const struct sbrec_port_binding *port_binding_rec;
-    struct sset chassis, port_bindings;
+    struct sset chassis, port_bindings, chassis_hn;
 
     sbctl_ctx->cache_valid = true;
     shash_init(&sbctl_ctx->chassis);
     shash_init(&sbctl_ctx->chassis_private);
     shash_init(&sbctl_ctx->port_bindings);
+    shash_init(&sbctl_ctx->chassis_hostname);
     sset_init(&chassis);
     SBREC_CHASSIS_FOR_EACH(chassis_rec, ctx->idl) {
         struct sbctl_chassis *ch;
@@ -270,6 +273,22 @@ sbctl_context_get(struct ctl_context *ctx)
                   ch_priv);
     }
     sset_destroy(&chassis);
+
+    sset_init(&chassis_hn);
+    SBREC_CHASSIS_FOR_EACH (chassis_rec, ctx->idl) {
+        struct sbctl_chassis *ch;
+        if (chassis_rec->hostname) {
+            if (!sset_add(&chassis_hn, chassis_rec->hostname)) {
+                continue;
+            }
+
+            ch = xmalloc(sizeof *ch);
+            ch->ch_cfg = chassis_rec;
+            shash_add(&sbctl_ctx->chassis_hostname,
+                      chassis_rec->hostname, ch);
+        }
+    }
+    sset_destroy(&chassis_hn);
 
     sset_init(&port_bindings);
     SBREC_PORT_BINDING_FOR_EACH(port_binding_rec, ctx->idl) {
@@ -349,6 +368,20 @@ find_port_binding(struct ctl_context *ctx, const char *name, bool must_exist)
     }
 
     return bd;
+}
+
+static struct sbctl_chassis *
+find_chassis_by_hostname(struct ctl_context *ctx,
+        const char *name, bool must_exist)
+{
+    struct sbctl_context *sbctl_ctx = sbctl_context_get(ctx);
+    struct sbctl_chassis *sbctl_ch = shash_find_data(
+                        &sbctl_ctx->chassis_hostname, name);
+    if (must_exist && !sbctl_ch) {
+        ctl_error(ctx, "no chassis named %s", name);
+    }
+
+    return sbctl_ch;
 }
 
 static void
@@ -590,6 +623,65 @@ pre_cmd_show(struct ctl_context *ctx)
             ovsdb_idl_add_column(ctx->idl, show->wref_table.wref_column);
         }
     }
+}
+
+static void
+sbctl_show_chassis(struct ctl_context *ctx, const char *name)
+{
+    const struct ovsdb_idl_row *row;
+    struct sset shown = SSET_INITIALIZER(&shown);
+    char *error = ctl_get_row(ctx, &sbrec_table_chassis, name, false, &row);
+
+    if (error) {
+        ctl_error(ctx, "%s", error);
+        free(error);
+        return;
+    }
+    cmd_show_row(ctx, row, 0, &shown);
+}
+
+static const struct sbrec_chassis *
+sbctl_find_chassis(struct ctl_context *ctx, const char *name)
+{
+    const struct sbctl_chassis *chassis;
+    const struct sbrec_chassis *chassis_rec;
+
+    chassis = find_chassis(ctx, name, false);
+
+    if (chassis) {
+        return chassis->ch_cfg;
+    }
+
+    chassis = find_chassis_by_hostname(ctx, name, false);
+
+    if (chassis) {
+        return chassis->ch_cfg;
+    }
+
+    SBREC_CHASSIS_FOR_EACH (chassis_rec, ctx->idl) {
+        for (int i = 0; i < chassis_rec->n_encaps; i++) {
+            if (!strcmp(chassis_rec->encaps[i]->ip, name)) {
+                return chassis_rec;
+            }
+        }
+    }
+    return NULL;
+}
+
+static void
+sbctl_show(struct ctl_context *ctx)
+{
+    const struct sbrec_chassis *chassis;
+
+    if (ctx->argc >= 2) {
+        for (int i = 1; i <= ctx->argc - 1; i++) {
+            chassis = sbctl_find_chassis(ctx, ctx->argv[i]);
+            if (chassis) {
+                sbctl_show_chassis(ctx, chassis->name);
+            }
+        }
+    }
+    else cmd_show(ctx);
 }
 
 static void
@@ -1722,7 +1814,8 @@ static const struct ctl_table_class tables[SBREC_N_TABLES] = {
 static const struct ctl_command_syntax sbctl_commands[] = {
     { "init", 0, 0, "", NULL, sbctl_init, NULL, "", RW },
 
-    {"show", 0, 0, "", pre_cmd_show, cmd_show, NULL,  "", RO},
+    {"show", 0, INT_MAX, "CHASSIS HOSTNAME ENCAP-IP", pre_cmd_show,
+    sbctl_show, NULL,  "", RO},
 
     /* Chassis commands. */
     {"chassis-add", 3, 3, "CHASSIS ENCAP-TYPE ENCAP-IP", pre_get_info,
