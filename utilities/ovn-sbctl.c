@@ -424,6 +424,174 @@ static struct cmd_show_table cmd_show_tables[] = {
     {NULL, NULL, {NULL, NULL, NULL}, {NULL, NULL, NULL}},
 };
 
+static const struct cmd_show_table *
+cmd_show_find_table_by_name(const char *name)
+{
+    const struct cmd_show_table *show;
+
+    for (show = cmd_show_tables; show->table; show++) {
+        if (!strcmp(show->table->name, name)) {
+            return show;
+        }
+    }
+    return NULL;
+}
+
+static const struct cmd_show_table *
+cmd_show_find_table_by_row(const struct ovsdb_idl_row *row)
+{
+    const struct cmd_show_table *show;
+
+    for (show = cmd_show_tables; show->table; show++) {
+        if (show->table == row->table->class_) {
+            return show;
+        }
+    }
+    return NULL;
+}
+
+static void
+cmd_show_weak_ref(struct ctl_context *ctx, const struct cmd_show_table *show,
+                  const struct ovsdb_idl_row *cur_row, int level)
+{
+    const struct ovsdb_idl_row *row_wref;
+    const struct ovsdb_idl_table_class *table = show->wref_table.table;
+    const struct ovsdb_idl_column *name_column
+        = show->wref_table.name_column;
+    const struct ovsdb_idl_column *wref_column
+        = show->wref_table.wref_column;
+
+    if (!table || !name_column || !wref_column) {
+        return;
+    }
+
+    for (row_wref = ovsdb_idl_first_row(ctx->idl, table); row_wref;
+         row_wref = ovsdb_idl_next_row(row_wref)) {
+        const struct ovsdb_datum *wref_datum
+            = ovsdb_idl_read(row_wref, wref_column);
+        /* If weak reference refers to the 'cur_row', prints it. */
+        if (wref_datum->n
+            && uuid_equals(&cur_row->uuid, &wref_datum->keys[0].uuid)) {
+            const struct ovsdb_datum *name_datum
+                = ovsdb_idl_read(row_wref, name_column);
+            ds_put_char_multiple(&ctx->output, ' ', (level + 1) * 4);
+            ds_put_format(&ctx->output, "%s ", table->name);
+            ovsdb_datum_to_string(name_datum,
+                    &name_column->type, &ctx->output);
+            ds_put_char(&ctx->output, '\n');
+        }
+    }
+}
+
+static void
+cmd_show_row(struct ctl_context *ctx, const struct ovsdb_idl_row *row,
+             int level, struct sset *shown)
+{
+    const struct cmd_show_table *show = cmd_show_find_table_by_row(row);
+    size_t i;
+
+    ds_put_char_multiple(&ctx->output, ' ', level * 4);
+    if (show && show->name_column) {
+        const struct ovsdb_datum *datum;
+
+        ds_put_format(&ctx->output, "%s ", show->table->name);
+        datum = ovsdb_idl_read(row, show->name_column);
+        ovsdb_datum_to_string(datum, &show->name_column->type, &ctx->output);
+    } else {
+        ds_put_format(&ctx->output, UUID_FMT, UUID_ARGS(&row->uuid));
+    }
+    ds_put_char(&ctx->output, '\n');
+
+    if (!show || sset_find(shown, show->table->name)) {
+        return;
+    }
+
+    sset_add(shown, show->table->name);
+    for (i = 0; i < ARRAY_SIZE(show->columns); i++) {
+        const struct ovsdb_idl_column *column = show->columns[i];
+        const struct ovsdb_datum *datum;
+
+        if (!column) {
+            break;
+        }
+
+        datum = ovsdb_idl_read(row, column);
+        if (column->type.key.type == OVSDB_TYPE_UUID &&
+            column->type.key.uuid.refTableName) {
+            const struct cmd_show_table *ref_show;
+            size_t j;
+
+            ref_show = cmd_show_find_table_by_name(
+                column->type.key.uuid.refTableName);
+            if (ref_show) {
+                for (j = 0; j < datum->n; j++) {
+                    const struct ovsdb_idl_row *ref_row;
+
+                    ref_row = ovsdb_idl_get_row_for_uuid(ctx->idl,
+                                                         ref_show->table,
+                                                         &datum->keys[j].uuid);
+                    if (ref_row) {
+                        cmd_show_row(ctx, ref_row, level + 1, shown);
+                    }
+                }
+                continue;
+            }
+        }
+        if (!ovsdb_datum_is_default(datum, &column->type)) {
+            ds_put_char_multiple(&ctx->output, ' ', (level + 1) * 4);
+            ds_put_format(&ctx->output, "%s: ", column->name);
+            ovsdb_datum_to_string(datum, &column->type, &ctx->output);
+            ds_put_char(&ctx->output, '\n');
+        }
+    }
+    cmd_show_weak_ref(ctx, show, row, level);
+    sset_find_and_delete_assert(shown, show->table->name);
+}
+
+static void
+cmd_show(struct ctl_context *ctx)
+{
+    const struct ovsdb_idl_row *row;
+    struct sset shown = SSET_INITIALIZER(&shown);
+
+    for (row = ovsdb_idl_first_row(ctx->idl, cmd_show_tables[0].table);
+         row; row = ovsdb_idl_next_row(row)) {
+        cmd_show_row(ctx, row, 0, &shown);
+    }
+
+    ovs_assert(sset_is_empty(&shown));
+    sset_destroy(&shown);
+}
+
+static void
+pre_cmd_show(struct ctl_context *ctx)
+{
+    const struct cmd_show_table *show;
+    for (show = cmd_show_tables; show->table; show++) {
+        size_t i;
+
+        ovsdb_idl_add_table(ctx->idl, show->table);
+        if (show->name_column) {
+            ovsdb_idl_add_column(ctx->idl, show->name_column);
+        }
+        for (i = 0; i < ARRAY_SIZE(show->columns); i++) {
+            const struct ovsdb_idl_column *column = show->columns[i];
+            if (column) {
+                ovsdb_idl_add_column(ctx->idl, column);
+            }
+        }
+        if (show->wref_table.table) {
+            ovsdb_idl_add_table(ctx->idl, show->wref_table.table);
+        }
+        if (show->wref_table.name_column) {
+            ovsdb_idl_add_column(ctx->idl, show->wref_table.name_column);
+        }
+        if (show->wref_table.wref_column) {
+            ovsdb_idl_add_column(ctx->idl, show->wref_table.wref_column);
+        }
+    }
+}
+
 static void
 sbctl_init(struct ctl_context *ctx OVS_UNUSED)
 {
@@ -1554,6 +1722,8 @@ static const struct ctl_table_class tables[SBREC_N_TABLES] = {
 static const struct ctl_command_syntax sbctl_commands[] = {
     { "init", 0, 0, "", NULL, sbctl_init, NULL, "", RW },
 
+    {"show", 0, 0, "", pre_cmd_show, cmd_show, NULL,  "", RO},
+
     /* Chassis commands. */
     {"chassis-add", 3, 3, "CHASSIS ENCAP-TYPE ENCAP-IP", pre_get_info,
      cmd_chassis_add, NULL, "--may-exist", RW},
@@ -1610,7 +1780,7 @@ main(int argc, char *argv[])
 
         .idl_class = &sbrec_idl_class,
         .tables = tables,
-        .cmd_show_table = cmd_show_tables,
+        .cmd_show_table = NULL,
         .commands = sbctl_commands,
 
         .usage = sbctl_usage,
