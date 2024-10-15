@@ -2287,6 +2287,9 @@ lflow_handle_flows_for_lport(const struct sbrec_port_binding *pb,
      * port binding'uuid', then this function should handle it properly.
      */
     ofctrl_remove_flows(l_ctx_out->flow_table, &pb->header_.uuid);
+    if (sbrec_port_binding_is_deleted(pb)) {
+        return true;
+    }
 
     if (pb->n_port_security && shash_find(l_ctx_in->binding_lports,
                                           pb->logical_port)) {
