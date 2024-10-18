@@ -3273,6 +3273,8 @@ put_be32(struct ofpbuf *buf, ovs_be32 x)
 }
 
 struct dns_data {
+    struct hmap_node hmap_node;
+    struct uuid uuid;
     uint64_t *dps;
     size_t n_dps;
     struct smap records;
@@ -3280,7 +3282,20 @@ struct dns_data {
     bool delete;
 };
 
-static struct shash dns_cache = SHASH_INITIALIZER(&dns_cache);
+static struct hmap dns_cache = HMAP_INITIALIZER(&dns_cache);
+
+static struct dns_data *
+dns_cache_find_data(const struct uuid *uuid)
+{
+    struct dns_data *dns_data;
+    size_t hash = uuid_hash(uuid);
+    HMAP_FOR_EACH_WITH_HASH (dns_data, hmap_node, hash, &dns_cache) {
+        if (uuid_equals(&dns_data->uuid, uuid)) {
+            return dns_data;
+        }
+    }
+    return NULL;
+}
 
 /* Called by pinctrl_run(). Runs within the main ovn-controller
  * thread context. */
@@ -3288,25 +3303,20 @@ static void
 sync_dns_cache(const struct sbrec_dns_table *dns_table)
     OVS_REQUIRES(pinctrl_mutex)
 {
-    struct shash_node *iter;
-    SHASH_FOR_EACH (iter, &dns_cache) {
-        struct dns_data *d = iter->data;
-        d->delete = true;
+    struct dns_data *dns_data;
+    HMAP_FOR_EACH (dns_data, hmap_node, &dns_cache) {
+        dns_data->delete = true;
     }
 
     const struct sbrec_dns *sbrec_dns;
     SBREC_DNS_TABLE_FOR_EACH (sbrec_dns, dns_table) {
-        const char *dns_id = smap_get(&sbrec_dns->external_ids, "dns_id");
-        if (!dns_id) {
-            continue;
-        }
-
-        struct dns_data *dns_data = shash_find_data(&dns_cache, dns_id);
+        const struct uuid *uuid = &sbrec_dns->header_.uuid;
+        dns_data = dns_cache_find_data(uuid);
         if (!dns_data) {
             dns_data = xmalloc(sizeof *dns_data);
             smap_init(&dns_data->records);
             smap_init(&dns_data->options);
-            shash_add(&dns_cache, dns_id, dns_data);
+            hmap_insert(&dns_cache, &dns_data->hmap_node, uuid_hash(uuid));
             dns_data->n_dps = 0;
             dns_data->dps = NULL;
         } else {
@@ -3333,14 +3343,13 @@ sync_dns_cache(const struct sbrec_dns_table *dns_table)
         }
     }
 
-    SHASH_FOR_EACH_SAFE (iter, &dns_cache) {
-        struct dns_data *d = iter->data;
-        if (d->delete) {
-            shash_delete(&dns_cache, iter);
-            smap_destroy(&d->records);
-            smap_destroy(&d->options);
-            free(d->dps);
-            free(d);
+    HMAP_FOR_EACH_SAFE (dns_data, hmap_node, &dns_cache) {
+        if (dns_data->delete) {
+            hmap_remove(&dns_cache, &dns_data->hmap_node);
+            smap_destroy(&dns_data->records);
+            smap_destroy(&dns_data->options);
+            free(dns_data->dps);
+            free(dns_data);
         }
     }
 }
@@ -3348,14 +3357,12 @@ sync_dns_cache(const struct sbrec_dns_table *dns_table)
 static void
 destroy_dns_cache(void)
 {
-    struct shash_node *iter;
-    SHASH_FOR_EACH_SAFE (iter, &dns_cache) {
-        struct dns_data *d = iter->data;
-        shash_delete(&dns_cache, iter);
-        smap_destroy(&d->records);
-        smap_destroy(&d->options);
-        free(d->dps);
-        free(d);
+    struct dns_data *dns_data;
+    HMAP_FOR_EACH_POP (dns_data, hmap_node, &dns_cache) {
+        smap_destroy(&dns_data->records);
+        smap_destroy(&dns_data->options);
+        free(dns_data->dps);
+        free(dns_data);
     }
 }
 
@@ -3543,17 +3550,16 @@ pinctrl_handle_dns_lookup(
     uint64_t dp_key = ntohll(pin->flow_metadata.flow.metadata);
     const char *answer_data = NULL;
     bool ovn_owned = false;
-    struct shash_node *iter;
-    SHASH_FOR_EACH (iter, &dns_cache) {
-        struct dns_data *d = iter->data;
-        ovn_owned = smap_get_bool(&d->options, "ovn-owned", false);
-        for (size_t i = 0; i < d->n_dps; i++) {
-            if (d->dps[i] == dp_key) {
+    struct dns_data *dns_data;
+    HMAP_FOR_EACH (dns_data, hmap_node, &dns_cache) {
+        ovn_owned = smap_get_bool(&dns_data->options, "ovn-owned", false);
+        for (size_t i = 0; i < dns_data->n_dps; i++) {
+            if (dns_data->dps[i] == dp_key) {
                 /* DNS records in SBDB are stored in lowercase. Convert to
                  * lowercase to perform case insensitive lookup
                  */
                 char *query_name_lower = str_tolower(ds_cstr(&query_name));
-                answer_data = smap_get(&d->records, query_name_lower);
+                answer_data = smap_get(&dns_data->records, query_name_lower);
                 free(query_name_lower);
                 if (answer_data) {
                     break;
