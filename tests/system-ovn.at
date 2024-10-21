@@ -13414,6 +13414,57 @@ AT_CHECK([for f in $(ls -1 nfcapd.*); do nfdump -o json -r $f; done | grep obser
 "observationPointID" : 2002,
 ])
 
+dnl This next part of the test may seem odd, but it's to test a specific
+dnl issue that was reported.
+dnl
+dnl For this issue to be triggered, we need the following:
+dnl 1) The final ingress ACL tier gives a "pass" verdict.
+dnl 2) An egress ACL exists with a higher tier than the final ingress ACL tier.
+dnl
+dnl We need to ensure that the ingress ACL only generates a single sample
+dnl for the pass verdict that was matched.
+
+dnl Delete the tier 1 ACL, so that the only ACL that matches is the tier 0
+dnl "pass" ACL.
+check ovn-nbctl --tier=1 acl-del ls from-lport 1 "inport == \"vm1\" && udp.dst == 1000"
+
+dnl Double check that there is only one ACL now.
+check_row_count nb:ACL 1
+
+dnl Now create an unrelated egress ACL that is at tier 1.
+check ovn-nbctl --tier=1 acl-add ls to-lport 1 "tcp" allow
+
+dnl Restart the IPFIX collector.
+DAEMONIZE([nfcapd -B 1024000 -w . -p 4242 2> collector.err], [collector.pid])
+
+dnl Wait for the collector to be up.
+OVS_WAIT_UNTIL([grep -q 'Startup nfcapd.' collector.err])
+
+dnl Send traffic to the UDP server (hits tier 0 on ingress, nothing on egress).
+NS_CHECK_EXEC([vm1], [echo a | nc --send-only -u 42.42.42.3 1000])
+
+dnl Only one packet should be sampled. Since we caught 4 samples before, the
+dnl total number of samples is now 5.
+OVS_WAIT_UNTIL([ovs-ofctl dump-ipfix-flow br-int | grep -q 'sampled pkts=5'])
+
+dnl Check the IPFIX samples.
+kill $(cat collector.pid)
+OVS_WAIT_WHILE([kill -0 $(cat collector.pid) 2>/dev/null])
+
+dnl Can't match on observation domain ID due to the followig fix not being
+dnl available in any released version of nfdump:
+dnl https://github.com/phaag/nfdump/issues/544
+dnl
+dnl Only match on the point ID.
+dnl The four from before are present, plus the new one that was captured.
+AT_CHECK([for f in $(ls -1 nfcapd.*); do nfdump -o json -r $f; done | grep observationPointID | awk '{$1=$1;print}' | sort], [0], [dnl
+"observationPointID" : 1001,
+"observationPointID" : 1001,
+"observationPointID" : 2001,
+"observationPointID" : 2002,
+"observationPointID" : 2002,
+])
+
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
 
 as ovn-sb
