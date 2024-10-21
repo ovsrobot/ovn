@@ -2288,11 +2288,22 @@ OVN_NBCTL_TEST([ovn_nbctl_policies], [policies], [
 AT_CHECK([ovn-nbctl lr-add lr0])
 
 dnl Add policies with allow and drop actions
-AT_CHECK([ovn-nbctl lr-policy-add lr0 100 "ip4.src == 1.1.1.0/24" drop])
-AT_CHECK([ovn-nbctl lr-policy-add lr0 100 "ip4.src == 1.1.2.0/24" allow pkt_mark=100,foo=bar])
+AT_CHECK([ovn-nbctl --chain "inbound" lr-policy-add lr0 100 "ip4.src == 1.1.1.0/24" drop])
+AT_CHECK([ovn-nbctl --chain "outbound" lr-policy-add lr0 100 "ip4.src == 2.1.1.0/24" allow])
+AT_CHECK([ovn-nbctl lr-policy-add lr0 101 "ip4.src == 2.1.2.0/24" jump "inbound"])
+AT_CHECK([ovn-nbctl --chain "inbound" lr-policy-add lr0 101 "ip4.src == 1.1.2.0/24" allow pkt_mark=100,foo=bar])
+AT_CHECK([ovn-nbctl lr-policy-add lr0 11 "ip6.src == 2002::/64" jump "outbound"])
+
+ovn-nbctl list Logical_Router_Policy
+ovn-nbctl lr-policy-list lr0
+
 AT_CHECK([ovn-nbctl lr-policy-add lr0 101 "ip4.src == 2.1.1.0/24" allow])
 AT_CHECK([ovn-nbctl lr-policy-add lr0 101 "ip4.src == 2.1.2.0/24" drop])
-AT_CHECK([ovn-nbctl lr-policy-add lr0 101 "ip6.src == 2002::/64" drop])
+
+
+
+
+
 AT_CHECK([ovn-nbctl --bfd lr-policy-add lr0 103 "ip4.src == 1.2.3.0/24" reroute 192.168.1.1], [1], [],
   [ovn-nbctl: out lrp not found for 192.168.1.1 nexthop
 ])

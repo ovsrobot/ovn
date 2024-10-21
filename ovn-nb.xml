@@ -3906,7 +3906,15 @@ or
       <p>
         The routing policy's priority.  Rules with numerically higher priority
         take precedence over those with lower. A rule is uniquely identified
-        by the priority and match string.
+        by the priority, chain and match string.
+      </p>
+    </column>
+
+    <column name="chain">
+      <p>
+        The routing policy rule's chain name. Only rules with empty chain name are
+        traversed by default. Others chains are traversed as responce to
+        jump action.
       </p>
     </column>
 
@@ -3941,7 +3949,18 @@ or
           <code>reroute</code>: Reroute packet to <ref column="nexthop"/> or
           <ref column="nexthops"/>.
         </li>
+
+        <li>
+          <code>jump</code>: Restart rules traversal for those having chain
+          name equal to <ref column="jump_chain"/>.
+        </li>
       </ul>
+    </column>
+
+    <column name="jump_chain">
+      <p>
+        The routing policy rule's chain name selected to traverse.
+      </p>
     </column>
 
     <column name="nexthop">

@@ -189,6 +189,7 @@ BUILD_ASSERT_DECL(ACL_OBS_STAGE_MAX < (1 << 2));
 #define REG_SRC_IPV4 "reg1"
 #define REG_SRC_IPV6 "xxreg1"
 #define REG_DHCP_RELAY_DIP_IPV4 "reg2"
+#define REG_POLICY_CHAIN_ID "reg6[0..15]"
 #define REG_ROUTE_TABLE_ID "reg7"
 
 /* Register used to store backend ipv6 address
@@ -10756,11 +10757,50 @@ static bool check_bfd_state(const struct nbrec_logical_router_policy *rule,
     return true;
 }
 
+
+
+static uint32_t
+policy_chain_add(struct simap *chain_ids,
+                 const char *chain_name)
+{
+    uint32_t id = simap_count(chain_ids) + 1;
+
+    if (id == UINT16_MAX) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "too many policy chains for Logical Router.");
+        return 0;
+    }
+
+    if (!simap_put(chain_ids, chain_name, id)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "Policy chain id unexpectedly appeared");
+    }
+
+    return id;
+}
+
+static uint32_t
+policy_chain_id(struct simap *chain_ids,
+                const char *chain_name)
+{
+    if (!chain_name || !chain_name[0]) {
+        return 0;
+    }
+
+    uint32_t id = simap_get(chain_ids, chain_name);
+    if (!id) {
+        id = policy_chain_add(chain_ids, chain_name);
+    }
+
+    return id;
+}
+
 static void
 build_routing_policy_flow(struct lflow_table *lflows, struct ovn_datapath *od,
                           const struct hmap *lr_ports, struct route_policy *rp,
                           const struct ovsdb_idl_row *stage_hint,
-                          struct lflow_ref *lflow_ref)
+                          struct lflow_ref *lflow_ref,
+                          struct simap *chain_ids)
 {
     const struct nbrec_logical_router_policy *rule = rp->rule;
     struct ds match = DS_EMPTY_INITIALIZER;
@@ -10808,7 +10848,12 @@ build_routing_policy_flow(struct lflow_table *lflows, struct ovn_datapath *od,
                       lrp_addr_s,
                       out_port->lrp_networks.ea_s,
                       out_port->json_key);
-
+    } else if (!strcmp(rule->action, "jump")) {
+        ds_put_format(&actions,
+                      "%s=%d; next(pipeline=ingress,table=%d);",
+                      REG_POLICY_CHAIN_ID,
+                      policy_chain_id(chain_ids, rule->jump_chain),
+                      ovn_stage_get_table(S_ROUTER_IN_POLICY));
     } else if (!strcmp(rule->action, "drop")) {
         ds_put_cstr(&actions, debug_drop_action());
     } else if (!strcmp(rule->action, "allow")) {
@@ -10818,7 +10863,9 @@ build_routing_policy_flow(struct lflow_table *lflows, struct ovn_datapath *od,
         }
         ds_put_cstr(&actions, REG_ECMP_GROUP_ID" = 0; next;");
     }
-    ds_put_format(&match, "%s", rule->match);
+
+    ds_put_format(&match, "%s == %d && (%s)", REG_POLICY_CHAIN_ID,
+                  policy_chain_id(chain_ids, rule->chain), rule->match);
 
     ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_POLICY, rule->priority,
                             ds_cstr(&match), ds_cstr(&actions), stage_hint,
@@ -13804,9 +13851,15 @@ build_ingress_policy_flows_for_lrouter(
     ovs_assert(od->nbr);
     /* This is a catch-all rule. It has the lowest priority (0)
      * does a match-all("1") and pass-through (next) */
+
     ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY, 0, "1",
                   REG_ECMP_GROUP_ID" = 0; next;",
                   lflow_ref);
+
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY_PRE, 0, "1",
+                  REG_POLICY_CHAIN_ID" = 0; next;",
+                  lflow_ref);
+
     ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY_ECMP, 150,
                   REG_ECMP_GROUP_ID" == 0", "next;",
                   lflow_ref);
@@ -13816,6 +13869,10 @@ build_ingress_policy_flows_for_lrouter(
     /* Convert routing policies to flows. */
     uint16_t ecmp_group_id = 1;
     struct route_policy *rp;
+    struct simap chain_ids;
+
+    simap_init(&chain_ids);
+
     HMAP_FOR_EACH_WITH_HASH (rp, key_node, uuid_hash(&od->key),
                              route_policies) {
         const struct nbrec_logical_router_policy *rule = rp->rule;
@@ -13828,9 +13885,12 @@ build_ingress_policy_flows_for_lrouter(
             ecmp_group_id++;
         } else {
             build_routing_policy_flow(lflows, od, lr_ports, rp,
-                                      &rule->header_, lflow_ref);
+                                      &rule->header_, lflow_ref,
+                                      &chain_ids);
         }
     }
+
+    simap_destroy(&chain_ids);
 }
 
 /* Local router ingress table ARP_RESOLVE: ARP Resolution. */
