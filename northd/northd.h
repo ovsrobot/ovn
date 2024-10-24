@@ -696,10 +696,18 @@ struct ovn_port {
     struct lflow_ref *stateful_lflow_ref;
 };
 
+enum route_source {
+    /* the route is directly connected to the logical router */
+    ROUTE_SOURCE_CONNECTED,
+    /* the route is derived from a northbound static route entry */
+    ROUTE_SOURCE_STATIC,
+};
+
 struct parsed_route {
     struct hmap_node key_node;
     struct in6_addr prefix;
     unsigned int plen;
+    struct in6_addr *nexthop; /* NULL for ROUTE_SOURCE_CONNECTED */
     bool is_src_route;
     uint32_t route_table_id;
     uint32_t hash;
@@ -708,8 +716,9 @@ struct parsed_route {
     bool is_discard_route;
     const struct nbrec_logical_router *nbr;
     bool stale;
+    enum route_source source;
     char *lrp_addr_s;
-    struct ovn_port *out_port;
+    const struct ovn_port *out_port;
 };
 
 void ovnnb_db_run(struct northd_input *input_data,
