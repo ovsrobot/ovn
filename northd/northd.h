@@ -180,7 +180,7 @@ struct route_policy {
     bool stale;
 };
 
-struct static_routes_data {
+struct routes_data {
     struct hmap parsed_routes;
     struct simap route_tables;
     struct hmap bfd_active_connections;
@@ -739,8 +739,8 @@ void build_parsed_routes(struct ovn_datapath *, const struct hmap *,
                          const struct hmap *, struct hmap *, struct simap *,
                          struct hmap *);
 uint32_t get_route_table_id(struct simap *, const char *);
-void static_routes_init(struct static_routes_data *);
-void static_routes_destroy(struct static_routes_data *);
+void routes_init(struct routes_data *);
+void routes_destroy(struct routes_data *);
 
 void bfd_init(struct bfd_data *);
 void bfd_destroy(struct bfd_data *);
