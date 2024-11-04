@@ -6756,7 +6756,7 @@ AT_CHECK([ovn-nbctl remove Logical_Switch_Port public options qos_min_rate=20000
 AT_CHECK([ovn-nbctl remove Logical_Switch_Port public options qos_max_rate=300000])
 
 OVS_WAIT_UNTIL([tc class show dev ovs-public | \
-                grep -q 'class htb .* rate 12Kbit ceil 34359Mbit burst 375000b cburst 373662b'])
+                grep -q 'class htb .* rate 12Kbit ceil 10Gbit burst 375000b cburst 365Kb'])
 
 AT_CHECK([ovn-nbctl remove Logical_Switch_Port public options qos_burst=3000000])
 OVS_WAIT_UNTIL([test "$(tc qdisc show | grep 'htb 1: dev ovs-public')" = ""])
