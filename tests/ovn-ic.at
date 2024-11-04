@@ -77,7 +77,7 @@ check_row_count ic-sb:Datapath_Binding 1 transit_switch=ts2
 check_column "ts1 ts2" ic-sb:Datapath_Binding transit_switch
 check_column "ts1 ts2" nb:Logical_Switch name
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 # Check SB DP key
 ts1_key=$(fetch_column ic-sb:Datapath_Binding tunnel_key transit_switch=ts1)

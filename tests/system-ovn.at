@@ -98,7 +98,7 @@ ovn-nbctl -- --id=@nat create nat type="snat" logical_ip=192.168.2.2 \
     external_ip=30.0.0.1 -- add logical_router R2 nat @nat
 
 # wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl dump-flows br-int | grep 'nat(src=30.0.0.1)'])
 
 # 'alice1' should be able to ping 'foo1' directly.
@@ -137,7 +137,7 @@ icmp,orig=(src=192.168.2.2,dst=172.16.1.2,id=<cleared>,type=8,code=0),reply=(src
 ovn-nbctl lr-route-add R1 30.0.0.0/24 20.0.0.2
 
 # wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 # Flush conntrack entries for easier output parsing of next test.
 AT_CHECK([ovs-appctl dpctl/flush-conntrack])
@@ -278,7 +278,7 @@ ovn-nbctl -- --id=@nat create nat type="snat" logical_ip=\"fd12::2\" \
     external_ip=\"fd30::1\" -- add logical_router R2 nat @nat
 
 # wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl dump-flows br-int | grep 'nat(src=fd30::1)'])
 
 # 'alice1' should be able to ping 'foo1' directly.
@@ -317,7 +317,7 @@ icmpv6,orig=(src=fd12::2,dst=fd21::2,id=<cleared>,type=128,code=0),reply=(src=fd
 ovn-nbctl lr-route-add R1 fd30::/64 fd00::2
 
 # wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 # Flush conntrack entries for easier output parsing of next test.
 AT_CHECK([ovs-appctl dpctl/flush-conntrack])
@@ -438,7 +438,7 @@ ovn-nbctl lsp-add alice alice1 \
 ovn-nbctl -- --id=@nat create nat type="snat" logical_ip=192.168.1.2 \
     external_ip=172.16.1.1 -- add logical_router R2 nat @nat
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl dump-flows br-int | grep 'nat(src=172.16.1.1)'])
 
 # South-North SNAT: 'foo1' pings 'alice1'. But 'alice1' receives traffic
@@ -550,7 +550,7 @@ ovn-nbctl lsp-add alice alice1 \
 ovn-nbctl -- --id=@nat create nat type="snat" logical_ip=\"fd10::2\" \
     external_ip=\"fd30::1\" -- add logical_router R2 nat @nat
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl dump-flows br-int | grep 'nat(src=fd30::1)'])
 
 # South-North SNAT: 'foo1' pings 'alice1'. But 'alice1' receives traffic
@@ -723,7 +723,7 @@ ovn-nbctl -- --id=@nat create nat type="snat" logical_ip=192.168.2.2 \
     external_ip=30.0.0.4 -- add logical_router R3 nat @nat
 
 # wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl dump-flows br-int | grep 'nat(src=30.0.0.4)'])
 
 # North-South DNAT: 'alice1' should be able to ping 'foo1' via 30.0.0.2
@@ -949,7 +949,7 @@ ovn-nbctl -- --id=@nat create nat type="snat" logical_ip='"fd12::2"' \
     external_ip='"fd40::4"' -- add logical_router R3 nat @nat
 
 # wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl dump-flows br-int | grep 'nat(src=fd40::4)'])
 
 # North-South DNAT: 'alice1' should be able to ping 'foo1' via fd30::2
@@ -1210,7 +1210,7 @@ ovn-nbctl -- --id=@nat create nat type="snat" logical_ip='"fd12::2"' \
     external_ip='"fd40::4"' -- add logical_router R3 nat @nat
 
 # wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl dump-flows br-int | grep 'nat(src=fd40::4)'])
 OVS_WAIT_UNTIL([ovs-ofctl dump-flows br-int | grep 'nat(src=30.0.0.4)'])
 
@@ -1426,7 +1426,7 @@ ovn-nbctl ls-lb-add foo lb2
 ovn-nbctl set load_balancer $lb2_uuid vips:'"30.0.0.2:8000"'='"172.16.1.2:80,172.16.1.3:80,172.16.1.4:80"'
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=172.16.1.4:80)'])
 
@@ -1445,7 +1445,7 @@ AT_CHECK([ovs-appctl dpctl/flush-conntrack])
 
 # Clear the apply-after-lb option.  The traffic will be allowed.
 check ovn-nbctl clear acl . options
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 OVS_WAIT_FOR_OUTPUT([
     for i in `seq 1 20`; do
@@ -1459,7 +1459,7 @@ tcp,orig=(src=192.168.1.2,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(s
 ])
 
 ovn-nbctl acl-del foo from-lport 1002 "ip4 && ip4.dst == {172.16.1.2,172.16.1.3,172.16.1.4} && ct.new"
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 dnl Should work with the virtual IP 30.0.0.1 address through NAT
 dnl Each server should have at least one connection.
@@ -1707,7 +1707,7 @@ ovn-nbctl add logical_switch foo load_balancer $lb2_uuid
 ovn-nbctl set load_balancer $lb2_uuid vips:'"[[fd03::2]]:8000"'='"@<:@fd02::2@:>@:80,@<:@fd02::3@:>@:80,@<:@fd02::4@:>@:80"'
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=\[[fd02::4\]]:80)'])
 
@@ -1902,7 +1902,7 @@ ovn-nbctl set logical_switch foo load_balancer=$uuid
 ovn-nbctl set load_balancer $uuid vips:'"30.0.0.2:8000"'='"192.168.1.3:80,192.168.1.4:80,192.168.1.5:80"'
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=192.168.1.5:80)'])
 
@@ -2012,7 +2012,7 @@ ovn-nbctl set load_balancer $uuid vips:'"[[fd03::2]]:8000"'='"@<:@fd01::3@:>@:80
 ovn-nbctl list load_balancer
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=\[[fd01::5\]]:80)'])
 
@@ -2166,7 +2166,7 @@ ovn-nbctl -- --id=@nat create nat type="snat" logical_ip=192.168.2.2 \
     external_ip=30.0.0.2 -- add logical_router R2 nat @nat
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 # Get the OF table numbers
 snat=$(ovn-debug lflow-stage-to-oftable lr_out_snat)
@@ -2516,7 +2516,7 @@ ovn-nbctl -- --id=@nat create nat type="snat" logical_ip=\"fd12::2\" \
 
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=\[[fd12::2\]]:80)'])
 
@@ -2694,7 +2694,7 @@ ovn-nbctl set logical_router R2 load_balancer=$uuid
 ovn-nbctl set logical_router R3 load_balancer=$uuid
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=192.168.2.2)'])
 
@@ -2867,7 +2867,7 @@ ovn-nbctl set logical_router R2 load_balancer=$uuid
 ovn-nbctl set logical_router R3 load_balancer=$uuid
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=fd12::2)'])
 
@@ -3074,7 +3074,7 @@ ovn-nbctl set logical_router R2 load_balancer=$uuid
 ovn-nbctl set logical_router R3 load_balancer=$uuid
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=192.168.2.2)'])
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
@@ -3222,7 +3222,7 @@ ovn-nbctl set logical_router R1 load_balancer=$uuid
 ovn-nbctl set load_balancer $uuid vips:'"172.16.1.11:8000"'='"192.168.1.2:80,192.168.2.2:80"'
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=192.168.2.2:80)'])
 
@@ -3365,7 +3365,7 @@ ovn-nbctl set logical_router R1 load_balancer=$uuid
 ovn-nbctl set load_balancer $uuid vips:'"[[fd72::11]]:8000"'='"@<:@fd01::2@:>@:80,@<:@fd02::2@:>@:80"'
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=\[[fd02::2\]]:80)'])
 
@@ -3523,7 +3523,7 @@ AT_CHECK([ovn-nbctl lr-nat-add R1 snat 172.16.1.1 0.0.0.0/0])
 # Add default route to ext-net
 AT_CHECK([ovn-nbctl lr-route-add R1 10.0.0.0/24 172.16.1.2])
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl dump-flows br-int | grep 'nat(src=172.16.1.1)'])
 
 # North-South DNAT: 'alice1' pings 'foo1' using 172.16.1.3.
@@ -3717,7 +3717,7 @@ ADD_VETH(alice1, alice1, br-int, "fd20::2/64", "f0:00:00:01:02:05", \
 ovn-nbctl lsp-add alice alice1 \
 -- lsp-set-addresses alice1 "f0:00:00:01:02:05 fd20::2"
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 # Add DNAT rules
 AT_CHECK([ovn-nbctl lr-nat-add R1 dnat_and_snat fd20::3 fd11::2 foo1 00:00:02:02:03:04])
@@ -3726,7 +3726,7 @@ AT_CHECK([ovn-nbctl lr-nat-add R1 dnat_and_snat fd20::4 fd11::3 foo2 00:00:02:02
 # Add a SNAT rule
 AT_CHECK([ovn-nbctl lr-nat-add R1 snat fd20::1 ::/0])
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl dump-flows br-int | grep 'nat(src=fd20::1)'])
 
 # North-South DNAT: 'alice1' pings 'foo1' using fd20::3
@@ -3921,7 +3921,7 @@ AT_CHECK([ovn-nbctl lr-nat-add R1 dnat_and_snat 172.16.1.4 192.168.2.2 bar1 00:0
 # Add a SNAT rule
 AT_CHECK([ovn-nbctl lr-nat-add R1 snat 172.16.1.1 0.0.0.0/0])
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl dump-flows br-int | grep 'nat(src=172.16.1.1)'])
 
 echo "------ hv dump ------"
@@ -4105,7 +4105,7 @@ AT_CHECK([ovn-nbctl lr-nat-add R1 dnat_and_snat fd20::4 fd12::2 bar1 00:00:02:02
 # Add a SNAT rule
 AT_CHECK([ovn-nbctl lr-nat-add R1 snat fd20::1 ::/0])
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl dump-flows br-int | grep 'nat(src=fd20::1)'])
 
 echo "------ hv dump ------"
@@ -4222,7 +4222,7 @@ ovn-nbctl lsp-add ls1 p1 \
 ovn-nbctl lsp-add ls1 p2 \
 -- lsp-set-addresses p2 "00:00:00:00:00:20 192.168.1.20"
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 zone_id=$(ovn-appctl -t ovn-controller ct-zone-list | grep p1 | cut -d ' ' -f2)
 
@@ -4318,7 +4318,7 @@ done
 # Enable IGMP snooping on sw1.
 ovn-nbctl set Logical_Switch sw1 other_config:mcast_querier="false"
 ovn-nbctl set Logical_Switch sw1 other_config:mcast_snoop="true"
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 group_v4="239.0.1.68"
 # Inject IGMP Join for v4 group on sw1-p1.
@@ -4348,7 +4348,7 @@ OVS_WAIT_UNTIL([
 
 # Flush IGMP groups.
 ovn-sbctl ip-multicast-flush sw1
-ovn-nbctl --wait=hv -t 3 sync
+check ovn-nbctl --wait=hv -t 3 sync
 OVS_WAIT_UNTIL([
     total_entries=`ovn-sbctl find IGMP_Group address="${group_v4}" | grep _uuid -c`
     test "${total_entries}" = "0"
@@ -4510,7 +4510,7 @@ ovn-nbctl --wait=sb ls-lb-add sw1 lb1
 ovn-nbctl --wait=sb lr-lb-add lr0 lb1
 
 OVN_POPULATE_ARP
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 ADD_NAMESPACES(sw0-p1)
 ADD_VETH(sw0-p1, sw0-p1, br-int, "10.0.0.3/24", "50:54:00:00:00:03", \
@@ -4736,7 +4736,7 @@ check ovn-nbctl ls-lb-add sw1 lb1
 check ovn-nbctl lr-lb-add lr0 lb1
 
 OVN_POPULATE_ARP
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 ADD_NAMESPACES(sw0-p1)
 ADD_VETH(sw0-p1, sw0-p1, br-int, "2001::3/64", "50:54:00:00:00:03", \
@@ -4882,7 +4882,7 @@ ADD_NAMESPACES(lsp)
 ADD_VETH(lsp, lsp, br-int, "42.42.42.1/24", "00:00:00:00:00:01", \
          "42.42.42.254")
 
-ovn-nbctl --wait=hv -t 3 sync
+check ovn-nbctl --wait=hv -t 3 sync
 
 # Start IPv4 TCP server on lsp.
 NETNS_DAEMONIZE([lsp], [nc -l -k 42.42.42.1 4041], [lsp0.pid])
@@ -4911,7 +4911,7 @@ ovn-nbctl pg-add pg0 lsp
 ovn-nbctl --apply-after-lb acl-add pg0 from-lport 1004 "ip4 && ip4.dst == 10.0.0.2" drop
 ovn-nbctl --apply-after-lb acl-add pg0 from-lport 1002 "ip4 && tcp" allow-related
 ovn-nbctl --apply-after-lb acl-add pg0 from-lport 1002 "ip4 && udp" allow
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 ## Check that IPv4 TCP hairpin connection succeeds on both VIPs.
 NS_CHECK_EXEC([lsp], [nc 88.88.88.88 8080 -z], [0], [ignore], [ignore])
@@ -4979,7 +4979,7 @@ ovn-nbctl lsp-add sw sw-rtr                       \
 
 ADD_NAMESPACES(lsp)
 ADD_VETH(lsp, lsp, br-int, "4200::1/64", "00:00:00:00:00:01", "4200::00ff", "nodad")
-ovn-nbctl --wait=hv -t 3 sync
+check ovn-nbctl --wait=hv -t 3 sync
 
 # Start IPv6 TCP server on lsp.
 NETNS_DAEMONIZE([lsp], [nc -l -k 4200::1 4041], [lsp0.pid])
@@ -5008,7 +5008,7 @@ ovn-nbctl pg-add pg0 lsp
 ovn-nbctl --apply-after-lb acl-add pg0 from-lport 1002 "ip6 && tcp" allow-related
 ovn-nbctl --apply-after-lb acl-add pg0 from-lport 1002 "ip6 && udp" allow
 ovn-nbctl --apply-after-lb acl-add pg0 from-lport 1000 "ip6" drop
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 # Check that IPv6 TCP hairpin connection succeeds on both VIPs.
 NS_CHECK_EXEC([lsp], [nc 8800::0088 8080 -z], [0], [ignore], [ignore])
@@ -5096,7 +5096,7 @@ ovn-nbctl lsp-set-addresses sw1-lr0 router
 ovn-nbctl lsp-set-options sw1-lr0 router-port=lr0-sw1
 
 OVN_POPULATE_ARP
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 ADD_NAMESPACES(sw0-p1-rej)
 ADD_VETH(sw0-p1-rej, sw0-p1-rej, br-int, "10.0.0.3/24", "50:54:00:00:00:03", \
@@ -5330,7 +5330,7 @@ ovn-nbctl lsp-set-addresses sw1-lr0 router
 ovn-nbctl lsp-set-options sw1-lr0 router-port=lr0-sw1
 
 OVN_POPULATE_ARP
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 ADD_NAMESPACES(sw0-p1-rej)
 ADD_VETH(sw0-p1-rej, sw0-p1-rej, br-int, "10.0.0.3/24", "50:54:00:00:00:03", \
@@ -5577,7 +5577,7 @@ ovn-nbctl --wait=sb ls-lb-add sw0 lb1
 ovn-nbctl --wait=sb lr-lb-add lr0 lb1
 
 OVN_POPULATE_ARP
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 ADD_NAMESPACES(rst-p1)
 ADD_VETH(rst-p1, rst-p1, br-int, "10.0.0.3/24", "50:54:00:00:00:03", \
@@ -6154,7 +6154,7 @@ ovn-nbctl lsp-add bob bob1 \
 -- lsp-set-addresses bob1 "f0:00:00:01:02:06 172.16.0.1"
 
 # Ensure ovn-controller is caught up
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 on_exit 'ovs-ofctl dump-flows br-int'
 
@@ -6193,7 +6193,7 @@ ovn-nbctl set Logical_Switch_Port r2-ext \
      type=router options:router-port=R2_ext addresses='"00:00:10:01:02:04"'
 
 # Wait for ovn-controller before sending traffic
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 NS_CHECK_EXEC([bob1], [nc -z 10.0.0.2 80], [0])
 NS_CHECK_EXEC([bob1], [ping -q -c 3 -i 0.3 -w 2 10.0.0.2 | FORMAT_PING], \
@@ -6388,7 +6388,7 @@ ovn-nbctl lsp-add bob bob1 \
 -- lsp-set-addresses bob1 "f0:00:00:01:02:06 fd07::1"
 
 # Ensure ovn-controller is caught up
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 on_exit 'ovs-ofctl dump-flows br-int'
 
@@ -6613,7 +6613,7 @@ ovn-nbctl lsp-add public public1 \
         -- lsp-set-type public1 localnet \
         -- lsp-set-options public1 network_name=phynet
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 # Send ping from sw01-x to ext-foo.
 NS_CHECK_EXEC([sw01-x], [ping -q -c 3 -i 0.3 -w 2 172.16.1.100 | FORMAT_PING], \
@@ -7120,7 +7120,7 @@ check ovn-nbctl acl-add pg1 from-lport 1002 "ip" allow-related
 check ovn-nbctl acl-add pg1 to-lport 1002 "ip" allow-related
 
 OVN_POPULATE_ARP
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 ADD_NAMESPACES(sw0-p1)
 ADD_VETH(sw0-p1, sw0-p1, br-int, "10.0.0.3/24", "50:54:00:00:00:03", \
@@ -7277,7 +7277,7 @@ ovn-nbctl lr-route-add lr1 0.0.0.0/0 172.18.1.2
 #ovn-sbctl create MAC_Binding ip=172.18.2.10 datapath=$ls1_uuid logical_port=vm2 mac="00:00:00:00:00:06"
 
 OVN_POPULATE_ARP
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 ADD_NAMESPACES(vm1)
 ADD_VETH(vm1, vm1, br-int, "192.168.100.5/24", "00:00:00:00:00:05", \
@@ -7723,7 +7723,7 @@ ADD_VETH(sw0-p3, sw0-p3, br-int, "10.0.0.4/24", "50:54:00:00:00:04", \
          "10.0.0.1")
 
 # Ensure ovn-controller is caught up
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 on_exit 'ovn-nbctl acl-list sw0'
 on_exit 'ovn-sbctl lflow-list'
@@ -7865,7 +7865,7 @@ ADD_VETH(sw0-p3, sw0-p3, br-int, "10.0.0.4/24", "50:54:00:00:00:04", \
          "10.0.0.1")
 
 # Ensure ovn-controller is caught up
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 on_exit 'ovn-nbctl acl-list sw0'
 on_exit 'ovn-sbctl lflow-list'
@@ -7993,7 +7993,7 @@ ADD_VETH(sw0-p2, sw0-p2, br-int, "10.0.0.3/24", "50:54:00:00:00:03", \
          "10.0.0.1")
 
 # Ensure ovn-controller is caught up
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 on_exit 'ovn-nbctl acl-list sw0'
 on_exit 'ovn-sbctl lflow-list'
@@ -8020,7 +8020,7 @@ icmp,orig=(src=10.0.0.2,dst=10.0.0.3,id=<cleared>,type=8,code=0),reply=(src=10.0
 # This ACL also allows the ping running in background.
 
 check ovn-nbctl --label=1235 acl-add sw0 from-lport 1003 'ip4 && inport == "sw0-p1" && ip4.dst == 10.0.0.3' allow-related
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 sleep 3s
 
@@ -8094,7 +8094,7 @@ ADD_VETH(sw0-p2, sw0-p2, br-int, "10.0.0.3/24", "50:54:00:00:00:03", \
          "10.0.0.1")
 
 # Ensure ovn-controller is caught up
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 on_exit 'ovn-nbctl acl-list sw0'
 on_exit 'ovn-sbctl lflow-list'
@@ -8121,7 +8121,7 @@ icmp,orig=(src=10.0.0.2,dst=10.0.0.3,id=<cleared>,type=8,code=0),reply=(src=10.0
 # This ACL also allows the ping running in background.
 
 check ovn-nbctl --label=1235 --apply-after-lb acl-add sw0 from-lport 1003 'ip4 && inport == "sw0-p1" && ip4.dst == 10.0.0.3' allow-related
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 sleep 3s
 
@@ -8212,7 +8212,7 @@ check ovn-nbctl lsp-set-addresses sw1-lr0 00:00:00:00:ff:02
 check ovn-nbctl lsp-set-options sw1-lr0 router-port=lr0-sw1
 
 # Ensure ovn-controller is caught up
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 on_exit 'ovn-nbctl acl-list sw0'
 on_exit 'ovn-sbctl lflow-list'
@@ -9772,7 +9772,7 @@ ovn-nbctl lb-add lb1 30.30.30.30:80 "192.168.2.2:80" tcp
 ovn-nbctl ls-lb-add foo lb1
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=192.168.2.2:80)'])
@@ -9825,7 +9825,7 @@ AT_CHECK([ovs-appctl dpctl/flush-conntrack])
 ovn-nbctl ls-lb-add foo lb1
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=192.168.2.2:80)'])
@@ -9917,7 +9917,7 @@ ovn-nbctl lb-add lb1 [[fd30::2]]:80 [[fd12::2]]:80 tcp
 ovn-nbctl ls-lb-add foo lb1
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=\[[fd12::2\]]:80)'])
@@ -9969,7 +9969,7 @@ AT_CHECK([ovs-appctl dpctl/flush-conntrack])
 ovn-nbctl ls-lb-add foo lb1
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=\[[fd12::2\]]:80)'])
@@ -10338,7 +10338,7 @@ check ovn-nbctl ls-lb-add foo lb2
 check ovn-nbctl set load_balancer $lb2_uuid vips:'"30.0.0.2:8000"'='"172.16.1.2:80,172.16.1.3:80,172.16.1.4:80"'
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=172.16.1.4:80)'])
 
@@ -12094,7 +12094,7 @@ ovn-nbctl -- --id=@nat create nat type="snat" logical_ip=192.168.2.2 \
     external_ip=30.0.0.2 -- add logical_router R2 nat @nat
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 grep 'nat(dst=192.168.2.2:12345)'])
 
@@ -12533,7 +12533,7 @@ check ovn-nbctl lsp-set-addresses lp0 "50:54:00:00:00:01 10.0.0.10"
 check ovn-nbctl lsp-set-addresses lp1 "50:54:00:00:00:02 20.0.0.10"
 
 OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up lp0` = xup])
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 # Stopping updates to sb
 # By stopping temporarily updates from controller to sb, we are making sb read-only.
@@ -13213,7 +13213,7 @@ ovs-vsctl --id=@br get Bridge br-int \
     -- --id=@ipfix create IPFIX targets=\"127.0.0.1:4242\" template_interval=1 \
     -- --id=@cs create Flow_Sample_Collector_Set id=100 bridge=@br ipfix=@ipfix
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 dnl And wait for it to be up and running.
 OVS_WAIT_UNTIL([ovs-ofctl dump-ipfix-flow br-int | grep -q '1 ids'])
 
@@ -13382,7 +13382,7 @@ ovs-vsctl --id=@br get Bridge br-int \
     -- --id=@ipfix create IPFIX targets=\"127.0.0.1:4242\" template_interval=1 \
     -- --id=@cs create Flow_Sample_Collector_Set id=100 bridge=@br ipfix=@ipfix
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 dnl And wait for it to be up and running.
 OVS_WAIT_UNTIL([ovs-ofctl dump-ipfix-flow br-int | grep -q '1 ids'])
 
@@ -13512,7 +13512,7 @@ ovs-vsctl --id=@br get Bridge br-int \
     -- --id=@ipfix create IPFIX targets=\"127.0.0.1:4242\" template_interval=1 \
     -- --id=@cs create Flow_Sample_Collector_Set id=100 bridge=@br ipfix=@ipfix
 
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 dnl And wait for it to be up and running.
 OVS_WAIT_UNTIL([ovs-ofctl dump-ipfix-flow br-int | grep -q '1 ids'])
 
@@ -13973,7 +13973,7 @@ ensure_controller_run
 restart_ovsdb_controller_updates $TCP_PORT
 
 wait_for_ports_up
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 AT_CHECK([ovn-appctl -t ovn-controller ct-zone-list | sed "s/ [[0-9]]*/ ??/" | sort], [0], [dnl
 sw0-port1 ??

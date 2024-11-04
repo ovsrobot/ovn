@@ -1343,7 +1343,7 @@ ovn-nbctl --stateless lr-nat-add CR dnat_and_snat  172.16.1.2 50.0.0.11
 ovn-nbctl --is-exempted lr-nat-update-ext-ip DR dnat_and_snat 172.16.1.2 disallowed_range
 ovn-nbctl --is-exempted lr-nat-update-ext-ip CR dnat_and_snat 172.16.1.2 disallowed_range
 
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 ovn-sbctl dump-flows DR > drflows6
 AT_CAPTURE_FILE([drflows2])
@@ -1797,7 +1797,7 @@ ovn-nbctl lrp-add lr0 lr0-join 00:00:01:01:02:04 10.10.0.1/24
 ovn-nbctl set logical_router lr0 options:chassis=ch1
 ovn-nbctl lr-nat-add lr0 dnat 192.168.2.2 10.0.0.5
 ovn-nbctl set logical_router lr0 options:dnat_force_snat_ip=192.168.2.3
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 AT_CHECK([ovn-sbctl lflow-list lr0 | grep lr_in_unsnat | ovn_strip_lflows], [0], [dnl
   table=??(lr_in_unsnat       ), priority=0    , match=(1), action=(next;)
@@ -1895,7 +1895,7 @@ ovn-nbctl ls-add ls1
 ovn-nbctl ls-add ls2
 ovn-nbctl lsp-add ls1 lsp1
 ovn-nbctl lsp-add ls2 lsp2
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 ls1_key=$(ovn-sbctl --columns tunnel_key --bare list Datapath_Binding ls1)
 ls2_key=$(ovn-sbctl --columns tunnel_key --bare list Datapath_Binding ls2)
 
@@ -1945,7 +1945,7 @@ ovn-nbctl ls-add ls1
 ovn-nbctl ls-add ls2
 ovn-nbctl lsp-add ls1 lsp1
 ovn-nbctl lsp-add ls2 lsp2
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 ls1_key=$(ovn-sbctl --columns tunnel_key --bare list Datapath_Binding ls1)
 ls2_key=$(ovn-sbctl --columns tunnel_key --bare list Datapath_Binding ls2)
 
@@ -2018,7 +2018,7 @@ ovn-nbctl lr-lb-add lr lb9
 ovn-nbctl lr-lb-add lr lb10
 ovn-nbctl lr-lb-add lr lb11
 
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 lr_key=$(fetch_column sb:datapath_binding tunnel_key external_ids:name=lr)
 lb_as_v4="_rtr_lb_${lr_key}_ip4"
 lb_as_v6="_rtr_lb_${lr_key}_ip6"
@@ -2092,7 +2092,7 @@ AT_CHECK([ovn-sbctl lflow-list | grep "xreg0\[[0..47\]]" | grep -vE 'lr_in_admis
 # Test chassis redirect port.
 ovn-nbctl remove logical_router lr options chassis
 ovn-nbctl lrp-set-gateway-chassis lrp-public ch
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 # Ingress router port ETH address is stored in lr_in_admission.
 AT_CHECK([ovn-sbctl lflow-list | grep -E "lr_in_admission.*xreg0\[[0..47\]]" | ovn_strip_lflows], [0], [dnl
@@ -2228,7 +2228,7 @@ lb4=$(fetch_column nb:load_balancer _uuid name=lb4)
 lbg=$(ovn-nbctl create load_balancer_group name=lbg)
 check ovn-nbctl add logical_switch  sw0 load_balancer_group $lbg
 
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 AT_CHECK([ovn-sbctl lflow-list | grep "ls_out_pre_lb.*priority=100" | grep reg0 | sort], [0], [dnl
 ])
 
@@ -2316,7 +2316,7 @@ ovn-nbctl set NB_Global . options:ignore_lsp_down=false
 ovn-nbctl ls-add sw0
 ovn-nbctl lsp-add sw0 sw0-p1 -- lsp-set-addresses sw0-p1 "aa:aa:aa:aa:aa:aa 10.0.0.1"
 
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 AT_CHECK([ovn-sbctl lflow-list | grep arp | grep 10\.0\.0\.1], [1], [ignore])
 
 ovn-nbctl --wait=sb set NB_Global . options:ignore_lsp_down=true
@@ -3539,7 +3539,7 @@ for direction in from to; do
     ovn-nbctl acl-add ls ${direction}-lport 2 "udp" allow-related
     ovn-nbctl acl-add ls ${direction}-lport 1 "ip" drop
 done
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 flow_eth='eth.src == 00:00:00:00:00:01 && eth.dst == 00:00:00:00:00:02'
 flow_ip='ip.ttl==64 && ip4.src == 42.42.42.1 && ip4.dst == 66.66.66.66'
@@ -3572,7 +3572,7 @@ ct_next(ct_state=new|trk) {
 for direction in from to; do
     ovn-nbctl acl-add ls ${direction}-lport 4 tcp allow-stateless
 done
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 # TCP packets should not go to conntrack anymore.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
@@ -3598,7 +3598,7 @@ ovn-nbctl ls-lb-add ls lb-udp
 
 # Remove stateless for TCP.
 ovn-nbctl acl-del ls
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 # TCP packets should go to conntrack.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
@@ -3632,7 +3632,7 @@ ct_lb_mark {
 for direction in from to; do
     ovn-nbctl acl-add ls ${direction}-lport 4 tcp allow-stateless
 done
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 # TCP packets should not go to conntrack for load balancing.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
@@ -3674,7 +3674,7 @@ for direction in from to; do
     ovn-nbctl acl-add pg ${direction}-lport 2 "udp" allow-related
     ovn-nbctl acl-add pg ${direction}-lport 1 "ip" drop
 done
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 lsp1_inport=$(fetch_column Port_Binding tunnel_key logical_port=lsp1)
 echo $lsp1_inport
@@ -3708,7 +3708,7 @@ ct_next(ct_state=new|trk) {
 for direction in from to; do
     ovn-nbctl acl-add pg ${direction}-lport 4 tcp allow-stateless
 done
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 # TCP packets should not go to conntrack anymore.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
@@ -3734,7 +3734,7 @@ ovn-nbctl ls-lb-add ls lb-udp
 
 # Remove stateless for TCP.
 ovn-nbctl acl-del pg
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 # TCP packets should go to conntrack.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
@@ -3768,7 +3768,7 @@ ct_lb_mark {
 for direction in from to; do
     ovn-nbctl acl-add pg ${direction}-lport 4 tcp allow-stateless
 done
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 # TCP packets should not go to conntrack for load balancing.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
@@ -3807,7 +3807,7 @@ for direction in from to; do
     ovn-nbctl acl-add ls ${direction}-lport 3 "tcp" allow-related
     ovn-nbctl acl-add ls ${direction}-lport 3 "udp" allow
 done
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 flow_eth='eth.src == 00:00:00:00:00:01 && eth.dst == 00:00:00:00:00:02'
 flow_ip='ip.ttl==64 && ip4.src == 42.42.42.1 && ip4.dst == 66.66.66.66'
@@ -3831,7 +3831,7 @@ for direction in from to; do
     ovn-nbctl acl-add ls ${direction}-lport 1 tcp allow-stateless
     ovn-nbctl acl-add ls ${direction}-lport 1 udp allow-stateless
 done
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 # TCP packets should not go to conntrack anymore.
 flow="inport == \"lsp1\" && ${flow_eth} && ${flow_ip} && ${flow_tcp}"
@@ -7015,7 +7015,7 @@ check ovn-nbctl lsp-add ls1 lsp1 -- \
     lsp-set-options lsp1 router-port=lrp1
 
 # ensure initial flows are installed without is_chassis_resident match part
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 ovn-sbctl dump-flows lr1 > lrflows
 AT_CAPTURE_FILE([lrflows])
 
@@ -7033,7 +7033,7 @@ wait_row_count Port_Binding 0 logical_port=cr-lrp1 options:always-redirect="true
 # make lrp a cr-port and check its flows
 check ovn-nbctl lrp-set-gateway-chassis lrp1 ch1
 
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 ovn-sbctl dump-flows lr1 > lrflows
 AT_CAPTURE_FILE([lrflows])
 
@@ -7055,7 +7055,7 @@ wait_row_count Port_Binding 1 logical_port=cr-lrp1 options:always-redirect="true
 # there should not be is_chassis_resident part.
 check ovn-nbctl lsp-add ls1 lsp-vtep -- lsp-set-type lsp-vtep vtep
 
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 ovn-sbctl dump-flows lr1 > lrflows
 AT_CAPTURE_FILE([lrflows])
 
@@ -7074,7 +7074,7 @@ wait_row_count Port_Binding 0 logical_port=cr-lrp1 options:always-redirect="true
 # delete vtep lport and check lrp has is_chassis_resident match part again.
 check ovn-nbctl lsp-del lsp-vtep
 
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 ovn-sbctl dump-flows lr1 > lrflows
 AT_CAPTURE_FILE([lrflows])
 
@@ -7369,7 +7369,7 @@ ovn-nbctl lb-add lb0 172.16.1.10:80 10.0.0.1:80
 ovn-nbctl lr-lb-add R1 lb0
 ovn-nbctl lb-add lb1 172.16.1.10:8080 10.0.0.1:8080
 ovn-nbctl lr-lb-add R1 lb1
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 AT_CHECK([ovn-sbctl get Port_Binding S1-R1 nat_addresses |grep -q 172.16.1.10], [0])
 
@@ -7513,7 +7513,7 @@ rm log_flows
 
 # Now remove the label from the allow-related ACL.
 set_acl_options allow_related_acl 0 true
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 record_log_flows
 
@@ -7618,7 +7618,7 @@ rm log_flows
 
 # Now remove the label from the allow-related ACL.
 set_acl_options allow_related_acl 0 true
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 record_log_flows
 
@@ -9233,7 +9233,7 @@ lb1_uuid=$(fetch_column nb:load_balancer _uuid name=lb1)
 lbg=$(ovn-nbctl create load_balancer_group name=lbg -- \
     add load_balancer_group lbg load_balancer $lb1_uuid)
 ovn-nbctl add logical_router R1 load_balancer_group $lbg
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 ovn-sbctl dump-flows S0 > S0flows
 ovn-sbctl dump-flows S1 > S1flows
@@ -9569,7 +9569,7 @@ p1_uuid=$(fetch_column nb:Logical_Switch_Port _uuid name=sw0-p1)
 p2_uuid=$(fetch_column nb:Logical_Switch_Port _uuid name=sw0-p2)
 
 echo "p1 uuid - $p1_uuid"
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 foo_as_uuid=$(ovn-nbctl create address_set name=foo addresses=\"1.1.1.1\",\"1.1.1.2\")
@@ -12659,7 +12659,7 @@ AT_SETUP([Sampling_App incremental processing])
 
 ovn_start
 
-ovn-nbctl --wait=sb sync
+check ovn-nbctl --wait=sb sync
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 
 ovn-nbctl create Sampling_App type="acl-new" id="42"

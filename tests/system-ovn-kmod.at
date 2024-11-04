@@ -111,7 +111,7 @@ NETNS_DAEMONIZE([foo1], [nc -l -k 192.168.1.2 80], [nc-foo1.pid])
 NETNS_DAEMONIZE([bar1], [nc -l -k 192.168.2.2 80], [nc-bar1.pid])
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 # Get the OF table numbers
 dnat=$(ovn-debug lflow-stage-to-oftable lr_in_dnat)
@@ -407,7 +407,7 @@ ovn-nbctl lr-lb-add R2 lb0-no-aff
 ovn-nbctl lr-lb-add R2 lb10-no-aff
 
 # Wait for ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 # Get the OF table numbers
 dnat=$(ovn-debug lflow-stage-to-oftable lr_in_dnat)
