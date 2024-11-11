@@ -49,7 +49,9 @@ controller_ovn_controller_SOURCES = \
 	controller/statctrl.h \
 	controller/statctrl.c \
 	controller/ct-zone.h \
-	controller/ct-zone.c
+	controller/ct-zone.c \
+	controller/ecmp-next-hop-monitor.h \
+	controller/ecmp-next-hop-monitor.c
 
 controller_ovn_controller_LDADD = lib/libovn.la $(OVS_LIBDIR)/libopenvswitch.la
 man_MANS += controller/ovn-controller.8

@@ -9,6 +9,8 @@ Post v24.09.0
      ECMP-nexthop.
      By default ovn-controller continuously sends ARP/ND packets for
      ECMP-nexthop.
+   - Introduce ovn-controller ECMP_nexthop monitor in order to flush stale ct
+     entries when related ecmp routes are removed by the CMS.
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------
