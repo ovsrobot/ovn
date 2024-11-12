@@ -91,7 +91,7 @@ sbctl_usage(void)
 usage: %s [OPTIONS] COMMAND [ARG...]\n\
 \n\
 General commands:\n\
-  show                        print overview of database contents\n\
+  show [CHASSIS | HOSTNAME | ENCAP-IP ...] print overview of database contents\n\
 \n\
 Chassis commands:\n\
   chassis-add CHASSIS ENCAP-TYPE ENCAP-IP  create a new chassis named\n\
@@ -355,12 +355,14 @@ static void
 pre_get_info(struct ctl_context *ctx)
 {
     ovsdb_idl_add_column(ctx->idl, &sbrec_chassis_col_name);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_chassis_col_hostname);
     ovsdb_idl_add_column(ctx->idl, &sbrec_chassis_col_encaps);
 
     ovsdb_idl_add_column(ctx->idl, &sbrec_chassis_private_col_name);
 
     ovsdb_idl_add_column(ctx->idl, &sbrec_encap_col_type);
     ovsdb_idl_add_column(ctx->idl, &sbrec_encap_col_ip);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_encap_col_options);
 
     ovsdb_idl_add_column(ctx->idl, &sbrec_port_binding_col_logical_port);
     ovsdb_idl_add_column(ctx->idl, &sbrec_port_binding_col_tunnel_key);
@@ -403,26 +405,6 @@ pre_get_info(struct ctl_context *ctx)
     ovsdb_idl_add_column(ctx->idl, &sbrec_load_balancer_col_name);
     ovsdb_idl_add_column(ctx->idl, &sbrec_load_balancer_col_protocol);
 }
-
-static struct cmd_show_table cmd_show_tables[] = {
-    {&sbrec_table_chassis,
-     &sbrec_chassis_col_name,
-     {&sbrec_chassis_col_hostname,
-      &sbrec_chassis_col_encaps,
-      NULL},
-     {&sbrec_table_port_binding,
-      &sbrec_port_binding_col_logical_port,
-      &sbrec_port_binding_col_chassis}},
-
-    {&sbrec_table_encap,
-     &sbrec_encap_col_type,
-     {&sbrec_encap_col_ip,
-      &sbrec_encap_col_options,
-      NULL},
-     {NULL, NULL, NULL}},
-
-    {NULL, NULL, {NULL, NULL, NULL}, {NULL, NULL, NULL}},
-};
 
 static void
 sbctl_init(struct ctl_context *ctx OVS_UNUSED)
@@ -561,6 +543,86 @@ cmd_lsp_unbind(struct ctl_context *ctx)
     if (sbctl_bd) {
         sbrec_port_binding_set_chassis(sbctl_bd->bd_cfg, NULL);
         sbrec_port_binding_set_up(sbctl_bd->bd_cfg, NULL, 0);
+    }
+}
+
+static void
+show_encap(struct ctl_context *ctx,
+           const struct sbrec_encap *encap)
+{
+    ds_put_format(&ctx->output, "    Encap %s\n", encap->type);
+    ds_put_format(&ctx->output, "        ip: \"%s\"\n", encap->ip);
+    ds_put_format(&ctx->output, "        options: {csum=\"%s\"}\n",
+                  smap_get_def(&encap->options, "csum", " "));
+};
+
+static void
+show_chassis(struct ctl_context *ctx,
+             const struct sbrec_chassis *chassis)
+{
+    const struct sbrec_port_binding *pb;
+
+    ds_put_format(&ctx->output, "Chassis %s\n", chassis->name);
+
+    if (chassis->hostname && strlen(chassis->hostname)) {
+        ds_put_format(&ctx->output, "    hostname: %s\n", chassis->hostname);
+    }
+
+    for (size_t i = 0; i < chassis->n_encaps; i++) {
+        show_encap(ctx, chassis->encaps[i]);
+    }
+
+    SBREC_PORT_BINDING_FOR_EACH (pb, ctx->idl) {
+        if (pb->chassis == chassis) {
+            ds_put_format(&ctx->output, "    Port_Binding %s\n",
+                          pb->logical_port);
+        }
+    }
+}
+
+static const struct sbrec_chassis *
+sbctl_find_chassis(struct ctl_context *ctx, const char *name)
+{
+    const struct sbctl_chassis *chassis = NULL;
+    const struct sbrec_chassis *chassis_rec = NULL;
+
+    /* Find chassis by his name. */
+    chassis = find_chassis(ctx, name, false);
+    if (chassis) {
+        return chassis->ch_cfg;
+    }
+
+    /* Find chassis by his hostname or encap ip. */
+    SBREC_CHASSIS_FOR_EACH (chassis_rec, ctx->idl) {
+        if (chassis_rec->hostname && !strcmp(chassis_rec->hostname, name)) {
+            return chassis_rec;
+        }
+        for (size_t i = 0; i < chassis_rec->n_encaps; i++) {
+            if (!strcmp(chassis_rec->encaps[i]->ip, name)) {
+                return chassis_rec;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static void
+cmd_show(struct ctl_context *ctx)
+{
+    const struct sbrec_chassis *chassis;
+
+    if (ctx->argc > 1) {
+        for (int i = 1; i <= ctx->argc - 1; i++) {
+            chassis = sbctl_find_chassis(ctx, ctx->argv[i]);
+            if (chassis) {
+                show_chassis(ctx, chassis);
+            }
+        }
+    } else {
+        SBREC_CHASSIS_FOR_EACH (chassis, ctx->idl) {
+            show_chassis(ctx, chassis);
+        }
     }
 }
 
@@ -1554,6 +1616,9 @@ static const struct ctl_table_class tables[SBREC_N_TABLES] = {
 static const struct ctl_command_syntax sbctl_commands[] = {
     { "init", 0, 0, "", NULL, sbctl_init, NULL, "", RW },
 
+    { "show", 0, INT_MAX, "[CHASSIS | HOSTNAME | ENCAP-IP ...]",
+     pre_get_info, cmd_show, NULL,  "", RO },
+
     /* Chassis commands. */
     {"chassis-add", 3, 3, "CHASSIS ENCAP-TYPE ENCAP-IP", pre_get_info,
      cmd_chassis_add, NULL, "--may-exist", RW},
@@ -1610,7 +1675,7 @@ main(int argc, char *argv[])
 
         .idl_class = &sbrec_idl_class,
         .tables = tables,
-        .cmd_show_table = cmd_show_tables,
+        .cmd_show_table = NULL,
         .commands = sbctl_commands,
 
         .usage = sbctl_usage,
