@@ -10720,6 +10720,106 @@ build_bfd_map(const struct nbrec_bfd_table *nbrec_bfd_table,
     }
 }
 
+struct ecmp_nexthop_data {
+    struct hmap_node hmap_node;
+    const struct sbrec_ecmp_nexthop *sb_ecmp_nh;
+    bool stale;
+};
+
+static struct ecmp_nexthop_data *
+ecmp_nexthop_alloc_entry(const struct sbrec_ecmp_nexthop *sb_ecmp_nh,
+                         struct hmap *map)
+{
+    struct ecmp_nexthop_data *e = xmalloc(sizeof *e);
+    e->sb_ecmp_nh = sb_ecmp_nh;
+
+    const char *sb_port = sb_ecmp_nh->port->logical_port;
+    const char *sb_nexthop = sb_ecmp_nh->nexthop;
+
+    uint32_t hash = hash_string(sb_nexthop, 0);
+    hash = hash_add(hash, hash_string(sb_port, 0));
+    hmap_insert(map, &e->hmap_node, hash);
+
+    return e;
+}
+
+static struct ecmp_nexthop_data *
+ecmp_nexthop_find_entry(const char *nexthop, const char *port,
+                        struct hmap *map)
+{
+    uint32_t hash = hash_string(nexthop, 0);
+    hash = hash_add(hash, hash_string(port, 0));
+
+    struct ecmp_nexthop_data *e;
+    HMAP_FOR_EACH_WITH_HASH (e, hmap_node, hash, map) {
+        const char *sb_port = e->sb_ecmp_nh->port->logical_port;
+        const char *sb_nexthop = e->sb_ecmp_nh->nexthop;
+        if (!strcmp(sb_nexthop, nexthop) && !strcmp(sb_port, port)) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+void
+build_ecmp_nexthop_table(
+        struct ovsdb_idl_txn *ovnsb_txn,
+        const struct hmap *lr_ports, const struct hmap *routes,
+        const struct sbrec_ecmp_nexthop_table *sbrec_ecmp_nexthop_table)
+{
+    if (!ovnsb_txn) {
+        return;
+    }
+
+    struct hmap sb_nexthops_map = HMAP_INITIALIZER(&sb_nexthops_map);
+
+    const struct sbrec_ecmp_nexthop *sb_ecmp_nexthop;
+    SBREC_ECMP_NEXTHOP_TABLE_FOR_EACH (sb_ecmp_nexthop,
+                                       sbrec_ecmp_nexthop_table) {
+        struct ecmp_nexthop_data *e = ecmp_nexthop_alloc_entry(
+                sb_ecmp_nexthop, &sb_nexthops_map);
+        e->stale = true;
+    }
+
+    struct parsed_route *pr;
+    HMAP_FOR_EACH (pr, key_node, routes) {
+        if (!pr->ecmp_symmetric_reply) {
+            continue;
+        }
+
+        if (!pr->out_port) {
+            continue;
+        }
+
+        struct ovn_port *out_port = ovn_port_find(lr_ports, pr->out_port->key);
+        if (!out_port || !out_port->sb) {
+            continue;
+        }
+
+        const struct nbrec_logical_router_static_route *r = pr->route;
+        const char *pb_name = out_port->sb->logical_port;
+
+        struct ecmp_nexthop_data *e = ecmp_nexthop_find_entry(
+                r->nexthop, pb_name, &sb_nexthops_map);
+        if (!e) {
+            sb_ecmp_nexthop = sbrec_ecmp_nexthop_insert(ovnsb_txn);
+            sbrec_ecmp_nexthop_set_nexthop(sb_ecmp_nexthop, r->nexthop);
+            sbrec_ecmp_nexthop_set_port(sb_ecmp_nexthop, out_port->sb);
+            e = ecmp_nexthop_alloc_entry(sb_ecmp_nexthop, &sb_nexthops_map);
+        }
+        e->stale = false;
+    }
+
+    struct ecmp_nexthop_data *e;
+    HMAP_FOR_EACH_POP (e, hmap_node, &sb_nexthops_map) {
+        if (e->stale) {
+            sbrec_ecmp_nexthop_delete(e->sb_ecmp_nh);
+        }
+        free(e);
+    }
+    hmap_destroy(&sb_nexthops_map);
+}
+
 /* Returns a string of the IP address of the router port 'op' that
  * overlaps with 'ip_s".  If one is not found, returns NULL.
  *
@@ -11160,10 +11260,11 @@ parsed_routes_add(struct ovn_datapath *od, const struct hmap *lr_ports,
     }
 
     /* Verify that ip_prefix and nexthop are on the same network. */
+    struct ovn_port *out_port = NULL;
     if (!is_discard_route &&
         !find_static_route_outport(od, lr_ports, route,
                                    IN6_IS_ADDR_V4MAPPED(&prefix),
-                                   NULL, NULL)) {
+                                   NULL, &out_port)) {
         return;
     }
 
@@ -11206,6 +11307,7 @@ parsed_routes_add(struct ovn_datapath *od, const struct hmap *lr_ports,
     new_pr->hash = route_hash(new_pr);
     new_pr->route = route;
     new_pr->nbr = od->nbr;
+    new_pr->out_port = out_port;
     new_pr->ecmp_symmetric_reply = smap_get_bool(&route->options,
                                                  "ecmp_symmetric_reply",
                                                  false);
