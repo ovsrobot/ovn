@@ -212,6 +212,9 @@ const struct ovn_field *ovn_field_from_name(const char *name);
 #define OVN_CT_ECMP_ETH_1ST_BIT 32
 #define OVN_CT_ECMP_ETH_END_BIT 79
 
+#define OVN_CT_ECMP_ETH_LOW     (((1ULL << OVN_CT_ECMP_ETH_1ST_BIT) - 1) << 32)
+#define OVN_CT_ECMP_ETH_HIGH    ((1ULL << (OVN_CT_ECMP_ETH_END_BIT - 63)) - 1)
+
 #define OVN_CT_STR(LABEL_VALUE) OVS_STRINGIZE(LABEL_VALUE)
 #define OVN_CT_MASKED_STR(LABEL_VALUE) \
     OVS_STRINGIZE(LABEL_VALUE) "/" OVS_STRINGIZE(LABEL_VALUE)
