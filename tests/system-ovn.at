@@ -12411,7 +12411,7 @@ check ovn-nbctl lsp-add sw1 rp-sw1 -- set Logical_Switch_Port rp-sw1 \
     type=router options:router-port=lr-sw1 \
     -- lsp-set-addresses rp-sw1 router
 
-check ovn-nbctl lrp-add lr1 lr1-join 04:00:02:01:02:03 172.16.2.2/24
+check ovn-nbctl lrp-add lr1 lr1-join 04:00:02:01:02:03 172.16.1.2/24
 check ovn-nbctl lsp-add join rp1-join -- set Logical_Switch_Port rp1-join \
     type=router options:router-port=lr1-join \
     -- lsp-set-addresses rp1-join router
