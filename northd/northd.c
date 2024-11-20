@@ -16207,8 +16207,7 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
                             struct ds *actions, bool distributed_nat,
                             struct eth_addr mac, int cidr_bits, bool is_v6,
                             struct ovn_port *l3dgw_port,
-                            struct lflow_ref *lflow_ref,
-                            const struct chassis_features *features)
+                            struct lflow_ref *lflow_ref)
 {
     if (!(nat_entry->type == SNAT || nat_entry->type == DNAT_AND_SNAT)) {
         return;
@@ -16239,34 +16238,6 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
                             priority, ds_cstr(match),
                             ds_cstr(actions), &nat->header_,
                             lflow_ref);
-
-    /* For the SNAT networks, we need to make sure that connections are
-     * properly tracked so we can decide whether to perform SNAT on traffic
-     * exiting the network. */
-    if (features->ct_commit_to_zone && features->ct_next_zone &&
-        nat_entry->type == SNAT && !od->is_gw_router) {
-        /* For traffic that comes from SNAT network, initiate CT state before
-         * entering S_ROUTER_OUT_SNAT to allow matching on various CT states.
-         */
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 70,
-                      ds_cstr(match), "ct_next(snat);",
-                      lflow_ref);
-
-        build_lrouter_out_snat_match(lflows, od, nat, match,
-                                     distributed_nat, cidr_bits, is_v6,
-                                     l3dgw_port, lflow_ref, true);
-
-        /* New traffic that goes into SNAT network is committed to CT to avoid
-         * SNAT-ing replies.*/
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, priority,
-                      ds_cstr(match), "ct_snat;",
-                      lflow_ref);
-
-        ds_put_cstr(match, " && ct.new");
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT, priority,
-                      ds_cstr(match), "ct_commit_to_zone(snat);",
-                      lflow_ref);
-    }
 }
 
 static void
@@ -16548,6 +16519,8 @@ static void build_lr_nat_defrag_and_lb_default_flows(
     /* Packets are allowed by default. */
     ovn_lflow_add(lflows, od, S_ROUTER_IN_DEFRAG, 0, "1", "next;", lflow_ref);
     ovn_lflow_add(lflows, od, S_ROUTER_IN_UNSNAT, 0, "1", "next;", lflow_ref);
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 0, "1", "next;",
+                  lflow_ref);
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_CHECK_DNAT_LOCAL, 0, "1",
                   REGBIT_DST_NAT_IP_LOCAL" = 0; next;", lflow_ref);
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 0, "1", "next;", lflow_ref);
@@ -16659,9 +16632,6 @@ build_lrouter_nat_defrag_and_lb(
         ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 50,
                       "ip", "flags.loopback = 1; ct_dnat;",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 50,
-                      "ip && ct.new", "ct_commit { } ; next; ",
-                      lflow_ref);
     }
 
     /* NAT rules are only valid on Gateway routers and routers with
@@ -16679,6 +16649,9 @@ build_lrouter_nat_defrag_and_lb(
         !lport_addresses_is_empty(&lrnat_rec->dnat_force_snat_addrs);
     bool lb_force_snat_ip =
         !lport_addresses_is_empty(&lrnat_rec->lb_force_snat_addrs);
+    bool stateful_dnat = lr_stateful_rec->has_lb_vip;
+    bool stateful_snat = (dnat_force_snat_ip || lb_force_snat_ip ||
+                          lrnat_rec->lb_force_snat_router_ip);
 
     for (size_t i = 0; i < lrnat_rec->n_nat_entries; i++) {
         struct ovn_nat *nat_entry = &lrnat_rec->nat_entries[i];
@@ -16695,6 +16668,21 @@ build_lrouter_nat_defrag_and_lb(
                                     &cidr_bits,
                                     &mac, &distributed_nat, &l3dgw_port) < 0) {
             continue;
+        }
+
+        if (!stateless) {
+            switch (nat_entry->type) {
+            case DNAT:
+                stateful_dnat = true;
+                break;
+            case SNAT:
+                stateful_snat = true;
+                break;
+            case DNAT_AND_SNAT:
+                stateful_snat = true;
+                stateful_dnat = true;
+                break;
+            }
         }
 
         /* S_ROUTER_IN_UNSNAT
@@ -16819,7 +16807,7 @@ build_lrouter_nat_defrag_and_lb(
         } else {
             build_lrouter_out_snat_flow(lflows, od, nat_entry, match, actions,
                                         distributed_nat, mac, cidr_bits, is_v6,
-                                        l3dgw_port, lflow_ref, features);
+                                        l3dgw_port, lflow_ref);
         }
 
         /* S_ROUTER_IN_ADMISSION - S_ROUTER_IN_IP_INPUT */
@@ -16907,6 +16895,34 @@ build_lrouter_nat_defrag_and_lb(
                                     ds_cstr(match), ds_cstr(actions),
                                     &nat->header_, lflow_ref);
         }
+    }
+
+
+    bool can_commit = features->ct_commit_to_zone && features->ct_next_zone;
+    if (can_commit && stateful_dnat) {
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_DEFRAG, 10,
+                      "ip && (!ct.trk || !ct.rpl)",
+                      "ct_next(dnat);", lflow_ref);
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 10,
+                      "ip && ct.new", "ct_commit_to_zone(dnat);", lflow_ref);
+    }
+
+    if (can_commit && stateful_snat) {
+        /* We would lose the CT state especially the ct.new flag if we have
+         * mixed SNAT and DNAT on single LR. In order to know if we actually
+         * can commit into SNAT zone keep the flag in register. The SNAT flows
+         * in the egress pipeline can then check the flag and commit
+         * based on that. */
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10,
+                      "ip && (!ct.trk || ct.new)",
+                      "flags.unsnat_new = 1; next;", lflow_ref);
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
+                      "ip && (!ct.trk || !ct.rpl) && "
+                      "flags.unsnat_new == 1", "ct_next(snat);",
+                      lflow_ref);
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 10,
+                      "ip && ct.new && flags.unsnat_new == 1",
+                      "ct_commit_to_zone(snat);", lflow_ref);
     }
 
     if (use_common_zone && od->nbr->n_nat) {

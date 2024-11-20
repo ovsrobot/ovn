@@ -1315,6 +1315,12 @@ ovn_strip_collector_set() {
     sed 's/collector_set=[[0-9]]*,\?/collector_set=??,/g'
 }
 
+get_zone_num() {
+    output=$1
+    name=$2
+    printf "$output" | grep $name | cut -d ' ' -f 2
+}
+
 OVS_END_SHELL_HELPERS
 
 m4_define([OVN_POPULATE_ARP], [AT_CHECK(ovn_populate_arp__, [0], [ignore])])

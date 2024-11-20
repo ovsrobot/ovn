@@ -237,6 +237,14 @@ m4_define([STRIP_MONITOR_CSUM], [grep "csum:" | sed 's/csum:.*/csum: <skip>/'])
 m4_define([FORMAT_CT],
     [[grep -F "dst=$1," | sed -e 's/port=[0-9]*/port=<cleared>/g' -e 's/id=[0-9]*/id=<cleared>/g' -e 's/state=[0-9_A-Z]*/state=<cleared>/g' | sort | uniq]])
 
+# FORMAT_CT_WITH_ZONE([ip-addr], [zone])
+#
+# Strip content from the piped input which would differ from test to test
+# and limit the output to the rows containing 'ip-addr' and 'zone'.
+#
+m4_define([FORMAT_CT_WITH_ZONE],
+    [[grep -F "dst=$1," | grep -F "zone=$2" | sed -e 's/port=[0-9]*/port=<cleared>/g' -e 's/id=[0-9]*/id=<cleared>/g' -e 's/state=[0-9_A-Z]*/state=<cleared>/g' | sort]])
+
 # DAEMONIZE([command], [pidfile])
 #
 # Run 'command' as a background process and record its pid to 'pidfile' to
