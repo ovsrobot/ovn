@@ -303,9 +303,9 @@ BUILD_ASSERT_DECL(ACL_OBS_STAGE_MAX < (1 << 2));
  * same ip_prefix values:
  *  -  connected route overrides static one;
  *  -  static route overrides src-ip route. */
-#define ROUTE_PRIO_OFFSET_MULTIPLIER 5
-#define ROUTE_PRIO_OFFSET_STATIC 2
-#define ROUTE_PRIO_OFFSET_CONNECTED 4
+#define ROUTE_PRIO_OFFSET_MULTIPLIER 3
+#define ROUTE_PRIO_OFFSET_STATIC 0
+#define ROUTE_PRIO_OFFSET_CONNECTED 2
 
 /* Returns the type of the datapath to which a flow with the given 'stage' may
  * be added. */
@@ -11443,6 +11443,7 @@ build_route_match(const struct ovn_port *op_inport, uint32_t rtb_id,
                   bool has_protocol_match)
 {
     const char *dir;
+    int base = 0;
     /* The priority here is calculated to implement longest-prefix-match
      * routing. */
     if (is_src_route) {
@@ -11450,6 +11451,9 @@ build_route_match(const struct ovn_port *op_inport, uint32_t rtb_id,
         ofs = 0;
     } else {
         dir = "dst";
+        /* dst routes have higher priority than all src routes regardless of
+         * prefix length. */
+        base = (128 + 1) * ROUTE_PRIO_OFFSET_MULTIPLIER;
     }
 
     if (op_inport) {
@@ -11462,7 +11466,7 @@ build_route_match(const struct ovn_port *op_inport, uint32_t rtb_id,
     if (has_protocol_match) {
         ofs += 1;
     }
-    *priority = (plen * ROUTE_PRIO_OFFSET_MULTIPLIER) + ofs;
+    *priority = base + (plen * ROUTE_PRIO_OFFSET_MULTIPLIER) + ofs;
 
     ds_put_format(match, "ip%s.%s == %s/%d", is_ipv4 ? "4" : "6", dir,
                   network_s, plen);
