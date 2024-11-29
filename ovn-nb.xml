@@ -3877,24 +3877,26 @@ or
 
     <column name="route_table">
       <p>
-        Any string to place route to separate routing table. If Logical Router
-        Port has configured value in <ref table="Logical_Router_Port"
-        column="options" key="route_table"/> other than empty string, OVN
-        performs route lookup for all packets entering Logical Router ingress
-        pipeline from this port in the following manner:
+        Any string to place route to separate routing table. Maximum prefix
+        length matched route takes precedence over others, while for the same
+        routes with same prefix length the following lookup order applies:
       </p>
 
-      <ul>
+      <ol>
         <li>
-          1. First lookup among "global" routes: routes without
-          <code>route_table</code> value set and routes to directly connected
-          networks.
+          Lookup among routes of directly connected networks (including
+          directly connected networks learned from other availability zones
+          within same LR through OVN-IC).
         </li>
         <li>
-          2. Next lookup among routes with same <code>route_table</code> value
-          as specified in LRP's options:route_table field.
+          Lookup among static routes with same <ref
+          table="Logical_Router_Static_Route" column="route_table"/> value
+          as specified in <ref table="Logical_Router_Port" column="options"
+          key="route_table"/> field.  If no value specified in <ref
+          table="Logical_Router_Port" column="options" key="route_table"/>,
+          static routes with empty <code>route_table</code> are looked up.
         </li>
-      </ul>
+      </ol>
     </column>
 
     <column name="external_ids" key="ic-learned-route">
