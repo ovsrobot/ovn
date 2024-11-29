@@ -6005,13 +6005,6 @@ nbctl_lrp_add(struct ctl_context *ctx)
             break;
         }
     }
-
-    if (!n_networks) {
-        ctl_error(ctx, "%s: router port requires specifying a network",
-                  lrp_name);
-        return;
-    }
-
     char **settings = (char **) &ctx->argv[n_networks + 4];
     int n_settings = ctx->argc - 4 - n_networks;
 
@@ -8057,8 +8050,8 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "lr-list", 0, 0, "", nbctl_pre_lr_list, nbctl_lr_list, NULL, "", RO },
 
     /* logical router port commands. */
-    { "lrp-add", 4, INT_MAX,
-      "ROUTER PORT MAC NETWORK... [COLUMN[:KEY]=VALUE]...",
+    { "lrp-add", 3, INT_MAX,
+      "ROUTER PORT MAC [NETWORK]... [COLUMN[:KEY]=VALUE]...",
       nbctl_pre_lrp_add, nbctl_lrp_add, NULL, "--may-exist", RW },
     { "lrp-set-gateway-chassis", 2, 3,
       "PORT CHASSIS [PRIORITY]",
