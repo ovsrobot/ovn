@@ -1067,7 +1067,8 @@ load_logical_ingress_metadata(const struct sbrec_port_binding *binding,
 
 static const struct sbrec_port_binding *
 get_binding_peer(struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                 const struct sbrec_port_binding *binding)
+                 const struct sbrec_port_binding *binding,
+                 const enum en_lport_type type)
 {
     const char *peer_name = smap_get(&binding->options, "peer");
     if (!peer_name) {
@@ -1076,15 +1077,32 @@ get_binding_peer(struct ovsdb_idl_index *sbrec_port_binding_by_name,
 
     const struct sbrec_port_binding *peer = lport_lookup_by_name(
         sbrec_port_binding_by_name, peer_name);
-    if (!peer || strcmp(peer->type, binding->type)) {
+    if (!peer) {
         return NULL;
     }
+
+    enum en_lport_type peer_type = get_lport_type(peer);
+    if (type != peer_type &&
+        !((type == LP_L3GATEWAY && peer_type == LP_PATCH) ||
+        (type == LP_PATCH && peer_type == LP_L3GATEWAY))) {
+        return NULL;
+    }
+
     const char *peer_peer_name = smap_get(&peer->options, "peer");
     if (!peer_peer_name || strcmp(peer_peer_name, binding->logical_port)) {
         return NULL;
     }
 
     return peer;
+}
+
+static bool
+physical_should_eval_peer_port(const struct sbrec_port_binding *binding,
+                      const struct sbrec_chassis *chassis,
+                      const enum en_lport_type type)
+{
+    return type == LP_PATCH ||
+           (type == LP_L3GATEWAY && binding->chassis == chassis);
 }
 
 enum access_type {
@@ -1506,11 +1524,9 @@ consider_port_binding(const struct physical_ctx *ctx,
     }
 
     struct match match;
-    if (type == LP_PATCH ||
-        (type == LP_L3GATEWAY && binding->chassis == ctx->chassis)) {
-
+    if (physical_should_eval_peer_port(binding, ctx->chassis, type)) {
         const struct sbrec_port_binding *peer = get_binding_peer(
-                ctx->sbrec_port_binding_by_name, binding);
+                ctx->sbrec_port_binding_by_name, binding, type);
         if (!peer) {
             return;
         }
@@ -2373,9 +2389,9 @@ physical_handle_flows_for_lport(const struct sbrec_port_binding *pb,
 
     if (!removed) {
         physical_eval_port_binding(p_ctx, pb, type, flow_table);
-        if (type == LP_PATCH) {
+        if (physical_should_eval_peer_port(pb, p_ctx->chassis, type)) {
             const struct sbrec_port_binding *peer =
-                get_binding_peer(p_ctx->sbrec_port_binding_by_name, pb);
+                get_binding_peer(p_ctx->sbrec_port_binding_by_name, pb, type);
             if (peer) {
                 physical_eval_port_binding(p_ctx, peer, get_lport_type(peer),
                                            flow_table);
