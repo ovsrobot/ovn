@@ -412,7 +412,8 @@ ls_stateful_record_set_acl_flags_(struct ls_stateful_record *ls_stateful_rec,
             ls_stateful_rec->max_acl_tier = acl->tier;
         }
         if (!ls_stateful_rec->has_stateful_acl
-                && !strcmp(acl->action, "allow-related")) {
+                && (!strcmp(acl->action, "allow-related")
+                     || !strcmp(acl->action, "allow-established"))) {
             ls_stateful_rec->has_stateful_acl = true;
         }
         if (ls_stateful_rec->has_stateful_acl &&

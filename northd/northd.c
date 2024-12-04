@@ -124,6 +124,7 @@ static bool vxlan_mode;
 #define REGBIT_ACL_HINT_ALLOW_REL "reg0[17]"
 #define REGBIT_FROM_ROUTER_PORT   "reg0[18]"
 #define REGBIT_IP_FRAG            "reg0[19]"
+#define REGBIT_ACL_PERSIST_ID     "reg0[20]"
 
 #define REG_ORIG_DIP_IPV4         "reg1"
 #define REG_ORIG_DIP_IPV6         "xxreg1"
@@ -7121,7 +7122,8 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
     }
 
     if (!strcmp(acl->action, "allow")
-        || !strcmp(acl->action, "allow-related")) {
+        || !strcmp(acl->action, "allow-related")
+        || !strcmp(acl->action, "allow-established")) {
         /* If there are any stateful flows, we must even commit "allow"
          * actions.  This is because, while the initiater's
          * direction may not have any stateful rules, the server's
@@ -7146,6 +7148,11 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
 
         ds_truncate(actions, log_verdict_len);
         ds_put_cstr(actions, REGBIT_CONNTRACK_COMMIT" = 1; ");
+
+        if (!strcmp(acl->action, "allow-established")) {
+            ds_put_format(actions,
+                          REGBIT_ACL_PERSIST_ID " = 1; ");
+        }
 
         /* For stateful ACLs sample "new" and "established" packets. */
         build_acl_sample_label_action(actions, acl, acl->sample_new,
@@ -7624,6 +7631,26 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_AFTER_LB_EVAL,
                       UINT16_MAX - 3,
                       REGBIT_ACL_HINT_ALLOW_REL" == 1",
+                      REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
+                      lflow_ref);
+
+        /* Ingress and egress ACL Table (Priority 65535).
+         *
+         * Allow traffic that is established if the ACL has a persistent
+         * conntrack ID configured.
+         */
+        ds_clear(&match);
+        ds_put_format(&match, "ct.est && ct_mark.allow_established == 1");
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, UINT16_MAX,
+                      ds_cstr(&match),
+                      REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
+                      lflow_ref);
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_AFTER_LB_EVAL, UINT16_MAX,
+                      ds_cstr(&match),
+                      REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
+                      lflow_ref);
+        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX,
+                      ds_cstr(&match),
                       REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
                       lflow_ref);
     }
@@ -8362,6 +8389,7 @@ build_stateful(struct ovn_datapath *od, struct lflow_table *lflows,
     ds_put_cstr(&actions,
                  "ct_commit { "
                     "ct_mark.blocked = 0; "
+                    "ct_mark.allow_established  = " REGBIT_ACL_PERSIST_ID "; "
                     "ct_mark.obs_stage = " REGBIT_ACL_OBS_STAGE "; "
                     "ct_mark.obs_collector_id = " REG_OBS_COLLECTOR_ID_EST "; "
                     "ct_label.obs_point_id = " REG_OBS_POINT_ID_EST "; "
@@ -8382,7 +8410,11 @@ build_stateful(struct ovn_datapath *od, struct lflow_table *lflows,
      * any packet that makes it this far is part of a connection we
      * want to allow to continue. */
     ds_clear(&actions);
-    ds_put_cstr(&actions, "ct_commit { ct_mark.blocked = 0; }; next;");
+    ds_put_cstr(&actions,
+                "ct_commit { "
+                   "ct_mark.blocked = 0; "
+                   "ct_mark.allow_established  = " REGBIT_ACL_PERSIST_ID "; "
+                "}; next;");
     ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 100,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 0",

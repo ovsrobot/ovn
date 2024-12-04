@@ -2490,6 +2490,17 @@ or
         </li>
 
         <li>
+            <code>allow-established</code>: This is similar to
+            <code>allow-related</code>. The difference is that if the ACL
+            <code>match</code> is changed, then established traffic can
+            still pass, even if the traffic does not match the ACL any longer.
+            When the ACL is deleted, or if the action changes to something
+            other than <code>allow-established</code>, then the established
+            traffic is no longer automatically allowed. At that point, the
+            traffic is subject to other configured ACLs.
+        </li>
+
+        <li>
           <code>drop</code>: Silently drop the packet.
         </li>
 
