@@ -50,6 +50,7 @@
 #include "en-lr-stateful.h"
 #include "en-ls-stateful.h"
 #include "en-sampling-app.h"
+#include "en-acl-ids.h"
 #include "lib/ovn-parallel-hmap.h"
 #include "ovn/actions.h"
 #include "ovn/features.h"
@@ -19120,6 +19121,8 @@ ovnnb_db_run(struct northd_input *input_data,
                      &data->ls_datapaths.datapaths);
     sync_template_vars(ovnsb_txn, input_data->nbrec_chassis_template_var_table,
                        input_data->sbrec_chassis_template_var_table);
+    sync_acl_ids(input_data->acl_id_data, ovnsb_txn,
+                 input_data->sbrec_acl_id_by_id);
 
     cleanup_stale_fdb_entries(input_data->sbrec_fdb_table,
                               &data->ls_datapaths.datapaths);

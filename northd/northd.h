@@ -63,12 +63,16 @@ struct northd_input {
     struct eth_addr svc_monitor_mac_ea;
     const struct chassis_features *features;
 
+    /* ACL ID inputs. */
+    const struct acl_id_data *acl_id_data;
+
     /* Indexes */
     struct ovsdb_idl_index *sbrec_chassis_by_name;
     struct ovsdb_idl_index *sbrec_chassis_by_hostname;
     struct ovsdb_idl_index *sbrec_ha_chassis_grp_by_name;
     struct ovsdb_idl_index *sbrec_ip_mcast_by_dp;
     struct ovsdb_idl_index *sbrec_fdb_by_dp_and_port;
+    struct ovsdb_idl_index *sbrec_acl_id_by_id;
 };
 
 /* A collection of datapaths. E.g. all logical switch datapaths, or all

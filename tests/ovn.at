@@ -39761,3 +39761,42 @@ OVN_CLEANUP([hv1])
 
 AT_CLEANUP
 ])
+
+AT_SETUP([ACL Conntrack ID propagation])
+ovn_start
+
+dnl In this test, we want to ensure that southbound ACL_ID
+dnl entries are created for northbound ACLs of type "allow-established".
+dnl
+dnl If an ACL is of a different type, or if an ACL is deleted,
+dnl then there should be no soutbhound ACL_ID.
+
+check ovn-nbctl ls-add sw
+check ovn-nbctl --wait=sb acl-add sw from-lport 1000 1 allow-related
+acl_uuid=$(fetch_column nb:ACL _uuid priority=1000)
+
+dnl The ACL is not allow-established, so SBDB should have no rows.
+wait_row_count ACL_ID 0
+
+dnl When we change to allow-established, the SBDB should pick it up.
+check ovn-nbctl --wait=sb set ACL $acl_uuid action=allow-established
+
+wait_row_count ACL_ID 1
+
+dnl Setting to a new action should remove the row from the SBDB.
+check ovn-nbctl --wait=sb set ACL $acl_uuid action=drop
+
+wait_row_count ACL_ID 0
+
+dnl Set back to allow-established and make sure it shows up in the SBDB.
+check ovn-nbctl --wait=sb set ACL $acl_uuid action=allow-established
+
+wait_row_count ACL_ID 1
+
+dnl Delete the ACL and ensure the SBDB entry is deleted.
+check ovn-nbctl --wait=sb acl-del sw from-lport 1000 1
+
+wait_row_count ACL_ID 0
+
+AT_CLEANUP
+])

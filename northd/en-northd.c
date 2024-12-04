@@ -61,6 +61,10 @@ northd_get_input_data(struct engine_node *node,
         engine_ovsdb_node_get_index(
             engine_get_input("SB_fdb", node),
             "sbrec_fdb_by_dp_and_port");
+    input_data->sbrec_acl_id_by_id =
+        engine_ovsdb_node_get_index(
+            engine_get_input("SB_acl_id", node),
+            "sbrec_acl_id_by_id");
 
     input_data->nbrec_logical_switch_table =
         EN_OVSDB_GET(engine_get_input("NB_logical_switch", node));
@@ -110,6 +114,8 @@ northd_get_input_data(struct engine_node *node,
     input_data->svc_monitor_mac = global_config->svc_monitor_mac;
     input_data->svc_monitor_mac_ea = global_config->svc_monitor_mac_ea;
     input_data->features = &global_config->features;
+
+    input_data->acl_id_data = engine_get_input_data("acl_id", node);
 }
 
 void

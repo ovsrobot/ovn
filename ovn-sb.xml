@@ -5217,4 +5217,17 @@ tcp.flags = RST;
       The set of variable values for a given chassis.
     </column>
   </table>
+
+  <table name="ACL_ID">
+    <p>
+      Each record represents an identifier that <code>ovn-northd</code> needs
+      to synchronize with instances of <code>ovn-controller</code>.
+    </p>
+    <column name="id">
+      The actual identifier being synchronized.
+    </column>
+    <column name="nb_acl">
+      The Northbound ACL UUID for which this ID corresponds.
+    </column>
+  </table>
 </database>

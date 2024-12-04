@@ -41,6 +41,7 @@
 #include "en-sampling-app.h"
 #include "en-sync-sb.h"
 #include "en-sync-from-sb.h"
+#include "en-acl-ids.h"
 #include "unixctl.h"
 #include "util.h"
 
@@ -102,7 +103,8 @@ static unixctl_cb_func chassis_features_list;
     SB_NODE(fdb, "fdb") \
     SB_NODE(static_mac_binding, "static_mac_binding") \
     SB_NODE(chassis_template_var, "chassis_template_var") \
-    SB_NODE(logical_dp_group, "logical_dp_group")
+    SB_NODE(logical_dp_group, "logical_dp_group") \
+    SB_NODE(acl_id, "acl_id")
 
 enum sb_engine_node {
 #define SB_NODE(NAME, NAME_STR) SB_##NAME,
@@ -161,6 +163,7 @@ static ENGINE_NODE(route_policies, "route_policies");
 static ENGINE_NODE(routes, "routes");
 static ENGINE_NODE(bfd, "bfd");
 static ENGINE_NODE(bfd_sync, "bfd_sync");
+static ENGINE_NODE(acl_id, "acl_id");
 
 void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
                           struct ovsdb_idl_loop *sb)
@@ -186,6 +189,9 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
                      global_config_sb_chassis_handler);
     engine_add_input(&en_global_config, &en_sampling_app, NULL);
 
+    engine_add_input(&en_acl_id, &en_nb_acl, NULL);
+    engine_add_input(&en_acl_id, &en_sb_acl_id, NULL);
+
     engine_add_input(&en_northd, &en_nb_mirror, NULL);
     engine_add_input(&en_northd, &en_nb_static_mac_binding, NULL);
     engine_add_input(&en_northd, &en_nb_chassis_template_var, NULL);
@@ -201,8 +207,10 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_northd, &en_sb_static_mac_binding, NULL);
     engine_add_input(&en_northd, &en_sb_chassis_template_var, NULL);
     engine_add_input(&en_northd, &en_sb_fdb, northd_sb_fdb_change_handler);
+    engine_add_input(&en_northd, &en_sb_acl_id, NULL);
     engine_add_input(&en_northd, &en_global_config,
                      northd_global_config_handler);
+    engine_add_input(&en_northd, &en_acl_id, NULL);
 
     /* northd engine node uses the sb mac binding table to
      * cleanup mac binding entries for deleted logical ports
@@ -364,6 +372,8 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
         = mac_binding_by_datapath_index_create(sb->idl);
     struct ovsdb_idl_index *fdb_by_dp_key =
         ovsdb_idl_index_create1(sb->idl, &sbrec_fdb_col_dp_key);
+    struct ovsdb_idl_index *sbrec_acl_id_by_id =
+        ovsdb_idl_index_create1(sb->idl, &sbrec_acl_id_col_id);
 
     engine_init(&en_northd_output, &engine_arg);
 
@@ -388,6 +398,9 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_ovsdb_node_add_index(&en_sb_fdb,
                                 "fdb_by_dp_key",
                                 fdb_by_dp_key);
+    engine_ovsdb_node_add_index(&en_sb_acl_id,
+                                "sbrec_acl_id_by_id",
+                                sbrec_acl_id_by_id);
 
     struct ovsdb_idl_index *sbrec_address_set_by_name
         = ovsdb_idl_index_create1(sb->idl, &sbrec_address_set_col_name);
