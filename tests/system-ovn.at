@@ -14251,6 +14251,18 @@ test
 
 : > output.txt
 
+# Get the ID for this ACL
+acl_id=$(fetch_column ACL_ID id nb_acl=$acl_uuid)
+acl_id=$(printf %x $acl_id)
+
+OVS_WAIT_FOR_OUTPUT([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(192.168.1.2) | \
+grep "labels=0x"$acl_id"00000000000000000000" | \
+sed -e 's/zone=[[0-9]]*/zone=<cleared>/' | \
+sed -e 's/mark=[[0-9]]*/mark=<cleared>/' | \
+sed -e 's/labels=0x[[0-9a-f]]*/labels=<cleared>/'], [0], [dnl
+tcp,orig=(src=192.168.1.1,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=192.168.1.1,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=<cleared>,labels=<cleared>,protoinfo=(state=<cleared>)
+])
+
 # Adjust the ACL so that it no longer matches
 check ovn-nbctl set ACL $acl_uuid match="\"ip4.dst == 192.168.1.3\""
 
@@ -14263,6 +14275,14 @@ test
 ])
 
 : > output.txt
+
+# Now remove the ACL. This should remove the conntrack entry as well.
+check ovn-nbctl --wait=hv acl-del sw from-lport 1000 'ip4.dst == 192.168.1.3'
+
+OVS_WAIT_FOR_OUTPUT([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(192.168.1.2) | \
+grep "labels=0x"$acl_id"00000000000000000000" | \
+sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
+])
 
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
 

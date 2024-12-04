@@ -204,3 +204,16 @@ void sync_acl_ids(const struct acl_id_data *id_data,
         }
     }
 }
+
+int64_t
+get_acl_id(const struct acl_id_data *acl_id_data, const struct nbrec_acl *acl)
+{
+    struct acl_id *acl_id;
+    uint32_t hash = uuid_hash(&acl->header_.uuid);
+    HMAP_FOR_EACH_WITH_HASH (acl_id, node, hash, &acl_id_data->ids) {
+        if (uuid_equals(&acl_id->nb_acl_uuid, &acl->header_.uuid)) {
+            return acl_id->id;
+        }
+    }
+    return 0;
+}

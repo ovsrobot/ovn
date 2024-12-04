@@ -96,6 +96,7 @@ lflow_get_input_data(struct engine_node *node,
     struct ed_type_sampling_app_data *sampling_app_data =
         engine_get_input_data("sampling_app", node);
     lflow_input->sampling_apps = &sampling_app_data->apps;
+    lflow_input->acl_id_data = engine_get_input_data("acl_id", node);
 }
 
 void en_lflow_run(struct engine_node *node, void *data)

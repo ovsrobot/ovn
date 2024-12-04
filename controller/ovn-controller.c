@@ -88,6 +88,7 @@
 #include "lib/dns-resolve.h"
 #include "ct-zone.h"
 #include "ovn-dns.h"
+#include "acl_ids.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
 
@@ -864,7 +865,8 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     SB_NODE(fdb, "fdb") \
     SB_NODE(meter, "meter") \
     SB_NODE(static_mac_binding, "static_mac_binding") \
-    SB_NODE(chassis_template_var, "chassis_template_var")
+    SB_NODE(chassis_template_var, "chassis_template_var") \
+    SB_NODE(acl_id, "acl_id")
 
 enum sb_engine_node {
 #define SB_NODE(NAME, NAME_STR) SB_##NAME,
@@ -5095,6 +5097,7 @@ main(int argc, char *argv[])
     ENGINE_NODE(mac_cache, "mac_cache");
     ENGINE_NODE(bfd_chassis, "bfd_chassis");
     ENGINE_NODE(dns_cache, "dns_cache");
+    ENGINE_NODE(acl_id, "acl_id");
 
 #define SB_NODE(NAME, NAME_STR) ENGINE_NODE_SB(NAME, NAME_STR);
     SB_NODES
@@ -5302,6 +5305,9 @@ main(int argc, char *argv[])
                      controller_output_mac_cache_handler);
     engine_add_input(&en_controller_output, &en_bfd_chassis,
                      controller_output_bfd_chassis_handler);
+
+    engine_add_input(&en_acl_id, &en_sb_acl_id, NULL);
+    engine_add_input(&en_controller_output, &en_acl_id, NULL);
 
     struct engine_arg engine_arg = {
         .sb_idl = ovnsb_idl_loop.idl,
@@ -5537,6 +5543,8 @@ main(int argc, char *argv[])
         statctrl_update_swconn(br_int_remote.target,
                                br_int_remote.probe_interval);
         pinctrl_update_swconn(br_int_remote.target,
+                              br_int_remote.probe_interval);
+        acl_ids_update_swconn(br_int_remote.target,
                               br_int_remote.probe_interval);
 
         /* Enable ACL matching for double tagged traffic. */
@@ -5842,6 +5850,8 @@ main(int argc, char *argv[])
                                       !ovnsb_idl_txn, !ovs_idl_txn);
                     stopwatch_stop(IF_STATUS_MGR_RUN_STOPWATCH_NAME,
                                    time_msec());
+
+                    acl_ids_run(engine_get_data(&en_acl_id));
                 }
             }
 

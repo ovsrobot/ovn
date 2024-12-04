@@ -232,6 +232,7 @@ struct lflow_input {
     struct hmap *parsed_routes;
     struct hmap *route_policies;
     struct simap *route_tables;
+    const struct acl_id_data *acl_id_data;
 };
 
 extern int parallelization_state;
