@@ -14,6 +14,7 @@ m4_define([_DUMP_DB_TABLES], [
     ovn-sbctl list port_group >> $1
     ovn-sbctl list bfd >> $1
     ovn-sbctl dump-flows > lflows_$1
+    ovn-sbctl list multicast_group > mgroup_$1
 ])
 
 # CHECK_NO_CHANGE_AFTER_RECOMPUTE
@@ -10946,6 +10947,92 @@ check_recompute_counter 1 1
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
 OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([IGMP incremental processing])
+
+check_recompute_counter() {
+    lflow_recomp=$(as northd ovn-appctl -t ovn-northd inc-engine/show-stats lflow recompute)
+    AT_CHECK([test x$lflow_recomp = x$1])
+}
+ovn_start
+
+net_add n1
+sim_add hv1
+as hv1
+
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.11
+
+sim_add hv2
+as hv2
+
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.2
+
+check ovn-nbctl ls-add sw1
+check ovn-nbctl ls-add sw2
+
+check ovn-nbctl lsp-add sw1 sw1-p11
+check ovn-nbctl lsp-add sw2 sw2-p21
+#check ovn-nbctl set Logical_Switch_Port sw2-p21 options:mcast_flood='true'
+
+check ovn-nbctl lr-add rtr
+check ovn-nbctl lrp-add rtr rtr-sw1 00:00:00:00:01:00 10.0.0.254/24
+check ovn-nbctl lrp-add rtr rtr-sw2 00:00:00:00:02:00 10.0.0.254/24
+
+
+check ovn-nbctl lsp-add sw1 sw1-rtr \
+    -- lsp-set-type sw1-rtr router  \
+    -- lsp-set-addresses sw1-rtr 00:00:00:00:01:00 \
+    -- lsp-set-options sw1-rtr router-port=rtr-sw1
+
+check ovn-nbctl lsp-add sw2 sw2-rtr \
+    -- lsp-set-type sw2-rtr router  \
+    -- lsp-set-addresses sw1-rtr 00:00:00:00:02:00 \
+    -- lsp-set-options sw2-rtr router-port=rtr-sw2
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+#create IGMP_GROUP 239.0.1.68 with port sw1-p11
+ovn-sbctl create IGMP_GROUP address=239.0.1.68 \
+    datapath=$(fetch_column Datapath_Binding _uuid external_ids:name=sw1) \
+    chassis=$(fetch_column Chassis _uuid name=hv1) \
+    chassis_name=hv1 \
+    ports=$(fetch_column Port_Binding _uuid logical_port=sw1-p11)
+
+check ovn-nbctl --wait=sb sync
+wait_row_count IGMP_GROUP 1 address=239.0.1.68
+wait_row_count MULTICAST_GROUP 1 name="239.0.1.68"
+wait_row_count MULTICAST_GROUP  1 name="239.0.1.68" ports='[['$(fetch_column Port_Binding _uuid logical_port=sw1-p11)']]'
+check_recompute_counter 0
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+check ovn-nbctl set logical_router rtr \
+    options:mcast_relay="true"
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+#update IGMP_GROUP 239.0.1.68 to include sw2-p21
+ovn-sbctl add igmp_group $(fetch_column IGMP_GROUP _uuid address=239.0.1.68) ports $(fetch_column Port_Binding _uuid logical_port=sw2-p21)
+
+ovn-nbctl --wait=sb sync
+wait_row_count IGMP_GROUP 1 address=239.0.1.68
+# a new multicast_group is created
+wait_row_count MULTICAST_GROUP 2 name=239.0.1.68
+check_recompute_counter 0
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+#delete IGMP_GROUP 239.0.1.68
+ovn-sbctl destroy igmp_group $(fetch_column IGMP_GROUP _uuid address=239.0.1.68)
+check ovn-nbctl --wait=sb sync
+check_recompute_counter 0
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+wait_row_count IGMP_GROUP 0 address=239.0.1.68
+wait_row_count MULTICAST_GROUP 0 name=239.0.1.68
+
+OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
 ])
 

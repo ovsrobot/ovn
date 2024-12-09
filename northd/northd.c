@@ -462,6 +462,7 @@ ovn_datapath_create(struct hmap *datapaths, const struct uuid *key,
     od->lr_group = NULL;
     hmap_init(&od->ports);
     sset_init(&od->router_ips);
+    od->igmp_lflow_ref = lflow_ref_create();
     return od;
 }
 
@@ -491,6 +492,7 @@ ovn_datapath_destroy(struct hmap *datapaths, struct ovn_datapath *od)
         destroy_mcast_info_for_datapath(od);
         destroy_ports_for_datapath(od);
         sset_destroy(&od->router_ips);
+        lflow_ref_destroy(od->igmp_lflow_ref);
         free(od);
     }
 }
@@ -10163,7 +10165,7 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
 
             ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 80,
                           "ip4.mcast || ip6.mcast",
-                          ds_cstr(actions), lflow_ref);
+                          ds_cstr(actions), od->igmp_lflow_ref);
         }
     }
 
@@ -10258,7 +10260,8 @@ build_lswitch_ip_mcast_igmp_mld(struct ovn_igmp_group *igmp_group,
                       igmp_group->mcgroup.name);
 
         ovn_lflow_add(lflows, igmp_group->datapath, S_SWITCH_IN_L2_LKUP,
-                      90, ds_cstr(match), ds_cstr(actions), NULL);
+                      90, ds_cstr(match), ds_cstr(actions),
+                      igmp_group->datapath->igmp_lflow_ref);
     }
 }
 
@@ -17268,7 +17271,7 @@ build_lswitch_and_lrouter_iterate_by_lr(struct ovn_datapath *od,
                                          lsi->parsed_routes, lsi->route_tables,
                                          lsi->bfd_ports, NULL);
     build_mcast_lookup_flows_for_lrouter(od, lsi->lflows, &lsi->match,
-                                         &lsi->actions, NULL);
+                                         &lsi->actions, od->igmp_lflow_ref);
     build_ingress_policy_flows_for_lrouter(od, lsi->lflows, lsi->lr_ports,
                                            lsi->route_policies, NULL);
     build_arp_resolve_flows_for_lrouter(od, lsi->lflows, NULL);
@@ -17798,6 +17801,14 @@ build_mcast_groups(const struct sbrec_igmp_group_table *sbrec_igmp_group_table,
                    const struct hmap *lr_ports,
                    struct hmap *mcast_groups,
                    struct hmap *igmp_groups);
+static void
+delete_igmp_group(const struct sbrec_igmp_group *sb_igmp,
+                  struct ovn_datapath *od,
+                  struct ovsdb_idl_index *sbrec_mcast_group_by_name_dp,
+                  struct lflow_table *lflows,
+                  struct uuidset *datapaths_to_sync,
+                  struct ds *actions,
+                  struct ds *match);
 
 static void
 build_igmp_group_for_sb(const struct sbrec_igmp_group *sb_igmp,
@@ -17814,6 +17825,14 @@ static void
 build_mcast_group_from_igmp_group(struct ovn_igmp_group *igmp_group,
                                    struct hmap *mcast_groups,
                                    struct hmap *igmp_groups);
+static void
+process_peer_switches_for_igmp(struct ovn_igmp_group *igmp_group,
+                               struct uuidset *datapaths_to_sync,
+                               struct hmap *mcast_groups,
+                               struct lflow_table *lflows,
+                               struct ds *actions,
+                               const struct shash *meter_groups);
+
 static struct sbrec_multicast_group *
 create_sb_multicast_group(struct ovsdb_idl_txn *ovnsb_txn,
                           const struct sbrec_datapath_binding *dp,
@@ -19326,6 +19345,217 @@ northd_get_datapath_for_port(const struct hmap *ls_ports,
     return op ? op->od : NULL;
 }
 
+/* handle changes to the sbrec_igmp_group_table in the incremental
+ * processor
+ */
+bool
+handle_igmp_change(struct ovsdb_idl_txn *ovnsb_txn,
+                   const struct sbrec_igmp_group_table *sbrec_igmp_group_table,
+                   struct lflow_input *input_data,
+                   struct lflow_table *lflows)
+{
+    struct hmap igmp_groups = HMAP_INITIALIZER(&igmp_groups);
+    struct hmap mcast_groups = HMAP_INITIALIZER(&mcast_groups);
+    struct ds match = DS_EMPTY_INITIALIZER;
+    struct ds actions = DS_EMPTY_INITIALIZER;
+
+    struct uuidset datapaths_to_sync =
+        UUIDSET_INITIALIZER(&datapaths_to_sync);
+
+    const struct sbrec_igmp_group *sb_igmp;
+    SBREC_IGMP_GROUP_TABLE_FOR_EACH_TRACKED (sb_igmp, sbrec_igmp_group_table) {
+        struct ovn_datapath *od =
+            ovn_datapath_from_sbrec(&input_data->ls_datapaths->datapaths,
+                                    &input_data->lr_datapaths->datapaths,
+                                    sb_igmp->datapath);
+        /* Processing new IGMP group. */
+        if (sbrec_igmp_group_is_new(sb_igmp)) {
+
+            build_igmp_group_for_sb(sb_igmp,
+                                    od,
+                                    input_data->sbrec_mcast_group_by_name_dp,
+                                    input_data->ls_ports, &igmp_groups);
+
+
+            build_igmp_router_entries(od,
+                                      input_data->sbrec_mcast_group_by_name_dp,
+                                      &igmp_groups);
+
+        /* Processing a deleted IGMP group. */
+        } else if (sbrec_igmp_group_is_deleted(sb_igmp)) {
+            delete_igmp_group(sb_igmp,
+                              od,
+                              input_data->sbrec_mcast_group_by_name_dp,
+                              lflows,
+                              &datapaths_to_sync,
+                              &actions,
+                              &match);
+        /* Processing an updated IGMP group. */
+        } else {
+            build_igmp_group_for_sb(sb_igmp,
+                                    od,
+                                    input_data->sbrec_mcast_group_by_name_dp,
+                                    input_data->ls_ports, &igmp_groups);
+
+            /* Do not need to worry about building IGMP groups for multicast
+             * routers with relay enabled. Updating the IGMP group does not
+             * make any changes applicable to them.
+             */
+        }
+    }
+
+
+    struct ovn_igmp_group *igmp_group;
+    HMAP_FOR_EACH_SAFE (igmp_group, hmap_node, &igmp_groups) {
+        if (igmp_group->datapath->nbr) {
+            /* For every router datapath each port of the peer switches
+             * need to be checked if they flood multicast.
+             */
+            process_peer_switches_for_igmp(igmp_group,
+                                           &datapaths_to_sync,
+                                           &mcast_groups,
+                                           lflows,
+                                           &actions,
+                                           input_data->meter_groups);
+        }
+        build_mcast_group_from_igmp_group(igmp_group,
+                                          &mcast_groups,
+                                          &igmp_groups);
+    }
+
+    /* After all the routers have been processed the flows for the
+     * the switches can be created */
+    HMAP_FOR_EACH_SAFE (igmp_group, hmap_node, &igmp_groups) {
+        build_lswitch_ip_mcast_igmp_mld(igmp_group, lflows, &actions, &match);
+
+        uuidset_insert(&datapaths_to_sync, &igmp_group->datapath->key);
+    }
+
+    struct ovn_multicast *mc;
+    HMAP_FOR_EACH_SAFE (mc, hmap_node, &mcast_groups) {
+        const struct sbrec_multicast_group *sbmc =
+            mcast_group_lookup(input_data->sbrec_mcast_group_by_name_dp,
+                                mc->group->name,  mc->datapath->sb);
+        if (sbmc) {
+            for (size_t i = 0; i < mc->n_ports; i++) {
+                sbrec_multicast_group_update_ports_addvalue(sbmc,
+                                                            mc->ports[i]->sb);
+            }
+        } else {
+            sbmc = create_sb_multicast_group(ovnsb_txn, mc->datapath->sb,
+                                             mc->group->name, mc->group->key);
+            ovn_multicast_update_sbrec(mc, sbmc);
+        }
+        if (mc->datapath->nbr) {
+            build_mcast_lookup_flows_for_lrouter(mc->datapath,
+                                                 lflows,
+                                                 &match,
+                                                 &actions,
+                                                 mc->datapath->igmp_lflow_ref);
+
+            uuidset_insert(&datapaths_to_sync, &mc->datapath->key);
+        }
+        ovn_multicast_destroy(&mcast_groups, mc);
+    }
+    struct uuidset_node *uuidnode;
+    UUIDSET_FOR_EACH (uuidnode, &datapaths_to_sync) {
+        const struct ovn_datapath *dp =
+            ovn_datapath_find(&input_data->ls_datapaths->datapaths,
+                              &uuidnode->uuid);
+        if (!dp) {
+            dp = ovn_datapath_find(&input_data->lr_datapaths->datapaths,
+                                   &uuidnode->uuid);
+        }
+
+        lflow_ref_sync_lflows(dp->igmp_lflow_ref,
+            lflows, ovnsb_txn,
+            input_data->ls_datapaths,
+            input_data->lr_datapaths,
+            input_data->ovn_internal_version_changed,
+            input_data->sbrec_logical_flow_table,
+            input_data->sbrec_logical_dp_group_table);
+    }
+
+    ds_destroy(&match);
+    ds_destroy(&actions);
+
+    /* It is required to cleanup igmp_groups after multicast_groups */
+    HMAP_FOR_EACH_SAFE (igmp_group, hmap_node, &igmp_groups) {
+        ovn_igmp_group_destroy(&igmp_groups, igmp_group);
+    }
+    hmap_destroy(&igmp_groups);
+    hmap_destroy(&mcast_groups);
+    uuidset_destroy(&datapaths_to_sync);
+
+    return true;
+}
+
+/* Process the deletion of an IGMP group. We only need to remove the
+ * multicast_groups associated with the datapath the IGMP group is on and the
+ */
+static void
+delete_igmp_group(const struct sbrec_igmp_group *sb_igmp,
+                  struct ovn_datapath *od,
+                  struct ovsdb_idl_index *sbrec_mcast_group_by_name_dp,
+                  struct lflow_table *lflows,
+                  struct uuidset *datapaths_to_sync,
+                  struct ds *actions,
+                  struct ds *match)
+{
+    /* The igmp group for multicast routers does not have a
+     * multicast group, skip the deletion
+     */
+     if (!strcmp(sb_igmp->address, OVN_IGMP_GROUP_MROUTERS)) {
+        return;
+     }
+
+     for (size_t i = 0; i < od->n_router_ports; i++) {
+        struct ovn_port *port = od->router_ports[i];
+        lflow_ref_unlink_lflows(port->peer->od->igmp_lflow_ref);
+        build_mcast_lookup_flows_for_lrouter(od->router_ports[i]->peer->od,
+                                             lflows,
+                                             match,
+                                             actions,
+                                             port->peer->od->igmp_lflow_ref);
+
+        uuidset_insert(datapaths_to_sync, &od->router_ports[i]->peer->od->key);
+        const struct sbrec_multicast_group *sbmc =
+            mcast_group_lookup(sbrec_mcast_group_by_name_dp,
+                               sb_igmp->address,  port->peer->od->sb);
+        if (sbmc) {
+            sbrec_multicast_group_delete(sbmc);
+        }
+    }
+    const struct sbrec_multicast_group *sbmc =
+        mcast_group_lookup(sbrec_mcast_group_by_name_dp,
+                           sb_igmp->address,  sb_igmp->datapath);
+        int removedPorts = 0;
+        for (size_t i = 0; i <sb_igmp->n_ports; i++) {
+
+            if (smap_get_bool(&sb_igmp->ports[i]->options,
+                              "mcast_flood",
+                              false)) {
+                /* If the port has mcast_flood set it is not in
+                 * the multicast_group for this igmp_group
+                 */
+                continue;
+            }
+            sbrec_multicast_group_update_ports_delvalue(sbmc,
+                                                        sb_igmp->ports[i]);
+            removedPorts++;
+        }
+        if (sb_igmp->n_ports >= sbmc->n_ports) {
+            lflow_ref_unlink_lflows(od->igmp_lflow_ref);
+            uuidset_insert(datapaths_to_sync, &od->key);
+        }
+        /* if the deletion removed all the ports from the
+         * multicast_group delete it from the database
+         */
+        if (removedPorts == sbmc->n_ports) {
+            sbrec_multicast_group_delete(sbmc);
+        }
+}
+
 static void
 build_igmp_group_for_sb(const struct sbrec_igmp_group *sb_igmp,
                         struct ovn_datapath *od,
@@ -19451,4 +19681,43 @@ build_mcast_group_from_igmp_group(struct ovn_igmp_group *igmp_group,
      * group.
      */
     ovn_igmp_group_aggregate_ports(igmp_group, mcast_groups);
+}
+
+/* For a given igmp_group check all the peer switches on the igmp_groups
+ * datapath for ports with mcast_info.flood set, If a port does
+ * mcast_info.flood set add it to the MC_STATIC group and prepare to update the
+ * datapaths logical flows.
+ */
+static void
+process_peer_switches_for_igmp(struct ovn_igmp_group *igmp_group,
+                               struct uuidset *datapaths_to_sync,
+                               struct hmap *mcast_groups,
+                               struct lflow_table *lflows,
+                               struct ds *actions,
+                               const struct shash *meter_groups)
+{
+
+    for (size_t i = 0; i < igmp_group->datapath->n_ls_peers; i++) {
+        struct ovn_datapath *ls_peer = igmp_group->datapath->ls_peers[i];
+        struct ovn_port *op;
+
+        HMAP_FOR_EACH_SAFE (op, dp_node, &ls_peer->ports) {
+            /* If this port is configured to always flood multicast traffic
+             * add it to the MC_STATIC group.
+             */
+            if (op->mcast_info.flood) {
+                ovn_multicast_add(mcast_groups, &mc_static, op);
+                op->od->mcast_info.sw.flood_static = true;
+
+                lflow_ref_unlink_lflows(op->od->igmp_lflow_ref);
+                build_lswitch_destination_lookup_bmcast(op->od,
+                                                        lflows,
+                                                        actions,
+                                                        meter_groups,
+                                                        NULL);
+
+                uuidset_insert(datapaths_to_sync, &op->od->key);
+            }
+        }
+    }
 }
