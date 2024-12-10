@@ -3142,11 +3142,14 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
         sbrec_port_binding_set_parent_port(op->sb, NULL);
         sbrec_port_binding_set_tag(op->sb, NULL, 0);
 
-        struct ds s = DS_EMPTY_INITIALIZER;
-        ds_put_cstr(&s, op->nbrp->mac);
-        for (int i = 0; i < op->nbrp->n_networks; ++i) {
-            ds_put_format(&s, " %s", op->nbrp->networks[i]);
+        const struct lport_addresses *networks;
+        if (op->primary_port) {
+            networks = &op->primary_port->lrp_networks;
+        } else {
+            networks = &op->lrp_networks;
         }
+        struct ds s = DS_EMPTY_INITIALIZER;
+        lrp_network_to_string(networks, &s, false);
         const char *addresses = ds_cstr(&s);
         sbrec_port_binding_set_mac(op->sb, &addresses, 1);
         ds_destroy(&s);
