@@ -1755,10 +1755,10 @@ tcp,orig=(src=fd01::2,dst=fd03::2,sport=<cleared>,dport=<cleared>),reply=(src=fd
 ])
 
 # Configure selection_fields.
-check ovn-nbctl set load_balancer $lb2_uuid selection_fields="ip_src,ip_dst,tp_src,tp_dst"
+check ovn-nbctl set load_balancer $lb2_uuid selection_fields="ipv6_src,ipv6_dst,tp_src,tp_dst"
 OVS_WAIT_UNTIL([
     test $(ovs-ofctl dump-groups br-int | \
-    grep "selection_method=hash,fields(ip_src,ip_dst,tcp_src,tcp_dst)" -c) -eq 2
+    grep "selection_method=hash,fields(ipv6_src,ipv6_dst,tcp_src,tcp_dst)" -c) -eq 2
 ])
 
 AT_CHECK([ovs-appctl dpctl/flush-conntrack])
@@ -1789,10 +1789,10 @@ done
 # there should be only one conntrack entry.
 AT_CHECK([test $(ovs-appctl dpctl/dump-conntrack | grep fd03::2 -c) -eq 1])
 
-check ovn-nbctl set load_balancer $lb2_uuid selection_fields="eth_src,ip_src"
+check ovn-nbctl set load_balancer $lb2_uuid selection_fields="eth_src,ipv6_src"
 OVS_WAIT_UNTIL([
     test $(ovs-ofctl dump-groups br-int | \
-    grep "selection_method=hash,fields(eth_src,ip_src)" -c) -eq 2
+    grep "selection_method=hash,fields(eth_src,ipv6_src)" -c) -eq 2
 ])
 
 AT_CHECK([ovs-appctl dpctl/flush-conntrack])
