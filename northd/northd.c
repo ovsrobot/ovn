@@ -10307,14 +10307,16 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
         return;
     }
 
+    /* Skip adding the unicast lookup flows the LSP is explicitly disabled */
+    if (!lsp_is_enabled(op->nbsp)) {
+       return;
+    }
+
     bool lsp_clone_to_unknown = lsp_is_clone_to_unknown(op->nbsp);
-    bool lsp_enabled = lsp_is_enabled(op->nbsp);
-    const char *action = lsp_enabled
-                         ? ((lsp_clone_to_unknown && op->od->has_unknown)
+    const char *action = lsp_clone_to_unknown && op->od->has_unknown
                          ? "clone {outport = %s; output; };"
                            "outport = \""MC_UNKNOWN "\"; output;"
-                         : "outport = %s; output;")
-                         : debug_drop_action();
+                         : "outport = %s; output;";
 
     if (lsp_is_router(op->nbsp) && op->peer && op->peer->nbrp) {
         /* For ports connected to logical routers add flows to bypass the
