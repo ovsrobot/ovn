@@ -181,12 +181,13 @@ az_run(struct ic_context *ctx)
 }
 
 static uint32_t
-allocate_ts_dp_key(struct hmap *dp_tnlids)
+allocate_ts_dp_key(struct hmap *dp_tnlids, bool vxlan_mode)
 {
-    static uint32_t hint = OVN_MIN_DP_KEY_GLOBAL;
+    static uint32_t hint = OVN_MIN_DP_VXLAN_KEY_GLOBAL;
     return ovn_allocate_tnlid(dp_tnlids, "transit switch datapath",
-                              OVN_MIN_DP_KEY_GLOBAL, OVN_MAX_DP_KEY_GLOBAL,
-                              &hint);
+            vxlan_mode ?  OVN_MIN_DP_VXLAN_KEY_GLOBAL : OVN_MIN_DP_KEY_GLOBAL,
+            vxlan_mode ? OVN_MAX_DP_VXLAN_KEY_GLOBAL : OVN_MAX_DP_KEY_GLOBAL,
+            &hint);
 }
 
 static void
@@ -255,12 +256,22 @@ ts_run(struct ic_context *ctx)
      * SB, to avoid uncommitted ISB datapath tunnel key to be synced back to
      * AZ. */
     if (ctx->ovnisb_txn) {
+        bool vxlan_mode = false;
+
+        const struct icsbrec_encap *encap;
+        ICSBREC_ENCAP_FOR_EACH (encap, ctx->ovnisb_idl) {
+            if (!strcmp(encap->type, "vxlan")) {
+                vxlan_mode = true;
+                break;
+            }
+        }
+
         /* Create ISB Datapath_Binding */
         ICNBREC_TRANSIT_SWITCH_FOR_EACH (ts, ctx->ovninb_idl) {
             isb_dp = shash_find_and_delete(&isb_dps, ts->name);
             if (!isb_dp) {
                 /* Allocate tunnel key */
-                int64_t dp_key = allocate_ts_dp_key(&dp_tnlids);
+                int64_t dp_key = allocate_ts_dp_key(&dp_tnlids, vxlan_mode);
                 if (!dp_key) {
                     continue;
                 }
@@ -1922,8 +1933,8 @@ static void
 ovn_db_run(struct ic_context *ctx,
            const struct icsbrec_availability_zone *az)
 {
-    ts_run(ctx);
     gateway_run(ctx, az);
+    ts_run(ctx);
     port_binding_run(ctx, az);
     route_run(ctx, az);
 }
