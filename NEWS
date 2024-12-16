@@ -6,6 +6,7 @@ Post v24.09.0
    - ovn-ic: Add support for route tag to prevent route learning.
    - Support for STT tunnels in ovn-encap-type is deprecated and will be
      removed in the next release.
+   - Bump python version required for building OVN to 3.7.
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------
