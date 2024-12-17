@@ -227,6 +227,7 @@ handle_route_msg_delete_routes(const struct route_table_msg *msg, void *data)
             rr->addr = rd->rta_dst;
             rr->plen = plen;
             rr->nexthop = nexthop->addr;
+            memcpy(rr->ifname, nexthop->ifname, IFNAMSIZ);
         }
         return;
     }

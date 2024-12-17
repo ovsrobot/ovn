@@ -14592,6 +14592,17 @@ AT_CHECK_UNQUOTED([ovn-sbctl --columns ip_prefix,nexthop,logical_port --bare fin
 $lp
 ])
 
+# by setting a learning interface filter we will now forget about this route
+check ovn-nbctl --wait=hv set Logical_Router_Port internet-phys \
+      options:dynamic-routing-ifname=thisdoesnotexist
+check_row_count Learned_Route 0
+
+# chaning it to "lo" will allow us to learn the route again
+check ovn-nbctl --wait=hv set Logical_Router_Port internet-phys \
+      options:dynamic-routing-ifname=lo
+check_row_count Learned_Route 1
+
+
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
 
 as ovn-sb
