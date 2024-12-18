@@ -39970,6 +39970,27 @@ check ovn-nbctl lsp-add phys phys1 \
         -- lsp-set-type phys1 localnet \
         -- lsp-set-options phys1 network_name=phys
 
+# routing-protocol redirection
+check ovn-nbctl set logical_router_port internet-phys \
+          options:routing-protocol-redirect=bgp-redirect \
+          options:routing-protocols=BGP,BFD
+check ovn-nbctl lsp-add phys bgp-redirect
+
+as hv1 ovs-vsctl add-port br-int bgp-redirect-0 -- \
+        set Interface bgp-redirect-0 external-ids:iface-id=bgp-redirect-hv1-0 \
+                              options:tx_pcap=hv1/bgp-redirect-0-tx.pcap \
+                              options:rxq_pcap=hv1/bgp-redirect-0-rx.pcap
+as hv1 ovs-vsctl add-port br-int bgp-redirect-1 -- \
+        set Interface bgp-redirect-1 external-ids:iface-id=bgp-redirect-hv1-1 \
+                              options:tx_pcap=hv1/bgp-redirect-1-tx.pcap \
+                              options:rxq_pcap=hv1/bgp-redirect-1-rx.pcap
+as hv2 ovs-vsctl add-port br-int bgp-redirect-0 -- \
+        set Interface bgp-redirect-0 external-ids:iface-id=bgp-redirect-hv2-0 \
+                              options:tx_pcap=hv2/bgp-redirect-0-tx.pcap \
+                              options:rxq_pcap=hv2/bgp-redirect-0-rx.pcap
+
+# now all setup is done
+
 check ovn-nbctl --wait=hv sync
 wait_for_ports_up
 OVN_POPULATE_ARP
@@ -40052,6 +40073,25 @@ packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:20', src='00:02:01:00:00:01')/ \
                     IP(dst='1.1.1.1', src='198.51.100.10', ttl=62)/ TCP()" | \
                     cut -c 1-68)
 OVN_CHECK_PACKETS_CONTAIN_PARTS([hv2/br-phys_hv2-1-tx.pcap], ["$packet"])
+
+# bgp packet to the active-active router ports are forwarded to the respective
+# bgp redirect LSP
+outside_to_bgp() {
+  local hv=$1 if=$2 redirindex=$3 mac=$4 ip=$5
+  packet=$(fmt_pkt "Ether(dst='$mac', src='00:aa:bb:cc:dd:ee')/ \
+                    IP(dst='$ip', src='1.1.1.1')/ \
+                    TCP(dport=179)")
+  as hv$hv ovs-appctl netdev-dummy/receive $if $packet
+  local filename="hv$hv-bgp-redirect-$redirindex-tx.expected"
+  rm -f $filename
+  echo $packet > $filename
+  OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv$hv/bgp-redirect-$redirindex-tx.pcap],
+                                     [$filename])
+}
+
+outside_to_bgp 1 br-phys_hv1-1 0 00:01:01:00:00:01 192.168.10.10
+outside_to_bgp 1 br-phys2_hv1-2 1 00:01:02:00:00:01 192.168.11.10
+outside_to_bgp 2 br-phys_hv2-1 0 00:02:01:00:00:01 192.168.20.10
 
 OVN_CLEANUP([hv1
 /Couldn't parse MAC binding/d

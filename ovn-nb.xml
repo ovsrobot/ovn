@@ -3689,6 +3689,10 @@ or
 
           The MAC and IP configuration of this LRP in the northbound database
           is ignored.
+
+          In case the option <ref column="options"
+          key="routing-protocol-redirect"/> is set the target LSP will also be
+          duplicated per LRP/LSP combination.
         </p>
         <p>
           The LRP must be connected via its LSP to an external network.
