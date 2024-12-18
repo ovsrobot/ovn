@@ -491,17 +491,18 @@ enum ovn_stage {
     PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_PRE,  13, "lr_in_ip_routing_pre")  \
     PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,      14, "lr_in_ip_routing")      \
     PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING_ECMP, 15, "lr_in_ip_routing_ecmp") \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY,          16, "lr_in_policy")          \
-    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     17, "lr_in_policy_ecmp")     \
-    PIPELINE_STAGE(ROUTER, IN,  DHCP_RELAY_RESP_CHK, 18,                      \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY_PRE,      16, "lr_in_policy_pre")      \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY,          17, "lr_in_policy")          \
+    PIPELINE_STAGE(ROUTER, IN,  POLICY_ECMP,     18, "lr_in_policy_ecmp")     \
+    PIPELINE_STAGE(ROUTER, IN,  DHCP_RELAY_RESP_CHK, 19,                      \
                   "lr_in_dhcp_relay_resp_chk")                                \
-    PIPELINE_STAGE(ROUTER, IN,  DHCP_RELAY_RESP, 19,                          \
+    PIPELINE_STAGE(ROUTER, IN,  DHCP_RELAY_RESP, 20,                          \
                   "lr_in_dhcp_relay_resp")                                    \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     20, "lr_in_arp_resolve")     \
-    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     21, "lr_in_chk_pkt_len")     \
-    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     22, "lr_in_larger_pkts")     \
-    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     23, "lr_in_gw_redirect")     \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     24, "lr_in_arp_request")     \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE,     21, "lr_in_arp_resolve")     \
+    PIPELINE_STAGE(ROUTER, IN,  CHK_PKT_LEN,     22, "lr_in_chk_pkt_len")     \
+    PIPELINE_STAGE(ROUTER, IN,  LARGER_PKTS,     23, "lr_in_larger_pkts")     \
+    PIPELINE_STAGE(ROUTER, IN,  GW_REDIRECT,     24, "lr_in_gw_redirect")     \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST,     25, "lr_in_arp_request")     \
                                                                       \
     /* Logical router egress stages. */                               \
     PIPELINE_STAGE(ROUTER, OUT, CHECK_DNAT_LOCAL,   0,                       \
