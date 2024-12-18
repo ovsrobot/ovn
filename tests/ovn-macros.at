@@ -82,6 +82,18 @@ m4_divert_text([PREPARE_TESTS],
        [dump_diff__ "$rcv_pcap" "$exp_text"])
    }
 
+   ovn_wait_packets_parts__ () {
+     echo "$3: waiting for packets matching $2 at $1:"
+     rcv_pcap=$1
+     rcv_text=`echo "$rcv_pcap.packets" | sed 's/\.pcap//'`
+     exp_text=$2
+     OVS_WAIT_UNTIL(
+       [$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" $rcv_pcap > $rcv_text
+        grep -q "$exp_text" "$rcv_text"],
+       [echo "Received:"
+        cat "$rcv_text"])
+   }
+
    ovn_wait_patch_port_flows () {
      for localnet in $1; do
        patch_port="patch-br-int-to-$localnet"
@@ -167,6 +179,11 @@ m4_define([OVN_CHECK_PACKETS_CONTAIN],
 # Duplicate packets are accepted, but the macro fails if unexpected packets are received.
 m4_define([OVN_CHECK_PACKETS_UNIQ],
   [ovn_wait_packets_uniq__ "$1" "$2" "__file__:__line__" $3])
+
+# OVN_CHECK_PACKETS_CONTAIN_PARTS succeeds if the expected part is found
+# in some packets. Other packets are ignored.
+m4_define([OVN_CHECK_PACKETS_CONTAIN_PARTS],
+  [ovn_wait_packets_parts__ "$1" "$2" "__file__:__line__"])
 
 m4_define([OVN_WAIT_PATCH_PORT_FLOWS],
   [ovn_wait_patch_port_flows "$1" "$2" "__file__:__line__"])

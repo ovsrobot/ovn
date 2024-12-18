@@ -404,6 +404,36 @@
           If the value is zero, it disables the inactivity probe.
         </p>
       </dd>
+      <dt><code>external_ids:ovn-active-active-mappings</code></dt>
+      <dd>
+        <p>
+          Setting is used for the chassis specific values of the
+          <code>options:active-active-lrp</code> in the northbound database.
+
+          The following is an example of such an option:
+          <code>ovn-active-active-mappings="phys;00:fe:fe:fe:fe:01,172.16.0.10/25;00:fe:fe:fe:fe:33,172.17.0.10/25|phys2;00:aa:bb:cc:dd:ee,192.168.0.10/24"</code>
+
+          This configures 2 separate active-active mapping for two external
+          networks.
+
+          <ul>
+            <li>
+              For the external network named <code>phys</code>
+              there will be two LRPs generated for this chassis. One with MAC
+              <code>00:fe:fe:fe:fe:01</code> and IP
+              <code>172.16.0.10/25</code>. The other with MAC
+              <code>00:fe:fe:fe:fe:33</code> and IP
+              <code>172.17.0.10/25</code>.
+            </li>
+            <li>
+              For the external network named <code>phys2</code>
+              there will be one LRPs generated for this chassis. With MAC
+              <code>00:aa:bb:cc:dd:ee</code> and IP
+              <code>192.168.0.10/24</code>.
+            </li>
+          </ul>
+        </p>
+      </dd>
     </dl>
 
     <p>

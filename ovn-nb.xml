@@ -3672,6 +3672,33 @@ or
           learned by the <code>ovn-ic</code> daemon.
         </p>
       </column>
+
+      <column name="options" key="active-active-lrp"
+          type='{"type": "boolean"}'>
+        <p>
+          If set to true this turns this LRP and associated LSP into a template
+          that will be used by ovn-northd to generate multiple LRP/LSP
+          combinations.
+          One or multiple LRP/LSP combinations will be built for each chassis
+          specified in the <ref column="ha_chassis_group"/> of this LRP
+          independent of their priority.
+          The amount of LRP/LSP combinations per chassis as well as their IP
+          and MAC addresses are determined based on the value of
+          <ref columns="external_ids" key="ovn-active-active-mappings"
+          db="Open_vSwitch"/> on that chassis.
+
+          The MAC and IP configuration of this LRP in the northbound database
+          is ignored.
+        </p>
+        <p>
+          The LRP must be connected via its LSP to an external network.
+
+          Having multiple such LRPs on a single router is not supported.
+
+          Having multiple such LRPs on different routers connected to the same
+          external network is also not supported.
+        </p>
+      </column>
     </group>
 
     <group title="Attachment">

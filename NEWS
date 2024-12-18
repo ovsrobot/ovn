@@ -12,6 +12,12 @@ Post v24.09.0
      and "routing-protocols" are now also usable on distributed gateway ports.
    - ovn-nb: Changed schema of ovn-nb to make networks optional within Logical
      Router Ports.
+   - Add the option "active-active-lrp" to LRPs. If set northd will clone this
+     LRP based on its HA_Chassis_Group and the
+     other_config:ovn-active-active-mapping of the defined chassis. In
+     combination with the dynamic routing features this allows operators to
+     integrate OVN into the network fabric in a highly available way without
+     significant (or any) changes to the CMS.
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------

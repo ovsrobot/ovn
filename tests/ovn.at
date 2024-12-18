@@ -39767,7 +39767,297 @@ check ovn-nbctl --wait=hv sync
 check_column $remote_chassis Port_Binding chassis logical_port=lsp
 
 OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([active-active LRPs])
+
+# This test uses active-active LRPs on a simulated multi-tenant internet
+# connection.
+# Tenant 1 (pr1, p1, vif1) is connected to the internet via NAT on pr1.
+# Tenant 2 (pr2, p2, vif2) is connected to the internet via routing.
+# The connections of pr1 and pr2 to public are using DGPs.
+# pr1 is thereby bound to hv1, while pr2 is bound to hv2.
+# The connection from internet to phys is also using a DGP.
+# This DGP is built active-active over hv1 and hv2.
+# It has two interfaces on hv1 and one on hv2.
+# The LS phys is assumed to be used for peering with a router outside OVN.
+#
+#
+# +----+       +----+
+# |vif1|       |vif2|
+# +--+-+       +--+-+
+#    |            |
+# +--+--+      +--+--+
+# |LS p1|      |LS p2|
+# +--+--+      +--+--+
+#    |            |
+# +--+---+     +--+---+
+# |LR pr1|     |LR pr2|
+# +-----++     ++-----+
+#       |       |
+#      ++-------++
+#      |LS public|
+#      +-----+---+
+#            |
+#      +-----+-----+
+#      |LR internet|
+#      +-----+-----+
+#            |
+#        +---+---+
+#        |LS phys|
+#        +-------+
+
+# hv setup
+
+ovn_start
+
+# n1 is the overlay network
+net_add n1
+
+# these are the respective chassis-to-switch networks
+net_add hv1-1
+net_add hv1-2
+net_add hv2-1
+
+for i in 1 2; do
+    sim_add hv${i}
+    as hv${i}
+    ovs-vsctl add-br br-phys
+    ovs-vsctl add-br br-tun
+    ovn_attach n1 br-tun 172.16.0.${i}
+    ovs-vsctl set open . external_ids:ovn-bridge-mappings=phys:br-phys
+done
+
+as hv1 net_attach hv1-1 br-phys
+as hv2 net_attach hv2-1 br-phys
+
+# having two ports on hv1 br-phys is more complex as net_attach does not like
+# it. We just attach it to another brige and then connect both.
+# Also we need to add fdb entries so packets can later be counted correctly
+# and we don't flood
+as hv1 ovs-vsctl add-br br-phys2 \
+        -- add-port br-phys patch-br-phys-to-br-phys2 \
+        -- add-port br-phys2 patch-br-phys2-to-br-phys \
+        -- set Interface patch-br-phys-to-br-phys2 type=patch \
+                                       options:peer=patch-br-phys2-to-br-phys \
+        -- set Interface patch-br-phys2-to-br-phys type=patch \
+                                       options:peer=patch-br-phys-to-br-phys2
+as hv1 net_attach hv1-2 br-phys2
+as hv1 ovs-appctl fdb/add br-phys br-phys_hv1-1 0 00:cc:cc:cc:cc:10
+as hv1 ovs-appctl fdb/add br-phys patch-br-phys-to-br-phys2 0 00:cc:cc:cc:cc:11
+
+# active-active mappings
+
+as hv1 ovs-vsctl set open . external_ids:ovn-active-active-mappings="phys;00:01:01:00:00:01,192.168.10.10/24;00:01:02:00:00:01,192.168.11.10/24"
+as hv2 ovs-vsctl set open . external_ids:ovn-active-active-mappings="phys;00:02:01:00:00:01,192.168.20.10/24"
+
+# LS setup
+
+check ovn-nbctl ls-add public
+check ovn-nbctl ls-add phys
+check ovn-nbctl ls-add p1
+check ovn-nbctl ls-add p2
+
+# LR internet setup
+
+check ovn-nbctl lr-add internet
+
+check ovn-nbctl lrp-add internet internet-public \
+        00:00:02:01:02:03 192.0.2.1/24
+check ovn-nbctl lsp-add public public-internet \
+    -- set Logical_Switch_Port public-internet type=router \
+                                         options:router-port=internet-public \
+    -- lsp-set-addresses public-internet router
+
+check ovn-nbctl ha-chassis-group-add to-phys
+check ovn-nbctl ha-chassis-group-add-chassis to-phys hv1 1
+check ovn-nbctl ha-chassis-group-add-chassis to-phys hv2 2
+ha_chassis_uuid=$(ovn-nbctl --column _uuid --bare list HA_Chassis_group)
+
+# actual mac address is irrelevant here, it is ignored if active-active-lrp
+# is set.
+check ovn-nbctl lrp-add internet internet-phys \
+        "00:00:00:00:00:01" "1.1.1.1/32" \
+    -- set Logical_Router_Port internet-phys \
+                             options:active-active-lrp=true \
+                             ha_chassis_group=${ha_chassis_uuid}
+check ovn-nbctl lsp-add phys phys-internet \
+    -- set Logical_Switch_Port phys-internet type=router \
+                                         options:router-port=internet-phys \
+    -- lsp-set-addresses phys-internet router
+
+check ovn-nbctl --ecmp lr-route-add internet 0.0.0.0/0 192.168.10.1
+check ovn-nbctl --ecmp lr-route-add internet 0.0.0.0/0 192.168.11.1
+check ovn-nbctl --ecmp lr-route-add internet 0.0.0.0/0 192.168.20.1
+# since there are no real systems behind these nexthops we need static mac
+# entries. These must be built with the future logical port names after northd
+# dervies them. We cant use static-mac-binding-add here as the port does not
+# exist on the northbound side.
+ovn-nbctl create Static_MAC_Binding logical_port=internet-phys-hv1-0 \
+                                    ip=192.168.10.1 mac='"00:cc:cc:cc:cc:10"'
+ovn-nbctl create Static_MAC_Binding logical_port=internet-phys-hv1-1 \
+                                    ip=192.168.11.1 mac='"00:cc:cc:cc:cc:11"'
+ovn-nbctl create Static_MAC_Binding logical_port=internet-phys-hv2-0 \
+                                    ip=192.168.20.1 mac='"00:cc:cc:cc:cc:20"'
+
+# LR pr1 setup
+
+check ovn-nbctl lr-add pr1 \
+    -- set Logical_Router pr1 options:requested-tnl-key=1338
+
+check ovn-nbctl lrp-add pr1 pr1-public \
+        00:00:02:01:02:04 192.0.2.2/24
+check ovn-nbctl lrp-set-gateway-chassis pr1-public hv1
+check ovn-nbctl lsp-add public public-pr1 \
+    -- set Logical_Switch_Port public-pr1 type=router \
+                                         options:router-port=pr1-public \
+    -- lsp-set-addresses public-pr1 router
+
+check ovn-nbctl lrp-add pr1 pr1-p1 \
+        00:00:03:00:00:01 10.0.0.1/24
+check ovn-nbctl lsp-add p1 p1-pr1 \
+    -- set Logical_Switch_Port p1-pr1 type=router \
+                                         options:router-port=pr1-p1 \
+    -- lsp-set-addresses p1-pr1 router
+
+check ovn-nbctl lr-route-add pr1 0.0.0.0/0 192.0.2.1
+
+# LR pr2 setup
+
+check ovn-nbctl lr-add pr2 \
+    -- set Logical_Router pr2 options:requested-tnl-key=1339
+
+check ovn-nbctl lrp-add pr2 pr2-public \
+        00:00:02:01:02:05 192.0.2.3/24
+check ovn-nbctl lrp-set-gateway-chassis pr2-public hv2
+check ovn-nbctl lsp-add public public-pr2 \
+    -- set Logical_Switch_Port public-pr2 type=router \
+                                         options:router-port=pr2-public \
+    -- lsp-set-addresses public-pr2 router
+
+check ovn-nbctl lrp-add pr2 pr2-p2 \
+        00:00:04:00:00:01 198.51.100.1/24
+check ovn-nbctl lsp-add p2 p2-pr2 \
+    -- set Logical_Switch_Port p2-pr2 type=router \
+                                         options:router-port=pr2-p2 \
+    -- lsp-set-addresses p2-pr2 router
+
+check ovn-nbctl lr-route-add pr2 0.0.0.0/0 192.0.2.1
+
+# Setup lsp "vif1" with NAT
+check ovn-nbctl lsp-add p1 vif1 \
+    -- lsp-set-addresses vif1 "00:00:ff:ff:ff:01 10.0.0.2"
+as hv1 ovs-vsctl add-port br-int vif1 -- \
+        set Interface vif1 external-ids:iface-id=vif1 \
+                              options:tx_pcap=hv1/vif1-tx.pcap \
+                              options:rxq_pcap=hv1/vif1-rx.pcap
+check ovn-nbctl lr-nat-add pr1 dnat_and_snat 192.0.2.10 10.0.0.2
+
+# Setup lsp "vif2" with a static route on LR internet
+check ovn-nbctl lsp-add p2 vif2 \
+    -- lsp-set-addresses vif2 "00:00:ff:ff:ff:02 198.51.100.10"
+as hv2 ovs-vsctl add-port br-int vif2 -- \
+        set Interface vif2 external-ids:iface-id=vif2 \
+                              options:tx_pcap=hv2/vif2-tx.pcap \
+                              options:rxq_pcap=hv2/vif2-rx.pcap
+check ovn-nbctl lr-route-add internet 198.51.100.0/24 192.0.2.3
+
+# Configure external connectivity
+check ovn-nbctl lsp-add phys phys1 \
+        -- lsp-set-addresses phys1 unknown \
+        -- lsp-set-type phys1 localnet \
+        -- lsp-set-options phys1 network_name=phys
+
+check ovn-nbctl --wait=hv sync
+wait_for_ports_up
+OVN_POPULATE_ARP
+
+# we should now have for each active-active-mapping there should now be one
+# LRP/LSP combination on the southbound side
+check_row_count Port_Binding 1 logical_port=internet-phys-hv1-0
+check_row_count Port_Binding 1 logical_port=internet-phys-hv1-1
+check_row_count Port_Binding 1 logical_port=internet-phys-hv2-0
+check_row_count Port_Binding 1 logical_port=phys-internet-hv1-0
+check_row_count Port_Binding 1 logical_port=phys-internet-hv1-1
+check_row_count Port_Binding 1 logical_port=phys-internet-hv2-0
+
+outside_to_vif() {
+  local hv=$1 vif=$2 send=$3 receive=$4
+  local packet=$(fmt_pkt \
+      "Ether(dst='00:01:01:00:00:01', src='00:aa:bb:cc:dd:ee')/ $send")
+  as hv1 ovs-appctl netdev-dummy/receive br-phys_hv1-1 $packet
+  local packet=$(fmt_pkt \
+      "Ether(dst='00:01:02:00:00:01', src='00:aa:bb:cc:dd:ee')/ $send")
+  as hv1 ovs-appctl netdev-dummy/receive br-phys2_hv1-2 $packet
+  local packet=$(fmt_pkt \
+      "Ether(dst='00:02:01:00:00:01', src='00:aa:bb:cc:dd:ee')/ $send")
+  as hv2 ovs-appctl netdev-dummy/receive br-phys_hv2-1 $packet
+  local out_packet=$(fmt_pkt "$receive")
+  local filename="hv$hv-vif$vif-tx.expected"
+  rm -f $filename
+  for i in `seq 1 3`; do
+    echo $out_packet >> $filename
+  done;
+
+  OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv$hv/vif$vif-tx.pcap], [$filename])
+}
+
+# injecting packets on any of the active-active interfaces will allow them
+# to reach vif1 and vif2
+outside_to_vif 1 1 "IP(dst='192.0.2.10', src='1.1.1.1')/ TCP()" \
+                   "Ether(dst='00:00:ff:ff:ff:01', src='00:00:03:00:00:01')/ \
+                    IP(dst='10.0.0.2', src='1.1.1.1', ttl=62)/ TCP()"
+outside_to_vif 2 2 "IP(dst='198.51.100.10', src='1.1.1.1')/ TCP()" \
+                   "Ether(dst='00:00:ff:ff:ff:02', src='00:00:04:00:00:01')/ \
+                    IP(dst='198.51.100.10', src='1.1.1.1', ttl=62)/ TCP()"
+
+# packets from vif1 and vif2 to the internet will use any of the active-active
+# interfaces. As the dp_hash will decide which they use we only check if
+# each of the egress interfaces has at least one expected packet going out.
+for i in `seq 1 100`; do
+  packet=$(fmt_pkt "Ether(dst='00:00:03:00:00:01', src='00:00:ff:ff:ff:01')/ \
+                    IP(dst='1.1.1.1', src='10.0.0.2')/ TCP(dport=5$i)")
+  as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
+  packet=$(fmt_pkt "Ether(dst='00:00:04:00:00:01', src='00:00:ff:ff:ff:02')/ \
+                    IP(dst='1.1.1.1', src='198.51.100.10')/ TCP(dport=5$i)")
+  as hv2 ovs-appctl netdev-dummy/receive vif2 $packet
+done
+
+# for vif1
+packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:10', src='00:01:01:00:00:01')/ \
+                    IP(dst='1.1.1.1', src='192.0.2.10', ttl=62)/ TCP()" | \
+                    cut -c 1-68)
+OVN_CHECK_PACKETS_CONTAIN_PARTS([hv1/br-phys_hv1-1-tx.pcap], ["$packet"])
+packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:11', src='00:01:02:00:00:01')/ \
+                    IP(dst='1.1.1.1', src='192.0.2.10', ttl=62)/ TCP()" | \
+                    cut -c 1-68)
+OVN_CHECK_PACKETS_CONTAIN_PARTS([hv1/br-phys2_hv1-2-tx.pcap], ["$packet"])
+packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:20', src='00:02:01:00:00:01')/ \
+                    IP(dst='1.1.1.1', src='192.0.2.10', ttl=62)/ TCP()" | \
+                    cut -c 1-68)
+OVN_CHECK_PACKETS_CONTAIN_PARTS([hv2/br-phys_hv2-1-tx.pcap], ["$packet"])
+
+# for vif2
+packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:10', src='00:01:01:00:00:01')/ \
+                    IP(dst='1.1.1.1', src='198.51.100.10', ttl=62)/ TCP()" | \
+                    cut -c 1-68)
+OVN_CHECK_PACKETS_CONTAIN_PARTS([hv1/br-phys_hv1-1-tx.pcap], ["$packet"])
+packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:11', src='00:01:02:00:00:01')/ \
+                    IP(dst='1.1.1.1', src='198.51.100.10', ttl=62)/ TCP()" | \
+                    cut -c 1-68)
+OVN_CHECK_PACKETS_CONTAIN_PARTS([hv1/br-phys2_hv1-2-tx.pcap], ["$packet"])
+packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:20', src='00:02:01:00:00:01')/ \
+                    IP(dst='1.1.1.1', src='198.51.100.10', ttl=62)/ TCP()" | \
+                    cut -c 1-68)
+OVN_CHECK_PACKETS_CONTAIN_PARTS([hv2/br-phys_hv2-1-tx.pcap], ["$packet"])
+
+OVN_CLEANUP([hv1
+/Couldn't parse MAC binding/d
+/left allocated when ofproto/d],[hv2
+/Couldn't parse MAC binding/d
+/left allocated when ofproto/d])
 AT_CLEANUP
 ])
 
