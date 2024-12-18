@@ -3837,6 +3837,7 @@ or
         </p>
         <p>
           Example: <code>{ip_proto,ip_src,ip_dst}</code> for a 3-tuple match.
+          Example: <code>{ip_proto,ipv6_src,ipv6_dst}</code> for a IPv6 match.
           Example: <code>{ip_proto,ip_src,ip_dst,tp_src,tp_dst}</code>
           for a 5-tuple match.
         </p>
