@@ -18,6 +18,10 @@ Post v24.09.0
      combination with the dynamic routing features this allows operators to
      integrate OVN into the network fabric in a highly available way without
      significant (or any) changes to the CMS.
+   - Prioritize routes on the same chassis as an active-active-lrp.
+     This will prevent such setups from forwarding traffic between ovn chassis
+     just based on ecmp routes and the datapath hash if the route is locally
+     available.
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------

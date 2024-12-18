@@ -40025,6 +40025,17 @@ outside_to_vif() {
   OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv$hv/vif$vif-tx.pcap], [$filename])
 }
 
+send_vif_to_outside() {
+  for i in `seq 1 100`; do
+    packet=$(fmt_pkt "Ether(dst='00:00:03:00:00:01', src='00:00:ff:ff:ff:01')/ \
+                      IP(dst='1.1.1.1', src='10.0.0.2')/ TCP(dport=5$i)")
+    as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
+    packet=$(fmt_pkt "Ether(dst='00:00:04:00:00:01', src='00:00:ff:ff:ff:02')/ \
+                      IP(dst='1.1.1.1', src='198.51.100.10')/ TCP(dport=5$i)")
+    as hv2 ovs-appctl netdev-dummy/receive vif2 $packet
+  done
+}
+
 # injecting packets on any of the active-active interfaces will allow them
 # to reach vif1 and vif2
 outside_to_vif 1 1 "IP(dst='192.0.2.10', src='1.1.1.1')/ TCP()" \
@@ -40037,14 +40048,9 @@ outside_to_vif 2 2 "IP(dst='198.51.100.10', src='1.1.1.1')/ TCP()" \
 # packets from vif1 and vif2 to the internet will use any of the active-active
 # interfaces. As the dp_hash will decide which they use we only check if
 # each of the egress interfaces has at least one expected packet going out.
-for i in `seq 1 100`; do
-  packet=$(fmt_pkt "Ether(dst='00:00:03:00:00:01', src='00:00:ff:ff:ff:01')/ \
-                    IP(dst='1.1.1.1', src='10.0.0.2')/ TCP(dport=5$i)")
-  as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
-  packet=$(fmt_pkt "Ether(dst='00:00:04:00:00:01', src='00:00:ff:ff:ff:02')/ \
-                    IP(dst='1.1.1.1', src='198.51.100.10')/ TCP(dport=5$i)")
-  as hv2 ovs-appctl netdev-dummy/receive vif2 $packet
-done
+# Since vif1 is bound to hv1 and vif2 to hv2 we expect them to egress using
+# only these interfaces
+send_vif_to_outside
 
 # for vif1
 packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:10', src='00:01:01:00:00:01')/ \
@@ -40055,12 +40061,32 @@ packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:11', src='00:01:02:00:00:01')/ \
                     IP(dst='1.1.1.1', src='192.0.2.10', ttl=62)/ TCP()" | \
                     cut -c 1-68)
 OVN_CHECK_PACKETS_CONTAIN_PARTS([hv1/br-phys2_hv1-2-tx.pcap], ["$packet"])
+
+# for vif2
+packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:20', src='00:02:01:00:00:01')/ \
+                    IP(dst='1.1.1.1', src='198.51.100.10', ttl=62)/ TCP()" | \
+                    cut -c 1-68)
+OVN_CHECK_PACKETS_CONTAIN_PARTS([hv2/br-phys_hv2-1-tx.pcap], ["$packet"])
+
+# now pr1 gets bound to hv2 and pr2 to hv1. We expect that vif1 will now exit
+# on hv2 and vif2 on hv1.
+as hv1 reset_pcap_file br-phys_hv1-1 hv1/br-phys_hv1-1
+as hv1 reset_pcap_file br-phys2_hv1-2 hv1/br-phys2_hv1-2
+as hv2 reset_pcap_file br-phys_hv2-1 hv2/br-phys_hv2-1
+check ovn-nbctl lrp-del-gateway-chassis pr1-public hv1
+check ovn-nbctl lrp-set-gateway-chassis pr1-public hv2
+check ovn-nbctl lrp-del-gateway-chassis pr2-public hv2
+check ovn-nbctl lrp-set-gateway-chassis pr2-public hv1
+check ovn-nbctl --wait=hv sync
+send_vif_to_outside
+
+# vif1
 packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:20', src='00:02:01:00:00:01')/ \
                     IP(dst='1.1.1.1', src='192.0.2.10', ttl=62)/ TCP()" | \
                     cut -c 1-68)
 OVN_CHECK_PACKETS_CONTAIN_PARTS([hv2/br-phys_hv2-1-tx.pcap], ["$packet"])
 
-# for vif2
+# vif2
 packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:10', src='00:01:01:00:00:01')/ \
                     IP(dst='1.1.1.1', src='198.51.100.10', ttl=62)/ TCP()" | \
                     cut -c 1-68)
@@ -40069,10 +40095,7 @@ packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:11', src='00:01:02:00:00:01')/ \
                     IP(dst='1.1.1.1', src='198.51.100.10', ttl=62)/ TCP()" | \
                     cut -c 1-68)
 OVN_CHECK_PACKETS_CONTAIN_PARTS([hv1/br-phys2_hv1-2-tx.pcap], ["$packet"])
-packet=$(fmt_pkt "Ether(dst='00:cc:cc:cc:cc:20', src='00:02:01:00:00:01')/ \
-                    IP(dst='1.1.1.1', src='198.51.100.10', ttl=62)/ TCP()" | \
-                    cut -c 1-68)
-OVN_CHECK_PACKETS_CONTAIN_PARTS([hv2/br-phys_hv2-1-tx.pcap], ["$packet"])
+
 
 # bgp packet to the active-active router ports are forwarded to the respective
 # bgp redirect LSP
