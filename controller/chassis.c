@@ -52,6 +52,7 @@ struct ovs_chassis_cfg {
     const char *cms_options;
     const char *monitor_all;
     const char *chassis_macs;
+    const char *active_active_mappings;
     const char *enable_lflow_cache;
     const char *limit_lflow_cache;
     const char *memlimit_lflow_cache;
@@ -130,6 +131,14 @@ get_chassis_mac_mappings(const struct smap *ext_ids, const char *chassis_id)
 {
     return get_chassis_external_id_value(ext_ids, chassis_id,
                                          "ovn-chassis-mac-mappings", "");
+}
+
+static const char *
+get_chassis_active_active_mappings(const struct smap *ext_ids,
+                                   const char *chassis_id)
+{
+    return get_chassis_external_id_value(ext_ids, chassis_id,
+                                         "ovn-active-active-mappings", "");
 }
 
 static const char *
@@ -320,6 +329,8 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
     ovs_cfg->monitor_all = get_monitor_all(&cfg->external_ids, chassis_id);
     ovs_cfg->chassis_macs =
         get_chassis_mac_mappings(&cfg->external_ids, chassis_id);
+    ovs_cfg->active_active_mappings =
+        get_chassis_active_active_mappings(&cfg->external_ids, chassis_id);
     ovs_cfg->enable_lflow_cache =
         get_enable_lflow_cache(&cfg->external_ids, chassis_id);
     ovs_cfg->limit_lflow_cache =
@@ -382,6 +393,8 @@ chassis_build_other_config(const struct ovs_chassis_cfg *ovs_cfg,
     smap_replace(config, "ovn-trim-timeout-ms", ovs_cfg->trim_timeout_ms);
     smap_replace(config, "iface-types", ds_cstr_ro(&ovs_cfg->iface_types));
     smap_replace(config, "ovn-chassis-mac-mappings", ovs_cfg->chassis_macs);
+    smap_replace(config, "ovn-active-active-mappings",
+                 ovs_cfg->active_active_mappings);
     smap_replace(config, "is-interconn",
                  ovs_cfg->is_interconn ? "true" : "false");
     smap_replace(config, OVN_FEATURE_PORT_UP_NOTIF, "true");
@@ -560,6 +573,14 @@ chassis_other_config_changed(const struct ovs_chassis_cfg *ovs_cfg,
         return true;
     }
 
+    const char *chassis_active_active_mapping =
+      get_chassis_active_active_mappings(&chassis_rec->other_config,
+                                         chassis_rec->name);
+    if (strcmp(ovs_cfg->active_active_mappings,
+               chassis_active_active_mapping)) {
+        return true;
+    }
+
     return false;
 }
 
@@ -703,6 +724,7 @@ update_supported_sset(struct sset *supported)
     sset_add(supported, "ovn-trim-timeout-ms");
     sset_add(supported, "iface-types");
     sset_add(supported, "ovn-chassis-mac-mappings");
+    sset_add(supported, "ovn-active-active-mappings");
     sset_add(supported, "is-interconn");
 
     /* Internal options. */
