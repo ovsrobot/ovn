@@ -41,7 +41,9 @@ northd_ovn_northd_SOURCES = \
 	northd/lflow-mgr.c \
 	northd/lflow-mgr.h \
 	northd/lb.c \
-	northd/lb.h
+	northd/lb.h \
+	northd/en-ecmp-nexthop.c \
+	northd/en-ecmp-nexthop.h
 northd_ovn_northd_LDADD = \
 	lib/libovn.la \
 	$(OVSDB_LIBDIR)/libovsdb.la \
