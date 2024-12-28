@@ -1351,3 +1351,9 @@ ovn_update_swconn_at(struct rconn *swconn, const char *target,
 
     return notify;
 }
+
+char *
+ovn_mirror_port_name(const char *port_name)
+{
+    return xasprintf("mp-%s", port_name);
+}
