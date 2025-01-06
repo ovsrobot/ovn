@@ -196,6 +196,8 @@ bool binding_cleanup(struct ovsdb_idl_txn *ovnsb_idl_txn,
 
 bool binding_handle_ovs_interface_changes(struct binding_ctx_in *,
                                           struct binding_ctx_out *);
+bool binding_handle_postponed_ports(struct binding_ctx_in *,
+                                         struct binding_ctx_out *);
 bool binding_handle_port_binding_changes(struct binding_ctx_in *,
                                          struct binding_ctx_out *);
 void binding_tracked_dp_destroy(struct hmap *tracked_datapaths);
