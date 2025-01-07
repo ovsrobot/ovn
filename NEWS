@@ -28,6 +28,9 @@ Post v24.09.0
        this option was not set).  TLS ciphersuites for TLSv1.3 and later can
        be configured via --ssl-ciphersuites (--ssl-ciphers only applies to
        TLSv1.2 and earlier).
+   - Improved handling of IPv6 traffic by enabling address prefix tracking
+     in OVS for both IPv4 and IPv6 addresses, whenever possible, reducing
+     the amount of IPv6 datapath flows.
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------
