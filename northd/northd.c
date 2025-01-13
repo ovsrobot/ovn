@@ -668,7 +668,6 @@ init_mcast_info_for_datapath(struct ovn_datapath *od)
     hmap_init(&od->mcast_info.group_tnlids);
     /* allocations start from hint + 1 */
     od->mcast_info.group_tnlid_hint = OVN_MIN_IP_MULTICAST - 1;
-    ovs_list_init(&od->mcast_info.groups);
 
     if (od->nbs) {
         init_mcast_info_for_switch_datapath(od);
@@ -9815,39 +9814,6 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
                       "ip6.mcast_flood",
                       "outport = \""MC_FLOOD"\"; output;",
                       lflow_ref);
-
-        /* Forward uregistered IP multicast to routers with relay enabled
-         * and to any ports configured to flood IP multicast traffic.
-         * If configured to flood unregistered traffic this will be
-         * handled by the L2 multicast flow.
-         */
-        if (!mcast_sw_info->flood_unregistered) {
-            ds_clear(actions);
-
-            if (mcast_sw_info->flood_relay) {
-                ds_put_cstr(actions,
-                            "clone { "
-                                "outport = \""MC_MROUTER_FLOOD"\"; "
-                                "output; "
-                            "}; ");
-            }
-
-            if (mcast_sw_info->flood_static) {
-                ds_put_cstr(actions, "outport =\""MC_STATIC"\"; output;");
-            }
-
-            /* Explicitly drop the traffic if relay or static flooding
-             * is not configured.
-             */
-            if (!mcast_sw_info->flood_relay &&
-                    !mcast_sw_info->flood_static) {
-                ds_put_cstr(actions, debug_drop_action());
-            }
-
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 80,
-                          "ip4.mcast || ip6.mcast",
-                          ds_cstr(actions), lflow_ref);
-        }
     }
 
     if (!smap_get_bool(&od->nbs->other_config,
@@ -9862,6 +9828,48 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
                   "outport = \""MC_FLOOD"\"; output;", lflow_ref);
 }
 
+/* Ingress table destination lookup, multicast handling (priority 80). */
+static void
+build_mcast_flood_lswitch(struct ovn_datapath *od, struct lflow_table *lflows,
+                          struct ds *actions, struct lflow_ref *lflow_ref)
+{
+    ovs_assert(od->nbs);
+    struct mcast_switch_info *mcast_sw_info = &od->mcast_info.sw;
+    if (!mcast_sw_info->enabled || mcast_sw_info->flood_unregistered) {
+        return;
+    }
+
+    ds_clear(actions);
+
+    /* Forward unregistered IP multicast to routers with relay enabled
+     * and to any ports configured to flood IP multicast traffic.
+     * If configured to flood unregistered traffic this will be
+     * handled by the L2 multicast flow.
+     */
+    if (mcast_sw_info->flood_relay) {
+        ds_put_cstr(actions,
+                    "clone { "
+                        "outport = \""MC_MROUTER_FLOOD"\"; "
+                        "output; "
+                    "}; ");
+    }
+
+    if (mcast_sw_info->flood_static) {
+        ds_put_cstr(actions, "outport =\""MC_STATIC"\"; output;");
+    }
+
+    /* Explicitly drop the traffic if relay or static flooding
+     * is not configured.
+     */
+    if (!mcast_sw_info->flood_relay &&
+        !mcast_sw_info->flood_static) {
+        ds_put_cstr(actions, debug_drop_action());
+    }
+
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 80,
+                  "ip4.mcast || ip6.mcast", ds_cstr(actions), lflow_ref);
+}
+
 
 /* Ingress table 25: Add IP multicast flows learnt from IGMP/MLD
  * (priority 90). */
@@ -9869,11 +9877,10 @@ static void
 build_lswitch_ip_mcast_igmp_mld(struct ovn_igmp_group *igmp_group,
                                 struct lflow_table *lflows,
                                 struct ds *actions,
-                                struct ds *match)
+                                struct ds *match,
+                                struct lflow_ref *lflow_ref)
 {
-    if (!(igmp_group->datapath && igmp_group->datapath->nbs)) {
-        return;
-    }
+    ovs_assert(igmp_group->datapath->nbs);
 
     uint64_t dummy;
 
@@ -9943,7 +9950,7 @@ build_lswitch_ip_mcast_igmp_mld(struct ovn_igmp_group *igmp_group,
                   igmp_group->mcgroup.name);
 
     ovn_lflow_add(lflows, igmp_group->datapath, S_SWITCH_IN_L2_LKUP,
-                  90, ds_cstr(match), ds_cstr(actions), NULL);
+                  90, ds_cstr(match), ds_cstr(actions), lflow_ref);
 }
 
 /* Ingress table 25: Destination lookup, unicast handling (priority 50), */
@@ -13546,14 +13553,49 @@ build_route_flows_for_lrouter(
     unique_routes_destroy(&unique_routes);
 }
 
+static void
+build_igmp_flows_for_lrouter(struct ovn_igmp_group *igmp_group,
+                             struct lflow_table *lflows,
+                             struct ds *match, struct ds *actions,
+                             struct lflow_ref *lflow_ref)
+{
+    ovs_assert(igmp_group->datapath->nbr);
+
+    if (!igmp_group->datapath->mcast_info.rtr.relay) {
+        return;
+    }
+
+    ds_clear(match);
+    ds_clear(actions);
+    if (IN6_IS_ADDR_V4MAPPED(&igmp_group->address)) {
+        ds_put_format(match, "ip4 && ip4.dst == %s ",
+                      igmp_group->mcgroup.name);
+    } else {
+        ds_put_format(match, "ip6 && ip6.dst == %s ",
+                      igmp_group->mcgroup.name);
+    }
+    if (igmp_group->datapath->mcast_info.rtr.flood_static) {
+        ds_put_cstr(actions,
+                    "clone { "
+                    "outport = \""MC_STATIC"\"; "
+                    "ip.ttl--; "
+                    "next; "
+                    "};");
+    }
+    ds_put_format(actions, "outport = \"%s\"; ip.ttl--; next;",
+                  igmp_group->mcgroup.name);
+    ovn_lflow_add(lflows, igmp_group->datapath, S_ROUTER_IN_IP_ROUTING, 10500,
+                  ds_cstr(match), ds_cstr(actions),
+                  lflow_ref);
+}
+
 /* IP Multicast lookup. Here we set the output port, adjust TTL and
  * advance to next table (priority 500).
  */
 static void
 build_mcast_lookup_flows_for_lrouter(
         struct ovn_datapath *od, struct lflow_table *lflows,
-        struct ds *match, struct ds *actions,
-        struct lflow_ref *lflow_ref)
+        struct ds *match, struct lflow_ref *lflow_ref)
 {
     ovs_assert(od->nbr);
 
@@ -13565,33 +13607,6 @@ build_mcast_lookup_flows_for_lrouter(
                   lflow_ref);
     if (!od->mcast_info.rtr.relay) {
         return;
-    }
-
-    struct ovn_igmp_group *igmp_group;
-
-    LIST_FOR_EACH (igmp_group, list_node, &od->mcast_info.groups) {
-        ds_clear(match);
-        ds_clear(actions);
-        if (IN6_IS_ADDR_V4MAPPED(&igmp_group->address)) {
-            ds_put_format(match, "ip4 && ip4.dst == %s ",
-                        igmp_group->mcgroup.name);
-        } else {
-            ds_put_format(match, "ip6 && ip6.dst == %s ",
-                        igmp_group->mcgroup.name);
-        }
-        if (od->mcast_info.rtr.flood_static) {
-            ds_put_cstr(actions,
-                        "clone { "
-                            "outport = \""MC_STATIC"\"; "
-                            "ip.ttl--; "
-                            "next; "
-                        "};");
-        }
-        ds_put_format(actions, "outport = \"%s\"; ip.ttl--; next;",
-                      igmp_group->mcgroup.name);
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 10500,
-                      ds_cstr(match), ds_cstr(actions),
-                      lflow_ref);
     }
 
     /* If needed, flood unregistered multicast on statically configured
@@ -16964,7 +16979,6 @@ struct lswitch_flow_build_info {
     const struct lr_stateful_table *lr_stateful_table;
     const struct ls_stateful_table *ls_stateful_table;
     struct lflow_table *lflows;
-    struct hmap *igmp_groups;
     const struct shash *meter_groups;
     const struct hmap *lb_dps_map;
     const struct hmap *svc_monitor_map;
@@ -17026,8 +17040,7 @@ build_lswitch_and_lrouter_iterate_by_lr(struct ovn_datapath *od,
     build_route_flows_for_lrouter(od, lsi->lflows,
                                   lsi->parsed_routes, lsi->route_tables,
                                   lsi->bfd_ports, NULL);
-    build_mcast_lookup_flows_for_lrouter(od, lsi->lflows, &lsi->match,
-                                         &lsi->actions, NULL);
+    build_mcast_lookup_flows_for_lrouter(od, lsi->lflows, &lsi->match, NULL);
     build_ingress_policy_flows_for_lrouter(od, lsi->lflows, lsi->lr_ports,
                                            lsi->route_policies, NULL);
     build_arp_resolve_flows_for_lrouter(od, lsi->lflows, NULL);
@@ -17129,7 +17142,6 @@ build_lflows_thread(void *arg)
     const struct lr_stateful_record *lr_stateful_rec;
     const struct ls_stateful_record *ls_stateful_rec;
     struct lswitch_flow_build_info *lsi;
-    struct ovn_igmp_group *igmp_group;
     struct ovn_lb_datapaths *lb_dps;
     struct ovn_datapath *od;
     struct ovn_port *op;
@@ -17280,20 +17292,6 @@ build_lflows_thread(void *arg)
                 }
             }
 
-            for (bnum = control->id;
-                    bnum <= lsi->igmp_groups->mask;
-                    bnum += control->pool->size)
-            {
-                HMAP_FOR_EACH_IN_PARALLEL (
-                        igmp_group, hmap_node, bnum, lsi->igmp_groups) {
-                    if (stop_parallel_processing()) {
-                        return NULL;
-                    }
-                    build_lswitch_ip_mcast_igmp_mld(igmp_group, lsi->lflows,
-                                                    &lsi->match,
-                                                    &lsi->actions);
-                }
-            }
             lsi->thread_lflow_counter = thread_lflow_counter;
         }
         post_completed_work(control);
@@ -17343,7 +17341,6 @@ build_lswitch_and_lrouter_flows(
     const struct lr_stateful_table *lr_stateful_table,
     const struct ls_stateful_table *ls_stateful_table,
     struct lflow_table *lflows,
-    struct hmap *igmp_groups,
     const struct shash *meter_groups,
     const struct hmap *lb_dps_map,
     const struct hmap *svc_monitor_map,
@@ -17378,7 +17375,6 @@ build_lswitch_and_lrouter_flows(
             lsiv[index].ls_port_groups = ls_pgs;
             lsiv[index].lr_stateful_table = lr_stateful_table;
             lsiv[index].ls_stateful_table = ls_stateful_table;
-            lsiv[index].igmp_groups = igmp_groups;
             lsiv[index].meter_groups = meter_groups;
             lsiv[index].lb_dps_map = lb_dps_map;
             lsiv[index].svc_monitor_map = svc_monitor_map;
@@ -17409,7 +17405,6 @@ build_lswitch_and_lrouter_flows(
     } else {
         const struct lr_stateful_record *lr_stateful_rec;
         const struct ls_stateful_record *ls_stateful_rec;
-        struct ovn_igmp_group *igmp_group;
         struct ovn_lb_datapaths *lb_dps;
         struct ovn_datapath *od;
         struct ovn_port *op;
@@ -17423,7 +17418,6 @@ build_lswitch_and_lrouter_flows(
             .lr_stateful_table = lr_stateful_table,
             .ls_stateful_table = ls_stateful_table,
             .lflows = lflows,
-            .igmp_groups = igmp_groups,
             .meter_groups = meter_groups,
             .lb_dps_map = lb_dps_map,
             .svc_monitor_map = svc_monitor_map,
@@ -17513,20 +17507,44 @@ build_lswitch_and_lrouter_flows(
                                     lsi.lflows);
         }
         stopwatch_stop(LFLOWS_LS_STATEFUL_STOPWATCH_NAME, time_msec());
-        stopwatch_start(LFLOWS_IGMP_STOPWATCH_NAME, time_msec());
-        HMAP_FOR_EACH (igmp_group, hmap_node, igmp_groups) {
-            build_lswitch_ip_mcast_igmp_mld(igmp_group,
-                                            lsi.lflows,
-                                            &lsi.actions,
-                                            &lsi.match);
-        }
-        stopwatch_stop(LFLOWS_IGMP_STOPWATCH_NAME, time_msec());
 
         ds_destroy(&lsi.match);
         ds_destroy(&lsi.actions);
     }
 
     free(svc_check_match);
+}
+
+/* The IGMP flows have to be built in main thread because there is
+ * single lflow_ref for all of them which isn't thread safe. */
+void
+build_igmp_lflows(struct hmap *igmp_groups, const struct hmap *ls_datapaths,
+                  struct lflow_table *lflows, struct lflow_ref *lflow_ref)
+{
+    struct ds actions = DS_EMPTY_INITIALIZER;
+    struct ds match = DS_EMPTY_INITIALIZER;
+
+    struct ovn_datapath *od;
+    HMAP_FOR_EACH (od, key_node, ls_datapaths) {
+        init_mcast_flow_count(od);
+        build_mcast_flood_lswitch(od, lflows, &actions, lflow_ref);
+    }
+
+    stopwatch_start(LFLOWS_IGMP_STOPWATCH_NAME, time_msec());
+    struct ovn_igmp_group *igmp_group;
+    HMAP_FOR_EACH (igmp_group, hmap_node, igmp_groups) {
+        if (igmp_group->datapath->nbs) {
+            build_lswitch_ip_mcast_igmp_mld(igmp_group, lflows, &actions,
+                                            &match, lflow_ref);
+        } else {
+            build_igmp_flows_for_lrouter(igmp_group, lflows, &actions,
+                                         &match, lflow_ref);
+        }
+    }
+    stopwatch_stop(LFLOWS_IGMP_STOPWATCH_NAME, time_msec());
+
+    ds_destroy(&actions);
+    ds_destroy(&match);
 }
 
 void run_update_worker_pool(int n_threads)
@@ -17553,20 +17571,6 @@ void build_lflows(struct ovsdb_idl_txn *ovnsb_txn,
                   struct lflow_input *input_data,
                   struct lflow_table *lflows)
 {
-    struct hmap mcast_groups;
-    struct hmap igmp_groups;
-
-    struct ovn_datapath *od;
-    HMAP_FOR_EACH (od, key_node, &input_data->ls_datapaths->datapaths) {
-        init_mcast_flow_count(od);
-    }
-
-    build_mcast_groups(input_data->sbrec_igmp_group_table,
-                       input_data->sbrec_mcast_group_by_name_dp,
-                       &input_data->ls_datapaths->datapaths,
-                       input_data->ls_ports, input_data->lr_ports,
-                       &mcast_groups, &igmp_groups);
-
     build_lswitch_and_lrouter_flows(input_data->ls_datapaths,
                                     input_data->lr_datapaths,
                                     input_data->ls_ports,
@@ -17575,7 +17579,6 @@ void build_lflows(struct ovsdb_idl_txn *ovnsb_txn,
                                     input_data->lr_stateful_table,
                                     input_data->ls_stateful_table,
                                     lflows,
-                                    &igmp_groups,
                                     input_data->meter_groups,
                                     input_data->lb_datapaths_map,
                                     input_data->svc_monitor_map,
@@ -17586,6 +17589,9 @@ void build_lflows(struct ovsdb_idl_txn *ovnsb_txn,
                                     input_data->parsed_routes,
                                     input_data->route_policies,
                                     input_data->route_tables);
+    build_igmp_lflows(input_data->igmp_groups,
+                      &input_data->ls_datapaths->datapaths,
+                      lflows, input_data->igmp_lflow_ref);
 
     if (parallelization_state == STATE_INIT_HASH_SIZES) {
         parallelization_state = STATE_USE_PARALLELIZATION;
@@ -17603,13 +17609,6 @@ void build_lflows(struct ovsdb_idl_txn *ovnsb_txn,
                            input_data->sbrec_logical_dp_group_table);
 
     stopwatch_stop(LFLOWS_TO_SB_STOPWATCH_NAME, time_msec());
-
-    sync_multicast_groups_to_sb(ovnsb_txn,
-                                input_data->sbrec_multicast_group_table,
-                                &input_data->ls_datapaths->datapaths,
-                                &input_data->lr_datapaths->datapaths,
-                                &mcast_groups);
-    ovn_igmp_groups_destroy(&igmp_groups);
 }
 
 void

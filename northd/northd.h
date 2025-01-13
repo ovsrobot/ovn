@@ -26,6 +26,7 @@
 #include "simap.h"
 #include "ovs-thread.h"
 
+
 struct northd_input {
     /* Northbound table references */
     const struct nbrec_logical_switch_table *nbrec_logical_switch_table;
@@ -198,13 +199,12 @@ struct bfd_sync_data {
     struct sset bfd_ports;
 };
 
+struct lflow_ref;
 struct lr_nat_table;
 
 struct lflow_input {
     /* Southbound table references */
     const struct sbrec_logical_flow_table *sbrec_logical_flow_table;
-    const struct sbrec_multicast_group_table *sbrec_multicast_group_table;
-    const struct sbrec_igmp_group_table *sbrec_igmp_group_table;
     const struct sbrec_logical_dp_group_table *sbrec_logical_dp_group_table;
 
     /* Indexes */
@@ -228,6 +228,8 @@ struct lflow_input {
     struct hmap *parsed_routes;
     struct hmap *route_policies;
     struct simap *route_tables;
+    struct hmap *igmp_groups;
+    struct lflow_ref *igmp_lflow_ref;
 };
 
 extern int parallelization_state;
@@ -292,7 +294,6 @@ struct mcast_info {
 
     struct hmap group_tnlids;  /* Group tunnel IDs in use on this DP. */
     uint32_t group_tnlid_hint; /* Hint for allocating next group tunnel ID. */
-    struct ovs_list groups;    /* List of groups learnt on this DP. */
 
     union {
         struct mcast_switch_info sw;  /* Switch specific multicast info. */
@@ -897,5 +898,8 @@ lsp_is_router(const struct nbrec_logical_switch_port *nbsp)
 }
 
 struct ovn_port *ovn_port_find(const struct hmap *ports, const char *name);
-
+void build_igmp_lflows(struct hmap *igmp_groups,
+                       const struct hmap *ls_datapaths,
+                       struct lflow_table *lflows,
+                       struct lflow_ref *lflow_ref);
 #endif /* NORTHD_H */
