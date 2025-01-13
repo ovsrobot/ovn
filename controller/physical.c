@@ -2413,12 +2413,16 @@ physical_handle_flows_for_lport(const struct sbrec_port_binding *pb,
 
     if (!removed) {
         physical_eval_port_binding(p_ctx, pb, flow_table);
-        if (!strcmp(pb->type, "patch")) {
-            const struct sbrec_port_binding *peer =
-                get_binding_peer(p_ctx->sbrec_port_binding_by_name, pb);
-            if (peer) {
-                physical_eval_port_binding(p_ctx, peer, flow_table);
+    }
+
+    if (!strcmp(pb->type, "patch")) {
+        const struct sbrec_port_binding *peer =
+            get_binding_peer(p_ctx->sbrec_port_binding_by_name, pb);
+        if (peer) {
+            if (removed) {
+                ofctrl_remove_flows(flow_table, &peer->header_.uuid);
             }
+            physical_eval_port_binding(p_ctx, peer, flow_table);
         }
     }
 
