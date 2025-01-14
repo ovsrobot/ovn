@@ -142,6 +142,7 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
 
     lb_data->tracked = true;
     struct tracked_lb_data *trk_lb_data = &lb_data->tracked_lb_data;
+    bool ret = true;
 
     const struct nbrec_load_balancer *tracked_lb;
     NBREC_LOAD_BALANCER_TABLE_FOR_EACH_TRACKED (tracked_lb, nb_lb_table) {
@@ -181,6 +182,7 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
             struct sset old_ips_v6 = SSET_INITIALIZER(&old_ips_v6);
             sset_swap(&lb->ips_v4, &old_ips_v4);
             sset_swap(&lb->ips_v6, &old_ips_v6);
+            enum lb_neighbor_responder_mode neigh_mode = lb->neigh_mode;
             ovn_northd_lb_reinit(lb, tracked_lb);
             health_checks |= lb->health_checks;
             struct crupdated_lb *clb = add_crupdated_lb_to_tracked_data(
@@ -208,11 +210,17 @@ lb_data_load_balancer_handler(struct engine_node *node, void *data)
 
             sset_destroy(&old_ips_v4);
             sset_destroy(&old_ips_v6);
+
+            if (neigh_mode != lb->neigh_mode) {
+                /* If neigh_mode is updated trigger a full recompute. */
+                ret = false;
+                break;
+            }
         }
     }
 
     engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return ret;
 }
 
 bool
