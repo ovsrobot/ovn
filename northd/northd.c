@@ -940,7 +940,7 @@ get_ovn_max_dp_key_local(bool _vxlan_mode)
 {
     if (_vxlan_mode) {
         /* OVN_MAX_DP_GLOBAL_NUM doesn't apply for VXLAN mode. */
-        return OVN_MAX_DP_VXLAN_KEY;
+        return OVN_MAX_DP_VXLAN_KEY_LOCAL;
     }
     return OVN_MAX_DP_KEY - OVN_MAX_DP_GLOBAL_NUM;
 }

@@ -24429,7 +24429,7 @@ m4_define([DVR_N_S_ARP_HANDLING],
    # validate max_tunid reflects the type of encapsulation used
    max_tunid=`ovn-nbctl get NB_Global . options:max_tunid | sed s/":"//g | sed s/\"//g`
    if [[ $encap = vxlan ]]; then
-       max_tunid_expected=4095
+       max_tunid_expected=1023
    else
        max_tunid_expected=16711680
    fi

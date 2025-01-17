@@ -2904,7 +2904,7 @@ done
 check ovn-nbctl --wait=sb $cmd
 
 check_row_count nb:Logical_Switch 4097
-wait_row_count sb:Datapath_Binding 4095
+wait_row_count sb:Datapath_Binding 1023
 
 OVS_WAIT_UNTIL([grep "all datapath tunnel ids exhausted" northd/ovn-northd.log])
 
@@ -2928,19 +2928,19 @@ check_uuid ovn-sbctl \
 
 cmd="ovn-nbctl --wait=sb"
 
-for i in {1..4095}; do
+for i in {1..1023}; do
     cmd="${cmd} -- ls-add lsw-${i}"
 done
 
 eval $cmd
 
-check_row_count nb:Logical_Switch 4095
-wait_row_count sb:Datapath_Binding 4095
+check_row_count nb:Logical_Switch 1023
+wait_row_count sb:Datapath_Binding 1023
 
 check ovn-nbctl ls-add lsw-exhausted
 
-check_row_count nb:Logical_Switch 4096
-wait_row_count sb:Datapath_Binding 4095
+check_row_count nb:Logical_Switch 1024
+wait_row_count sb:Datapath_Binding 1023
 
 OVS_WAIT_UNTIL([grep "all datapath tunnel ids exhausted" northd/ovn-northd.log])
 
@@ -12730,7 +12730,7 @@ check_engine_stats northd recompute nocompute
 check_engine_stats lflow recompute nocompute
 
 AT_CHECK([ovn-nbctl get NB_Global . options:max_tunid | \
-sed s/":"//g | sed s/\"//g], [0], [4095
+sed s/":"//g | sed s/\"//g], [0], [1023
 ], [])
 
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats

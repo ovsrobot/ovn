@@ -28,6 +28,9 @@ Post v24.09.0
        this option was not set).  TLS ciphersuites for TLSv1.3 and later can
        be configured via --ssl-ciphersuites (--ssl-ciphers only applies to
        TLSv1.2 and earlier).
+   - Reduce the max number of local datapath to 1024 when OVN is using VXLAN
+     encapsulation type. This is needed to support OVN-interconnect in VXLAN
+     mode.
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------
