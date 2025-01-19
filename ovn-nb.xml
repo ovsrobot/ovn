@@ -2167,6 +2167,14 @@
       </p>
 
       <p>
+        Example: <code>{ip_proto,ip_src,ip_dst}</code> for a 3-tuple match.
+        Example: <code>{ip_proto,ipv6_src,ipv6_dst}</code> for a IPv6 match.
+        Example: <code>{ip_proto,ip_src,ip_dst,tp_src,tp_dst}</code>
+        Example: <code>{ip_src,ip_dst,ipv6_src,ipv6_dst,tp_src,tp_dst}</code>
+        for a 5-tuple match.
+      </p>
+
+      <p>
         <code>dp_hash</code> selection method uses the assistance of
         datapath to calculate the hash and it is expected to be
         faster than <code>hash</code> selection method. So CMS should take
@@ -3836,7 +3844,9 @@ or
         </p>
         <p>
           Example: <code>{ip_proto,ip_src,ip_dst}</code> for a 3-tuple match.
+          Example: <code>{ip_proto,ipv6_src,ipv6_dst}</code> for a IPv6 match.
           Example: <code>{ip_proto,ip_src,ip_dst,tp_src,tp_dst}</code>
+          Example: <code>{ip_src,ip_dst,ipv6_src,ipv6_dst,tp_src,tp_dst}</code>
           for a 5-tuple match.
         </p>
     </column>
