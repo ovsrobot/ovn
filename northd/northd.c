@@ -3111,13 +3111,31 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
 
         /* If the router is for l3 gateway, it resides on a chassis
          * and its port type is "l3gateway". */
-        const char *chassis_name = smap_get(&op->od->nbr->options, "chassis");
+        const char *lr_chassis = smap_get(&op->od->nbr->options, "chassis");
+
+        /* If the LRP has requested chassis, that is remote, set the type to
+         * remote and add the appropriate chassis. */
+        const char *req_chassis = smap_get(&op->nbrp->options,
+                                           "requested-chassis");
+        const struct sbrec_chassis *sb_chassis = NULL;
+        const char *type = "patch";
         if (is_cr_port(op)) {
-            sbrec_port_binding_set_type(op->sb, "chassisredirect");
-        } else if (chassis_name) {
-            sbrec_port_binding_set_type(op->sb, "l3gateway");
-        } else {
-            sbrec_port_binding_set_type(op->sb, "patch");
+            type = "chassisredirect";
+        } else if (lr_chassis) {
+            type = "l3gateway";
+        } else if (req_chassis) {
+            const struct sbrec_chassis *tr_chassis = chassis_lookup(
+                sbrec_chassis_by_name, sbrec_chassis_by_hostname, req_chassis);
+            bool trp = tr_chassis && smap_get_bool(&tr_chassis->other_config,
+                                                   "is-remote", false);
+            sb_chassis = trp ? tr_chassis : NULL;
+            type = trp ? "remote" : "patch";
+        }
+
+        sbrec_port_binding_set_type(op->sb, type);
+        sbrec_port_binding_set_requested_chassis(op->sb, sb_chassis);
+        if (sb_chassis) {
+            sbrec_port_binding_set_chassis(op->sb, sb_chassis);
         }
 
         if (is_cr_port(op)) {
@@ -4184,6 +4202,14 @@ ovn_port_assign_requested_tnl_id(struct ovn_port *op)
 }
 
 static bool
+ovn_port_is_trp(struct ovn_port *op)
+{
+    return op->nbrp &&
+           op->sb->chassis &&
+           smap_get_bool(&op->sb->chassis->other_config, "is-remote", false);
+}
+
+static bool
 ovn_port_allocate_key(struct ovn_port *op)
 {
     if (!op->tunnel_key) {
@@ -4288,6 +4314,7 @@ build_ports(struct ovsdb_idl_txn *ovnsb_txn,
                               sbrec_mirror_table,
                               op, queue_id_bitmap,
                               &active_ha_chassis_grps);
+        op->od->is_transit_router |= ovn_port_is_trp(op);
         ovs_list_remove(&op->list);
     }
 
@@ -4301,6 +4328,7 @@ build_ports(struct ovsdb_idl_txn *ovnsb_txn,
                               op, queue_id_bitmap,
                               &active_ha_chassis_grps);
         sbrec_port_binding_set_logical_port(op->sb, op->key);
+        op->od->is_transit_router |= ovn_port_is_trp(op);
         ovs_list_remove(&op->list);
     }
 

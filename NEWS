@@ -28,6 +28,9 @@ Post v24.09.0
        this option was not set).  TLS ciphersuites for TLSv1.3 and later can
        be configured via --ssl-ciphersuites (--ssl-ciphers only applies to
        TLSv1.2 and earlier).
+   - Add concept of Transit Routers, the routers not allow CMS to specify
+     options:requested-chassis, if the chassis is remote the port will behave
+     as remote port.
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------
