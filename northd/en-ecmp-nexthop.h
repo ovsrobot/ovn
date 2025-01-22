@@ -24,8 +24,11 @@
 
 #include "lib/inc-proc-eng.h"
 
+bool ecmp_nexthop_mac_binding_handler(struct engine_node *node,
+                                      void *data OVS_UNUSED);
 void en_ecmp_nexthop_run(struct engine_node *node, void *data);
 void *en_ecmp_nexthop_init(struct engine_node *node OVS_UNUSED,
                            struct engine_arg *arg OVS_UNUSED);
 void en_ecmp_nexthop_cleanup(void *data);
+struct ovsdb_idl_index *ecmp_nexthop_index_create(struct ovsdb_idl *idl);
 #endif /* OVN_ECMP_NEXT_HOP_MONITOR_H */
