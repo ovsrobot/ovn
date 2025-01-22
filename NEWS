@@ -33,6 +33,8 @@ Post v24.09.0
      ARP/ND packets used for tracking ECMP next hop MAC addresses.
    - Auto flush ECMP symmetric reply connection states when an ECMP route is
      removed by the CMS."
+   - Add "ecmp_nexthop_monitor_en" config option to NB_Global table in order to
+     enable or disable ecmp_nexthop tracking logic.
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------
