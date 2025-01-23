@@ -1363,6 +1363,12 @@ lsp_is_router(const struct nbrec_logical_switch_port *nbsp)
 }
 
 static bool
+lsp_is_switch(const struct nbrec_logical_switch_port *nbsp)
+{
+    return !strcmp(nbsp->type, "switch");
+}
+
+static bool
 lsp_is_remote(const struct nbrec_logical_switch_port *nbsp)
 {
     return !strcmp(nbsp->type, "remote");
@@ -1449,7 +1455,8 @@ lsp_force_fdb_lookup(const struct ovn_port *op)
 static struct ovn_port *
 ovn_port_get_peer(const struct hmap *lr_ports, struct ovn_port *op)
 {
-    if (!op->nbsp || !lsp_is_router(op->nbsp) || is_cr_port(op)) {
+    if (!op->nbsp || (!lsp_is_router(op->nbsp) && !lsp_is_switch(op->nbsp))
+        || is_cr_port(op)) {
         return NULL;
     }
 
@@ -2114,6 +2121,12 @@ parse_lsp_addrs(struct ovn_port *op)
     }
     op->n_lsp_non_router_addrs = op->n_lsp_addrs;
 
+    /* Addresses are not leaked between directly connected switches, so
+     * we should expect unknown addresses behind the port. */
+    if (lsp_is_switch(nbsp)) {
+        op->has_unknown = true;
+    }
+
     op->ps_addrs
         = xmalloc(sizeof *op->ps_addrs * nbsp->n_port_security);
     for (size_t j = 0; j < nbsp->n_port_security; j++) {
@@ -2401,7 +2414,8 @@ join_logical_ports(const struct sbrec_port_binding_table *sbrec_pb_table,
     }
 
     /* Connect logical router ports, and logical switch ports of type "router",
-     * to their peers. */
+     * to their peers.  As well as logical switch ports of type "switch" to
+     * theirs. */
     struct ovn_port *op;
     HMAP_FOR_EACH (op, key_node, ports) {
         if (op->nbsp && lsp_is_router(op->nbsp) && !op->primary_port) {
@@ -2452,6 +2466,20 @@ join_logical_ports(const struct sbrec_port_binding_table *sbrec_pb_table,
                         arp_proxy, op->nbsp->name);
                 }
             }
+        } else if (op->nbsp && op->nbsp->peer && lsp_is_switch(op->nbsp)) {
+            struct ovn_port *peer = ovn_port_find(ports, op->nbsp->peer);
+
+            if (!peer) {
+                continue;
+            }
+            if (!peer->nbsp || !lsp_is_switch(peer->nbsp)) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+
+                VLOG_WARN_RL(&rl, "Bad configuration: The peer of a switch "
+                                  "port %s in not a 'switch' port", op->key);
+                continue;
+            }
+            op->peer = peer;
         } else if (op->nbrp && op->nbrp->peer && !is_cr_port(op)) {
             struct ovn_port *peer = ovn_port_find(ports, op->nbrp->peer);
             if (peer) {
@@ -3255,9 +3283,15 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
                 sbrec_port_binding_set_chassis(op->sb, NULL);
             }
 
+            if (lsp_is_switch(op->nbsp) && op->peer) {
+                smap_add(&options, "peer", op->peer->key);
+            }
+
             sbrec_port_binding_set_options(op->sb, &options);
             smap_destroy(&options);
-            if (ovn_is_known_nb_lsp_type(op->nbsp->type)) {
+            if (lsp_is_switch(op->nbsp)) {
+                sbrec_port_binding_set_type(op->sb, "patch");
+            } else if (ovn_is_known_nb_lsp_type(op->nbsp->type)) {
                 sbrec_port_binding_set_type(op->sb, op->nbsp->type);
             } else {
                 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
@@ -19413,7 +19447,7 @@ handle_port_binding_changes(struct ovsdb_idl_txn *ovnsb_txn,
 
         bool up = false;
 
-        if (lsp_is_router(op->nbsp)) {
+        if (lsp_is_router(op->nbsp) || lsp_is_switch(op->nbsp)) {
             up = true;
         } else if (sb->chassis) {
             up = !smap_get_bool(&sb->chassis->other_config, "is-remote", false)
