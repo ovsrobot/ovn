@@ -38,6 +38,8 @@ Post v24.09.0
    - Improved handling of IPv6 traffic by enabling address prefix tracking
      in OVS for both IPv4 and IPv6 addresses, whenever possible, reducing
      the amount of IPv6 datapath flows.
+   - Add "options:commit-all" to LR, that enables commit of all traffic
+     when LR is stateful.
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------

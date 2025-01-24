@@ -2955,6 +2955,14 @@ or
         option is not present the limit is not set and the zone limit is
         derived from OvS default datapath limit.
       </column>
+
+      <column name="options" key="commit-all" type='{"type": "boolean"}'>
+          When enabled the LR will commit traffic in a zone that is stateful.
+          The traffic is not commited to both zones but it is selective based
+          whether there is stateful DNAT/SNAT or both. The commit all will
+          prevent issues with <code>ct.inv</code> packets as it will prevent
+          the commit of reply traffic, which could happen in some cases.
+      </column>
     </group>
 
     <group title="Common Columns">
