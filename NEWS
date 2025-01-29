@@ -38,6 +38,9 @@ Post v24.09.0
    - Improved handling of IPv6 traffic by enabling address prefix tracking
      in OVS for both IPv4 and IPv6 addresses, whenever possible, reducing
      the amount of IPv6 datapath flows.
+   - Add concept of Transit Routers, the routers not allow CMS to specify
+     options:requested-chassis, if the chassis is remote the port will behave
+     as remote port.
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------
