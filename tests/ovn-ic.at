@@ -76,12 +76,15 @@ check_row_count ic-sb:Datapath_Binding 1 transit_switch=ts1
 check_row_count ic-sb:Datapath_Binding 1 transit_switch=ts2
 check_column "ts1 ts2" ic-sb:Datapath_Binding transit_switch
 check_column "ts1 ts2" nb:Logical_Switch name
+check_column "interconn-ts=ts1 requested-tnl-key=1025" nb:Logical_Switch other_config name="ts1"
+check_column "interconn-ts=ts2 requested-tnl-key=1026" nb:Logical_Switch other_config name="ts2"
 
 check ovn-nbctl --wait=hv sync
 
 # Check SB DP key
 ts1_key=$(fetch_column ic-sb:Datapath_Binding tunnel_key transit_switch=ts1)
 check_column "$ts1_key" Datapath_Binding tunnel_key external_ids:interconn-ts=ts1
+
 
 # Test delete
 AT_CHECK([ovn-ic-nbctl --wait=sb ts-del ts1])

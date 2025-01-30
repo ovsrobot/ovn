@@ -71,6 +71,8 @@ en_global_config_run(struct engine_node *node , void *data)
 
     const struct nbrec_nb_global_table *nb_global_table =
         EN_OVSDB_GET(engine_get_input("NB_nb_global", node));
+    const struct nbrec_logical_switch_table *nbrec_ls_table =
+        EN_OVSDB_GET(engine_get_input("NB_logical_switch", node));
     const struct sbrec_sb_global_table *sb_global_table =
         EN_OVSDB_GET(engine_get_input("SB_sb_global", node));
     const struct sbrec_chassis_table *sbrec_chassis_table =
@@ -121,10 +123,19 @@ en_global_config_run(struct engine_node *node , void *data)
                      config_data->svc_monitor_mac);
     }
 
+    bool ic_mode = false;
+    const struct nbrec_logical_switch *nbs;
+    NBREC_LOGICAL_SWITCH_TABLE_FOR_EACH (nbs, nbrec_ls_table) {
+        if (smap_get(&nbs->other_config, "interconn-ts")) {
+            ic_mode = true;
+            break;
+        }
+    }
     char *max_tunid = xasprintf("%d",
                                 get_ovn_max_dp_key_local(
                                     is_vxlan_mode(&nb->options,
-                                                  sbrec_chassis_table)));
+                                                  sbrec_chassis_table),
+                                    ic_mode));
     smap_replace(options, "max_tunid", max_tunid);
     free(max_tunid);
 
@@ -367,6 +378,46 @@ node_global_config_handler(struct engine_node *node, void *data OVS_UNUSED)
         || global_config->tracked_data.nb_options_changed) {
         return false;
     }
+
+    return true;
+}
+
+bool
+global_config_nb_logical_switch_handler(struct engine_node *node,
+                                        void *data)
+{
+    struct ed_type_global_config *config_data = data;
+    const struct nbrec_logical_switch_table *nbrec_ls_table =
+        EN_OVSDB_GET(engine_get_input("NB_logical_switch", node));
+    const struct nbrec_nb_global *nb = nbrec_nb_global_table_first(
+                EN_OVSDB_GET(engine_get_input("NB_nb_global", node)));
+    const struct sbrec_chassis_table *sbrec_chassis_table =
+        EN_OVSDB_GET(engine_get_input("SB_chassis", node));
+
+    bool ic_mode = false;
+    const struct nbrec_logical_switch *nbs;
+    NBREC_LOGICAL_SWITCH_TABLE_FOR_EACH (nbs, nbrec_ls_table) {
+        if (smap_get(&nbs->other_config, "interconn-ts")) {
+            ic_mode = true;
+            break;
+        }
+    }
+    char *max_tunid = xasprintf("%d",
+                                get_ovn_max_dp_key_local(
+                                    is_vxlan_mode(&nb->options,
+                                                  sbrec_chassis_table),
+                                    ic_mode));
+    struct smap *options = &config_data->nb_options;
+    smap_replace(options, "max_tunid", max_tunid);
+    free(max_tunid);
+
+    if (!smap_equal(&nb->options, options)) {
+        nbrec_nb_global_verify_options(nb);
+        nbrec_nb_global_set_options(nb, options);
+    }
+
+    engine_set_node_state(node, EN_UPDATED);
+    config_data->tracked = true;
 
     return true;
 }

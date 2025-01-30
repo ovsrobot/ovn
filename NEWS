@@ -38,6 +38,8 @@ Post v24.09.0
    - Improved handling of IPv6 traffic by enabling address prefix tracking
      in OVS for both IPv4 and IPv6 addresses, whenever possible, reducing
      the amount of IPv6 datapath flows.
+   - Reduce the max number of local datapath to 1024 when OVN is using VXLAN
+     encapsulation type in OVN-interconnect mode.
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------
