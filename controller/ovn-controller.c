@@ -3400,6 +3400,18 @@ en_bfd_chassis_run(struct engine_node *node, void *data OVS_UNUSED)
     engine_set_node_state(node, EN_UPDATED);
 }
 
+static bool
+en_bfd_chassis_sb_sb_global_handler(struct engine_node *node,
+                                    void *data OVS_UNUSED)
+{
+    const struct sbrec_sb_global_table *sb_global_table =
+        EN_OVSDB_GET(engine_get_input("SB_sb_global", node));
+    const struct sbrec_sb_global *sb_global =
+        sbrec_sb_global_table_first(sb_global_table);
+    /* Only recompute bfd_chassis is the options column get updated */
+    return !sbrec_sb_global_is_updated(sb_global, SBREC_SB_GLOBAL_COL_OPTIONS);
+}
+
 static void
 en_bfd_chassis_cleanup(void *data OVS_UNUSED){
     struct ed_type_bfd_chassis *bfd_chassis = data;
@@ -5244,7 +5256,8 @@ main(int argc, char *argv[])
     engine_add_input(&en_if_status_mgr, &en_ovs_interface,
                      if_status_mgr_ovs_interface_handler);
     engine_add_input(&en_bfd_chassis, &en_ovs_open_vswitch, NULL);
-    engine_add_input(&en_bfd_chassis, &en_sb_sb_global, NULL);
+    engine_add_input(&en_bfd_chassis, &en_sb_sb_global,
+                     en_bfd_chassis_sb_sb_global_handler);
     engine_add_input(&en_bfd_chassis, &en_sb_chassis, NULL);
     engine_add_input(&en_bfd_chassis, &en_sb_ha_chassis_group, NULL);
 
