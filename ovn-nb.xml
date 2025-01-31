@@ -394,6 +394,9 @@
         support HW VTEP functionality and main encap type is GENEVE or STT, set
         this option to <code>false</code> to use default
         non-<code>VXLAN mode</code> tunnel IDs allocation logic.
+        Please consider when OVN is running in <code>OVN-interconnect</code>
+        mode and it is using <code>VXLAN</code> encapsulation type, the max
+        number of local datapath is reduced to 1024.
       </column>
 
       <column name="options" key="always_tunnel"
@@ -887,6 +890,12 @@
         of corresponding transit switch in <ref db="OVN_IC_Northbound"/>
         database.  This kind of logical switch is created and controlled
         by <code>ovn-ic</code>.
+      </column>
+      <column name="other_config" key="ic-vxlan_mode"
+          type='{"type": "boolean"}'>
+        <code>ic-vxlan_mode</code> is set to true by <code>ovn-ic</code> when
+        it runs <code>VXLAN</code> as encapsulation protocol for cross-AZ
+        traffic. Default value is false.
       </column>
     </group>
 
