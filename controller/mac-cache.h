@@ -159,8 +159,6 @@ bool mac_binding_data_from_sbrec(struct mac_binding_data *data,
 void mac_bindings_clear(struct hmap *map);
 void mac_bindings_to_string(const struct hmap *map, struct ds *out_data);
 
-bool sb_mac_binding_updated(const struct sbrec_mac_binding *mb);
-
 /* FDB. */
 struct fdb *fdb_add(struct hmap *map, struct fdb_data fdb_data,
                     long long timestamp);
