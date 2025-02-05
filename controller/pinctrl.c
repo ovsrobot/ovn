@@ -4683,6 +4683,7 @@ init_put_mac_bindings(void)
 static void
 destroy_put_mac_bindings(void)
 {
+    mac_bindings_clear(&put_mac_bindings);
     hmap_destroy(&put_mac_bindings);
 }
 
