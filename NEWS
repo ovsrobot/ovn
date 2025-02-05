@@ -41,6 +41,8 @@ Post v24.09.0
    - Add concept of Transit Routers, users are now allowed to specify
      options:requested-chassis for router ports; if the chassis is remote
      then the router port will behave as a remote port.
+   - Add "options:ct-commit-all" to LR, that enables commit of all traffic
+     to DNAT and SNAT zone when LR is stateful.
 
 OVN v24.09.0 - 13 Sep 2024
 --------------------------
