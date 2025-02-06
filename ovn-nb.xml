@@ -3692,6 +3692,12 @@ or
             <code>BFD</code> (forwards UDP port 3784)
           </li>
         </ul>
+        <p>
+          Note that for BGP to work in "unnumbered mode" (automatic on-link
+          peer discovery), Logical Router Port needs to enable sending of
+          periodic IPv6 Router Announcements (see the <ref
+          column="ipv6_ra_configs" key="send_periodic"/>).
+        </p>
       </column>
 
       <column name="options" key="gateway_mtu_bypass">
