@@ -3024,6 +3024,28 @@ or
         derived from OvS default datapath limit.
       </column>
 
+      <column name="options" key="ic-route-filter-adv">
+        <p>
+          This option expects list of CIDRs delimited by "," that's present
+          in the Logical Router. A route will not be advertised if the
+          route's prefix belongs to any of the CIDRs listed.
+
+          This allows to filter CIDR prefixes in the process of advertising
+          routes in <code>ovn-ic</code> daemon.
+        </p>
+      </column>
+
+      <column name="options" key="ic-route-filter-learn">
+        <p>
+          This option expects list of CIDRs delimited by "," that's present
+          in the Logical Router. A route will not be learned if the
+          route's prefix belongs to any of the CIDRs listed.
+
+          This allows to filter CIDR prefixes in the process of learning
+          routes in <code>ovn-ic</code> daemon.
+        </p>
+      </column>
+
       <column name="options" key="dynamic-routing" type='{"type": "boolean"}'>
         If set to <code>true</code> then this <ref table="Logical_Router"/>
         can participate in dynamic routing with components outside of OVN.
@@ -3881,6 +3903,28 @@ or
           <ref table="Route" db="OVN_IC_Southbound"/> table of the
           <ref db="OVN_IC_Southbound"/> database, will be filtered and not
           learned by the <code>ovn-ic</code> daemon.
+        </p>
+      </column>
+
+      <column name="options" key="ic-route-filter-adv">
+        <p>
+          This option expects list of CIDRs delimited by "," that's present
+          in the Logical Router Port. A route will be advertised if the
+          route's prefix belongs to any of the CIDRs listed.
+
+          This allows to filter CIDR prefixes in the process of advertising
+          routes in <code>ovn-ic</code> daemon.
+        </p>
+      </column>
+
+      <column name="options" key="ic-route-filter-learn">
+        <p>
+          This option expects list of CIDRs delimited by "," that's present
+          in the Logical Router Port. A route will be learned if the
+          route's prefix belongs to any of the CIDRs listed.
+
+          This allows to filter CIDR prefixes in the process of learning
+          routes in <code>ovn-ic</code> daemon.
         </p>
       </column>
 
