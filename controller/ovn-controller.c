@@ -5740,8 +5740,10 @@ main(int argc, char *argv[])
                      lflow_output_template_vars_handler);
     engine_add_input(&en_lflow_output, &en_runtime_data,
                      lflow_output_runtime_data_handler);
+    /* Using a noop handler because we only need the non_vif_data to find
+     * the corresponding local openflow port of an OVN port. */
     engine_add_input(&en_lflow_output, &en_non_vif_data,
-                     NULL);
+                     engine_noop_handler);
 
     engine_add_input(&en_lflow_output, &en_sb_multicast_group,
                      lflow_output_sb_multicast_group_handler);
