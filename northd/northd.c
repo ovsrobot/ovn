@@ -11079,7 +11079,7 @@ parsed_route_free(struct parsed_route *pr) {
  * in there.
  * Takes ownership of the provided nexthop. All other parameters are cloned.
  * Elements of the routes hmap need to be freed using parsed_route_free. */
-void
+struct parsed_route *
 parsed_route_add(const struct ovn_datapath *od,
                  struct in6_addr *nexthop,
                  const struct in6_addr *prefix,
@@ -11108,9 +11108,11 @@ parsed_route_add(const struct ovn_datapath *od,
     struct parsed_route *pr = parsed_route_lookup(routes, hash, new_pr);
     if (!pr) {
         hmap_insert(routes, &new_pr->key_node, hash);
+        return new_pr;
     } else {
         pr->stale = false;
         parsed_route_free(new_pr);
+        return pr;
     }
 }
 
@@ -19116,6 +19118,7 @@ routes_destroy(struct routes_data *data)
 
     simap_destroy(&data->route_tables);
     __bfd_destroy(&data->bfd_active_connections);
+
 }
 
 void
