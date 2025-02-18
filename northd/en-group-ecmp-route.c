@@ -17,6 +17,7 @@
 #include <config.h>
 #include <stdbool.h>
 
+#include "northd/lflow-mgr.h"
 #include "openvswitch/list.h"
 #include "openvswitch/vlog.h"
 #include "stopwatch.h"
@@ -76,6 +77,7 @@ group_node_free(struct group_ecmp_route_node *n)
 
     unique_routes_destroy(&n->unique_routes);
     ecmp_groups_destroy(&n->ecmp_groups);
+    lflow_ref_destroy(n->lflow_ref);
     free(n);
 }
 
@@ -153,6 +155,7 @@ group_ecmp_route_add(struct group_ecmp_route_data *data,
     size_t hash = uuid_hash(&od->key);
     struct group_ecmp_route_node *n = xmalloc(sizeof *n);
     n->od = od;
+    n->lflow_ref = lflow_ref_create();
     hmap_init(&n->ecmp_groups);
     hmap_init(&n->unique_routes);
     hmap_insert(&data->routes, &n->hmap_node, hash);
