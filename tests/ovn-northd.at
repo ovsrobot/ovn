@@ -15516,6 +15516,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15530,6 +15531,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15540,6 +15542,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15549,6 +15552,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15559,6 +15563,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15568,6 +15573,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15577,6 +15583,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15587,6 +15594,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15597,6 +15605,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15607,6 +15616,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15617,6 +15627,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15631,6 +15642,7 @@ check_engine_compute northd unchanged
 check_engine_compute routes unchanged
 check_engine_compute advertised_route_sync unchanged
 check_engine_compute learned_route_sync incremental
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15641,6 +15653,7 @@ check_engine_compute northd unchanged
 check_engine_compute routes unchanged
 check_engine_compute advertised_route_sync unchanged
 check_engine_compute learned_route_sync incremental
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15651,6 +15664,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15661,6 +15675,7 @@ check_engine_compute northd incremental
 check_engine_compute routes incremental
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync incremental
+check_engine_compute group_ecmp_route unchanged
 check_engine_compute lflow incremental
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15674,6 +15689,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15683,6 +15699,7 @@ check_engine_compute northd incremental
 check_engine_compute routes incremental
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync incremental
+check_engine_compute group_ecmp_route unchanged
 check_engine_compute lflow incremental
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15692,6 +15709,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15701,6 +15719,7 @@ check_engine_compute northd recompute
 check_engine_compute routes recompute
 check_engine_compute advertised_route_sync recompute
 check_engine_compute learned_route_sync recompute
+check_engine_compute group_ecmp_route recompute
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
