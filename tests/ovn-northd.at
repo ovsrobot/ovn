@@ -15642,7 +15642,7 @@ check_engine_compute northd unchanged
 check_engine_compute routes unchanged
 check_engine_compute advertised_route_sync unchanged
 check_engine_compute learned_route_sync incremental
-check_engine_compute group_ecmp_route recompute
+check_engine_compute group_ecmp_route incremental
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
@@ -15653,7 +15653,7 @@ check_engine_compute northd unchanged
 check_engine_compute routes unchanged
 check_engine_compute advertised_route_sync unchanged
 check_engine_compute learned_route_sync incremental
-check_engine_compute group_ecmp_route recompute
+check_engine_compute group_ecmp_route incremental
 check_engine_compute lflow recompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
