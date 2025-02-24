@@ -27,6 +27,102 @@
 #include "openvswitch/hmap.h"
 #include "ovn-util.h"
 
+struct ar_entry {
+    struct hmap_node hmap_node;
+
+    const struct ovn_datapath *od;       /* Datapath the route is
+                                          * advertised on. */
+    const struct ovn_port *op;           /* Port the route is advertised
+                                          * on. */
+    char *ip_prefix;
+    const struct ovn_port *tracked_port; /* If set, the port whose chassis
+                                          * advertises this route with a
+                                          * higher priority. */
+    enum route_source source;
+};
+
+/* Add a new entries to the to-be-advertised routes.
+ * Takes ownership of ip_prefix. */
+static struct ar_entry *
+ar_entry_add_nocopy(struct hmap *routes, const struct ovn_datapath *od,
+                    const struct ovn_port *op, char *ip_prefix,
+                    const struct ovn_port *tracked_port,
+                    enum route_source source)
+{
+    struct ar_entry *route_e = xzalloc(sizeof *route_e);
+
+    route_e->od = od;
+    route_e->op = op;
+    route_e->ip_prefix = ip_prefix;
+    route_e->tracked_port = tracked_port;
+    route_e->source = source;
+    uint32_t hash = uuid_hash(&od->sb->header_.uuid);
+    hash = hash_string(op->sb->logical_port, hash);
+    hash = hash_string(ip_prefix, hash);
+    hmap_insert(routes, &route_e->hmap_node, hash);
+
+    return route_e;
+}
+
+/* Add a new entries to the to-be-advertised routes.
+ * Makes a copy of ip_prefix. */
+static struct ar_entry *
+ar_entry_add(struct hmap *routes, const struct ovn_datapath *od,
+             const struct ovn_port *op, const char *ip_prefix,
+             const struct ovn_port *tracked_port,
+             enum route_source source)
+{
+    return ar_entry_add_nocopy(routes, od, op, xstrdup(ip_prefix),
+                               tracked_port, source);
+}
+
+static struct ar_entry *
+ar_entry_find(struct hmap *route_map,
+              const struct sbrec_datapath_binding *sb_db,
+              const struct sbrec_port_binding *logical_port,
+              const char *ip_prefix,
+              const struct sbrec_port_binding *tracked_port)
+{
+    struct ar_entry *route_e;
+    uint32_t hash;
+
+    hash = uuid_hash(&sb_db->header_.uuid);
+    hash = hash_string(logical_port->logical_port, hash);
+    hash = hash_string(ip_prefix, hash);
+
+    HMAP_FOR_EACH_WITH_HASH (route_e, hmap_node, hash, route_map) {
+        if (!uuid_equals(&sb_db->header_.uuid,
+                         &route_e->od->sb->header_.uuid)) {
+            continue;
+        }
+        if (!uuid_equals(&logical_port->header_.uuid,
+                         &route_e->op->sb->header_.uuid)) {
+            continue;
+        }
+        if (strcmp(ip_prefix, route_e->ip_prefix)) {
+            continue;
+        }
+
+        if (tracked_port) {
+            if (!route_e->tracked_port ||
+                    tracked_port != route_e->tracked_port->sb) {
+                continue;
+            }
+        }
+
+        return route_e;
+    }
+
+    return NULL;
+}
+
+static void
+ar_entry_free(struct ar_entry *route_e)
+{
+    free(route_e->ip_prefix);
+    free(route_e);
+}
+
 static void
 advertised_route_table_sync(
     struct ovsdb_idl_txn *ovnsb_txn,
@@ -158,7 +254,7 @@ en_advertised_route_sync_run(struct engine_node *node, void *data OVS_UNUSED)
                                 sbrec_advertised_route_table,
                                 &lr_stateful_data->table,
                                 &routes_data->parsed_routes,
-                                &dynamic_routes_data->parsed_routes,
+                                &dynamic_routes_data->routes,
                                 routes_sync_data);
 
     stopwatch_stop(ADVERTISED_ROUTE_SYNC_RUN_STOPWATCH_NAME, time_msec());
@@ -184,18 +280,18 @@ build_nat_parsed_route_for_port(const struct ovn_port *advertising_op,
             continue;
         }
 
-        int plen = nat_entry_is_v6(nat) ? 128 : 32;
-        struct in6_addr prefix;
-        ip46_parse(nat->nb->external_ip, &prefix);
-
         const struct ovn_port *tracked_port =
             nat->is_distributed
             ? ovn_port_find(ls_ports, nat->nb->logical_port)
             : nat->l3dgw_port;
-        parsed_route_add(advertising_od, NULL, &prefix, plen, false,
-                         nat->nb->external_ip, advertising_op, 0, false,
-                         false, NULL, ROUTE_SOURCE_NAT, &nat->nb->header_,
-                         tracked_port, routes);
+
+        if (!ar_entry_find(routes, advertising_od->sb, advertising_op->sb,
+                           nat->nb->external_ip,
+                           tracked_port ? tracked_port->sb : NULL)) {
+            ar_entry_add(routes, advertising_od, advertising_op,
+                         nat->nb->external_ip, tracked_port,
+                         ROUTE_SOURCE_NAT);
+        }
     }
 }
 
@@ -294,20 +390,12 @@ build_lb_parsed_route_for_port(const struct ovn_port *advertising_op,
 
     const char *ip_address;
     SSET_FOR_EACH (ip_address, &lb_ips->ips_v4) {
-        struct in6_addr prefix;
-        ip46_parse(ip_address, &prefix);
-        parsed_route_add(advertising_od, NULL, &prefix, 32, false,
-                         ip_address, advertising_op, 0, false, false,
-                         NULL, ROUTE_SOURCE_LB, &advertising_op->nbrp->header_,
-                         tracked_port, routes);
+        ar_entry_add(routes, advertising_od, advertising_op,
+                     ip_address, tracked_port, ROUTE_SOURCE_LB);
     }
     SSET_FOR_EACH (ip_address, &lb_ips->ips_v6) {
-        struct in6_addr prefix;
-        ip46_parse(ip_address, &prefix);
-        parsed_route_add(advertising_od, NULL, &prefix, 128, false,
-                         ip_address, advertising_op, 0, false, false,
-                         NULL, ROUTE_SOURCE_LB, &advertising_op->nbrp->header_,
-                         tracked_port, routes);
+        ar_entry_add(routes, advertising_od, advertising_op,
+                     ip_address, tracked_port, ROUTE_SOURCE_LB);
     }
 }
 
@@ -402,7 +490,7 @@ en_dynamic_routes_init(struct engine_node *node OVS_UNUSED,
 {
     struct dynamic_routes_data *data = xmalloc(sizeof *data);
     *data = (struct dynamic_routes_data) {
-        .parsed_routes = HMAP_INITIALIZER(&data->parsed_routes),
+        .routes = HMAP_INITIALIZER(&data->routes),
     };
 
     return data;
@@ -411,9 +499,9 @@ en_dynamic_routes_init(struct engine_node *node OVS_UNUSED,
 static void
 en_dynamic_routes_clear(struct dynamic_routes_data *data)
 {
-    struct parsed_route *r;
-    HMAP_FOR_EACH_POP (r, key_node, &data->parsed_routes) {
-        parsed_route_free(r);
+    struct ar_entry *ar;
+    HMAP_FOR_EACH_POP (ar, hmap_node, &data->routes) {
+        ar_entry_free(ar);
     }
 }
 void
@@ -422,7 +510,7 @@ en_dynamic_routes_cleanup(void *data_)
     struct dynamic_routes_data *data = data_;
 
     en_dynamic_routes_clear(data);
-    hmap_destroy(&data->parsed_routes);
+    hmap_destroy(&data->routes);
 }
 
 void
@@ -447,98 +535,18 @@ en_dynamic_routes_run(struct engine_node *node, void *data)
         }
         build_nat_parsed_routes(od, lr_stateful_rec->lrnat_rec,
                                 &northd_data->ls_ports,
-                                &dynamic_routes_data->parsed_routes);
+                                &dynamic_routes_data->routes);
         build_nat_connected_parsed_routes(od, &lr_stateful_data->table,
                                           &northd_data->ls_ports,
-                                          &dynamic_routes_data->parsed_routes);
+                                          &dynamic_routes_data->routes);
 
         build_lb_parsed_routes(od, lr_stateful_rec->lb_ips,
-                               &dynamic_routes_data->parsed_routes);
+                               &dynamic_routes_data->routes);
         build_lb_connected_parsed_routes(od, &lr_stateful_data->table,
-                                         &dynamic_routes_data->parsed_routes);
+                                         &dynamic_routes_data->routes);
     }
     stopwatch_stop(DYNAMIC_ROUTES_RUN_STOPWATCH_NAME, time_msec());
     engine_set_node_state(node, EN_UPDATED);
-}
-
-struct ar_entry {
-    struct hmap_node hmap_node;
-
-    const struct ovn_datapath *od;       /* Datapath the route is
-                                          * advertised on. */
-    const struct ovn_port *op;           /* Port the route is advertised
-                                          * on. */
-    char *ip_prefix;
-    const struct ovn_port *tracked_port; /* If set, the port whose chassis
-                                          * advertises this route with a
-                                          * higher priority. */
-};
-
-/* Add a new entries to the to-be-advertised routes.
- * Takes ownership of ip_prefix. */
-static struct ar_entry *
-ar_entry_add(struct hmap *routes, const struct ovn_datapath *od,
-             const struct ovn_port *op, char *ip_prefix,
-             const struct ovn_port *tracked_port)
-{
-    struct ar_entry *route_e = xzalloc(sizeof *route_e);
-
-    route_e->od = od;
-    route_e->op = op;
-    route_e->ip_prefix = ip_prefix;
-    route_e->tracked_port = tracked_port;
-    uint32_t hash = uuid_hash(&od->sb->header_.uuid);
-    hash = hash_string(op->sb->logical_port, hash);
-    hash = hash_string(ip_prefix, hash);
-    hmap_insert(routes, &route_e->hmap_node, hash);
-
-    return route_e;
-}
-
-static struct ar_entry *
-ar_entry_find(struct hmap *route_map,
-              const struct sbrec_datapath_binding *sb_db,
-              const struct sbrec_port_binding *logical_port,
-              const char *ip_prefix,
-              const struct sbrec_port_binding *tracked_port)
-{
-    struct ar_entry *route_e;
-    uint32_t hash;
-
-    hash = uuid_hash(&sb_db->header_.uuid);
-    hash = hash_string(logical_port->logical_port, hash);
-    hash = hash_string(ip_prefix, hash);
-
-    HMAP_FOR_EACH_WITH_HASH (route_e, hmap_node, hash, route_map) {
-        if (!uuid_equals(&sb_db->header_.uuid,
-                         &route_e->od->sb->header_.uuid)) {
-            continue;
-        }
-        if (!uuid_equals(&logical_port->header_.uuid,
-                         &route_e->op->sb->header_.uuid)) {
-            continue;
-        }
-        if (strcmp(ip_prefix, route_e->ip_prefix)) {
-            continue;
-        }
-
-        if (tracked_port) {
-            if (!route_e->tracked_port ||
-                    tracked_port != route_e->tracked_port->sb) {
-                continue;
-            }
-        }
-        return route_e;
-    }
-
-    return NULL;
-}
-
-static void
-ar_entry_free(struct ar_entry *route_e)
-{
-    free(route_e->ip_prefix);
-    free(route_e);
 }
 
 static void
@@ -550,16 +558,16 @@ publish_lport_addresses(struct hmap *sync_routes,
 {
     for (size_t i = 0; i < addresses->n_ipv4_addrs; i++) {
         const struct ipv4_netaddr *addr = &addresses->ipv4_addrs[i];
-        ar_entry_add(sync_routes, od, logical_port, xstrdup(addr->addr_s),
-                     tracking_port);
+        ar_entry_add(sync_routes, od, logical_port, addr->addr_s,
+                     tracking_port, ROUTE_SOURCE_CONNECTED);
     }
     for (size_t i = 0; i < addresses->n_ipv6_addrs; i++) {
         if (in6_is_lla(&addresses->ipv6_addrs[i].network)) {
             continue;
         }
         const struct ipv6_netaddr *addr = &addresses->ipv6_addrs[i];
-        ar_entry_add(sync_routes, od, logical_port, xstrdup(addr->addr_s),
-                      tracking_port);
+        ar_entry_add(sync_routes, od, logical_port, addr->addr_s,
+                     tracking_port, ROUTE_SOURCE_CONNECTED);
     }
 }
 
@@ -640,78 +648,85 @@ publish_host_routes(struct hmap *sync_routes,
     }
 }
 
-static void
-advertised_route_table_sync_route_add(
-    const struct lr_stateful_table *lr_stateful_table,
-    struct advertised_route_sync_data *data,
-    struct uuidset *host_route_lrps,
-    struct hmap *sync_routes,
-    const struct parsed_route *route)
+static bool
+should_advertise_route(const struct lr_stateful_table *lr_stateful_table,
+                       struct advertised_route_sync_data *data,
+                       struct uuidset *host_route_lrps,
+                       struct hmap *sync_routes,
+                       const struct ovn_datapath *advertising_od,
+                       const struct ovn_port *advertising_op,
+                       const struct ovn_port *tracked_op,
+                       enum route_source source)
 {
-    if (route->is_discard_route) {
-        return;
-    }
-    if (prefix_is_link_local(&route->prefix, route->plen)) {
-        return;
-    }
-    if (!route->od->dynamic_routing) {
-        return;
+    if (!advertising_od->dynamic_routing) {
+        return false;
     }
 
     enum dynamic_routing_redistribute_mode drr =
-        route->out_port->dynamic_routing_redistribute;
-    if (route->source == ROUTE_SOURCE_CONNECTED) {
+        advertising_op->dynamic_routing_redistribute;
+
+    switch (source) {
+    case ROUTE_SOURCE_CONNECTED:
         if (!drr_mode_CONNECTED_is_set(drr)) {
-            return;
+            return false;
         }
+
         /* If we advertise host routes, we only need to do so once per
          * LRP. */
-        const struct uuid *lrp_uuid = &route->out_port->nbrp->header_.uuid;
-        if (drr_mode_CONNECTED_AS_HOST_is_set(drr) &&
-            !uuidset_contains(host_route_lrps, lrp_uuid)) {
+        const struct uuid *lrp_uuid = &advertising_op->nbrp->header_.uuid;
+        if (drr_mode_CONNECTED_AS_HOST_is_set(drr)) {
+            if (uuidset_contains(host_route_lrps, lrp_uuid)) {
+                return false;
+            }
             uuidset_insert(host_route_lrps, lrp_uuid);
             publish_host_routes(sync_routes, lr_stateful_table,
-                                route->od, route->out_port,
+                                advertising_od, advertising_op,
                                 data);
-            return;
+            return false;
         }
-    }
-    if (route->source == ROUTE_SOURCE_STATIC && !drr_mode_STATIC_is_set(drr)) {
-        return;
-    }
-    if (route->source == ROUTE_SOURCE_NAT) {
+        return true;
+
+    case ROUTE_SOURCE_STATIC:
+        return drr_mode_STATIC_is_set(drr);
+
+    case ROUTE_SOURCE_NAT:
         if (!drr_mode_NAT_is_set(drr)) {
-            return;
+            return false;
         }
+
         /* If NAT route tracks port on a different DP than the one that
          * advertises the route, we need to watch for changes on that DP as
          * well. */
-        if (route->tracked_port && route->tracked_port->od != route->od) {
-            if (route->tracked_port->od->nbr) {
+        if (tracked_op && tracked_op->od != advertising_od) {
+            if (tracked_op->od->nbr) {
                 uuidset_insert(&data->nb_lr,
-                               &route->tracked_port->od->nbr->header_.uuid);
-            } else if (route->tracked_port->od->nbs) {
+                               &tracked_op->od->nbr->header_.uuid);
+            } else if (tracked_op->od->nbs) {
                 uuidset_insert(&data->nb_ls,
-                               &route->tracked_port->od->nbs->header_.uuid);
+                               &tracked_op->od->nbs->header_.uuid);
             }
         }
-    }
-    if (route->source == ROUTE_SOURCE_LB) {
+        return true;
+
+    case ROUTE_SOURCE_LB:
         if (!drr_mode_LB_is_set(drr)) {
-            return;
+            return false;
         }
+
         /* If LB route tracks port on a different DP than the one that
          * advertises the route, we need to watch for changes on that DP as
          * well. */
-        if (route->tracked_port && route->tracked_port->od != route->od) {
+        if (tracked_op && tracked_op->od != advertising_od) {
             uuidset_insert(&data->nb_lr,
-                           &route->tracked_port->od->nbr->header_.uuid);
+                           &tracked_op->od->nbr->header_.uuid);
         }
+        return true;
+
+    case ROUTE_SOURCE_LEARNED:
+        return true;
     }
 
-    char *ip_prefix = normalize_v46_prefix(&route->prefix, route->plen);
-    ar_entry_add(sync_routes, route->od, route->out_port, ip_prefix,
-                 route->tracked_port);
+    OVS_NOT_REACHED();
 }
 
 static void
@@ -725,23 +740,48 @@ advertised_route_table_sync(
 {
     struct hmap sync_routes = HMAP_INITIALIZER(&sync_routes);
     struct uuidset host_route_lrps = UUIDSET_INITIALIZER(&host_route_lrps);
-    const struct parsed_route *route;
-
-    struct ar_entry *route_e;
 
     /* First build the set of non-dynamic routes that need sync-ing. */
+    const struct parsed_route *route;
     HMAP_FOR_EACH (route, key_node, routes) {
-        advertised_route_table_sync_route_add(lr_stateful_table,
-                                              data, &host_route_lrps,
-                                              &sync_routes,
-                                              route);
+        if (route->is_discard_route) {
+            continue;
+        }
+
+        if (prefix_is_link_local(&route->prefix, route->plen)) {
+            continue;
+        }
+
+        if (!should_advertise_route(lr_stateful_table,
+                                    data, &host_route_lrps,
+                                    &sync_routes,
+                                    route->od, route->out_port,
+                                    route->tracked_port,
+                                    route->source)) {
+            continue;
+        }
+
+        ar_entry_add_nocopy(&sync_routes, route->od, route->out_port,
+                            normalize_v46_prefix(&route->prefix, route->plen),
+                            route->tracked_port,
+                            route->source);
     }
+
     /* Then add the set of dynamic routes that need sync-ing. */
-    HMAP_FOR_EACH (route, key_node, dynamic_routes) {
-        advertised_route_table_sync_route_add(lr_stateful_table,
-                                              data, &host_route_lrps,
-                                              &sync_routes,
-                                              route);
+    struct ar_entry *route_e;
+    HMAP_FOR_EACH (route_e, hmap_node, dynamic_routes) {
+        if (!should_advertise_route(lr_stateful_table,
+                                    data, &host_route_lrps,
+                                    &sync_routes,
+                                    route_e->od, route_e->op,
+                                    route_e->tracked_port,
+                                    route_e->source)) {
+            continue;
+        }
+
+        ar_entry_add(&sync_routes, route_e->od, route_e->op,
+                     route_e->ip_prefix, route_e->tracked_port,
+                     route_e->source);
     }
     uuidset_destroy(&host_route_lrps);
 
