@@ -3030,4 +3030,152 @@ m_as ovn-chassis-3 killall tcpdump
 
 AT_CLEANUP
 
+AT_SETUP([ovn multinode bgp unnumbered])
 
+check_fake_multinode_setup
+cleanup_multinode_resources
+
+check m_as ovn-gw-3 ovs-vsctl del-port br-ex eth2
+
+check m_as ovn-gw-2 sed -i 's/bgpd=no/bgpd=yes/g' /etc/frr/daemons
+check m_as ovn-gw-2 sed -i 's/StartLimitBurst=.*/StartLimitBurst=100/g' /usr/lib/systemd/system/frr.service
+check m_as ovn-gw-2 systemctl daemon-reload
+check m_as ovn-gw-2 systemctl stop frr
+
+check m_as ovn-gw-3 sed -i 's/bgpd=no/bgpd=yes/g' /etc/frr/daemons
+check m_as ovn-gw-3 sed -i 's/StartLimitBurst=.*/StartLimitBurst=100/g' /usr/lib/systemd/system/frr.service
+check m_as ovn-gw-3 systemctl daemon-reload
+check m_as ovn-gw-3 systemctl restart frr
+
+check m_as ovn-gw-2 systemctl start frr
+
+echo "configure
+!
+ip prefix-list accept-all seq 5 permit any
+!
+router bgp 4200000100
+neighbor eth2 interface remote-as external
+!
+address-family ipv4 unicast
+  neighbor eth2 soft-reconfiguration inbound
+  neighbor eth2 prefix-list accept-all in
+exit-address-family
+!
+address-family ipv6 unicast
+  neighbor eth2 soft-reconfiguration inbound
+  neighbor eth2 activate
+exit-address-family
+!" | podman exec -i ovn-gw-3 vtysh
+
+check m_as ovn-gw-2 ovs-vsctl set Open_vSwitch . external-ids:ovn-bridge-mappings="physnet_ovn-gw-2_eth2:br-ex"
+
+check multinode_nbctl --wait=hv lr-add lr-ovn-gw-2-eth2
+check multinode_nbctl --wait=hv set Logical_Router lr-ovn-gw-2-eth2 options:chassis=ovn-gw-2
+check multinode_nbctl set Logical_Router lr-ovn-gw-2-eth2  options:dynamic-routing=true options:requested-tnl-key=10 options:dynamic-routing-redistribute=nat
+
+check multinode_nbctl lrp-add lr-ovn-gw-2-eth2 lrp-ovn-gw-2-eth2 02:fb:d6:66:99:1c 
+check multinode_nbctl lrp-set-options lrp-ovn-gw-2-eth2 dynamic-routing-maintain-vrf=true 
+
+check multinode_nbctl ls-add ls-ovn-gw-2-eth2
+
+check multinode_nbctl lsp-add ls-ovn-gw-2-eth2 lsp-ovn-gw-2-eth2
+check multinode_nbctl lsp-set-type lsp-ovn-gw-2-eth2 router
+check multinode_nbctl lsp-set-options lsp-ovn-gw-2-eth2 router-port=lrp-ovn-gw-2-eth2
+check multinode_nbctl lsp-set-addresses lsp-ovn-gw-2-eth2 router
+
+check multinode_nbctl lsp-add ls-ovn-gw-2-eth2 patch-ovn-gw-2-eth2
+check multinode_nbctl lsp-set-addresses patch-ovn-gw-2-eth2 unknown
+check multinode_nbctl lsp-set-type patch-ovn-gw-2-eth2 localnet
+check multinode_nbctl --wait=hv lsp-set-options patch-ovn-gw-2-eth2 network_name=physnet_ovn-gw-2_eth2 
+
+OVS_WAIT_UNTIL([m_as ovn-gw-2 ip link | grep -q ovnvrf10:.*UP])
+
+check multinode_nbctl lsp-add ls-ovn-gw-2-eth2 lsp-ovn-gw-2-eth2-bgp
+check multinode_nbctl lsp-set-addresses lsp-ovn-gw-2-eth2-bgp unknown
+
+check multinode_nbctl add Logical_Router_Port lrp-ovn-gw-2-eth2 options routing-protocols=\"BGP,BFD\" routing-protocol-redirect=lsp-ovn-gw-2-eth2-bgp 
+check multinode_nbctl set Logical_Router_Port lrp-ovn-gw-2-eth2 ipv6_ra_configs:send_periodic=true
+check multinode_nbctl set Logical_Router_Port lrp-ovn-gw-2-eth2 ipv6_ra_configs:address_mode=slaac
+check multinode_nbctl set Logical_Router_Port lrp-ovn-gw-2-eth2 ipv6_ra_configs:max_interval=1
+check multinode_nbctl set Logical_Router_Port lrp-ovn-gw-2-eth2 ipv6_ra_configs:min_interval=1
+
+check m_as ovn-gw-2 ovs-vsctl add-port br-int eth2-bgp -- set Interface eth2-bgp type=internal mac=\"02:fb:d6:66:99:1c\" external-ids:iface-id=lsp-ovn-gw-2-eth2-bgp
+check m_as ovn-gw-2 ip link set dev eth2-bgp master ovnvrf10
+check m_as ovn-gw-2 ip link set dev eth2-bgp up
+
+echo "configure
+ip prefix-list no-default seq 5 deny 0.0.0.0/0
+ip prefix-list no-default seq 10 permit 0.0.0.0/0 le 32
+ipv6 prefix-list no-default seq 5 deny ::/0
+ipv6 prefix-list no-default seq 10 permit ::/0 le 128
+vrf ovnvrf10
+exit-vrf
+router bgp 4210000000 vrf ovnvrf10
+bgp router-id 42.42.42.42
+neighbor eth2-bgp interface remote-as external
+address-family ipv4 unicast
+redistribute kernel
+neighbor eth2-bgp prefix-list no-default out
+exit-address-family
+address-family ipv6 unicast
+neighbor eth2-bgp soft-reconfiguration inbound
+neighbor eth2-bgp prefix-list no-default out
+redistribute kernel
+neighbor eth2-bgp activate
+exit-address-family
+do copy running-config startup-config" | podman exec -i ovn-gw-2 vtysh
+
+# OVS_WAIT_UNTIL([m_as ovn-gw-2 vtysh -c 'show bgp vrf ovnvrf10 neighbors' | grep 'Connections established' | sed 's/Connections established \([0-9]\+\); dropped \([0-9]\+\)/\1-\2/' | bc | grep -q '1'])
+# OVS_WAIT_UNTIL([m_as ovn-gw-2 vtysh -c 'show bgp vrf ovnvrf10 neighbors' | grep -qE 'Connections established \[1-9\]\[0-9\]*'])
+OVS_WAIT_UNTIL([m_as ovn-gw-2 vtysh -c 'show bgp vrf ovnvrf10 neighbors' | grep -qE 'Connections established 1'])
+
+gw_lr="lr-ovn-gw-2-eth2"
+guest_ls="ls-guest-net"
+guest_lsp_to_lr="lsp-to-gw"
+lrp_to_guest_ls="lrp-to-guest"
+guest_lrp_ip="192.168.10.1"
+guest_lrp_cidr="$guest_lrp_ip/24"
+guest_vm_ip="192.168.10.10"
+guest_vm_cidr="$guest_vm_ip/24"
+guest_vm_iface="guest-vm"
+guest_vm_ns="ns-guest"
+lsp_name="ovn-gw-2-ns-guest-$guest_vm_iface"
+
+check multinode_nbctl lrp-add $gw_lr $lrp_to_guest_ls 02:00:ff:00:00:01 $guest_lrp_cidr
+check multinode_nbctl ls-add $guest_ls
+check multinode_nbctl lsp-add $guest_ls $guest_lsp_to_lr
+check multinode_nbctl lsp-set-type $guest_lsp_to_lr router
+check multinode_nbctl lsp-set-options $guest_lsp_to_lr router-port=$lrp_to_guest_ls
+check multinode_nbctl lsp-set-addresses $guest_lsp_to_lr router
+      
+check multinode_nbctl lsp-add $guest_ls $lsp_name
+check multinode_nbctl lsp-set-addresses $lsp_name '00:00:02:00:01:01 192.168.10.10/24'
+m_as ovn-gw-2 /data/create_fake_vm.sh $lsp_name $guest_vm_ns 00:00:02:00:01:01 1342 192.168.10.10 24 192.168.10.1 1000::3/64 1000:a/64
+
+neighbor_lla=$(m_as ovn-gw-2 vtysh -c "show bgp vrf ovnvrf10 neighbor eth2-bgp" | grep "^Foreign host:" | awk '{print $3}' | tr -d ',')
+check multinode_nbctl lr-route-add $gw_lr "0.0.0.0/0" $neighbor_lla lrp-ovn-gw-2-eth2
+check multinode_nbctl lr-nat-add $gw_lr dnat_and_snat 172.16.10.2 192.168.10.10
+
+OVS_WAIT_UNTIL([m_as ovn-central-az1-1 ovn-sbctl list Advertised_Route | grep -q 172.16.10.2])
+
+OVS_WAIT_UNTIL([m_as ovn-gw-3 ip route | grep -q 'eth2'])
+OVS_WAIT_UNTIL([m_as ovn-gw-3 ping -W 1 -c 1 172.16.10.2])
+
+check m_as ovn-chassis-2 ip addr add 10.42.0.10/24 dev eth1
+check m_as ovn-gw-3 ip addr add 10.42.0.1/24 dev eth1
+check m_as ovn-chassis-2 ip route del default
+check m_as ovn-chassis-2 ip route add default via 10.42.0.1
+
+OVS_WAIT_UNTIL([m_as ovn-chassis-2 ping -W 1 -c 1 172.16.10.2])
+
+check m_as ovn-chassis-2 ip route del default
+check m_as ovn-chassis-2 ip route add default via 10.88.0.1 dev eth0 proto static metric 100
+check m_as ovn-chassis-2 ip addr del 10.42.0.10/24 dev eth1
+check m_as ovn-gw-3 ip addr del 10.42.0.1/24 dev eth1
+
+check m_as ovn-gw-3 systemctl stop frr
+check m_as ovn-gw-2 systemctl stop frr
+check m_as ovn-gw-3 ovs-vsctl add-port br-ex eth2
+check m_as ovn-gw-2 ovs-vsctl del-port br-int eth2-bgp
+
+AT_CLEANUP
