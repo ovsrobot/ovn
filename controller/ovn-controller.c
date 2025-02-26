@@ -3054,14 +3054,17 @@ en_lb_data_cleanup(void *data)
 
 static void
 mac_binding_add_sb(struct mac_cache_data *data,
-                   const struct sbrec_mac_binding *smb)
+                   const struct sbrec_mac_binding *smb,
+                   struct ovsdb_idl_index *sbrec_port_binding_by_name)
 {
     struct mac_binding_data mb_data;
     if (!mac_binding_data_from_sbrec(&mb_data, smb)) {
         return;
     }
 
-    mac_binding_add(&data->mac_bindings, mb_data, smb, 0);
+    const struct sbrec_port_binding *pb = lport_lookup_by_name(
+            sbrec_port_binding_by_name, smb->logical_port);
+    mac_binding_add(&data->mac_bindings, mb_data, smb, pb, 0);
 }
 
 static void
@@ -3113,7 +3116,8 @@ fdb_remove_sb(struct mac_cache_data *data, const struct sbrec_fdb *sfdb)
 static void
 mac_cache_mb_handle_for_datapath(struct mac_cache_data *data,
                                  const struct sbrec_datapath_binding *dp,
-                                 struct ovsdb_idl_index *sbrec_mb_by_dp)
+                                 struct ovsdb_idl_index *sbrec_mb_by_dp,
+                                 struct ovsdb_idl_index *sbrec_pb_by_name)
 {
     bool has_threshold = mac_cache_threshold_find(data, dp->tunnel_key);
 
@@ -3124,7 +3128,7 @@ mac_cache_mb_handle_for_datapath(struct mac_cache_data *data,
     const struct sbrec_mac_binding *mb;
     SBREC_MAC_BINDING_FOR_EACH_EQUAL (mb, mb_index_row, sbrec_mb_by_dp) {
         if (has_threshold) {
-            mac_binding_add_sb(data, mb);
+            mac_binding_add_sb(data, mb, sbrec_pb_by_name);
         } else {
             mac_binding_remove_sb(data, mb);
         }
@@ -3185,6 +3189,10 @@ en_mac_cache_run(struct engine_node *node, void *data)
             engine_ovsdb_node_get_index(
                     engine_get_input("SB_fdb", node),
                     "dp_key");
+    struct ovsdb_idl_index *sbrec_port_binding_by_name =
+            engine_ovsdb_node_get_index(
+                    engine_get_input("SB_port_binding", node),
+                    "name");
 
     mac_cache_thresholds_clear(cache_data);
     mac_bindings_clear(&cache_data->mac_bindings);
@@ -3199,7 +3207,8 @@ en_mac_cache_run(struct engine_node *node, void *data)
 
         mac_cache_threshold_add(cache_data, sbrec_dp);
         mac_cache_mb_handle_for_datapath(cache_data, sbrec_dp,
-                                         sbrec_mb_by_dp);
+                                         sbrec_mb_by_dp,
+                                         sbrec_port_binding_by_name);
         mac_cache_fdb_handle_for_datapath(cache_data, sbrec_dp,
                                           sbrec_fdb_by_dp_key);
     }
@@ -3216,6 +3225,10 @@ mac_cache_sb_mac_binding_handler(struct engine_node *node, void *data)
     const struct sbrec_mac_binding_table *mb_table =
             EN_OVSDB_GET(engine_get_input("SB_mac_binding", node));
     size_t previous_size = hmap_count(&cache_data->mac_bindings);
+    struct ovsdb_idl_index *sbrec_port_binding_by_name =
+            engine_ovsdb_node_get_index(
+                    engine_get_input("SB_port_binding", node),
+                    "name");
 
     const struct sbrec_mac_binding *sbrec_mb;
     SBREC_MAC_BINDING_TABLE_FOR_EACH_TRACKED (sbrec_mb, mb_table) {
@@ -3231,7 +3244,8 @@ mac_cache_sb_mac_binding_handler(struct engine_node *node, void *data)
 
         if (mac_cache_threshold_find(cache_data,
                                      sbrec_mb->datapath->tunnel_key)) {
-            mac_binding_add_sb(cache_data, sbrec_mb);
+            mac_binding_add_sb(cache_data, sbrec_mb,
+                               sbrec_port_binding_by_name);
         }
     }
 
@@ -3292,6 +3306,10 @@ mac_cache_runtime_data_handler(struct engine_node *node, void *data OVS_UNUSED)
             engine_ovsdb_node_get_index(
                     engine_get_input("SB_fdb", node),
                     "dp_key");
+    struct ovsdb_idl_index *sbrec_port_binding_by_name =
+            engine_ovsdb_node_get_index(
+                    engine_get_input("SB_port_binding", node),
+                    "name");
 
     /* There are no tracked data. Fall back to full recompute. */
     if (!rt_data->tracked) {
@@ -3312,7 +3330,8 @@ mac_cache_runtime_data_handler(struct engine_node *node, void *data OVS_UNUSED)
 
     HMAP_FOR_EACH (tdp, node, &rt_data->tracked_dp_bindings) {
         mac_cache_mb_handle_for_datapath(cache_data, tdp->dp,
-                                         sbrec_mb_by_dp);
+                                         sbrec_mb_by_dp,
+                                         sbrec_port_binding_by_name);
 
         mac_cache_fdb_handle_for_datapath(cache_data, tdp->dp,
                                           sbrec_fdb_by_dp_key);
@@ -3342,6 +3361,10 @@ mac_cache_sb_datapath_binding_handler(struct engine_node *node, void *data)
             engine_ovsdb_node_get_index(
                     engine_get_input("SB_fdb", node),
                     "dp_key");
+    struct ovsdb_idl_index *sbrec_port_binding_by_name =
+            engine_ovsdb_node_get_index(
+                    engine_get_input("SB_port_binding", node),
+                    "name");
 
     size_t previous_mb_size = hmap_count(&cache_data->mac_bindings);
     size_t previous_fdb_size = hmap_count(&cache_data->fdbs);
@@ -3365,7 +3388,8 @@ mac_cache_sb_datapath_binding_handler(struct engine_node *node, void *data)
 
     SBREC_DATAPATH_BINDING_TABLE_FOR_EACH_TRACKED (sbrec_dp, dp_table) {
         mac_cache_mb_handle_for_datapath(cache_data, sbrec_dp,
-                                         sbrec_mb_by_dp);
+                                         sbrec_mb_by_dp,
+                                         sbrec_port_binding_by_name);
 
         mac_cache_fdb_handle_for_datapath(cache_data, sbrec_dp,
                                           sbrec_fdb_by_dp_key);
