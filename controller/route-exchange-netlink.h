@@ -22,12 +22,12 @@
 #include "openvswitch/list.h"
 #include <netinet/in.h>
 #include <net/if.h>
+#include <linux/rtnetlink.h>
 
-/* This value is arbitrary but currently unused.
- * See the kernel rtnetlink UAPI at
- * https://github.com/torvalds/linux/blob/master/include/uapi/linux/rtnetlink.h
- * */
-#define RTPROT_OVN 84
+/* RTPROT_OVN is defined in the kernel rtnetlink.h and forward declared in the
+ * OVS submodule. While the value should always be 84 we validate this here as
+ * tests will fail if that value ever changes. */
+BUILD_ASSERT_DECL(RTPROT_OVN == 84);
 
 struct in6_addr;
 struct hmap;

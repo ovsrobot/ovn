@@ -584,4 +584,10 @@ AC_DEFUN([OVS_CHECK_LINUX_NETLINK], [
     ])],
     [AC_DEFINE([HAVE_NLA_BITFIELD32], [1],
     [Define to 1 if struct nla_bitfield32 is available.])])
+  AC_COMPILE_IFELSE([
+    AC_LANG_PROGRAM([#include <linux/rtnetlink.h>], [
+        int x = RTPROT_OVN;
+    ])],
+    [AC_DEFINE([HAVE_RTPROT_OVN], [1],
+               [Define to 1 if RTPROT_OVN is available.])])
 ])
