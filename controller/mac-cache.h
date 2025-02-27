@@ -70,6 +70,10 @@ struct mac_binding {
     const struct sbrec_mac_binding *sbrec;
     /* User specified timestamp (in ms) */
     long long timestamp;
+    /* SB MAC binding logical port address. */
+    struct lport_addresses laddr;
+    /* SB Port binding tunnel key. */
+    int64_t tunnel_key;
 };
 
 struct fdb_data {
@@ -147,7 +151,9 @@ mac_binding_data_init(struct mac_binding_data *data,
 }
 
 void mac_binding_add(struct hmap *map, struct mac_binding_data mb_data,
-                     const struct sbrec_mac_binding *, long long timestamp);
+                     const struct sbrec_mac_binding *smb,
+                     const struct sbrec_port_binding *pb,
+                     long long timestamp);
 
 void mac_binding_remove(struct hmap *map, struct mac_binding *mb);
 
@@ -180,15 +186,17 @@ void
 mac_binding_stats_process_flow_stats(struct ovs_list *stats_list,
                                      struct ofputil_flow_stats *ofp_stats);
 
-void mac_binding_stats_run(struct ovs_list *stats_list, uint64_t *req_delay,
-                           void *data);
+void mac_binding_stats_run(struct rconn *swconn OVS_UNUSED,
+                           struct ovs_list *stats_list,
+                           uint64_t *req_delay, void *data);
 
 /* FDB stat processing. */
 void fdb_stats_process_flow_stats(struct ovs_list *stats_list,
                                   struct ofputil_flow_stats *ofp_stats);
 
-void fdb_stats_run(struct ovs_list *stats_list, uint64_t *req_delay,
-                   void *data);
+void fdb_stats_run(struct rconn *swconn OVS_UNUSED,
+                   struct ovs_list *stats_list,
+                   uint64_t *req_delay, void *data);
 
 void mac_cache_stats_destroy(struct ovs_list *stats_list);
 
@@ -220,5 +228,13 @@ void buffered_packets_ctx_destroy(struct buffered_packets_ctx *ctx);
 bool buffered_packets_ctx_is_ready_to_send(struct buffered_packets_ctx *ctx);
 
 bool buffered_packets_ctx_has_packets(struct buffered_packets_ctx *ctx);
+
+void mac_binding_probe_stats_process_flow_stats(
+        struct ovs_list *stats_list,
+        struct ofputil_flow_stats *ofp_stats);
+
+void mac_binding_probe_stats_run(struct rconn *swconn,
+                                 struct ovs_list *stats_list,
+                                 uint64_t *req_delay, void *data);
 
 #endif /* controller/mac-cache.h */

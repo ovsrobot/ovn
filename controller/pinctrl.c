@@ -4718,7 +4718,7 @@ pinctrl_handle_put_mac_binding(const struct flow *md,
                      ? random_range(MAX_MAC_BINDING_DELAY_MSEC) + 1
                      : 0;
     long long timestamp = time_msec() + delay;
-    mac_binding_add(&put_mac_bindings, mb_data, NULL, timestamp);
+    mac_binding_add(&put_mac_bindings, mb_data, NULL, NULL, timestamp);
 
     /* We can send the buffered packet once the main ovn-controller
      * thread calls pinctrl_run() and it writes the mac_bindings stored
@@ -4924,7 +4924,7 @@ run_buffered_binding(const struct sbrec_mac_binding_table *mac_binding_table,
             continue;
         }
 
-        mac_binding_add(&recent_mbs, mb_data, smb, 0);
+        mac_binding_add(&recent_mbs, mb_data, smb, NULL, 0);
 
         const char *redirect_port =
             smap_get(&pb->options, "chassis-redirect-port");
@@ -4941,7 +4941,7 @@ run_buffered_binding(const struct sbrec_mac_binding_table *mac_binding_table,
         /* Add the same entry also for chassisredirect port as the buffered
          * traffic might be buffered on the cr port. */
         mb_data.port_key = pb->tunnel_key;
-        mac_binding_add(&recent_mbs, mb_data, smb, 0);
+        mac_binding_add(&recent_mbs, mb_data, smb, NULL, 0);
     }
 
     buffered_packets_ctx_run(&buffered_packets_ctx, &recent_mbs,
@@ -5303,7 +5303,7 @@ send_garp_rarp_delete(const char *lport)
     notify_pinctrl_handler();
 }
 
-static void
+void
 send_self_originated_neigh_packet(struct rconn *swconn,
                                   uint32_t dp_key, uint32_t port_key,
                                   struct eth_addr eth,
