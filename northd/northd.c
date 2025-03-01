@@ -14173,7 +14173,7 @@ build_arp_resolve_flows_for_lrp(struct ovn_port *op,
 
 static void
 build_routing_protocols_redirect_rule__(
-        const char *s_addr, const char *redirect_port_name, int protocol_port,
+        const char *s_ip_addr, const char *redirect_port_name, int protocol_port,
         const char *proto, bool is_ipv6, struct ovn_port *ls_peer,
         struct lflow_table *lflows, struct ds *match, struct ds *actions,
         struct lflow_ref *lflow_ref)
@@ -14186,7 +14186,7 @@ build_routing_protocols_redirect_rule__(
      * and the routing protocol's port to the LSP specified in
      * 'routing-protocol-redirect' option.*/
     ds_clear(match);
-    ds_put_format(match, "ip%d.dst == %s && %s.dst == %d", ip_ver, s_addr,
+    ds_put_format(match, "ip%d.dst == %s && %s.dst == %d", ip_ver, s_ip_addr,
                   proto, protocol_port);
     ovn_lflow_add(lflows, ls_peer->od, S_SWITCH_IN_L2_LKUP, 100,
                   ds_cstr(match),
@@ -14196,7 +14196,7 @@ build_routing_protocols_redirect_rule__(
     /* To accomodate "peer" nature of the routing daemons, redirect also
      * replies to the daemons' client requests. */
     ds_clear(match);
-    ds_put_format(match, "ip%d.dst == %s && %s.src == %d", ip_ver, s_addr,
+    ds_put_format(match, "ip%d.dst == %s && %s.src == %d", ip_ver, s_ip_addr,
                   proto, protocol_port);
     ovn_lflow_add(lflows, ls_peer->od, S_SWITCH_IN_L2_LKUP, 100,
                   ds_cstr(match),
@@ -14206,19 +14206,19 @@ build_routing_protocols_redirect_rule__(
 
 static void
 apply_routing_protocols_redirect__(
-        const char *s_addr, const char *redirect_port_name, int protocol_flags,
+        const char *s_ip_addr, const char *redirect_port_name, int protocol_flags,
         bool is_ipv6, struct ovn_port *ls_peer, struct lflow_table *lflows,
         struct ds *match, struct ds *actions, struct lflow_ref *lflow_ref)
 {
     if (protocol_flags & REDIRECT_BGP) {
-        build_routing_protocols_redirect_rule__(s_addr, redirect_port_name,
+        build_routing_protocols_redirect_rule__(s_ip_addr, redirect_port_name,
                                                 179, "tcp", is_ipv6, ls_peer,
                                                 lflows, match, actions,
                                                 lflow_ref);
     }
 
     if (protocol_flags & REDIRECT_BFD) {
-        build_routing_protocols_redirect_rule__(s_addr, redirect_port_name,
+        build_routing_protocols_redirect_rule__(s_ip_addr, redirect_port_name,
                                                 3784, "udp", is_ipv6, ls_peer,
                                                 lflows, match, actions,
                                                 lflow_ref);
@@ -14235,7 +14235,7 @@ apply_routing_protocols_redirect__(
         /* Ensure that redirect port receives copy of NA messages destined to
          * its IP.*/
         ds_clear(match);
-        ds_put_format(match, "ip6.dst == %s && nd_na", s_addr);
+        ds_put_format(match, "ip6.dst == %s && nd_na", s_ip_addr);
         ovn_lflow_add(lflows, ls_peer->od, S_SWITCH_IN_L2_LKUP, 100,
                       ds_cstr(match),
                       ds_cstr(actions),
@@ -14244,7 +14244,7 @@ apply_routing_protocols_redirect__(
         /* Ensure that redirect port receives copy of ARP replies destined to
          * its IP */
         ds_clear(match);
-        ds_put_format(match, "arp.op == 2 && arp.tpa == %s", s_addr);
+        ds_put_format(match, "arp.op == 2 && arp.tpa == %s", s_ip_addr);
         ovn_lflow_add(lflows, ls_peer->od, S_SWITCH_IN_L2_LKUP, 100,
                       ds_cstr(match),
                       ds_cstr(actions),
