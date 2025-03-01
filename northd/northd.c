@@ -5493,7 +5493,9 @@ int parallelization_state = STATE_NULL;
  * threads are collected to fix the lflow hmap's size (by the function
  * fix_flow_map_size()).
  * */
+#ifndef _WIN32
 thread_local size_t thread_lflow_counter = 0;
+#endif
 
 static bool
 build_dhcpv4_action(struct ovn_port *op, ovs_be32 offer_ip,

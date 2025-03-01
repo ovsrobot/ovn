@@ -251,7 +251,11 @@ enum {
     STATE_USE_PARALLELIZATION /* parallelization is on */
 };
 
+#ifdef _WIN32
+static __declspec(thread) size_t thread_lflow_counter = 0;
+#else
 extern thread_local size_t thread_lflow_counter;
+#endif
 
 /*
  * Multicast snooping and querier per datapath configuration.
