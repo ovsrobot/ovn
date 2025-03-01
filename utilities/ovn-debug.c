@@ -22,6 +22,7 @@
 #include "northd/northd.h"
 #include "ovn-util.h"
 
+#ifndef _WIN32
 struct ovn_lflow_stage {
     const char *name;
     uint8_t table_id;
@@ -171,3 +172,12 @@ main(int argc, char *argv[])
     ctx.argv = argv + optind;
     ovs_cmdl_run_command(&ctx, commands);
 }
+
+#else /* _WIN32 */
+
+/* add a stub main for windows builds */
+int
+main(int argc, char *argv[])
+{
+}
+#endif /* _WIN32 */
