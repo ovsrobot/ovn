@@ -83,6 +83,7 @@ struct worker_control {
     void *data; /* Pointer to data to be processed. */
     pthread_t worker;
     struct worker_pool *pool;
+    bool hasWorker;
 };
 
 struct worker_pool {

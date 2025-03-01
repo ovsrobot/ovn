@@ -93,9 +93,9 @@ stop_controls(struct worker_pool *pool)
 
         /* Wait for completion. */
         for (size_t i = 0; i < pool->size ; i++) {
-            if (pool->controls[i].worker) {
+            if (pool->controls[i].hasWorker) {
                 pthread_join(pool->controls[i].worker, NULL);
-                pool->controls[i].worker = 0;
+                pool->controls[i].hasWorker = false;
             }
         }
         workers_must_exit = false;
@@ -154,11 +154,15 @@ init_controls(struct worker_pool *pool)
         new_control->done = pool->done;
         new_control->data = NULL;
         new_control->pool = pool;
-        new_control->worker = 0;
+        new_control->hasWorker = false;
         ovs_mutex_init(&new_control->mutex);
         atomic_init(&new_control->finished, false);
         sprintf(sem_name, WORKER_SEM_NAME, sembase, pool, i);
+#ifndef _WIN32
         new_control->fire = sem_open(sem_name, O_CREAT, S_IRWXU, 0);
+#else
+        new_control->fire = sem_open(sem_name, O_CREAT, 0);
+#endif
         if (new_control->fire == SEM_FAILED) {
             free_controls(pool);
             return -1;
@@ -173,6 +177,7 @@ init_threads(struct worker_pool *pool, void *(*start)(void *))
     for (size_t i = 0; i < pool_size; i++) {
         pool->controls[i].worker =
             ovs_thread_create("worker pool helper", start, &pool->controls[i]);
+            pool->controls[i].hasWorker = true;
     }
     ovs_list_push_back(&worker_pools, &pool->list_node);
 }
@@ -207,7 +212,11 @@ ovn_update_worker_pool(size_t requested_pool_size,
             (*pool)->size = pool_size;
             (*pool)->controls = NULL;
             sprintf(sem_name, MAIN_SEM_NAME, sembase, *pool);
+#ifndef _WIN32
             (*pool)->done = sem_open(sem_name, O_CREAT, S_IRWXU, 0);
+#else
+            (*pool)->done = sem_open(sem_name, O_CREAT, 0);
+#endif
             if ((*pool)->done == SEM_FAILED) {
                 goto cleanup;
             }
