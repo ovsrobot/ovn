@@ -1,5 +1,8 @@
 Post v25.03.0
 -------------
+  - Add additional protocol support for options:activation-strategy. The new
+    supported protocols are gARP and NA. The option now supports comma
+    separated to specify selected group of protocols.
 
 OVN v25.03.0 - xx xxx xxxx
 --------------------------
