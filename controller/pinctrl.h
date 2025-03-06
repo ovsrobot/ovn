@@ -44,24 +44,24 @@ struct sbrec_mac_binding_table;
 void pinctrl_init(void);
 void pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                  struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
-                 struct ovsdb_idl_index *sbrec_port_binding_by_datapath,
                  struct ovsdb_idl_index *sbrec_port_binding_by_key,
                  struct ovsdb_idl_index *sbrec_port_binding_by_name,
                  struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
                  struct ovsdb_idl_index *sbrec_igmp_groups,
                  struct ovsdb_idl_index *sbrec_ip_multicast_opts,
                  struct ovsdb_idl_index *sbrec_fdb_by_dp_key_mac,
-                 const struct sbrec_controller_event_table *,
-                 const struct sbrec_service_monitor_table *,
-                 const struct sbrec_mac_binding_table *,
-                 const struct sbrec_bfd_table *,
-                 const struct sbrec_ecmp_nexthop_table *,
-                 const struct ovsrec_bridge *, const struct sbrec_chassis *,
+                 const struct sbrec_controller_event_table *ce_table,
+                 const struct sbrec_service_monitor_table *svc_mon_table,
+                 const struct sbrec_mac_binding_table *mac_binding_table,
+                 const struct sbrec_bfd_table *bfd_table,
+                 const struct sbrec_ecmp_nexthop_table *ecmp_nh_table,
+                 const struct sbrec_chassis *chassis,
                  const struct hmap *local_datapaths,
                  const struct sset *active_tunnels,
                  const struct shash *local_active_ports_ipv6_pd,
                  const struct shash *local_active_ports_ras,
-                 const struct ovsrec_open_vswitch_table *ovs_table);
+                 const struct ovsrec_open_vswitch_table *ovs_table,
+                 const struct hmap *garp_rarp_data);
 void pinctrl_wait(struct ovsdb_idl_txn *ovnsb_idl_txn);
 void pinctrl_destroy(void);
 
