@@ -97,6 +97,8 @@ enum mff_log_flags_bits {
     MLF_FROM_CTRL_BIT = 19,
     MLF_UNSNAT_NEW_BIT = 20,
     MLF_UNSNAT_NOT_TRACKED_BIT = 21,
+    MLF_NETWORK_ID_START_BIT = 28,
+    MLF_NETWORK_ID_END_BIT = 31,
 };
 
 /* MFF_LOG_FLAGS_REG flag assignments */
@@ -159,7 +161,12 @@ enum mff_log_flags {
     MLF_UNSNAT_NEW = (1 << MLF_UNSNAT_NEW_BIT),
 
     /* Indicate that the packet didn't go through unSNAT. */
-    MLF_UNSNAT_NOT_TRACKED = (1 << MLF_UNSNAT_NOT_TRACKED_BIT)
+    MLF_UNSNAT_NOT_TRACKED = (1 << MLF_UNSNAT_NOT_TRACKED_BIT),
+
+    /* Assign network ID to packet to choose correct network for snat when
+     * lb_force_snat_ip=routerip. */
+    MLF_NETWORK_ID = ((1 << (MLF_NETWORK_ID_END_BIT - MLF_NETWORK_ID_START_BIT
+                       + 1)) - 1),
 };
 
 /* OVN logical fields
