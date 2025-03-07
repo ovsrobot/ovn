@@ -1316,10 +1316,62 @@ route_has_local_gw(const struct nbrec_logical_router *lr,
 }
 
 static bool
+lrp_has_neighbor_in_ts(const struct nbrec_logical_router_port *lrp,
+                       struct in6_addr *nexthop)
+{
+    bool has_neighbor_in_same_tw = false;
+    struct in6_addr lrp_address;
+    unsigned int lrp_mask_len;
+    if (!lrp || !nexthop) {
+        return false;
+    }
+
+    for (size_t n_addr = 0; n_addr  < lrp->n_networks; n_addr++) {
+        char *network = lrp->networks[n_addr];
+        if (!network) {
+            continue;
+        }
+
+        if (!ip46_parse_cidr(network, &lrp_address, &lrp_mask_len)) {
+            continue;
+        }
+
+        if (IN6_IS_ADDR_V4MAPPED(&lrp_address) !=
+            IN6_IS_ADDR_V4MAPPED(nexthop)) {
+            continue;
+        }
+
+        if (IN6_IS_ADDR_V4MAPPED(&lrp_address)) {
+            ovs_be32 neigh_prefix_v4 = in6_addr_get_mapped_ipv4(nexthop);
+            ovs_be32 prefix_v4 = in6_addr_get_mapped_ipv4(&lrp_address);
+            ovs_be32 mask = be32_prefix_mask(lrp_mask_len);
+            if ((prefix_v4 & mask) == (neigh_prefix_v4 & mask)) {
+                has_neighbor_in_same_tw = true;
+                break;
+            }
+        } else {
+            struct in6_addr mask = ipv6_create_mask(lrp_mask_len);
+            struct in6_addr lrp_ipv6_prefix = ipv6_addr_bitand(&lrp_address,
+                                                               &mask);
+            struct in6_addr neihgbor_ipv6_prefix = ipv6_addr_bitand(nexthop,
+                                                                    &mask);
+            if (ipv6_addr_equals(&lrp_ipv6_prefix, &neihgbor_ipv6_prefix)) {
+                has_neighbor_in_same_tw = true;
+                break;
+            }
+        }
+    }
+
+    return has_neighbor_in_same_tw;
+}
+
+static bool
 route_need_learn(const struct nbrec_logical_router *lr,
                  const struct icsbrec_route *isb_route,
                  struct in6_addr *prefix, unsigned int plen,
-                 const struct smap *nb_options)
+                 const struct smap *nb_options,
+                 const struct nbrec_logical_router_port *ts_lrp,
+                 struct in6_addr *nexthop)
 {
     if (!smap_get_bool(nb_options, "ic-route-learn", false)) {
         return false;
@@ -1341,6 +1393,10 @@ route_need_learn(const struct nbrec_logical_router *lr,
     if (route_has_local_gw(lr, isb_route->route_table, isb_route->ip_prefix)) {
         VLOG_DBG("Skip learning %s (rtb:%s) route, as we've got one with "
                  "local GW", isb_route->ip_prefix, isb_route->route_table);
+        return false;
+    }
+
+    if (!lrp_has_neighbor_in_ts(ts_lrp, nexthop)) {
         return false;
     }
 
@@ -1467,7 +1523,7 @@ sync_learned_routes(struct ic_context *ctx,
                 continue;
             }
             if (!route_need_learn(ic_lr->lr, isb_route, &prefix, plen,
-                                  &nb_global->options)) {
+                                  &nb_global->options, lrp, &nexthop)) {
                 continue;
             }
 
@@ -1480,6 +1536,7 @@ sync_learned_routes(struct ic_context *ctx,
                 struct uuid ext_id;
                 smap_get_uuid(&route_learned->nb_route->external_ids,
                               "ic-learned-route", &ext_id);
+
                 if (!uuid_equals(&ext_id, &isb_route->header_.uuid)) {
                     char *uuid_s =
                         xasprintf(UUID_FMT,
@@ -1785,6 +1842,58 @@ delete_orphan_ic_routes(struct ic_context *ctx,
                          isb_route->nexthop, isb_route->origin,
                          isb_route->route_table, isb_route->transit_switch);
             icsbrec_route_delete(isb_route);
+            continue;
+        }
+
+        const struct nbrec_logical_router_port *lrp;
+        const struct nbrec_logical_switch *ls;
+        ls = find_ts_in_nb(ctx, isb_route->transit_switch);
+        if (ls) {
+            bool found_lrp_in_ts = false;
+            struct in6_addr lrp_address, nexthop;
+            unsigned int prefix_len;
+            if (!ip46_parse(isb_route->nexthop, &nexthop)) {
+                continue;
+            }
+
+            for (size_t i = 0; i < ls->n_ports; i++) {
+                char * lsp_name = ls->ports[i]->name;
+                const char *lrp_name = get_lrp_name_by_ts_port_name(ctx,
+                                                                    lsp_name);
+                if (lrp_name) {
+                    lrp = get_lrp_by_lrp_name(ctx, lrp_name);
+                    size_t n_networks = 0;
+                    if (lrp) {
+                        n_networks = lrp->n_networks;
+                    }
+                    for (size_t n_addr = 0; n_addr < n_networks; n_addr++) {
+                        char *network = lrp->networks[n_addr];
+                        if (!network) {
+                            continue;
+                        }
+
+                        if (!ip46_parse_cidr(network, &lrp_address,
+                                                      &prefix_len)) {
+                            continue;
+                        }
+
+                        if (ipv6_addr_equals(&lrp_address, &nexthop)) {
+                            found_lrp_in_ts = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!found_lrp_in_ts) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_INFO_RL(&rl, "Deleting orphan ICDB:Route: %s->%s "
+                             " (%s, rtb:%s, transit switch: %s)",
+                             isb_route->ip_prefix, isb_route->nexthop,
+                             isb_route->origin, isb_route->route_table,
+                             isb_route->transit_switch);
+                icsbrec_route_delete(isb_route);
+            }
         }
     }
     icsbrec_route_index_destroy_row(isb_route_key);
