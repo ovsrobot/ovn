@@ -119,6 +119,35 @@ ct_zones_restore(struct ct_zone_ctx *ctx,
 }
 
 void
+ct_zones_reserved_lports(const struct ovsrec_open_vswitch_table *ovs_table,
+                         struct sset * reserved_lports_set)
+{
+    const struct ovsrec_open_vswitch *cfg;
+    cfg = ovsrec_open_vswitch_table_first(ovs_table);
+
+    if (cfg == NULL) {
+        return;
+    }
+
+    const char *reserve_ct_zone_request_list = smap_get(
+      &cfg->external_ids, "reserve_ct_zones");
+
+    if (reserve_ct_zone_request_list == NULL) {
+        return;
+    }
+
+    char *dup_reserve_list = xstrdup(reserve_ct_zone_request_list);
+    char *reserve_port;
+    char *save_ptr = NULL;
+
+    for (reserve_port = strtok_r(dup_reserve_list, ",", &save_ptr);
+         reserve_port != NULL;
+         reserve_port = strtok_r(NULL, ",", &save_ptr)) {
+            sset_add(reserved_lports_set, reserve_port);
+    }
+}
+
+void
 ct_zones_parse_range(const struct ovsrec_open_vswitch_table *ovs_table,
                      int *min_ct_zone, int *max_ct_zone)
 {
@@ -169,7 +198,8 @@ out:
 void
 ct_zones_update(const struct sset *local_lports,
                 const struct ovsrec_open_vswitch_table *ovs_table,
-                const struct hmap *local_datapaths, struct ct_zone_ctx *ctx)
+                const struct hmap *local_datapaths, struct ct_zone_ctx *ctx,
+                struct sset *reserved_lports)
 {
     int min_ct_zone, max_ct_zone;
     const char *user;
@@ -181,6 +211,13 @@ ct_zones_update(const struct sset *local_lports,
     const char *local_lport;
     SSET_FOR_EACH (local_lport, local_lports) {
         sset_add(&all_users, local_lport);
+    }
+
+    if (!sset_is_empty(reserved_lports)) {
+        const char *reserved_lport;
+        SSET_FOR_EACH (reserved_lport, reserved_lports) {
+            sset_add(&all_users, reserved_lport);
+        }
     }
 
     /* Local patched datapath (gateway routers) need zones assigned. */
@@ -397,12 +434,15 @@ ct_zone_handle_dp_update(struct ct_zone_ctx *ctx,
 
 /* Returns "true" if there was an update to the context. */
 bool
-ct_zone_handle_port_update(struct ct_zone_ctx *ctx,
-                           const struct sbrec_port_binding *pb,
-                           bool updated, int *scan_start,
-                           int min_ct_zone, int max_ct_zone)
+ct_zone_handle_port_update(
+    struct ct_zone_ctx *ctx,
+    const struct sbrec_port_binding *pb,
+    bool updated, int *scan_start,
+    int min_ct_zone, int max_ct_zone,
+    struct sset *reserved_lports)
 {
     struct shash_node *node = shash_find(&ctx->current, pb->logical_port);
+    bool is_reserved = node && sset_contains(reserved_lports, node->name);
 
     if (node) {
         struct ct_zone *ct_zone = node->data;
@@ -418,6 +458,8 @@ ct_zone_handle_port_update(struct ct_zone_ctx *ctx,
                                   scan_start, max_ct_zone);
         }
         ct_zone_limit_update(ctx, pb->logical_port, ct_zone_get_pb_limit(pb));
+        return true;
+    } else if (node && is_reserved) {
         return true;
     } else if (node && ct_zone_remove(ctx, node->name)) {
         return true;

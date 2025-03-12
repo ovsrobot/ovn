@@ -64,6 +64,9 @@ struct ct_zone_pending_entry {
 
 void ct_zone_ctx_init(struct ct_zone_ctx *ctx);
 void ct_zone_ctx_destroy(struct ct_zone_ctx *ctx);
+void ct_zones_reserved_lports(
+    const struct ovsrec_open_vswitch_table *ovs_table,
+    struct sset * reserved_lports_set);
 void ct_zones_parse_range(const struct ovsrec_open_vswitch_table *ovs_table,
                           int *min_ct_zone, int *max_ct_zone);
 void ct_zones_restore(struct ct_zone_ctx *ctx,
@@ -73,7 +76,8 @@ void ct_zones_restore(struct ct_zone_ctx *ctx,
 void ct_zones_update(const struct sset *local_lports,
                      const struct ovsrec_open_vswitch_table *ovs_table,
                      const struct hmap *local_datapaths,
-                     struct ct_zone_ctx *ctx);
+                     struct ct_zone_ctx *ctx,
+                     struct sset *reserved_lports);
 void ct_zones_commit(const struct ovsrec_bridge *br_int,
                      const struct ovsrec_datapath *ovs_dp,
                      struct ovsdb_idl_txn *ovs_idl_txn,
@@ -85,7 +89,8 @@ bool ct_zone_handle_dp_update(struct ct_zone_ctx *ctx,
 bool ct_zone_handle_port_update(struct ct_zone_ctx *ctx,
                                 const struct sbrec_port_binding *pb,
                                 bool updated, int *scan_start,
-                                int min_ct_zone, int max_ct_zone);
+                                int min_ct_zone, int max_ct_zone,
+                                struct sset *reserved_lports);
 uint16_t ct_zone_find_zone(const struct shash *ct_zones, const char *name);
 void ct_zones_limits_sync(struct ct_zone_ctx *ctx,
                           const struct hmap *local_datapaths,
