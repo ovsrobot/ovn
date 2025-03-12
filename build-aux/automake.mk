@@ -1,7 +1,9 @@
 EXTRA_DIST += \
 	build-aux/calculate-schema-cksum \
+	build-aux/calculate-northd-cksum \
 	build-aux/cccl \
 	build-aux/cksum-schema-check \
+	build-aux/cksum-northd-check \
 	build-aux/dist-docs \
 	build-aux/dpdkstrip.py \
 	build-aux/initial-tab-whitelist \

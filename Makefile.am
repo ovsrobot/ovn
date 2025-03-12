@@ -379,6 +379,14 @@ check-ifconfig:
 	fi
 .PHONY: check-ifconfig
 
+# Check if northd stages cksum valid.
+ALL_LOCAL += check-northd
+
+.PHONY: check-northd
+
+check-northd:
+	@build-aux/cksum-northd-check || exit 1
+
 if HAVE_GROFF
 ALL_LOCAL += manpage-check
 manpage-check: $(man_MANS) $(dist_man_MANS) $(noinst_man_MANS)

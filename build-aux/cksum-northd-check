@@ -1,0 +1,11 @@
+#!/bin/sh
+
+cksumcheckpath=`dirname $0`
+sum=`$cksumcheckpath/calculate-northd-cksum`
+checksum=$(sed -n '/\* cksum *=/{s/.*cksum *= *\([0-9]*\) \([0-9]*\).*/\1 \2/p;q}' lib/ovn-util.c)
+
+if [ "$sum" != "$checksum" ]; then
+    ln=`sed -n '/cksum =/{=;q}' lib/ovn-util.c`
+    echo >&2 "lib/ovn-util.c:$ln: The checksum \"$sum\" was calculated from the northd stages and does not match cksum field file - you should probably update the ovn version number and the checksum in the file."
+    exit 1
+fi
