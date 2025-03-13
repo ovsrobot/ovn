@@ -42,6 +42,7 @@ enum ovn_controller_event {
                                        * (16..31 of the 32 bits). */
 #define MFF_LOG_INPORT     MFF_REG14  /* Logical input port (32 bits). */
 #define MFF_LOG_OUTPORT    MFF_REG15  /* Logical output port (32 bits). */
+#define MFF_LOG_TUN_OFPORT MFF_REG5   /* 16..31 of the 32 bits */
 
 /* Logical registers.
  *
@@ -97,6 +98,7 @@ enum mff_log_flags_bits {
     MLF_FROM_CTRL_BIT = 19,
     MLF_UNSNAT_NEW_BIT = 20,
     MLF_UNSNAT_NOT_TRACKED_BIT = 21,
+    MLF_RECIRC_BIT = 22,
 };
 
 /* MFF_LOG_FLAGS_REG flag assignments */
@@ -159,7 +161,10 @@ enum mff_log_flags {
     MLF_UNSNAT_NEW = (1 << MLF_UNSNAT_NEW_BIT),
 
     /* Indicate that the packet didn't go through unSNAT. */
-    MLF_UNSNAT_NOT_TRACKED = (1 << MLF_UNSNAT_NOT_TRACKED_BIT)
+    MLF_UNSNAT_NOT_TRACKED = (1 << MLF_UNSNAT_NOT_TRACKED_BIT),
+
+    /* Indicate the packet has been processed by LOCAL table once before. */
+    MLF_RECIRC = (1 << MLF_RECIRC_BIT),
 };
 
 /* OVN logical fields
@@ -224,15 +229,19 @@ const struct ovn_field *ovn_field_from_name(const char *name);
 #define OVN_CT_OBS_STAGE_END_BIT 5
 #define OVN_CT_ALLOW_ESTABLISHED_BIT 6
 #define OVN_CT_NETWORK_FUNCTION_GROUP_BIT 7
+#define OVN_CT_TUN_IF_BIT 8
 
 #define OVN_CT_BLOCKED 1
 #define OVN_CT_NATTED  2
 #define OVN_CT_LB_SKIP_SNAT 4
 #define OVN_CT_LB_FORCE_SNAT 8
 #define OVN_CT_NETWORK_FUNCTION_GROUP 128
+#define OVN_CT_TUN_IF 256
 
 #define OVN_CT_NETWORK_FUNCTION_GROUP_ID_1ST_BIT 17
 #define OVN_CT_NETWORK_FUNCTION_GROUP_ID_END_BIT 24
+#define OVN_CT_TUN_IF_1ST_BIT 80
+#define OVN_CT_TUN_IF_END_BIT 95
 
 #define OVN_CT_ECMP_ETH_1ST_BIT 32
 #define OVN_CT_ECMP_ETH_END_BIT 79
