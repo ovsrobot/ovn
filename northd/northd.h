@@ -36,6 +36,9 @@ struct northd_input {
     const struct nbrec_chassis_template_var_table
         *nbrec_chassis_template_var_table;
     const struct nbrec_mirror_table *nbrec_mirror_table;
+    const struct nbrec_network_function_table *nbrec_network_function_table;
+    const struct nbrec_network_function_group_table
+        *nbrec_network_function_group_table;
 
     /* Southbound table references */
     const struct sbrec_datapath_binding_table *sbrec_datapath_binding_table;
@@ -495,14 +498,16 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, IN,  ACL_AFTER_LB_ACTION,  20, \
                    "ls_in_acl_after_lb_action")  \
     PIPELINE_STAGE(SWITCH, IN,  STATEFUL,      21, "ls_in_stateful")      \
-    PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    22, "ls_in_arp_rsp")       \
-    PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  23, "ls_in_dhcp_options")  \
-    PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 24, "ls_in_dhcp_response") \
-    PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,    25, "ls_in_dns_lookup")    \
-    PIPELINE_STAGE(SWITCH, IN,  DNS_RESPONSE,  26, "ls_in_dns_response")  \
-    PIPELINE_STAGE(SWITCH, IN,  EXTERNAL_PORT, 27, "ls_in_external_port") \
-    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       28, "ls_in_l2_lkup")       \
-    PIPELINE_STAGE(SWITCH, IN,  L2_UNKNOWN,    29, "ls_in_l2_unknown")    \
+    PIPELINE_STAGE(SWITCH, IN,  NETWORK_FUNCTION, 22, \
+                   "ls_in_network_function") \
+    PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    23, "ls_in_arp_rsp")       \
+    PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  24, "ls_in_dhcp_options")  \
+    PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 25, "ls_in_dhcp_response") \
+    PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,    26, "ls_in_dns_lookup")    \
+    PIPELINE_STAGE(SWITCH, IN,  DNS_RESPONSE,  27, "ls_in_dns_response")  \
+    PIPELINE_STAGE(SWITCH, IN,  EXTERNAL_PORT, 28, "ls_in_external_port") \
+    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       29, "ls_in_l2_lkup")       \
+    PIPELINE_STAGE(SWITCH, IN,  L2_UNKNOWN,    30, "ls_in_l2_unknown")    \
                                                                           \
     /* Logical switch egress stages. */                                   \
     PIPELINE_STAGE(SWITCH, OUT, LOOKUP_FDB,      0, "ls_out_lookup_fdb")     \
@@ -516,8 +521,10 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, OUT, ACL_ACTION,      8, "ls_out_acl_action")     \
     PIPELINE_STAGE(SWITCH, OUT, QOS,             9, "ls_out_qos")            \
     PIPELINE_STAGE(SWITCH, OUT, STATEFUL,       10, "ls_out_stateful")       \
-    PIPELINE_STAGE(SWITCH, OUT, CHECK_PORT_SEC, 11, "ls_out_check_port_sec") \
-    PIPELINE_STAGE(SWITCH, OUT, APPLY_PORT_SEC, 12, "ls_out_apply_port_sec") \
+    PIPELINE_STAGE(SWITCH, OUT, NETWORK_FUNCTION, 11, \
+                   "ls_out_network_function") \
+    PIPELINE_STAGE(SWITCH, OUT, CHECK_PORT_SEC, 12, "ls_out_check_port_sec") \
+    PIPELINE_STAGE(SWITCH, OUT, APPLY_PORT_SEC, 13, "ls_out_apply_port_sec") \
                                                                       \
     /* Logical router ingress stages. */                              \
     PIPELINE_STAGE(ROUTER, IN,  ADMISSION,       0, "lr_in_admission")    \
@@ -991,6 +998,12 @@ static inline bool
 lsp_is_router(const struct nbrec_logical_switch_port *nbsp)
 {
     return !strcmp(nbsp->type, "router");
+}
+
+static inline bool
+lsp_can_receive_multicast(const struct nbrec_logical_switch_port *nbsp)
+{
+    return smap_get_bool(&nbsp->options, "receive_multicast", true);
 }
 
 const char *lrp_find_member_ip(const struct ovn_port *op, const char *ip_s);
