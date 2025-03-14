@@ -3626,8 +3626,9 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
         struct ovn_lb_vip *lb_vip = &lb->vips[i];
         struct ovn_northd_lb_vip *lb_vip_nb = &lb->vips_nb[i];
 
-        for (size_t j = 0; j < lb_vip->n_backends; j++) {
-            struct ovn_lb_backend *backend = &lb_vip->backends[j];
+        for (size_t j = 0; j < vector_len(&lb_vip->backends); j++) {
+            const struct ovn_lb_backend *backend =
+                vector_get_ptr(&lb_vip->backends, j);
             struct ovn_northd_lb_backend *backend_nb =
                 &lb_vip_nb->backends_nb[j];
 
@@ -3701,8 +3702,10 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
                      bool ls_dp,
                      const struct hmap *svc_monitor_map)
 {
-    bool reject = !lb_vip->n_backends && lb_vip->empty_backend_rej;
-    bool drop = !lb_vip->n_backends && !lb_vip->empty_backend_rej;
+    bool reject =
+        vector_is_empty(&lb_vip->backends) && lb_vip->empty_backend_rej;
+    bool drop =
+        vector_is_empty(&lb_vip->backends) && !lb_vip->empty_backend_rej;
 
     if (ls_dp || lb->affinity_timeout) {
         const char *ip_reg =
@@ -3717,11 +3720,12 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
     if (lb_vip_nb->lb_health_check) {
         ds_put_cstr(action, "ct_lb_mark(backends=");
 
+        size_t i = 0;
         size_t n_active_backends = 0;
-        for (size_t i = 0; i < lb_vip->n_backends; i++) {
-            struct ovn_lb_backend *backend = &lb_vip->backends[i];
+        const struct ovn_lb_backend *backend;
+        VECTOR_FOR_EACH_PTR (&lb_vip->backends, backend) {
             struct ovn_northd_lb_backend *backend_nb =
-                &lb_vip_nb->backends_nb[i];
+                &lb_vip_nb->backends_nb[i++];
 
             if (!backend_nb->health_check) {
                 continue;
@@ -6036,7 +6040,7 @@ build_empty_lb_event_flow(struct ovn_lb_vip *lb_vip,
 {
     bool controller_event = lb->controller_event ||
                             controller_event_en; /* deprecated */
-    if (!controller_event || lb_vip->n_backends ||
+    if (!controller_event || !vector_is_empty(&lb_vip->backends) ||
         lb_vip->empty_backend_rej) {
         return false;
     }
@@ -7858,9 +7862,8 @@ build_lb_affinity_lr_flows(struct lflow_table *lflows,
     size_t aff_match_learn_len = aff_match_learn.length;
 
 
-    for (size_t i = 0; i < lb_vip->n_backends; i++) {
-        struct ovn_lb_backend *backend = &lb_vip->backends[i];
-
+    struct ovn_lb_backend *backend;
+    VECTOR_FOR_EACH_PTR (&lb_vip->backends, backend) {
         ds_put_cstr(&aff_match_learn, backend->ip_str);
         ds_put_cstr(&aff_match, backend->ip_str);
 
@@ -8033,9 +8036,8 @@ build_lb_affinity_ls_flows(struct lflow_table *lflows,
     size_t aff_match_len = aff_match.length;
     size_t aff_match_learn_len = aff_match_learn.length;
 
-    for (size_t i = 0; i < lb_vip->n_backends; i++) {
-        struct ovn_lb_backend *backend = &lb_vip->backends[i];
-
+    const struct ovn_lb_backend *backend;
+    VECTOR_FOR_EACH_PTR (&lb_vip->backends, backend) {
         ds_put_cstr(&aff_match_learn, backend->ip_str);
         ds_put_cstr(&aff_match, backend->ip_str);
 
@@ -11908,8 +11910,9 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
      * (created by ct_lb_mark for the first rcv packet in this flow).
      */
     if (stateless_nat) {
-        if (ctx->lb_vip->n_backends) {
-            struct ovn_lb_backend *backend = &ctx->lb_vip->backends[0];
+        if (!vector_is_empty(&ctx->lb_vip->backends)) {
+            const struct ovn_lb_backend *backend =
+                vector_get_ptr(&ctx->lb_vip->backends, 0);
             bool ipv6 = !IN6_IS_ADDR_V4MAPPED(&backend->ip);
             ds_put_format(&dnat_action, "%s.dst = %s; ", ipv6 ? "ip6" : "ip4",
                           backend->ip_str);
@@ -11923,7 +11926,8 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
         meter = copp_meter_get(COPP_REJECT, od->nbr->copp, ctx->meter_groups);
     }
 
-    if (ctx->lb_vip->n_backends || !ctx->lb_vip->empty_backend_rej) {
+    if (!vector_is_empty(&ctx->lb_vip->backends) ||
+        !ctx->lb_vip->empty_backend_rej) {
         ds_put_format(ctx->new_match, " && is_chassis_resident(%s)",
                       dgp->cr_port->json_key);
     }
@@ -11936,7 +11940,7 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
     ds_truncate(ctx->new_match, new_match_len);
 
     ds_destroy(&dnat_action);
-    if (!ctx->lb_vip->n_backends) {
+    if (vector_is_empty(&ctx->lb_vip->backends)) {
         return;
     }
 
@@ -12128,8 +12132,8 @@ build_lrouter_nat_flows_for_lb(
      */
     ds_put_format(&undnat_match, "%s && (", ip_match);
 
-    for (size_t i = 0; i < lb_vip->n_backends; i++) {
-        struct ovn_lb_backend *backend = &lb_vip->backends[i];
+    const struct ovn_lb_backend *backend;
+    VECTOR_FOR_EACH_PTR (&lb_vip->backends, backend) {
         ds_put_format(&undnat_match, "(%s.src == %s", ip_match,
                       backend->ip_str);
 

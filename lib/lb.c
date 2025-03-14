@@ -24,32 +24,24 @@
 
 VLOG_DEFINE_THIS_MODULE(lb);
 
-static void ovn_lb_backends_clear(struct ovn_lb_vip *vip);
+static void ovn_lb_backends_destroy(struct ovn_lb_vip *vip);
 
 /* Format for backend ips: "IP1:port1,IP2:port2,...". */
 static char *
 ovn_lb_backends_init_explicit(struct ovn_lb_vip *lb_vip, const char *value)
 {
     struct ds errors = DS_EMPTY_INITIALIZER;
-    size_t n_allocated_backends = 0;
     char *tokstr = xstrdup(value);
     char *save_ptr = NULL;
-    lb_vip->n_backends = 0;
+    lb_vip->backends = VECTOR_EMPTY_INITIALIZER(struct ovn_lb_backend);
 
     for (char *token = strtok_r(tokstr, ",", &save_ptr);
         token != NULL;
         token = strtok_r(NULL, ",", &save_ptr)) {
-
-        if (lb_vip->n_backends == n_allocated_backends) {
-            lb_vip->backends = x2nrealloc(lb_vip->backends,
-                                          &n_allocated_backends,
-                                          sizeof *lb_vip->backends);
-        }
-
-        struct ovn_lb_backend *backend = &lb_vip->backends[lb_vip->n_backends];
+        struct ovn_lb_backend backend;
         int backend_addr_family;
-        if (!ip_address_and_port_from_lb_key(token, &backend->ip_str,
-                                             &backend->ip, &backend->port,
+        if (!ip_address_and_port_from_lb_key(token, &backend.ip_str,
+                                             &backend.ip, &backend.port,
                                              &backend_addr_family)) {
             if (lb_vip->port_str) {
                 ds_put_format(&errors, "%s: should be an IP address and a "
@@ -62,7 +54,7 @@ ovn_lb_backends_init_explicit(struct ovn_lb_vip *lb_vip, const char *value)
         }
 
         if (lb_vip->address_family != backend_addr_family) {
-            free(backend->ip_str);
+            free(backend.ip_str);
             ds_put_format(&errors, "%s: IP address family is different from "
                                    "VIP %s, ",
                           token, lb_vip->vip_str);
@@ -70,24 +62,24 @@ ovn_lb_backends_init_explicit(struct ovn_lb_vip *lb_vip, const char *value)
         }
 
         if (lb_vip->port_str) {
-            if (!backend->port) {
-                free(backend->ip_str);
+            if (!backend.port) {
+                free(backend.ip_str);
                 ds_put_format(&errors, "%s: should be an IP address and "
                                        "a port number with : as a separator, ",
                               token);
                 continue;
             }
         } else {
-            if (backend->port) {
-                free(backend->ip_str);
+            if (backend.port) {
+                free(backend.ip_str);
                 ds_put_format(&errors, "%s: should be an IP address, ", token);
                 continue;
             }
         }
 
-        backend->port_str =
-            backend->port ? xasprintf("%"PRIu16, backend->port) : NULL;
-        lb_vip->n_backends++;
+        backend.port_str =
+            backend.port ? xasprintf("%"PRIu16, backend.port) : NULL;
+        vector_push(&lb_vip->backends, &backend);
     }
     free(tokstr);
 
@@ -137,8 +129,7 @@ ovn_lb_backends_init_template(struct ovn_lb_vip *lb_vip, const char *value_)
     struct ds errors = DS_EMPTY_INITIALIZER;
     char *value = xstrdup(value_);
     char *save_ptr = NULL;
-    size_t n_allocated_backends = 0;
-    lb_vip->n_backends = 0;
+    lb_vip->backends = VECTOR_EMPTY_INITIALIZER(struct ovn_lb_backend);
 
     for (char *backend = strtok_r(value, ",", &save_ptr); backend;
          backend = strtok_r(NULL, ",", &save_ptr)) {
@@ -164,18 +155,12 @@ ovn_lb_backends_init_template(struct ovn_lb_vip *lb_vip, const char *value_)
         }
 
         if (success) {
-            if (lb_vip->n_backends == n_allocated_backends) {
-                lb_vip->backends = x2nrealloc(lb_vip->backends,
-                                              &n_allocated_backends,
-                                              sizeof *lb_vip->backends);
-            }
-
-            struct ovn_lb_backend *lb_backend =
-                &lb_vip->backends[lb_vip->n_backends];
-            lb_backend->ip_str = backend_ip;
-            lb_backend->port_str = backend_port;
-            lb_backend->port = 0;
-            lb_vip->n_backends++;
+            struct ovn_lb_backend lb_backend = (struct ovn_lb_backend) {
+                .ip_str = backend_ip,
+                .port_str = backend_port,
+                .port = 0,
+            };
+            vector_push(&lb_vip->backends, &lb_backend);
         } else {
             ds_put_format(&errors, "%s: should be a template of the form: "
                           "'^backendip_variable1[:^port_variable1|:port]', ",
@@ -236,7 +221,7 @@ ovn_lb_vip_init_template(struct ovn_lb_vip *lb_vip, const char *lb_key_,
 
     if (template_error) {
         lb_vip->template_backends = false;
-        ovn_lb_backends_clear(lb_vip);
+        ovn_lb_backends_destroy(lb_vip);
 
         char *explicit_error = ovn_lb_backends_init_explicit(lb_vip, lb_value);
         if (explicit_error) {
@@ -270,18 +255,13 @@ ovn_lb_vip_init(struct ovn_lb_vip *lb_vip, const char *lb_key,
 static void
 ovn_lb_backends_destroy(struct ovn_lb_vip *vip)
 {
-    for (size_t i = 0; i < vip->n_backends; i++) {
-        free(vip->backends[i].ip_str);
-        free(vip->backends[i].port_str);
+    struct ovn_lb_backend *backend;
+    VECTOR_FOR_EACH_PTR (&vip->backends, backend) {
+        free(backend->ip_str);
+        free(backend->port_str);
     }
-}
 
-static void
-ovn_lb_backends_clear(struct ovn_lb_vip *vip)
-{
-    ovn_lb_backends_destroy(vip);
-    vip->backends = NULL;
-    vip->n_backends = 0;
+    vector_destroy(&vip->backends);
 }
 
 void
@@ -290,7 +270,6 @@ ovn_lb_vip_destroy(struct ovn_lb_vip *vip)
     free(vip->vip_str);
     free(vip->port_str);
     ovn_lb_backends_destroy(vip);
-    free(vip->backends);
 }
 
 static void
@@ -322,9 +301,8 @@ ovn_lb_vip_backends_format(const struct ovn_lb_vip *vip, struct ds *s)
 {
     bool needs_brackets = vip->address_family == AF_INET6 && vip->port_str
                           && !vip->template_backends;
-    for (size_t i = 0; i < vip->n_backends; i++) {
-        struct ovn_lb_backend *backend = &vip->backends[i];
-
+    const struct ovn_lb_backend *backend;
+    VECTOR_FOR_EACH_PTR (&vip->backends, backend) {
         if (needs_brackets) {
             ds_put_char(s, '[');
         }
@@ -335,10 +313,9 @@ ovn_lb_vip_backends_format(const struct ovn_lb_vip *vip, struct ds *s)
         if (backend->port_str) {
             ds_put_format(s, ":%s", backend->port_str);
         }
-        if (i != vip->n_backends - 1) {
-            ds_put_char(s, ',');
-        }
+        ds_put_char(s, ',');
     }
+    ds_chomp(s, ',');
 }
 
 /* Formats the VIP in the way the ovn-controller expects it, that is,
