@@ -5895,7 +5895,6 @@ main(int argc, char *argv[])
 
     ofctrl_init(&lflow_output_data->group_table,
                 &lflow_output_data->meter_table);
-    ofctrl_seqno_init();
 
     unixctl_command_register("group-table-list", "", 0, 0,
                              extend_table_list,
@@ -6588,6 +6587,7 @@ loop_done:
     free(ovn_version);
     lflow_destroy();
     ofctrl_destroy();
+    ofctrl_seqno_destroy();
     pinctrl_destroy();
     binding_destroy();
     patch_destroy();
