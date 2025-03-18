@@ -5937,8 +5937,15 @@ for i in 1 2 3; do
     done
 done
 
-OVN_CLEANUP([hv1],[hv2],[hv3])
-
+# There might be transaction error for FDB when two controllers try to add
+# the same FDB simultaneously.
+OVN_CLEANUP([hv1
+/transaction error/d
+],[hv2
+/transaction error/d
+],[hv3
+/transaction error/d
+])
 AT_CLEANUP
 ])
 
