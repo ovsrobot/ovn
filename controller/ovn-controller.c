@@ -6384,7 +6384,9 @@ main(int argc, char *argv[])
                                    ofctrl_seqno_get_req_cfg(),
                                    engine_node_changed(&en_lflow_output),
                                    engine_node_changed(&en_pflow_output),
-                                   tracked_acl_ids);
+                                   tracked_acl_ids,
+                                   ovnsb_cond_seqno
+                                   == ovnsb_expected_cond_seqno);
                         stopwatch_stop(OFCTRL_PUT_STOPWATCH_NAME, time_msec());
                     }
                     stopwatch_start(OFCTRL_SEQNO_RUN_STOPWATCH_NAME,
