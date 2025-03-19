@@ -1,0 +1,18 @@
+#!/bin/sh
+
+file=$1
+schema=$2
+
+cksumcheckpath=`dirname $0`
+sum=$("$cksumcheckpath/calculate-pipeline-cksum" "$schema")
+checksum=$(sed -n \
+    's/^#define OVN_NORTHD_PIPELINE_CSUM  *"\([^"]*\)".*/\1/p' "$1")
+
+if [ "$sum" != "$checksum" ]; then
+    ln=`grep -on 'cksum *= [0-9 ]*' -m1 lib/ovn-util.c | cut -d':' -f1`
+    echo >&2 "$1:$ln: The checksum \"$sum\" was calculated from the" \
+         "pipeline stages and does not match cksum in $1:$ln -" \
+         "you should probably update the ovn version number and the" \
+         "checksum in $1."
+    exit 1
+fi

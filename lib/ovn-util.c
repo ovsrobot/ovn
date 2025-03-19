@@ -896,7 +896,11 @@ ip_address_and_port_from_lb_key(const char *key, char **ip_address,
  * modified or a stage is added to a logical pipeline.
  *
  * This value is also used to handle some backward compatibility during
- * upgrading. It should never decrease or rewind. */
+ * upgrading. It should never decrease or rewind.
+ *
+ * NOTE: if OVN_NORTHD_PIPELINE_CSUM is updated make sure to double check
+ * whether an update of OVN_INTERNAL_MINOR_VER is required. */
+#define OVN_NORTHD_PIPELINE_CSUM "1317960254 5844"
 #define OVN_INTERNAL_MINOR_VER 6
 
 /* Returns the OVN version. The caller must free the returned value. */
