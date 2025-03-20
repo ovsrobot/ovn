@@ -37,7 +37,7 @@ struct route_ctx_in {
     const char *dynamic_routing_port_mapping;
     const struct sset *active_tunnels;
     const struct hmap *local_datapaths;
-    const struct sset *local_lports;
+    const struct simap *local_lports;
     struct shash *local_bindings;
 };
 
