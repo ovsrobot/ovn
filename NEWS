@@ -4,6 +4,8 @@ Post v25.03.0
      external-ids, this option allows to specify if ovn-controller should
      perform cleanup when exiting. The "--restart" exit always has priority
      to keep the backward compatibility.
+   - Added support to reserve ct-zones for upcoming ports via setting
+     external_ids:reserve_ct_zones option in Open_vSwitch table.
 
 OVN v25.03.0 - 07 Mar 2025
 --------------------------
