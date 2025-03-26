@@ -642,6 +642,21 @@
         table
       </dt>
 
+      
+      <dt>
+        <code>external-ids:reserve_ct_zones</code> in the <code>Bridge</code>
+        table
+      </dt>
+
+      <dd>
+        <p>
+          This key represents list of ports which are supposed to come up on
+          the chassis, and hence need advance reservation of ct-zones.
+          It is comma seprated list of port names.
+        </p>
+      </dd>
+   </dl>
+
       <dd>
         <p>
           This key represents the timestamp (in milliseconds) of the last known

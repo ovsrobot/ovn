@@ -2368,10 +2368,13 @@ en_ct_zones_run(struct engine_node *node, void *data)
             EN_OVSDB_GET(engine_get_input("SB_datapath_binding", node));
 
     const struct ovsrec_bridge *br_int = get_br_int(bridge_table, ovs_table);
-
+    struct sset reserved_lports = SSET_INITIALIZER(&reserved_lports);
+    ct_zones_reserved_lports(ovs_table, &reserved_lports);
     ct_zones_restore(&ct_zones_data->ctx, ovs_table, dp_table, br_int);
     ct_zones_update(&rt_data->local_lports, ovs_table,
-                    &rt_data->local_datapaths, &ct_zones_data->ctx);
+                    &rt_data->local_datapaths, &ct_zones_data->ctx,
+                    &reserved_lports);
+    sset_destroy(&reserved_lports);
     ct_zones_limits_sync(&ct_zones_data->ctx, &rt_data->local_datapaths,
                          &rt_data->lbinding_data.lports);
 
@@ -2438,6 +2441,9 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
     ct_zones_parse_range(ovs_table, &min_ct_zone, &max_ct_zone);
     scan_start = min_ct_zone;
 
+    struct sset reserved_lports = SSET_INITIALIZER(&reserved_lports);
+    ct_zones_reserved_lports(ovs_table, &reserved_lports);
+
     HMAP_FOR_EACH (tdp, node, tracked_dp_bindings) {
         if (tdp->tracked_type == TRACKED_RESOURCE_NEW) {
             /* A new datapath has been added. Fall back to full recompute. */
@@ -2458,7 +2464,8 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
                     updated |= ct_zone_handle_port_update(&ct_zones_data->ctx,
                                                t_lport->pb,
                                                false, &scan_start,
-                                               min_ct_zone, max_ct_zone);
+                                               min_ct_zone, max_ct_zone,
+                                               &reserved_lports);
                 }
 
                 continue;
@@ -2470,9 +2477,12 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
             updated |= ct_zone_handle_port_update(&ct_zones_data->ctx,
                                                   t_lport->pb,
                                                   port_updated, &scan_start,
-                                                  min_ct_zone, max_ct_zone);
+                                                  min_ct_zone, max_ct_zone,
+                                                  &reserved_lports);
         }
     }
+
+    sset_destroy(&reserved_lports);
 
     if (updated) {
         engine_set_node_state(node, EN_UPDATED);
