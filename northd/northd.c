@@ -4880,6 +4880,11 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 delete_fdb_entries(ni->sbrec_fdb_by_dp_and_port,
                                    od->tunnel_key, old_tunnel_key);
             }
+        } else if (!strcmp(new_nbsp->type, "virtual") &&
+                   smap_get(&new_nbsp->options, "virtual-parents")) {
+            /* Virtual port depends on other LSPs, make sure we process
+               it correctly when other LSPs change. */
+            goto fail;
         }
         op->visited = true;
     }

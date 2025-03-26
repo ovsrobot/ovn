@@ -16753,3 +16753,33 @@ check grep -q "Bad configuration: The peer of the switch port 'ls-lrp1' (LRP pee
 
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Virtual LSP - I-P])
+ovn_start
+
+check ovn-nbctl ls-add ls
+
+check ovn-nbctl lsp-add ls lsp-vir \
+    -- lsp-set-addresses lsp-vir "00:00:00:00:01:88 10.0.0.88" \
+    -- lsp-set-type lsp-vir virtual \
+    -- set logical_switch_port lsp-vir options:virtual-ip=10.0.0.88 \
+    -- set logical_switch_port lsp-vir options:virtual-parents=lsp
+
+check ovn-nbctl lsp-add ls lsp \
+    -- lsp-set-addresses lsp "00:00:00:00:01:11 10.0.0.11"
+
+check ovn-nbctl --wait=sb sync
+
+#check as northd ovn-appctl -t ovn-northd inc-engine/recompute
+#check ovn-nbctl --wait=sb sync
+
+ovn-sbctl dump-flows ls > flows
+AT_CAPTURE_FILE([flows])
+
+AT_CHECK([grep -e "ls_in_arp_rsp" flows | grep bind_vport | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_arp_rsp      ), priority=100  , match=(inport == "lsp" && ((arp.op == 1 && arp.spa == 10.0.0.88 && arp.tpa == 10.0.0.88) || (arp.op == 2 && arp.spa == 10.0.0.88))), action=(bind_vport("lsp-vir", inport); next;)
+])
+
+AT_CLEANUP
+])
