@@ -1383,6 +1383,59 @@ prefix_is_link_local(const struct in6_addr *prefix, unsigned int plen)
             ((prefix->s6_addr[1] & 0xc0) == 0x80));
 }
 
+bool
+find_prefix_in_list(const struct in6_addr *prefix, unsigned int plen,
+                    const struct sset *prefix_list, const char *filter_name)
+{
+    if (sset_is_empty(prefix_list)) {
+        return true;
+    }
+
+
+    bool matched = false;
+    struct in6_addr lt_prefix;
+    const char *cur_prefix;
+    unsigned int lt_plen;
+
+    SSET_FOR_EACH (cur_prefix, prefix_list) {
+        if (!ip46_parse_cidr(cur_prefix, &lt_prefix, &lt_plen)) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_WARN_RL(&rl, "Bad format in LR, LRP or nb_global options:"
+                         "%s: %s. CIDR expected.", filter_name, cur_prefix);
+            continue;
+        }
+
+        if (IN6_IS_ADDR_V4MAPPED(&lt_prefix) != IN6_IS_ADDR_V4MAPPED(prefix)) {
+            continue;
+        }
+
+        /* 192.168.0.0/16 does not belong to 192.168.0.0/17 */
+        if (plen < lt_plen) {
+            continue;
+        }
+
+        if (IN6_IS_ADDR_V4MAPPED(prefix)) {
+            ovs_be32 bl_prefix_v4 = in6_addr_get_mapped_ipv4(&lt_prefix);
+            ovs_be32 prefix_v4 = in6_addr_get_mapped_ipv4(prefix);
+            ovs_be32 mask = be32_prefix_mask(lt_plen);
+
+            if ((prefix_v4 & mask) != (bl_prefix_v4 & mask)) {
+                continue;
+            }
+        } else {
+            struct in6_addr bl_mask = ipv6_create_mask(lt_plen);
+            struct in6_addr m_prefix = ipv6_addr_bitand(prefix, &bl_mask);
+            struct in6_addr m_bl_prefix = ipv6_addr_bitand(&lt_prefix,
+                                                           &bl_mask);
+            if (!ipv6_addr_equals(&m_prefix, &m_bl_prefix)) {
+                continue;
+            }
+        }
+        matched = true;
+        break;
+    }
+    return matched;
+}
 const struct sbrec_port_binding *
 lport_lookup_by_name(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                      const char *name)
