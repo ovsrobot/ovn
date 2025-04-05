@@ -98,6 +98,9 @@ static bool vxlan_mode;
 
 static bool vxlan_ic_mode;
 
+/* Respond to unicast ARP requests for known ips or not. */
+static bool unicast_arp_responder = false;
+
 #define MAX_OVN_TAGS 4096
 
 
@@ -9515,15 +9518,16 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
         for (size_t i = 0; i < op->n_lsp_addrs; i++) {
             for (size_t j = 0; j < op->lsp_addrs[i].n_ipv4_addrs; j++) {
                 ds_clear(match);
-                /* Do not reply on unicast ARPs, forward them to the target
-                 * to have ability to monitor target liveness via unicast
-                 * ARP requests.
-                */
-                ds_put_format(match,
-                    "arp.tpa == %s && "
-                    "arp.op == 1 && "
-                    "eth.dst == ff:ff:ff:ff:ff:ff",
-                    op->lsp_addrs[i].ipv4_addrs[j].addr_s);
+                ds_put_format(match, "arp.tpa == %s && arp.op == 1",
+                              op->lsp_addrs[i].ipv4_addrs[j].addr_s);
+
+                if (!unicast_arp_responder) {
+                    /* Do not reply on unicast ARPs, forward them to the target
+                     * to have ability to monitor target liveness via unicast
+                     * ARP requests.
+                    */
+                   ds_put_cstr(match, " && eth.dst == ff:ff:ff:ff:ff:ff");
+                }
                 ds_clear(actions);
                 ds_put_format(actions,
                     "eth.dst = eth.src; "
@@ -18979,6 +18983,10 @@ ovnnb_db_run(struct northd_input *input_data,
                                               false);
     use_common_zone = smap_get_bool(input_data->nb_options, "use_common_zone",
                                     false);
+
+    unicast_arp_responder = smap_get_bool(input_data->nb_options,
+                                          "unicast_arp_responder",
+                                          false);
 
     vxlan_mode = is_vxlan_mode(input_data->nb_options,
                                input_data->sbrec_chassis_table);

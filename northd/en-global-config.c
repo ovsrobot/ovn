@@ -269,6 +269,12 @@ global_config_nb_global_handler(struct engine_node *node, void *data)
         return false;
     }
 
+    /* Check if northd_internal_version has changed or not. */
+    if (config_out_of_sync(&nb->options, &config_data->nb_options,
+                           "unicast_arp_responder", false)) {
+        return false;
+    }
+
     if (check_nb_options_out_of_sync(nb, config_data, sampling_apps)) {
         config_data->tracked_data.nb_options_changed = true;
     }
