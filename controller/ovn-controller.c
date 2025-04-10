@@ -1100,18 +1100,20 @@ en_if_status_mgr_run(struct engine_node *node, void *data_)
     return state;
 }
 
-static bool
-if_status_mgr_ovs_interface_handler(struct engine_node *node, void *data)
+static enum engine_input_handler_result
+if_status_mgr_ovs_interface_handler(struct engine_node *node OVS_UNUSED,
+                                    void *data)
 {
     struct ed_type_if_status_mgr *data_ = data;
+    enum engine_input_handler_result result = EN_HANDLED_UNCHANGED;
 
     const struct ovsrec_interface *iface;
     OVSREC_INTERFACE_TABLE_FOR_EACH_TRACKED (iface, data_->iface_table) {
         if (if_status_mgr_iface_update(data_->manager, iface)) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
-    return true;
+    return result;
 }
 
 /* This engine node is to wrap the OVS_interface input and maintain a copy of
@@ -1190,12 +1192,12 @@ en_ovs_interface_shadow_run(struct engine_node *node, void *data_)
     return EN_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 ovs_interface_shadow_ovs_interface_handler(struct engine_node *node,
                                            void *data_)
 {
-    engine_set_node_state(node, en_ovs_interface_shadow_run(node, data_));
-    return true;
+    en_ovs_interface_shadow_run(node, data_);
+    return EN_HANDLED_UPDATED;
 }
 
 struct ed_type_activated_ports {
@@ -1613,10 +1615,11 @@ en_sb_ro_cleanup(void *data OVS_UNUSED)
 {
 }
 
-static bool
+static enum engine_input_handler_result
 runtime_data_sb_ro_handler(struct engine_node *node, void *data)
 {
     const struct sbrec_chassis *chassis = NULL;
+    enum engine_input_handler_result result = EN_HANDLED_UNCHANGED;
 
     struct ovsrec_open_vswitch_table *ovs_table =
         (struct ovsrec_open_vswitch_table *)EN_OVSDB_GET(
@@ -1645,51 +1648,53 @@ runtime_data_sb_ro_handler(struct engine_node *node, void *data)
                                     chassis,
                                     &rt_data->tracked_dp_bindings,
                                     pb_table, sb_readonly)) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
             rt_data->tracked = true;
         }
     }
-    return true;
+    return result;
 }
 
-static bool
+static enum engine_input_handler_result
 runtime_data_ovs_interface_shadow_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data = data;
     struct binding_ctx_in b_ctx_in;
     struct binding_ctx_out b_ctx_out;
+    enum engine_input_handler_result result = EN_HANDLED_UNCHANGED;
     init_binding_ctx(node, rt_data, &b_ctx_in, &b_ctx_out);
     rt_data->tracked = true;
     b_ctx_out.tracked_dp_bindings = &rt_data->tracked_dp_bindings;
 
     if (!binding_handle_ovs_interface_changes(&b_ctx_in, &b_ctx_out)) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     if (b_ctx_out.local_lports_changed) {
-        engine_set_node_state(node, EN_UPDATED);
+        result = EN_HANDLED_UPDATED;
         rt_data->local_lports_changed = b_ctx_out.local_lports_changed;
     }
 
-    return true;
+    return result;
 }
 
-static bool
+static enum engine_input_handler_result
 runtime_data_sb_port_binding_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data = data;
     struct binding_ctx_in b_ctx_in;
     struct binding_ctx_out b_ctx_out;
+    enum engine_input_handler_result result = EN_HANDLED_UNCHANGED;
     init_binding_ctx(node, rt_data, &b_ctx_in, &b_ctx_out);
     if (!b_ctx_in.chassis_rec) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     rt_data->tracked = true;
     b_ctx_out.tracked_dp_bindings = &rt_data->tracked_dp_bindings;
 
     if (!binding_handle_port_binding_changes(&b_ctx_in, &b_ctx_out)) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     rt_data->local_lports_changed = b_ctx_out.local_lports_changed;
@@ -1700,13 +1705,13 @@ runtime_data_sb_port_binding_handler(struct engine_node *node, void *data)
             b_ctx_out.local_lports_changed ||
             b_ctx_out.localnet_learn_fdb_changed ||
             !hmap_is_empty(b_ctx_out.tracked_dp_bindings)) {
-        engine_set_node_state(node, EN_UPDATED);
+        result = EN_HANDLED_UPDATED;
     }
 
-    return true;
+    return result;
 }
 
-static bool
+static enum engine_input_handler_result
 runtime_data_sb_datapath_binding_handler(struct engine_node *node OVS_UNUSED,
                                          void *data OVS_UNUSED)
 {
@@ -1720,7 +1725,7 @@ runtime_data_sb_datapath_binding_handler(struct engine_node *node OVS_UNUSED,
         if (sbrec_datapath_binding_is_deleted(dp)) {
             if (get_local_datapath(&rt_data->local_datapaths,
                                    dp->tunnel_key)) {
-                return false;
+                return EN_UNHANDLED;
             }
 
         }
@@ -1734,12 +1739,12 @@ runtime_data_sb_datapath_binding_handler(struct engine_node *node OVS_UNUSED,
              */
             if (get_local_datapath_no_hash(&rt_data->local_datapaths,
                                            dp->tunnel_key)) {
-                return false;
+                return EN_UNHANDLED;
             }
         }
     }
 
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
 static void
@@ -1867,11 +1872,12 @@ en_template_vars_run(struct engine_node *node, void *data)
     return EN_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 template_vars_sb_chassis_template_var_handler(struct engine_node *node,
                                               void *data)
 {
     struct ed_type_template_vars *tv_data = data;
+    enum engine_input_handler_result result;
 
     const struct sbrec_chassis_template_var_table *tv_table =
         EN_OVSDB_GET(engine_get_input("SB_chassis_template_var", node));
@@ -1889,13 +1895,13 @@ template_vars_sb_chassis_template_var_handler(struct engine_node *node,
 
     if (!sset_is_empty(&tv_data->new) || !sset_is_empty(&tv_data->deleted) ||
             !sset_is_empty(&tv_data->updated)) {
-        engine_set_node_state(node, EN_UPDATED);
+        result = EN_HANDLED_UPDATED;
     } else {
-        engine_set_node_state(node, EN_UNCHANGED);
+        result = EN_HANDLED_UNCHANGED;
     }
 
     tv_data->change_tracked = true;
-    return true;
+    return result;
 }
 
 static void
@@ -2050,10 +2056,11 @@ en_addr_sets_run(struct engine_node *node, void *data)
     return EN_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 addr_sets_sb_address_set_handler(struct engine_node *node, void *data)
 {
     struct ed_type_addr_sets *as = data;
+    enum engine_input_handler_result result;
 
     struct sbrec_address_set_table *as_table =
         (struct sbrec_address_set_table *)EN_OVSDB_GET(
@@ -2064,13 +2071,13 @@ addr_sets_sb_address_set_handler(struct engine_node *node, void *data)
 
     if (!sset_is_empty(&as->new) || !sset_is_empty(&as->deleted) ||
             !shash_is_empty(&as->updated)) {
-        engine_set_node_state(node, EN_UPDATED);
+        result = EN_HANDLED_UPDATED;
     } else {
-        engine_set_node_state(node, EN_UNCHANGED);
+        result = EN_HANDLED_UNCHANGED;
     }
 
     as->change_tracked = true;
-    return true;
+    return result;
 }
 
 struct ed_type_port_groups{
@@ -2240,10 +2247,11 @@ en_port_groups_run(struct engine_node *node, void *data)
     return EN_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 port_groups_sb_port_group_handler(struct engine_node *node, void *data)
 {
     struct ed_type_port_groups *pg = data;
+    enum engine_input_handler_result result;
 
     const struct sbrec_port_group_table *pg_table =
         EN_OVSDB_GET(engine_get_input("SB_port_group", node));
@@ -2257,16 +2265,16 @@ port_groups_sb_port_group_handler(struct engine_node *node, void *data)
 
     if (!sset_is_empty(&pg->new) || !sset_is_empty(&pg->deleted) ||
             !sset_is_empty(&pg->updated)) {
-        engine_set_node_state(node, EN_UPDATED);
+        result = EN_HANDLED_UPDATED;
     } else {
-        engine_set_node_state(node, EN_UNCHANGED);
+        result = EN_HANDLED_UNCHANGED;
     }
 
     pg->change_tracked = true;
-    return true;
+    return result;
 }
 
-static bool
+static enum engine_input_handler_result
 port_groups_runtime_data_handler(struct engine_node *node, void *data)
 {
     const struct sbrec_port_group_table *pg_table =
@@ -2276,8 +2284,10 @@ port_groups_runtime_data_handler(struct engine_node *node, void *data)
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
 
+    enum engine_input_handler_result result;
+
     if (!rt_data->tracked) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     if (hmap_is_empty(&rt_data->tracked_dp_bindings)) {
@@ -2319,12 +2329,12 @@ port_groups_runtime_data_handler(struct engine_node *node, void *data)
 out:
     if (!sset_is_empty(&pg->new) || !sset_is_empty(&pg->deleted) ||
             !sset_is_empty(&pg->updated)) {
-        engine_set_node_state(node, EN_UPDATED);
+        result = EN_HANDLED_UPDATED;
     } else {
-        engine_set_node_state(node, EN_UNCHANGED);
+        result = EN_HANDLED_UNCHANGED;
     }
     pg->change_tracked = true;
-    return true;
+    return result;
 }
 
 static void *
@@ -2382,7 +2392,7 @@ en_ct_zones_run(struct engine_node *node, void *data)
 /* Handles datapath binding changes for the ct_zones engine.
  * Returns false if the datapath is deleted or if the requested snat
  * ct zone doesn't match with the ct_zones data. */
-static bool
+static enum engine_input_handler_result
 ct_zones_datapath_binding_handler(struct engine_node *node, void *data)
 {
     struct ed_type_ct_zones *ct_zones_data = data;
@@ -2402,19 +2412,19 @@ ct_zones_datapath_binding_handler(struct engine_node *node, void *data)
         if (sbrec_datapath_binding_is_deleted(dp) ||
             sbrec_datapath_binding_is_new(dp)) {
             /* Fall back to full recompute of ct_zones engine. */
-            return false;
+            return EN_UNHANDLED;
         }
 
         if (!ct_zone_handle_dp_update(&ct_zones_data->ctx, local_dp,
                                       &rt_data->lbinding_data.lports)) {
-            return false;
+            return EN_UNHANDLED;
         }
     }
 
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
-static bool
+static enum engine_input_handler_result
 ct_zones_runtime_data_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
@@ -2424,7 +2434,7 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
 
     /* There is no tracked data. Fall back to full recompute of ct_zones. */
     if (!rt_data->tracked) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     struct ed_type_ct_zones *ct_zones_data = data;
@@ -2441,7 +2451,7 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
     HMAP_FOR_EACH (tdp, node, tracked_dp_bindings) {
         if (tdp->tracked_type == TRACKED_RESOURCE_NEW) {
             /* A new datapath has been added. Fall back to full recompute. */
-            return false;
+            return EN_UNHANDLED;
         }
 
         struct shash_node *shash_node;
@@ -2474,11 +2484,7 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
         }
     }
 
-    if (updated) {
-        engine_set_node_state(node, EN_UPDATED);
-    }
-
-    return true;
+    return updated ? EN_HANDLED_UPDATED : EN_HANDLED_UNCHANGED;
 }
 
 /* The data in the ct_zones node is always valid (i.e., no stale pointers). */
@@ -2855,7 +2861,7 @@ en_lb_data_run(struct engine_node *node, void *data)
     return EN_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 lb_data_sb_load_balancer_handler(struct engine_node *node, void *data)
 {
     struct ed_type_lb_data *lb_data = data;
@@ -2891,13 +2897,13 @@ lb_data_sb_load_balancer_handler(struct engine_node *node, void *data)
     if (!uuidset_is_empty(&lb_data->deleted) ||
         !uuidset_is_empty(&lb_data->updated) ||
         !uuidset_is_empty(&lb_data->new)) {
-        engine_set_node_state(node, EN_UPDATED);
+        return EN_HANDLED_UPDATED;
     }
 
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
-static bool
+static enum engine_input_handler_result
 lb_data_template_var_handler(struct engine_node *node, void *data)
 {
     struct ed_type_lb_data *lb_data = data;
@@ -2907,9 +2913,10 @@ lb_data_template_var_handler(struct engine_node *node, void *data)
         engine_get_input_data("template_vars", node);
     const struct sbrec_load_balancer_table *lb_table =
         EN_OVSDB_GET(engine_get_input("SB_load_balancer", node));
+    enum engine_input_handler_result result = EN_HANDLED_UNCHANGED;
 
     if (!tv_data->change_tracked) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     const struct lb_data_ctx_in ctx_in = {
@@ -2927,10 +2934,10 @@ lb_data_template_var_handler(struct engine_node *node, void *data)
                                       res_name, lb_data_handle_changed_ref,
                                       &lb_data->objs_processed,
                                       &ctx_in, lb_data, &changed)) {
-            return false;
+            return EN_UNHANDLED;
         }
         if (changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
     SSET_FOR_EACH (res_name, &tv_data->updated) {
@@ -2939,10 +2946,10 @@ lb_data_template_var_handler(struct engine_node *node, void *data)
                                       res_name, lb_data_handle_changed_ref,
                                       &lb_data->objs_processed,
                                       &ctx_in, lb_data, &changed)) {
-            return false;
+            return EN_UNHANDLED;
         }
         if (changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
     SSET_FOR_EACH (res_name, &tv_data->new) {
@@ -2951,19 +2958,19 @@ lb_data_template_var_handler(struct engine_node *node, void *data)
                                       res_name, lb_data_handle_changed_ref,
                                       &lb_data->objs_processed,
                                       &ctx_in, lb_data, &changed)) {
-            return false;
+            return EN_UNHANDLED;
         }
         if (changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
 
     lb_data->change_tracked = true;
 
-    return true;
+    return result;
 }
 
-static bool
+static enum engine_input_handler_result
 lb_data_runtime_data_handler(struct engine_node *node, void *data OVS_UNUSED)
 {
     struct ed_type_lb_data *lb_data = data;
@@ -2977,12 +2984,12 @@ lb_data_runtime_data_handler(struct engine_node *node, void *data OVS_UNUSED)
     /* There are no tracked data. Fall back to full recompute of
      * lb_ct_tuple. */
     if (!rt_data->tracked) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     struct hmap *tracked_dp_bindings = &rt_data->tracked_dp_bindings;
     if (hmap_is_empty(tracked_dp_bindings)) {
-        return true;
+        return EN_HANDLED_UNCHANGED;
     }
 
     struct hmap *lbs = NULL;
@@ -3023,10 +3030,10 @@ lb_data_runtime_data_handler(struct engine_node *node, void *data OVS_UNUSED)
     if (!uuidset_is_empty(&lb_data->deleted) ||
         !uuidset_is_empty(&lb_data->updated) ||
         !uuidset_is_empty(&lb_data->new)) {
-        engine_set_node_state(node, EN_UPDATED);
+        return EN_HANDLED_UPDATED;
     }
 
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
 static void
@@ -3217,7 +3224,7 @@ en_mac_cache_run(struct engine_node *node, void *data)
     return EN_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 mac_cache_sb_mac_binding_handler(struct engine_node *node, void *data)
 {
     struct mac_cache_data *cache_data = data;
@@ -3246,13 +3253,13 @@ mac_cache_sb_mac_binding_handler(struct engine_node *node, void *data)
     }
 
     if (hmap_count(&cache_data->mac_bindings) != previous_size) {
-        engine_set_node_state(node, EN_UPDATED);
+        return EN_HANDLED_UPDATED;
     }
 
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
-static bool
+static enum engine_input_handler_result
 mac_cache_sb_fdb_handler(struct engine_node *node, void *data)
 {
     struct mac_cache_data *cache_data = data;
@@ -3282,13 +3289,13 @@ mac_cache_sb_fdb_handler(struct engine_node *node, void *data)
     }
 
     if (hmap_count(&cache_data->fdbs) != previous_size) {
-        engine_set_node_state(node, EN_UPDATED);
+        return EN_HANDLED_UPDATED;
     }
 
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
-static bool
+static enum engine_input_handler_result
 mac_cache_runtime_data_handler(struct engine_node *node, void *data OVS_UNUSED)
 {
     struct mac_cache_data *cache_data = data;
@@ -3305,7 +3312,7 @@ mac_cache_runtime_data_handler(struct engine_node *node, void *data OVS_UNUSED)
 
     /* There are no tracked data. Fall back to full recompute. */
     if (!rt_data->tracked) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     size_t previous_mb_size = hmap_count(&cache_data->mac_bindings);
@@ -3330,13 +3337,13 @@ mac_cache_runtime_data_handler(struct engine_node *node, void *data OVS_UNUSED)
 
     if (hmap_count(&cache_data->mac_bindings) != previous_mb_size ||
         hmap_count(&cache_data->fdbs) != previous_fdb_size) {
-        engine_set_node_state(node, EN_UPDATED);
+        return EN_HANDLED_UPDATED;
     }
 
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
-static bool
+static enum engine_input_handler_result
 mac_cache_sb_datapath_binding_handler(struct engine_node *node, void *data)
 {
     struct mac_cache_data *cache_data = data;
@@ -3383,10 +3390,10 @@ mac_cache_sb_datapath_binding_handler(struct engine_node *node, void *data)
 
     if (hmap_count(&cache_data->mac_bindings) != previous_mb_size ||
         hmap_count(&cache_data->fdbs) != previous_fdb_size) {
-        engine_set_node_state(node, EN_UPDATED);
+        return EN_HANDLED_UPDATED;
     }
 
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
 
@@ -3463,7 +3470,7 @@ en_dns_cache_run(struct engine_node *node, void *data OVS_UNUSED)
     return EN_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 dns_cache_sb_dns_handler(struct engine_node *node, void *data OVS_UNUSED)
 {
     const struct sbrec_dns_table *dns_table =
@@ -3471,8 +3478,7 @@ dns_cache_sb_dns_handler(struct engine_node *node, void *data OVS_UNUSED)
 
     ovn_dns_update_cache(dns_table);
 
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
 static void
@@ -3542,13 +3548,17 @@ en_non_vif_data_run(struct engine_node *node, void *data)
     return EN_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 non_vif_data_ovs_iface_handler(struct engine_node *node, void *data OVS_UNUSED)
 {
     const struct ovsrec_interface_table *iface_table =
         EN_OVSDB_GET(engine_get_input("OVS_interface", node));
 
-    return local_nonvif_data_handle_ovs_iface_changes(iface_table);
+    if (local_nonvif_data_handle_ovs_iface_changes(iface_table)) {
+        return EN_HANDLED_UNCHANGED;
+    } else {
+        return EN_UNHANDLED;
+    }
 }
 
 struct ed_type_northd_options {
@@ -3605,7 +3615,7 @@ en_northd_options_run(struct engine_node *node, void *data)
     return EN_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 en_northd_options_sb_sb_global_handler(struct engine_node *node, void *data)
 {
     struct ed_type_northd_options *n_opts = data;
@@ -3613,6 +3623,7 @@ en_northd_options_sb_sb_global_handler(struct engine_node *node, void *data)
         EN_OVSDB_GET(engine_get_input("SB_sb_global", node));
     const struct sbrec_sb_global *sb_global =
         sbrec_sb_global_table_first(sb_global_table);
+    enum engine_input_handler_result result = EN_HANDLED_UNCHANGED;
 
     bool explicit_arp_ns_output =
             sb_global
@@ -3622,7 +3633,7 @@ en_northd_options_sb_sb_global_handler(struct engine_node *node, void *data)
 
     if (explicit_arp_ns_output != n_opts->explicit_arp_ns_output) {
         n_opts->explicit_arp_ns_output = explicit_arp_ns_output;
-        engine_set_node_state(node, EN_UPDATED);
+        result =  EN_HANDLED_UPDATED;
     }
 
     bool always_tunnel =
@@ -3633,7 +3644,7 @@ en_northd_options_sb_sb_global_handler(struct engine_node *node, void *data)
 
     if (always_tunnel != n_opts->always_tunnel) {
         n_opts->always_tunnel = always_tunnel;
-        engine_set_node_state(node, EN_UPDATED);
+        result = EN_HANDLED_UPDATED;
     }
 
     bool register_consolidation =
@@ -3644,10 +3655,10 @@ en_northd_options_sb_sb_global_handler(struct engine_node *node, void *data)
 
     if (register_consolidation != n_opts->register_consolidation) {
         n_opts->register_consolidation = register_consolidation;
-        engine_set_node_state(node, EN_UPDATED);
+        result = EN_HANDLED_UPDATED;
     }
 
-    return true;
+    return result;
 }
 
 struct ed_type_dhcp_options {
@@ -3998,7 +4009,7 @@ en_lflow_output_run(struct engine_node *node, void *data)
     return EN_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_sb_logical_flow_handler(struct engine_node *node, void *data)
 {
     struct ed_type_lflow_output *fo = data;
@@ -4006,13 +4017,14 @@ lflow_output_sb_logical_flow_handler(struct engine_node *node, void *data)
     struct lflow_ctx_out l_ctx_out;
     init_lflow_ctx(node, fo, &l_ctx_in, &l_ctx_out);
 
-    bool handled = lflow_handle_changed_flows(&l_ctx_in, &l_ctx_out);
+    if (lflow_handle_changed_flows(&l_ctx_in, &l_ctx_out)) {
+        return EN_HANDLED_UPDATED;
+    }
 
-    engine_set_node_state(node, EN_UPDATED);
-    return handled;
+    return EN_UNHANDLED;
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_flow_sample_collector_set_handler(struct engine_node *node,
                                                void *data OVS_UNUSED)
 {
@@ -4026,13 +4038,13 @@ lflow_output_flow_sample_collector_set_handler(struct engine_node *node,
     const struct ovsrec_open_vswitch *cfg =
         ovsrec_open_vswitch_table_first(ovs_table);
     if (!cfg) {
-        return true;
+        return EN_HANDLED_UNCHANGED;
     }
 
     const struct ovsrec_bridge *br_int;
     br_int = get_bridge(bridge_table, br_int_name(ovs_table));
     if (!br_int) {
-        return true;
+        return EN_HANDLED_UNCHANGED;
     }
 
     const struct ovsrec_flow_sample_collector_set *set;
@@ -4043,12 +4055,11 @@ lflow_output_flow_sample_collector_set_handler(struct engine_node *node,
             flow_collector_ids_clear(&lfo->collector_ids);
             flow_collector_ids_init_from_table(&lfo->collector_ids,
                                                flow_collector_table);
-            return false;
+            return EN_UNHANDLED;
         }
     }
 
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
 static void
@@ -4109,7 +4120,7 @@ pflow_output_get_debug(struct engine_node *node, struct physical_debug *debug)
                                          "debug_drop_domain_id", 0);
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_sb_mac_binding_handler(struct engine_node *node, void *data)
 {
     struct ovsdb_idl_index *sbrec_port_binding_by_name =
@@ -4129,11 +4140,10 @@ lflow_output_sb_mac_binding_handler(struct engine_node *node, void *data)
     lflow_handle_changed_mac_bindings(sbrec_port_binding_by_name,
             mac_binding_table, local_datapaths, &lfo->flow_table);
 
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_sb_static_mac_binding_handler(struct engine_node *node,
                                            void *data)
 {
@@ -4154,11 +4164,10 @@ lflow_output_sb_static_mac_binding_handler(struct engine_node *node,
     lflow_handle_changed_static_mac_bindings(sbrec_port_binding_by_name,
         smb_table, local_datapaths, &lfo->flow_table);
 
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
 {
     struct ed_type_lflow_output *lfo = data;
@@ -4167,14 +4176,13 @@ lflow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
     struct lflow_ctx_out l_ctx_out;
     init_lflow_ctx(node, lfo, &l_ctx_in, &l_ctx_out);
     if (!lflow_handle_changed_mc_groups(&l_ctx_in, &l_ctx_out)) {
-        return false;
+        return EN_UNHANDLED;
     }
 
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_sb_port_binding_handler(struct engine_node *node, void *data)
 {
     struct ed_type_lflow_output *lfo = data;
@@ -4183,14 +4191,13 @@ lflow_output_sb_port_binding_handler(struct engine_node *node, void *data)
     struct lflow_ctx_out l_ctx_out;
     init_lflow_ctx(node, lfo, &l_ctx_in, &l_ctx_out);
     if (!lflow_handle_changed_port_bindings(&l_ctx_in, &l_ctx_out)) {
-        return false;
+        return EN_UNHANDLED;
     }
 
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_addr_sets_handler(struct engine_node *node, void *data)
 {
     struct ed_type_addr_sets *as_data =
@@ -4204,9 +4211,10 @@ lflow_output_addr_sets_handler(struct engine_node *node, void *data)
 
     bool changed;
     const char *ref_name;
+    enum engine_input_handler_result result = EN_HANDLED_UNCHANGED;
 
     if (!as_data->change_tracked) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     SSET_FOR_EACH (ref_name, &as_data->deleted) {
@@ -4215,10 +4223,10 @@ lflow_output_addr_sets_handler(struct engine_node *node, void *data)
                                       lflow_handle_changed_ref,
                                       l_ctx_out.objs_processed,
                                       &l_ctx_in, &l_ctx_out, &changed)) {
-            return false;
+            return EN_UNHANDLED;
         }
         if (changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
     struct shash_node *shash_node;
@@ -4234,11 +4242,11 @@ lflow_output_addr_sets_handler(struct engine_node *node, void *data)
                                           lflow_handle_changed_ref,
                                           l_ctx_out.objs_processed,
                                           &l_ctx_in, &l_ctx_out, &changed)) {
-                return false;
+                return EN_UNHANDLED;
             }
         }
         if (changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
     SSET_FOR_EACH (ref_name, &as_data->new) {
@@ -4247,17 +4255,17 @@ lflow_output_addr_sets_handler(struct engine_node *node, void *data)
                                       lflow_handle_changed_ref,
                                       l_ctx_out.objs_processed,
                                       &l_ctx_in, &l_ctx_out, &changed)) {
-            return false;
+            return EN_UNHANDLED;
         }
         if (changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
 
-    return true;
+    return result;
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_port_groups_handler(struct engine_node *node, void *data)
 {
     struct ed_type_port_groups *pg_data =
@@ -4271,9 +4279,10 @@ lflow_output_port_groups_handler(struct engine_node *node, void *data)
 
     bool changed;
     const char *ref_name;
+    enum engine_input_handler_result result = EN_HANDLED_UNCHANGED;
 
     if (!pg_data->change_tracked) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     SSET_FOR_EACH (ref_name, &pg_data->deleted) {
@@ -4282,10 +4291,10 @@ lflow_output_port_groups_handler(struct engine_node *node, void *data)
                                       lflow_handle_changed_ref,
                                       l_ctx_out.objs_processed,
                                       &l_ctx_in, &l_ctx_out, &changed)) {
-            return false;
+            return EN_UNHANDLED;
         }
         if (changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
     SSET_FOR_EACH (ref_name, &pg_data->updated) {
@@ -4294,10 +4303,10 @@ lflow_output_port_groups_handler(struct engine_node *node, void *data)
                                       lflow_handle_changed_ref,
                                       l_ctx_out.objs_processed,
                                       &l_ctx_in, &l_ctx_out, &changed)) {
-            return false;
+            return EN_UNHANDLED;
         }
         if (changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
     SSET_FOR_EACH (ref_name, &pg_data->new) {
@@ -4306,17 +4315,17 @@ lflow_output_port_groups_handler(struct engine_node *node, void *data)
                                       lflow_handle_changed_ref,
                                       l_ctx_out.objs_processed,
                                       &l_ctx_in, &l_ctx_out, &changed)) {
-            return false;
+            return EN_UNHANDLED;
         }
         if (changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
 
-    return true;
+    return result;
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_template_vars_handler(struct engine_node *node, void *data)
 {
     struct ed_type_template_vars *tv_data =
@@ -4329,9 +4338,10 @@ lflow_output_template_vars_handler(struct engine_node *node, void *data)
 
     const char *res_name;
     bool changed;
+    enum engine_input_handler_result result = EN_HANDLED_UNCHANGED;
 
     if (!tv_data->change_tracked) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     SSET_FOR_EACH (res_name, &tv_data->deleted) {
@@ -4340,10 +4350,10 @@ lflow_output_template_vars_handler(struct engine_node *node, void *data)
                                       res_name, lflow_handle_changed_ref,
                                       l_ctx_out.objs_processed,
                                       &l_ctx_in, &l_ctx_out, &changed)) {
-            return false;
+            return EN_UNHANDLED;
         }
         if (changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
     SSET_FOR_EACH (res_name, &tv_data->updated) {
@@ -4352,10 +4362,10 @@ lflow_output_template_vars_handler(struct engine_node *node, void *data)
                                       res_name, lflow_handle_changed_ref,
                                       l_ctx_out.objs_processed,
                                       &l_ctx_in, &l_ctx_out, &changed)) {
-            return false;
+            return EN_UNHANDLED;
         }
         if (changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
     SSET_FOR_EACH (res_name, &tv_data->new) {
@@ -4364,17 +4374,17 @@ lflow_output_template_vars_handler(struct engine_node *node, void *data)
                                       res_name, lflow_handle_changed_ref,
                                       l_ctx_out.objs_processed,
                                       &l_ctx_in, &l_ctx_out, &changed)) {
-            return false;
+            return EN_UNHANDLED;
         }
         if (changed) {
-            engine_set_node_state(node, EN_UPDATED);
+            result = EN_HANDLED_UPDATED;
         }
     }
 
-    return true;
+    return result;
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_runtime_data_handler(struct engine_node *node,
                                   void *data OVS_UNUSED)
 {
@@ -4384,15 +4394,14 @@ lflow_output_runtime_data_handler(struct engine_node *node,
     /* There is no tracked data. Fall back to full recompute of
      * flow_output. */
     if (!rt_data->tracked) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     struct hmap *tracked_dp_bindings = &rt_data->tracked_dp_bindings;
     if (hmap_is_empty(tracked_dp_bindings)) {
-        if (rt_data->local_lports_changed) {
-            engine_set_node_state(node, EN_UPDATED);
-        }
-        return true;
+        return rt_data->local_lports_changed
+               ? EN_HANDLED_UPDATED
+               : EN_HANDLED_UNCHANGED;
     }
 
     struct lflow_ctx_in l_ctx_in;
@@ -4405,7 +4414,7 @@ lflow_output_runtime_data_handler(struct engine_node *node,
         if (tdp->tracked_type == TRACKED_RESOURCE_NEW) {
             if (!lflow_add_flows_for_datapath(tdp->dp, &l_ctx_in,
                                               &l_ctx_out)) {
-                return false;
+                return EN_UNHANDLED;
             }
         }
         struct shash_node *shash_node;
@@ -4414,23 +4423,22 @@ lflow_output_runtime_data_handler(struct engine_node *node,
             if (!lflow_handle_flows_for_lport(
                     lport->pb, &l_ctx_in, &l_ctx_out,
                     lport->tracked_type == TRACKED_RESOURCE_REMOVED)) {
-                return false;
+                return EN_UNHANDLED;
             }
         }
     }
 
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_lb_data_handler(struct engine_node *node, void *data)
 {
     struct ed_type_lflow_output *fo = data;
     struct ed_type_lb_data *lb_data = engine_get_input_data("lb_data", node);
 
     if (!lb_data->change_tracked) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     struct lflow_ctx_in l_ctx_in;
@@ -4442,11 +4450,10 @@ lflow_output_lb_data_handler(struct engine_node *node, void *data)
                                             &lb_data->updated,
                                             &lb_data->new);
 
-    engine_set_node_state(node, EN_UPDATED);
-    return handled;
+    return handled ? EN_HANDLED_UPDATED : EN_UNHANDLED;
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_sb_fdb_handler(struct engine_node *node, void *data)
 {
     struct ed_type_lflow_output *fo = data;
@@ -4456,11 +4463,10 @@ lflow_output_sb_fdb_handler(struct engine_node *node, void *data)
 
     bool handled = lflow_handle_changed_fdbs(&l_ctx_in, &l_ctx_out);
 
-    engine_set_node_state(node, EN_UPDATED);
-    return handled;
+    return handled ? EN_HANDLED_UPDATED : EN_UNHANDLED;
 }
 
-static bool
+static enum engine_input_handler_result
 lflow_output_sb_meter_handler(struct engine_node *node, void *data)
 {
     struct ed_type_lflow_output *fo = data;
@@ -4471,12 +4477,11 @@ lflow_output_sb_meter_handler(struct engine_node *node, void *data)
     SBREC_METER_TABLE_FOR_EACH_TRACKED (iter, meter_table) {
         if (ovn_extend_table_desired_lookup_by_name(&fo->meter_table,
                                                     iter->name)) {
-            engine_set_node_state(node, EN_UPDATED);
-            break;
+            return EN_HANDLED_UPDATED;
         }
     }
 
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
 struct ed_type_pflow_output {
@@ -4658,7 +4663,7 @@ en_pflow_output_run(struct engine_node *node, void *data)
     return EN_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 pflow_output_if_status_mgr_handler(struct engine_node *node,
                                    void *data)
 {
@@ -4674,6 +4679,7 @@ pflow_output_if_status_mgr_handler(struct engine_node *node,
     init_physical_ctx(node, rt_data, non_vif_data, &p_ctx);
 
     const struct ovsrec_interface *iface;
+    enum engine_input_handler_result result = EN_HANDLED_UNCHANGED;
     OVSREC_INTERFACE_TABLE_FOR_EACH_TRACKED (iface, if_mgr_data->iface_table) {
         const char *iface_id = smap_get(&iface->external_ids, "iface-id");
         if (!iface_id) {
@@ -4694,16 +4700,16 @@ pflow_output_if_status_mgr_handler(struct engine_node *node,
             if (!physical_handle_flows_for_lport(pb, removed, &p_ctx,
                                                  &pfo->flow_table)) {
                 destroy_physical_ctx(&p_ctx);
-                return false;
+                return EN_UNHANDLED;
             }
         }
-        engine_set_node_state(node, EN_UPDATED);
+        result = EN_HANDLED_UPDATED;
     }
     destroy_physical_ctx(&p_ctx);
-    return true;
+    return result;
 }
 
-static bool
+static enum engine_input_handler_result
 pflow_output_sb_port_binding_handler(struct engine_node *node,
                                      void *data)
 {
@@ -4726,22 +4732,21 @@ pflow_output_sb_port_binding_handler(struct engine_node *node,
         /* Trigger a full recompute if type column is updated. */
         if (sbrec_port_binding_is_updated(pb, SBREC_PORT_BINDING_COL_TYPE)) {
             destroy_physical_ctx(&p_ctx);
-            return false;
+            return EN_UNHANDLED;
         }
         bool removed = sbrec_port_binding_is_deleted(pb);
         if (!physical_handle_flows_for_lport(pb, removed, &p_ctx,
                                              &pfo->flow_table)) {
             destroy_physical_ctx(&p_ctx);
-            return false;
+            return EN_UNHANDLED;
         }
     }
 
-    engine_set_node_state(node, EN_UPDATED);
     destroy_physical_ctx(&p_ctx);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 pflow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
@@ -4756,12 +4761,11 @@ pflow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
 
     physical_handle_mc_group_changes(&p_ctx, &pfo->flow_table);
 
-    engine_set_node_state(node, EN_UPDATED);
     destroy_physical_ctx(&p_ctx);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 pflow_output_runtime_data_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
@@ -4772,12 +4776,12 @@ pflow_output_runtime_data_handler(struct engine_node *node, void *data)
     /* There is no tracked data. Fall back to full recompute of
      * pflow_output. */
     if (!rt_data->tracked) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     struct hmap *tracked_dp_bindings = &rt_data->tracked_dp_bindings;
     if (hmap_is_empty(tracked_dp_bindings)) {
-        return true;
+        return EN_HANDLED_UNCHANGED;
     }
 
     struct ed_type_pflow_output *pfo = data;
@@ -4791,7 +4795,7 @@ pflow_output_runtime_data_handler(struct engine_node *node, void *data)
             /* Fall back to full recompute when a local datapath
              * is added or deleted. */
             destroy_physical_ctx(&p_ctx);
-            return false;
+            return EN_UNHANDLED;
         }
 
         struct shash_node *shash_node;
@@ -4802,17 +4806,16 @@ pflow_output_runtime_data_handler(struct engine_node *node, void *data)
             if (!physical_handle_flows_for_lport(lport->pb, removed, &p_ctx,
                                                  &pfo->flow_table)) {
                 destroy_physical_ctx(&p_ctx);
-                return false;
+                return EN_UNHANDLED;
             }
         }
     }
 
-    engine_set_node_state(node, EN_UPDATED);
     destroy_physical_ctx(&p_ctx);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 pflow_output_ct_zones_handler(struct engine_node *node OVS_UNUSED,
                                     void *data OVS_UNUSED)
 {
@@ -4828,16 +4831,16 @@ pflow_output_ct_zones_handler(struct engine_node *node OVS_UNUSED,
      *   - pflow_output handler for the runtime_data adds the physical
      *     flows for the claimed lport.
      * */
-    return !ct_zones_data->recomputed;
+    return ct_zones_data->recomputed ? EN_UNHANDLED : EN_HANDLED_UNCHANGED;
 }
 
-static bool
+static enum engine_input_handler_result
 pflow_output_activated_ports_handler(struct engine_node *node, void *data)
 {
     struct ed_type_activated_ports *ap =
         engine_get_input_data("activated_ports", node);
     if (!ap->activated_ports) {
-        return true;
+        return EN_HANDLED_UNCHANGED;
     }
 
     struct ed_type_pflow_output *pfo = data;
@@ -4866,17 +4869,16 @@ pflow_output_activated_ports_handler(struct engine_node *node, void *data)
             if (!physical_handle_flows_for_lport(pb, false, &p_ctx,
                                                  &pfo->flow_table)) {
                 destroy_physical_ctx(&p_ctx);
-                return false;
+                return EN_UNHANDLED;
             }
             tag_port_as_activated_in_engine(pp);
         }
     }
-    engine_set_node_state(node, EN_UPDATED);
     destroy_physical_ctx(&p_ctx);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
+static enum engine_input_handler_result
 pflow_output_debug_handler(struct engine_node *node, void *data)
 {
     struct ed_type_pflow_output *pfo = data;
@@ -4887,10 +4889,9 @@ pflow_output_debug_handler(struct engine_node *node, void *data)
     if (pfo->debug.collector_set_id != debug.collector_set_id ||
         pfo->debug.obs_domain_id != debug.obs_domain_id) {
         pfo->debug = debug;
-        return false;
+        return EN_UNHANDLED;
     }
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
 static void *
@@ -4913,52 +4914,46 @@ en_controller_output_run(struct engine_node *node OVS_UNUSED,
     return EN_UPDATED;
 }
 
-static bool
-controller_output_pflow_output_handler(struct engine_node *node,
+static enum engine_input_handler_result
+controller_output_pflow_output_handler(struct engine_node *node OVS_UNUSED,
                                        void *data OVS_UNUSED)
 {
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
-controller_output_lflow_output_handler(struct engine_node *node,
+static enum engine_input_handler_result
+controller_output_lflow_output_handler(struct engine_node *node OVS_UNUSED,
                                        void *data OVS_UNUSED)
 {
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
-controller_output_mac_cache_handler(struct engine_node *node,
+static enum engine_input_handler_result
+controller_output_mac_cache_handler(struct engine_node *node OVS_UNUSED,
                                     void *data OVS_UNUSED)
 {
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
-controller_output_bfd_chassis_handler(struct engine_node *node,
+static enum engine_input_handler_result
+controller_output_bfd_chassis_handler(struct engine_node *node OVS_UNUSED,
                                     void *data OVS_UNUSED)
 {
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
-controller_output_acl_id_handler(struct engine_node *node,
+static enum engine_input_handler_result
+controller_output_acl_id_handler(struct engine_node *node OVS_UNUSED,
                                     void *data OVS_UNUSED)
 {
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
-static bool
-controller_output_route_exchange_handler(struct engine_node *node,
+static enum engine_input_handler_result
+controller_output_route_exchange_handler(struct engine_node *node OVS_UNUSED,
                                          void *data OVS_UNUSED)
 {
-    engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return EN_HANDLED_UPDATED;
 }
 
 /* Handles sbrec_chassis changes.
@@ -4967,7 +4962,7 @@ controller_output_route_exchange_handler(struct engine_node *node,
  * any flow computation.  Encap changes will also result in
  * sbrec_chassis changes, but we handle encap changes separately.
  */
-static bool
+static enum engine_input_handler_result
 pflow_lflow_output_sb_chassis_handler(struct engine_node *node,
                                       void *data OVS_UNUSED)
 {
@@ -4977,11 +4972,11 @@ pflow_lflow_output_sb_chassis_handler(struct engine_node *node,
     const struct sbrec_chassis *ch;
     SBREC_CHASSIS_TABLE_FOR_EACH_TRACKED (ch, chassis_table) {
         if (sbrec_chassis_is_deleted(ch) || sbrec_chassis_is_new(ch)) {
-            return false;
+            return EN_UNHANDLED;
         }
     }
 
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
 struct ed_type_route {
@@ -5090,7 +5085,7 @@ en_route_cleanup(void *data)
     hmap_destroy(&re_data->announce_routes);
 }
 
-static bool
+static enum engine_input_handler_result
 route_runtime_data_handler(struct engine_node *node, void *data)
 {
     struct ed_type_route *re_data = data;
@@ -5098,7 +5093,7 @@ route_runtime_data_handler(struct engine_node *node, void *data)
         engine_get_input_data("runtime_data", node);
 
     if (!rt_data->tracked) {
-        return false;
+        return EN_UNHANDLED;
     }
 
     struct tracked_datapath *t_dp;
@@ -5109,7 +5104,7 @@ route_runtime_data_handler(struct engine_node *node, void *data)
         if (re_t_dp) {
             /* XXX: Until we get I-P support for route exchange we need to
              * request recompute. */
-            return false;
+            return EN_UNHANDLED;
         }
 
         struct shash_node *shash_node;
@@ -5118,15 +5113,15 @@ route_runtime_data_handler(struct engine_node *node, void *data)
             if (route_exchange_relevant_port(lport->pb)) {
                 /* XXX: Until we get I-P support for route exchange we need to
                  * request recompute. */
-                return false;
+                return EN_UNHANDLED;
             }
         }
     }
 
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
-static bool
+static enum engine_input_handler_result
 route_sb_port_binding_data_handler(struct engine_node *node, void *data)
 {
     struct ed_type_route *re_data = data;
@@ -5161,13 +5156,13 @@ route_sb_port_binding_data_handler(struct engine_node *node, void *data)
         if (re_t_dp) {
             /* XXX: Until we get I-P support for route exchange we need to
              * request recompute. */
-            return false;
+            return EN_UNHANDLED;
         }
 
         if (route_exchange_relevant_port(sbrec_pb)) {
             /* XXX: Until we get I-P support for route exchange we need to
              * request recompute. */
-            return false;
+            return EN_UNHANDLED;
         }
 
         if (sset_contains(&re_data->tracked_ports_local,
@@ -5176,7 +5171,7 @@ route_sb_port_binding_data_handler(struct engine_node *node, void *data)
                                           &rt_data->active_tunnels,
                                           sbrec_pb)) {
                 /* The port was previously local but now it no longer is. */
-                return false;
+                return EN_UNHANDLED;
             }
         }
 
@@ -5186,16 +5181,16 @@ route_sb_port_binding_data_handler(struct engine_node *node, void *data)
                                          &rt_data->active_tunnels,
                                          sbrec_pb)) {
                 /* The port was previously remote but now we bound it. */
-                return false;
+                return EN_UNHANDLED;
             }
         }
 
     }
 
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
-static bool
+static enum engine_input_handler_result
 route_sb_advertised_route_data_handler(struct engine_node *node, void *data)
 {
     struct ed_type_route *re_data = data;
@@ -5211,10 +5206,10 @@ route_sb_advertised_route_data_handler(struct engine_node *node, void *data)
         if (re_t_dp) {
             /* XXX: Until we get I-P support for route exchange we need to
              * request recompute. */
-            return false;
+            return EN_UNHANDLED;
         }
     }
-    return true;
+    return EN_HANDLED_UNCHANGED;
 }
 
 struct ed_type_route_exchange {
