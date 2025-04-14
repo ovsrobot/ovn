@@ -496,4 +496,10 @@ const struct sbrec_port_binding *lport_lookup_by_name(
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
     const char *name);
 
+void mac_binding_add_to_sb(
+    struct ovsdb_idl_txn *ovnsb_idl_txn,
+    struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
+    const char *logical_port, const struct sbrec_datapath_binding *dp,
+    struct eth_addr ea, const char *ip, bool update_only);
+
 #endif /* OVN_UTIL_H */
