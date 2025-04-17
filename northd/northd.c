@@ -3615,8 +3615,9 @@ static struct service_monitor_info *
 create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
                           struct hmap *monitor_map,
                           const char *ip, const char *logical_port,
-                          uint16_t service_port, const char *protocol,
-                          const char *chassis_name)
+                          uint16_t service_port, bool local_backend,
+                          const char *protocol, const char *chassis_name,
+                          const char *az_name)
 {
     struct service_monitor_info *mon_info =
         get_service_mon(monitor_map, ip, logical_port, service_port,
@@ -3642,9 +3643,18 @@ create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
     sbrec_service_monitor_set_port(sbrec_mon, service_port);
     sbrec_service_monitor_set_logical_port(sbrec_mon, logical_port);
     sbrec_service_monitor_set_protocol(sbrec_mon, protocol);
+    sbrec_service_monitor_set_local_backend(sbrec_mon, local_backend);
     if (chassis_name) {
         sbrec_service_monitor_set_chassis_name(sbrec_mon, chassis_name);
     }
+
+    if (az_name) {
+        struct smap options = SMAP_INITIALIZER(&options);
+        smap_add(&options, "az-name", az_name);
+        sbrec_service_monitor_set_external_ids(sbrec_mon, &options);
+        smap_destroy(&options);
+    }
+
     mon_info = xzalloc(sizeof *mon_info);
     mon_info->sbrec_mon = sbrec_mon;
     hmap_insert(monitor_map, &mon_info->hmap_node, hash);
@@ -3652,12 +3662,12 @@ create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
 }
 
 static void
-ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
-                  const struct ovn_northd_lb *lb,
-                  const char *svc_monitor_mac,
-                  const struct eth_addr *svc_monitor_mac_ea,
-                  struct hmap *monitor_map, struct hmap *ls_ports,
-                  struct sset *svc_monitor_lsps)
+ovn_lb_svc_create_local(struct ovsdb_idl_txn *ovnsb_txn,
+                        const struct ovn_northd_lb *lb,
+                        const char *svc_monitor_mac,
+                        const struct eth_addr *svc_monitor_mac_ea,
+                        struct hmap *monitor_map, struct hmap *ls_ports,
+                        struct sset *svc_monitor_lsps)
 {
     if (lb->template) {
         return;
@@ -3680,7 +3690,8 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
             struct ovn_port *op = ovn_port_find(ls_ports,
                                                 backend_nb->logical_port);
 
-            if (!op || !lsp_is_enabled(op->nbsp)) {
+            if (backend_nb->local_backend &&
+                (!op || !lsp_is_enabled(op->nbsp))) {
                 continue;
             }
 
@@ -3690,7 +3701,7 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
             }
 
             const char *chassis_name = NULL;
-            if (op->sb->chassis) {
+            if (backend_nb->local_backend && op->sb->chassis) {
                 chassis_name = op->sb->chassis->name;
             }
 
@@ -3699,8 +3710,9 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                                           backend->ip_str,
                                           backend_nb->logical_port,
                                           backend->port,
-                                          protocol,
-                                          chassis_name);
+                                          backend_nb->local_backend,
+                                          protocol, chassis_name,
+                                          backend_nb->az_name);
             ovs_assert(mon_info);
             sbrec_service_monitor_set_options(
                 mon_info->sbrec_mon, &lb_vip_nb->lb_health_check->options);
@@ -3720,11 +3732,13 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                     backend_nb->svc_mon_src_ip);
             }
 
-            if ((!op->sb->n_up || !op->sb->up[0])
-                && mon_info->sbrec_mon->status
-                && !strcmp(mon_info->sbrec_mon->status, "online")) {
-                sbrec_service_monitor_set_status(mon_info->sbrec_mon,
-                                                 "offline");
+            if (backend_nb->local_backend) {
+                if ((!op->sb->n_up || !op->sb->up[0])
+                    && mon_info->sbrec_mon->status
+                    && !strcmp(mon_info->sbrec_mon->status, "online")) {
+                    sbrec_service_monitor_set_status(mon_info->sbrec_mon,
+                                                     "offline");
+                }
             }
 
             mon_info->required = true;
@@ -3940,20 +3954,22 @@ build_lb_svcs(
     const struct sbrec_service_monitor *sbrec_mon;
     SBREC_SERVICE_MONITOR_TABLE_FOR_EACH (sbrec_mon,
                             sbrec_service_monitor_table) {
-        uint32_t hash = sbrec_mon->port;
-        hash = hash_string(sbrec_mon->ip, hash);
-        hash = hash_string(sbrec_mon->logical_port, hash);
-        struct service_monitor_info *mon_info = xzalloc(sizeof *mon_info);
-        mon_info->sbrec_mon = sbrec_mon;
-        mon_info->required = false;
-        hmap_insert(svc_monitor_map, &mon_info->hmap_node, hash);
+        if (!sbrec_mon->propogated) {
+            uint32_t hash = sbrec_mon->port;
+            hash = hash_string(sbrec_mon->ip, hash);
+            hash = hash_string(sbrec_mon->logical_port, hash);
+            struct service_monitor_info *mon_info = xzalloc(sizeof *mon_info);
+            mon_info->sbrec_mon = sbrec_mon;
+            mon_info->required = false;
+            hmap_insert(svc_monitor_map, &mon_info->hmap_node, hash);
+        }
     }
 
     struct ovn_lb_datapaths *lb_dps;
     HMAP_FOR_EACH (lb_dps, hmap_node, lb_dps_map) {
-        ovn_lb_svc_create(ovnsb_txn, lb_dps->lb, svc_monitor_mac,
-                          svc_monitor_mac_ea, svc_monitor_map, ls_ports,
-                          svc_monitor_lsps);
+        ovn_lb_svc_create_local(ovnsb_txn, lb_dps->lb, svc_monitor_mac,
+                                svc_monitor_mac_ea, svc_monitor_map, ls_ports,
+                                svc_monitor_lsps);
     }
 
     struct service_monitor_info *mon_info;
@@ -10329,6 +10345,50 @@ build_lswitch_ip_unicast_lookup_for_nats(
                                     &op->nbsp->header_,
                                     lflow_ref);
         }
+    }
+}
+
+static void
+ovn_lb_svc_create_propagated(const struct sbrec_service_monitor *sbrec_mon,
+                             const struct eth_addr *svc_monitor_mac_ea,
+                             const char *svc_monitor_mac)
+{
+    struct eth_addr ea;
+    if (!sbrec_mon->src_mac ||
+        !eth_addr_from_string(sbrec_mon->src_mac, &ea) ||
+        !eth_addr_equals(ea, *svc_monitor_mac_ea)) {
+        sbrec_service_monitor_set_src_mac(sbrec_mon,
+                                          svc_monitor_mac);
+    }
+
+    /* TODO: set port to svc_monitor_lsps */
+}
+
+static void
+build_prgp_svc(struct lflow_input *input_data,
+               const struct eth_addr *svc_monitor_mac_ea,
+               const char *svc_monitor_mac,
+               const struct hmap *prgp_svc)
+{
+
+    const struct sbrec_service_monitor *sbrec_mon;
+    SBREC_SERVICE_MONITOR_TABLE_FOR_EACH (sbrec_mon,
+                                          input_data->sbrec_svc_table) {
+        if (sbrec_mon->propogated) {
+            uint32_t hash = sbrec_mon->port;
+            hash = hash_string(sbrec_mon->ip, hash);
+            hash = hash_string(sbrec_mon->logical_port, hash);
+            struct service_monitor_info *mon_info = xzalloc(sizeof *mon_info);
+            mon_info->sbrec_mon = sbrec_mon;
+            mon_info->required = false;
+            hmap_insert(prgp_svc, &mon_info->hmap_node, hash);
+        }
+    }
+
+    struct service_monitor_info *mon_info;
+    HMAP_FOR_EACH (mon_info, hmap_node, prgp_svc) {
+        ovn_lb_svc_create_propagated(mon_info->sbrec_mon, svc_monitor_mac_ea,
+                                     svc_monitor_mac);
     }
 }
 
@@ -17452,6 +17512,7 @@ struct lswitch_flow_build_info {
     const struct shash *meter_groups;
     const struct hmap *lb_dps_map;
     const struct hmap *svc_monitor_map;
+    const struct hmap *prgp_svc;
     const struct sset *bfd_ports;
     const struct chassis_features *features;
     char *svc_check_match;
@@ -17819,6 +17880,7 @@ build_lswitch_and_lrouter_flows(
     const struct shash *meter_groups,
     const struct hmap *lb_dps_map,
     const struct hmap *svc_monitor_map,
+    const struct hmap *prgp_svc,
     const struct sset *bfd_ports,
     const struct chassis_features *features,
     const char *svc_monitor_mac,
@@ -17859,6 +17921,7 @@ build_lswitch_and_lrouter_flows(
             lsiv[index].svc_check_match = svc_check_match;
             lsiv[index].thread_lflow_counter = 0;
             lsiv[index].svc_monitor_mac = svc_monitor_mac;
+            lsiv[index].prgp_svc = prgp_svc;
             lsiv[index].sampling_apps = sampling_apps;
             lsiv[index].route_data = route_data;
             lsiv[index].route_tables = route_tables;
@@ -17902,6 +17965,7 @@ build_lswitch_and_lrouter_flows(
             .features = features,
             .svc_check_match = svc_check_match,
             .svc_monitor_mac = svc_monitor_mac,
+            .prgp_svc = prgp_svc,
             .sampling_apps = sampling_apps,
             .route_data = route_data,
             .route_tables = route_tables,
@@ -18067,6 +18131,7 @@ void build_lflows(struct ovsdb_idl_txn *ovnsb_txn,
                                     input_data->meter_groups,
                                     input_data->lb_datapaths_map,
                                     input_data->svc_monitor_map,
+                                    input_data->prgp_svc,
                                     input_data->bfd_ports,
                                     input_data->features,
                                     input_data->svc_monitor_mac,
@@ -18915,7 +18980,12 @@ northd_destroy(struct northd_data *data)
     HMAP_FOR_EACH_POP (mon_info, hmap_node, &data->svc_monitor_map) {
         free(mon_info);
     }
-    hmap_destroy(&data->svc_monitor_map);
+    hmap_destroy(&data->prgp_svc);
+
+    HMAP_FOR_EACH_POP (mon_info, hmap_node, &data->prgp_svc) {
+        free(mon_info);
+    }
+    hmap_destroy(&data->prgp_svc);
 
     /* XXX Having to explicitly clean up macam here
      * is a bit strange. We don't explicitly initialize

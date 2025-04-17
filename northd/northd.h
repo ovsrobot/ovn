@@ -169,6 +169,7 @@ struct northd_data {
     struct ovs_list lr_list;
     struct sset svc_monitor_lsps;
     struct hmap svc_monitor_map;
+    struct hmap prgp_svc;
 
     /* Change tracking data. */
     struct northd_tracked_data trk_data;
@@ -218,6 +219,7 @@ struct lflow_input {
     const struct sbrec_logical_flow_table *sbrec_logical_flow_table;
     const struct sbrec_logical_dp_group_table *sbrec_logical_dp_group_table;
     const struct sbrec_acl_id_table *sbrec_acl_id_table;
+    const struct sbrec_service_monitor_table *sbrec_svc_table;
 
     /* Indexes */
     struct ovsdb_idl_index *sbrec_mcast_group_by_name_dp;
@@ -234,8 +236,10 @@ struct lflow_input {
     const struct sset *bfd_ports;
     const struct chassis_features *features;
     const struct hmap *svc_monitor_map;
+    const struct hmap *prgp_svc;
     bool ovn_internal_version_changed;
     const char *svc_monitor_mac;
+    struct eth_addr svc_monitor_mac_ea;
     const struct sampling_app_table *sampling_apps;
     struct group_ecmp_route_data *route_data;
     struct hmap *route_policies;
