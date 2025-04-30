@@ -1292,6 +1292,8 @@ ovn_port_create(struct hmap *ports, const char *key,
     op->lflow_ref = lflow_ref_create();
     op->stateful_lflow_ref = lflow_ref_create();
 
+    ovs_list_init(&op->list);
+
     return op;
 }
 
@@ -4679,6 +4681,7 @@ static bool
 ls_port_init(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
              struct ovn_datapath *od,
              const struct sbrec_port_binding *sb,
+             bool *destroyed,
              const struct sbrec_mirror_table *sbrec_mirror_table,
              struct ovsdb_idl_index *sbrec_chassis_by_name,
              struct ovsdb_idl_index *sbrec_chassis_by_hostname)
@@ -4697,6 +4700,9 @@ ls_port_init(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
     }
     /* Assign new tunnel ids where needed. */
     if (!ovn_port_allocate_key(op)) {
+        if (destroyed) {
+            *destroyed = true;
+        }
         return false;
     }
     /* Create new binding, if needed. */
@@ -4726,9 +4732,12 @@ ls_port_create(struct ovsdb_idl_txn *ovnsb_txn, struct hmap *ls_ports,
     struct ovn_port *op = ovn_port_create(ls_ports, key, nbsp, NULL,
                                           NULL);
     hmap_insert(&od->ports, &op->dp_node, hmap_node_hash(&op->key_node));
-    if (!ls_port_init(op, ovnsb_txn, od, NULL, sbrec_mirror_table,
+    bool destroyed = false;
+    if (!ls_port_init(op, ovnsb_txn, od, NULL,  &destroyed, sbrec_mirror_table,
                       sbrec_chassis_by_name, sbrec_chassis_by_hostname)) {
-        ovn_port_destroy(ls_ports, op);
+        if (!destroyed) {
+            ovn_port_destroy(ls_ports, op);
+        }
         return NULL;
     }
 
@@ -4748,7 +4757,7 @@ ls_port_reinit(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
     op->sb = sb;
     ovn_port_set_nb(op, nbsp, NULL);
     op->primary_port = op->cr_port = NULL;
-    return ls_port_init(op, ovnsb_txn, od, sb, sbrec_mirror_table,
+    return ls_port_init(op, ovnsb_txn, od, sb, NULL, sbrec_mirror_table,
                         sbrec_chassis_by_name, sbrec_chassis_by_hostname);
 }
 
