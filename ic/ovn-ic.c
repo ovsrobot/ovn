@@ -939,14 +939,17 @@ struct ic_route_info {
 
     const struct nbrec_logical_router *nb_lr;
 
-    /* Either nb_route or nb_lrp is set and the other one must be NULL.
+    /* One of nb_route, nb_lrp, nb_lb is set and the other ones must be NULL.
      * - For a route that is learned from IC-SB, or a static route that is
      *   generated from a route that is configured in NB, the "nb_route"
      *   is set.
      * - For a route that is generated from a direct-connect subnet of
-     *   a logical router port, the "nb_lrp" is set. */
+     *   a logical router port, the "nb_lrp" is set.
+     * - For a route that is generated from a load-balancer vip of
+     *   a logical router, the "nb_lb" is set. */
     const struct nbrec_logical_router_static_route *nb_route;
     const struct nbrec_logical_router_port *nb_lrp;
+    const struct nbrec_load_balancer *nb_lb;
 };
 
 static uint32_t
@@ -1163,9 +1166,10 @@ add_to_routes_ad(struct hmap *routes_ad, const struct in6_addr prefix,
                  const struct nbrec_logical_router_port *nb_lrp,
                  const struct nbrec_logical_router_static_route *nb_route,
                  const struct nbrec_logical_router *nb_lr,
+                 const struct nbrec_load_balancer *nb_lb,
                  const char *route_tag)
 {
-    ovs_assert(nb_route || nb_lrp);
+    ovs_assert(nb_route || nb_lrp || nb_lb);
 
     if (route_table == NULL) {
         route_table = "";
@@ -1184,6 +1188,7 @@ add_to_routes_ad(struct hmap *routes_ad, const struct in6_addr prefix,
         ic_route->route_table = route_table;
         ic_route->nb_lrp = nb_lrp;
         ic_route->nb_lr = nb_lr;
+        ic_route->nb_lb = nb_lb;
         ic_route->route_tag = route_tag;
         hmap_insert(routes_ad, &ic_route->node, hash);
     } else {
@@ -1193,6 +1198,9 @@ add_to_routes_ad(struct hmap *routes_ad, const struct in6_addr prefix,
         if (nb_route) {
             VLOG_WARN_RL(&rl, msg_fmt, origin, "route",
                          UUID_ARGS(&nb_route->header_.uuid));
+        } else if (nb_lb) {
+            VLOG_WARN_RL(&rl, msg_fmt, origin, "loadbalancer",
+                         UUID_ARGS(&nb_lb->header_.uuid));
         } else {
             VLOG_WARN_RL(&rl, msg_fmt, origin, "lrp",
                          UUID_ARGS(&nb_lrp->header_.uuid));
@@ -1248,7 +1256,8 @@ add_static_to_routes_ad(
     }
 
     add_to_routes_ad(routes_ad, prefix, plen, nexthop, ROUTE_ORIGIN_STATIC,
-                     nb_route->route_table, NULL, nb_route, nb_lr, route_tag);
+                     nb_route->route_table, NULL, nb_route, nb_lr,
+                     NULL, route_tag);
 }
 
 static void
@@ -1296,7 +1305,68 @@ add_network_to_routes_ad(struct hmap *routes_ad, const char *network,
 
     /* directly-connected routes go to <main> route table */
     add_to_routes_ad(routes_ad, prefix, plen, nexthop, ROUTE_ORIGIN_CONNECTED,
-                     NULL, nb_lrp, NULL, nb_lr, route_tag);
+                     NULL, nb_lrp, NULL, nb_lr, NULL, route_tag);
+}
+
+static void
+add_lb_vip_to_routes_ad(
+    struct hmap *routes_ad,
+    const char *vip_key,
+    const struct nbrec_load_balancer *nb_lb,
+    const struct lport_addresses *nexthop_addresses,
+    const struct smap *nb_options,
+    const struct nbrec_logical_router *nb_lr,
+    const char *route_tag)
+{
+    char *vip_str = NULL;
+    struct in6_addr vip_ip, nexthop;
+    uint16_t vip_port;
+    int addr_family;
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+
+    if (!ip_address_and_port_from_lb_key(vip_key, &vip_str, &vip_ip,
+                                         &vip_port, &addr_family)) {
+        VLOG_WARN_RL(&rl, "Route ad: Parsing failed for lb vip %s", vip_key);
+        return;
+    }
+    if (vip_str == NULL) {
+        return;
+    }
+    unsigned int plen = (addr_family == AF_INET) ? 32 : 128;
+    if (!route_need_advertise(NULL, &vip_ip, plen, nb_options)) {
+        VLOG_DBG("Route ad: skip lb vip %s.", vip_key);
+        free(vip_str);
+        return;
+    }
+    if (!get_nexthop_from_lport_addresses(IN6_IS_ADDR_V4MAPPED(&vip_ip),
+                                          nexthop_addresses,
+                                          &nexthop)) {
+        VLOG_WARN_RL(&rl, "Route ad: failed to get nexthop for lb vip");
+        free(vip_str);
+        return;
+    }
+
+    if (VLOG_IS_DBG_ENABLED()) {
+        struct ds msg = DS_EMPTY_INITIALIZER;
+
+        ds_put_format(&msg, "Adding lb vip route to <main> routing "
+                      "table: %s, nexthop ", vip_str);
+
+        if (IN6_IS_ADDR_V4MAPPED(&nexthop)) {
+            ds_put_format(&msg, IP_FMT,
+                          IP_ARGS(in6_addr_get_mapped_ipv4(&nexthop)));
+        } else {
+            ipv6_format_addr(&nexthop, &msg);
+        }
+
+        VLOG_DBG("%s", ds_cstr(&msg));
+        ds_destroy(&msg);
+    }
+
+    /* Lb vip routes go to <main> route table */
+    add_to_routes_ad(routes_ad, vip_ip, plen, nexthop, ROUTE_ORIGIN_LB,
+                     NULL, NULL, NULL, nb_lr, nb_lb, route_tag);
+    free(vip_str);
 }
 
 static bool
@@ -1316,6 +1386,44 @@ route_has_local_gw(const struct nbrec_logical_router *lr,
 }
 
 static bool
+route_matches_local_lb(const struct nbrec_load_balancer *nb_lb,
+                       const char *ip_prefix)
+{
+    char *vip_str = NULL;
+    struct in6_addr vip_ip;
+    uint16_t vip_port;
+    int addr_family;
+    unsigned int plen;
+    char vip_cidr[50];
+    struct smap_node *node;
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+
+    SMAP_FOR_EACH (node, &nb_lb->vips) {
+        if (node->key) {
+            if (ip_address_and_port_from_lb_key(node->key, &vip_str,
+                                                &vip_ip, &vip_port,
+                                                &addr_family)) {
+                if (vip_str) {
+                    plen = (addr_family == AF_INET) ? 32 : 128;
+                    snprintf(vip_cidr, 50, "%s/%d", vip_str, plen);
+                    if (!strcmp(vip_cidr, ip_prefix)) {
+                       free(vip_str);
+                       return true;
+                    }
+                }
+            } else {
+                VLOG_WARN_RL(
+                    &rl,
+                    "Route learn: Parsing failed for local lb vip %s",
+                    node->key);
+            }
+        }
+    }
+    free(vip_str);
+    return false;
+}
+
+static bool
 route_need_learn(const struct nbrec_logical_router *lr,
                  const struct icsbrec_route *isb_route,
                  struct in6_addr *prefix, unsigned int plen,
@@ -1327,6 +1435,11 @@ route_need_learn(const struct nbrec_logical_router *lr,
 
     if (plen == 0 &&
         !smap_get_bool(nb_options, "ic-route-learn-default", false)) {
+        return false;
+    }
+
+    if (!strcmp(isb_route->origin, ROUTE_ORIGIN_LB) &&
+        !smap_get_bool(nb_options, "ic-route-learn-lb", false)) {
         return false;
     }
 
@@ -1342,6 +1455,29 @@ route_need_learn(const struct nbrec_logical_router *lr,
         VLOG_DBG("Skip learning %s (rtb:%s) route, as we've got one with "
                  "local GW", isb_route->ip_prefix, isb_route->route_table);
         return false;
+    }
+
+    for (int i = 0; i < lr->n_load_balancer; i++) {
+        if (route_matches_local_lb(lr->load_balancer[i],
+                                   isb_route->ip_prefix)) {
+            VLOG_DBG("Skip learning %s (rtb:%s) route, as we've got local"
+                     " LB with matching VIP", isb_route->ip_prefix,
+                     isb_route->route_table);
+            return false;
+        }
+    }
+    for (int i = 0; i < lr->n_load_balancer_group; i++) {
+        const struct nbrec_load_balancer_group *nb_lbg;
+        nb_lbg = lr->load_balancer_group[i];
+        for (int j = 0; j < nb_lbg->n_load_balancer; j++) {
+            if (route_matches_local_lb(nb_lbg->load_balancer[j],
+                                       isb_route->ip_prefix)) {
+                VLOG_DBG("Skip learning %s (rtb:%s) route, as we've got local"
+                         " LB with matching VIP", isb_route->ip_prefix,
+                         isb_route->route_table);
+                return false;
+            }
+        }
     }
 
     return true;
@@ -1535,8 +1671,13 @@ ad_route_sync_external_ids(const struct ic_route_info *route_adv,
     const char *route_tag;
     smap_get_uuid(&isb_route->external_ids, "nb-id", &isb_ext_id);
     smap_get_uuid(&isb_route->external_ids, "lr-id", &isb_ext_lr_id);
-    nb_id = route_adv->nb_route ? route_adv->nb_route->header_.uuid
-                               : route_adv->nb_lrp->header_.uuid;
+    if (route_adv->nb_lb) {
+        nb_id = route_adv->nb_lb->header_.uuid;
+    } else {
+        nb_id = route_adv->nb_route ? route_adv->nb_route->header_.uuid
+                                   : route_adv->nb_lrp->header_.uuid;
+    }
+
     lr_id = route_adv->nb_lr->header_.uuid;
     if (!uuid_equals(&isb_ext_id, &nb_id)) {
         char *uuid_s = xasprintf(UUID_FMT, UUID_ARGS(&nb_id));
@@ -1694,6 +1835,40 @@ build_ts_routes_to_adv(struct ic_context *ctx,
             /* The router port of the TS port is ignored. */
             VLOG_DBG("Skip advertising direct route of lrp %s (TS port)",
                      lrp->name);
+        }
+    }
+
+    /* Check loadbalancers associated with the LR */
+    if (smap_get_bool(&nb_global->options, "ic-route-adv-lb", false)) {
+        for (int i = 0; i < lr->n_load_balancer; i++) {
+            const struct nbrec_load_balancer *nb_lb = lr->load_balancer[i];
+            struct smap_node *node;
+            SMAP_FOR_EACH (node, &nb_lb->vips) {
+                if (node->key) {
+                    add_lb_vip_to_routes_ad(routes_ad, node->key, nb_lb,
+                                            ts_port_addrs,
+                                            &nb_global->options,
+                                            lr, route_tag);
+                }
+            }
+        }
+
+        for (int i = 0; i < lr->n_load_balancer_group; i++) {
+            const struct nbrec_load_balancer_group *nb_lbg;
+            nb_lbg = lr->load_balancer_group[i];
+            for (int j = 0; j < nb_lbg->n_load_balancer; j++) {
+                const struct nbrec_load_balancer *nb_lb;
+                nb_lb = nb_lbg->load_balancer[j];
+                struct smap_node *node;
+                SMAP_FOR_EACH (node, &nb_lb->vips) {
+                    if (node->key) {
+                        add_lb_vip_to_routes_ad(routes_ad, node->key, nb_lb,
+                                                ts_port_addrs,
+                                                &nb_global->options,
+                                                lr, route_tag);
+                    }
+                }
+            }
         }
     }
 }
@@ -2213,6 +2388,10 @@ main(int argc, char *argv[])
                          &nbrec_logical_router_col_options);
     ovsdb_idl_add_column(ovnnb_idl_loop.idl,
                          &nbrec_logical_router_col_external_ids);
+    ovsdb_idl_add_column(ovnnb_idl_loop.idl,
+                         &nbrec_logical_router_col_load_balancer);
+    ovsdb_idl_add_column(ovnnb_idl_loop.idl,
+                         &nbrec_logical_router_col_load_balancer_group);
 
     ovsdb_idl_add_table(ovnnb_idl_loop.idl, &nbrec_table_logical_router_port);
     ovsdb_idl_add_column(ovnnb_idl_loop.idl,
@@ -2251,6 +2430,16 @@ main(int argc, char *argv[])
                          &nbrec_logical_switch_port_col_enabled);
     ovsdb_idl_add_column(ovnnb_idl_loop.idl,
                          &nbrec_logical_switch_port_col_external_ids);
+
+    ovsdb_idl_add_table(ovnnb_idl_loop.idl,
+                        &nbrec_table_load_balancer);
+    ovsdb_idl_add_column(ovnnb_idl_loop.idl,
+                         &nbrec_load_balancer_col_vips);
+
+    ovsdb_idl_add_table(ovnnb_idl_loop.idl,
+                        &nbrec_table_load_balancer_group);
+    ovsdb_idl_add_column(ovnnb_idl_loop.idl,
+                         &nbrec_load_balancer_group_col_load_balancer);
 
     /* ovn-sb db. */
     struct ovsdb_idl_loop ovnsb_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(
