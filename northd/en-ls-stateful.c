@@ -73,12 +73,11 @@ static void ls_stateful_record_reinit(
     const struct ls_port_group *,
     const struct ls_port_group_table *);
 static bool ls_has_lb_vip(const struct ovn_datapath *);
-static void ls_stateful_record_set_acl_flags(
+static void ls_stateful_record_set_acls(
     struct ls_stateful_record *, const struct ovn_datapath *,
     const struct ls_port_group *, const struct ls_port_group_table *);
-static bool ls_stateful_record_set_acl_flags_(struct ls_stateful_record *,
-                                              struct nbrec_acl **,
-                                              size_t n_acls);
+static void ls_stateful_record_set_acls_(struct ls_stateful_record *,
+                                         struct nbrec_acl **, size_t n_acls);
 static struct ls_stateful_input ls_stateful_get_input_data(
     struct engine_node *);
 
@@ -235,6 +234,43 @@ ls_stateful_port_group_handler(struct engine_node *node, void *data_)
     return EN_HANDLED_UNCHANGED;
 }
 
+enum engine_input_handler_result
+ls_stateful_acl_handler(struct engine_node *node, void *data_)
+{
+    struct ed_type_ls_stateful *data = data_;
+    const struct nbrec_acl_table *nbrec_acl_table =
+        EN_OVSDB_GET(engine_get_input("NB_acl", node));
+
+    const struct nbrec_acl *acl;
+    NBREC_ACL_TABLE_FOR_EACH_TRACKED (acl, nbrec_acl_table) {
+        /* The creation and deletion is handled in relation to LS/PG rather
+         * than the ACL itself. */
+        if (nbrec_acl_is_new(acl) || nbrec_acl_is_deleted(acl)) {
+            continue;
+        }
+
+        /* Meter changes are handled separately in the en_sync_meters node. */
+        if (nbrec_acl_is_updated(acl, NBREC_ACL_COL_LOG) ||
+            nbrec_acl_is_updated(acl, NBREC_ACL_COL_METER)) {
+            continue;
+        }
+
+        struct ls_stateful_record *ls_stateful_rec;
+        LS_STATEFUL_TABLE_FOR_EACH (ls_stateful_rec, &data->table) {
+            if (uuidset_contains(&ls_stateful_rec->related_acls,
+                                 &acl->header_.uuid)) {
+                hmapx_add(&data->trk_data.crupdated, ls_stateful_rec);
+            }
+        }
+    }
+
+    if (ls_stateful_has_tracked_data(&data->trk_data)) {
+        return EN_HANDLED_UPDATED;
+    }
+
+    return EN_HANDLED_UNCHANGED;
+}
+
 /* static functions. */
 static void
 ls_stateful_table_init(struct ls_stateful_table *table)
@@ -295,6 +331,7 @@ ls_stateful_record_create(struct ls_stateful_table *table,
         xzalloc(sizeof *ls_stateful_rec);
     ls_stateful_rec->ls_index = od->index;
     ls_stateful_rec->nbs_uuid = od->nbs->header_.uuid;
+    uuidset_init(&ls_stateful_rec->related_acls);
     ls_stateful_record_init(ls_stateful_rec, od, NULL, ls_pgs);
     ls_stateful_rec->lflow_ref = lflow_ref_create();
 
@@ -307,6 +344,7 @@ ls_stateful_record_create(struct ls_stateful_table *table,
 static void
 ls_stateful_record_destroy(struct ls_stateful_record *ls_stateful_rec)
 {
+    uuidset_destroy(&ls_stateful_rec->related_acls);
     lflow_ref_destroy(ls_stateful_rec->lflow_ref);
     free(ls_stateful_rec);
 }
@@ -318,7 +356,7 @@ ls_stateful_record_init(struct ls_stateful_record *ls_stateful_rec,
                       const struct ls_port_group_table *ls_pgs)
 {
     ls_stateful_rec->has_lb_vip = ls_has_lb_vip(od);
-    ls_stateful_record_set_acl_flags(ls_stateful_rec, od, ls_pg, ls_pgs);
+    ls_stateful_record_set_acls(ls_stateful_rec, od, ls_pg, ls_pgs);
 }
 
 static void
@@ -365,20 +403,19 @@ ls_has_lb_vip(const struct ovn_datapath *od)
 }
 
 static void
-ls_stateful_record_set_acl_flags(struct ls_stateful_record *ls_stateful_rec,
-                                 const struct ovn_datapath *od,
-                                 const struct ls_port_group *ls_pg,
-                                 const struct ls_port_group_table *ls_pgs)
+ls_stateful_record_set_acls(struct ls_stateful_record *ls_stateful_rec,
+                            const struct ovn_datapath *od,
+                            const struct ls_port_group *ls_pg,
+                            const struct ls_port_group_table *ls_pgs)
 {
     ls_stateful_rec->has_stateful_acl = false;
     memset(&ls_stateful_rec->max_acl_tier, 0,
            sizeof ls_stateful_rec->max_acl_tier);
     ls_stateful_rec->has_acls = false;
+    uuidset_clear(&ls_stateful_rec->related_acls);
 
-    if (ls_stateful_record_set_acl_flags_(ls_stateful_rec, od->nbs->acls,
-                                          od->nbs->n_acls)) {
-        return;
-    }
+    ls_stateful_record_set_acls_(ls_stateful_rec, od->nbs->acls,
+                                 od->nbs->n_acls);
 
     if (!ls_pg) {
         ls_pg = ls_port_group_table_find(ls_pgs, od->nbs);
@@ -390,11 +427,8 @@ ls_stateful_record_set_acl_flags(struct ls_stateful_record *ls_stateful_rec,
 
     const struct ls_port_group_record *ls_pg_rec;
     HMAP_FOR_EACH (ls_pg_rec, key_node, &ls_pg->nb_pgs) {
-        if (ls_stateful_record_set_acl_flags_(ls_stateful_rec,
-                                              ls_pg_rec->nb_pg->acls,
-                                              ls_pg_rec->nb_pg->n_acls)) {
-            return;
-        }
+        ls_stateful_record_set_acls_(ls_stateful_rec, ls_pg_rec->nb_pg->acls,
+                                     ls_pg_rec->nb_pg->n_acls);
     }
 }
 
@@ -421,46 +455,24 @@ update_ls_max_acl_tier(struct ls_stateful_record *ls_stateful_rec,
     *tier = MAX(*tier, acl->tier);
 }
 
-static bool
-ls_acl_tiers_are_maxed_out(struct acl_tier *acl_tier,
-                           uint64_t max_allowed_acl_tier)
+static void
+ls_stateful_record_set_acls_(struct ls_stateful_record *ls_stateful_rec,
+                             struct nbrec_acl **acls, size_t n_acls)
 {
-    return acl_tier->ingress_post_lb == max_allowed_acl_tier &&
-           acl_tier->ingress_pre_lb == max_allowed_acl_tier &&
-           acl_tier->egress == max_allowed_acl_tier;
-}
-
-static bool
-ls_stateful_record_set_acl_flags_(struct ls_stateful_record *ls_stateful_rec,
-                                  struct nbrec_acl **acls,
-                                  size_t n_acls)
-{
-    /* A true return indicates that there are no possible ACL flags
-     * left to set on ls_stateful record. A false return indicates that
-     * further ACLs should be explored in case more flags need to be
-     * set on ls_stateful record.
-     */
     if (!n_acls) {
-        return false;
+        return;
     }
 
     ls_stateful_rec->has_acls = true;
     for (size_t i = 0; i < n_acls; i++) {
         const struct nbrec_acl *acl = acls[i];
         update_ls_max_acl_tier(ls_stateful_rec, acl);
+        uuidset_insert(&ls_stateful_rec->related_acls, &acl->header_.uuid);
         if (!ls_stateful_rec->has_stateful_acl
                 && !strcmp(acl->action, "allow-related")) {
             ls_stateful_rec->has_stateful_acl = true;
         }
-        if (ls_stateful_rec->has_stateful_acl &&
-            ls_acl_tiers_are_maxed_out(
-                &ls_stateful_rec->max_acl_tier,
-                nbrec_acl_col_tier.type.key.integer.max)) {
-            return true;
-        }
     }
-
-    return false;
 }
 
 static struct ls_stateful_input
