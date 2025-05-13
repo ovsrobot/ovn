@@ -172,6 +172,15 @@ main(int argc, char *argv[])
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_port_binding_col_type);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_port_binding_col_up);
 
+    /* Listen for Mac_Binding changes, we use this table to create tunnels
+     * for macs learned from other VTEPs */
+    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_mac_binding);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_mac);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_ip);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                         &sbrec_mac_binding_col_logical_port);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_datapath);
+
     ovsdb_idl_set_leader_only(ovnsb_idl_loop.idl, false);
     ovsdb_idl_get_initial_snapshot(ovnsb_idl_loop.idl);
 
