@@ -265,6 +265,11 @@ struct engine_node {
      * engine 'data'. It may be NULL. */
     void (*clear_tracked_data)(void *tracked_data);
 
+    /* Method used to dump info about node input compute failues. It may be
+     * NULL.
+     */
+    void (*dump_compute_failure_info)(struct engine_node *);
+
     /* Engine stats. */
     struct engine_stats stats;
 };
@@ -422,6 +427,9 @@ void engine_ovsdb_node_add_index(struct engine_node *, const char *name,
 #define IS_VALID(NAME) \
     .is_valid = en_##NAME##_is_valid
 
+#define COMPUTE_FAIL_INFO(NAME) \
+        .dump_compute_failure_info = en_##NAME##_compute_failure_info,
+
 #define ENGINE_NODE2(NAME, ARG1) \
     ENGINE_NODE_DEF_START(NAME, #NAME) \
     ARG1(NAME), \
@@ -460,6 +468,40 @@ static void *en_##DB_NAME##_##TBL_NAME##_init( \
 } \
 static void en_##DB_NAME##_##TBL_NAME##_cleanup(void *data OVS_UNUSED) \
 { \
+} \
+static void \
+en_##DB_NAME##_##TBL_NAME##_compute_failure_info(struct engine_node *node)  \
+{                                                                           \
+    if (!VLOG_IS_DBG_ENABLED()) {                                           \
+        return;                                                             \
+    }                                                                       \
+    const struct ovsdb_idl *table = EN_OVSDB_GET(node);                     \
+    const void *iter;                                                       \
+    for ((iter) = ovsdb_idl_track_get_first(table,                          \
+                                            &DB_NAME##rec_table_##TBL_NAME);\
+         (iter);                                                            \
+         (iter) = ovsdb_idl_track_get_next(iter)) {                         \
+        const struct ovsdb_idl_row *row = iter;                             \
+        if (ovsdb_idl_row_get_seqno((iter), OVSDB_IDL_CHANGE_INSERT) > 0) { \
+            VLOG_DBG("%s (New) "UUID_FMT,                                   \
+                      #DB_NAME"_"#TBL_NAME, UUID_ARGS(&row->uuid));         \
+            break;                                                          \
+        } else if (ovsdb_idl_row_get_seqno((iter),                          \
+                                           OVSDB_IDL_CHANGE_DELETE) > 0) {  \
+            VLOG_DBG("%s (Deleted) "UUID_FMT,                               \
+                      #DB_NAME"_"#TBL_NAME, UUID_ARGS(&row->uuid));         \
+            break;                                                          \
+        } else {                                                            \
+            for (int i = 0; i < row->table->class_->n_columns; i++) {       \
+                if (ovsdb_idl_track_is_updated(row,                         \
+                              &DB_NAME##rec_##TBL_NAME##_columns[i])) {     \
+                    VLOG_DBG("%s (Updated) "UUID_FMT,                       \
+                              #DB_NAME"_"#TBL_NAME, UUID_ARGS(&row->uuid)); \
+                    break;                                                  \
+                }                                                           \
+            }                                                               \
+        }                                                                   \
+    }                                                                       \
 }
 
 /* Macro to define member functions of an engine node which represents
@@ -480,6 +522,7 @@ static void en_##DB_NAME##_##TBL_NAME##_cleanup(void *data OVS_UNUSED) \
 /* Macro to define an engine node which represents a table of OVSDB */
 #define ENGINE_NODE_OVSDB(DB_NAME, DB_NAME_STR, TBL_NAME, TBL_NAME_STR) \
     ENGINE_NODE_DEF_START(DB_NAME##_##TBL_NAME, DB_NAME_STR"_"TBL_NAME_STR) \
+    COMPUTE_FAIL_INFO(DB_NAME##_##TBL_NAME) \
     ENGINE_NODE_DEF_END
 
 /* Macro to define an engine node which represents a table of OVN SB DB */

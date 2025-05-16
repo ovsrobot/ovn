@@ -501,14 +501,18 @@ engine_run_node(struct engine_node *node, bool recompute_allowed)
      */
     bool need_compute = false;
     for (size_t i = 0; i < node->n_inputs; i++) {
-        if (node->inputs[i].node->state == EN_UPDATED) {
+        struct engine_node *input_node = node->inputs[i].node;
+        if (input_node->state == EN_UPDATED) {
             need_compute = true;
 
             /* Trigger a recompute if we don't have a change handler. */
             if (!node->inputs[i].change_handler) {
                 engine_recompute(node, recompute_allowed,
                                  "missing handler for input %s",
-                                 node->inputs[i].node->name);
+                                 input_node->name);
+                if (input_node->dump_compute_failure_info) {
+                    input_node->dump_compute_failure_info(input_node);
+                }
                 return;
             }
         }
