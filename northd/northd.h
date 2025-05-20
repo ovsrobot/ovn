@@ -20,6 +20,7 @@
 #include "lib/ovn-util.h"
 #include "lib/ovs-atomic.h"
 #include "lib/sset.h"
+#include "lib/hmapx.h"
 #include "northd/en-port-group.h"
 #include "northd/ipam.h"
 #include "openvswitch/hmap.h"
@@ -414,6 +415,9 @@ struct ovn_datapath {
     /* The logical router group to which this datapath belongs.
      * Valid only if it is logical router datapath. NULL otherwise. */
     struct lrouter_group *lr_group;
+
+    /* Set of localnet or l2gw ports. */
+    struct hmapx ph_ports;
 
     /* Map of ovn_port objects belonging to this datapath.
      * This map doesn't include derived ports. */
