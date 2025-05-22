@@ -194,6 +194,8 @@ struct route_msg_handle_data {
     struct hmapx *routes_to_advertise;
     struct vector *learned_routes;
     const struct hmap *routes;
+    int n_routes;
+    int ret;
 };
 
 static void
@@ -247,6 +249,10 @@ handle_route_msg(const struct route_table_msg *msg, void *data)
     }
     err = re_nl_delete_route(rd->rta_table_id, &rd->rta_dst,
                              rd->rtm_dst_len, rd->rta_priority);
+    /* Report return value and number of deleted routes to the caller. */
+    handle_data->ret |= err;
+    handle_data->n_routes++;
+
     if (err) {
         char addr_s[INET6_ADDRSTRLEN + 1];
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
@@ -303,7 +309,7 @@ re_nl_sync_routes(uint32_t table_id, const struct hmap *routes,
     hmapx_destroy(&routes_to_advertise);
 }
 
-void
+int
 re_nl_cleanup_routes(uint32_t table_id)
 {
     /* Remove routes from the system that are not in the host_routes hmap and
@@ -314,4 +320,6 @@ re_nl_cleanup_routes(uint32_t table_id)
         .learned_routes = NULL,
     };
     route_table_dump_one_table(table_id, handle_route_msg, &data);
+
+    return data.n_routes ? data.ret : 0;
 }

@@ -261,7 +261,10 @@ route_exchange_run(const struct route_exchange_ctx_in *r_ctx_in,
     struct maintained_route_table_entry *mrt;
     HMAP_FOR_EACH_POP (mrt, node, &old_maintained_route_table) {
         if (!maintained_route_table_contains(mrt->table_id)) {
-            re_nl_cleanup_routes(mrt->table_id);
+            if (re_nl_cleanup_routes(mrt->table_id)) {
+                /* If netlink transaction fails, we will retry next time. */
+                maintained_route_table_add(mrt->table_id);
+            }
         }
         free(mrt);
     }
@@ -271,7 +274,10 @@ route_exchange_run(const struct route_exchange_ctx_in *r_ctx_in,
     const char *vrf_name;
     SSET_FOR_EACH_SAFE (vrf_name, &old_maintained_vrfs) {
         if (!sset_contains(&_maintained_vrfs, vrf_name)) {
-            re_nl_delete_vrf(vrf_name);
+            if (re_nl_delete_vrf(vrf_name)) {
+                /* If netlink transaction fails, we will retry next time. */
+                sset_add(&_maintained_vrfs, vrf_name);
+            }
         }
         sset_delete(&old_maintained_vrfs, SSET_NODE_FROM_NAME(vrf_name));
     }
