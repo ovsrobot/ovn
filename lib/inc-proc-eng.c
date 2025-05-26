@@ -440,8 +440,10 @@ static bool
 engine_compute(struct engine_node *node, bool recompute_allowed)
 {
     for (size_t i = 0; i < node->n_inputs; i++) {
+        struct engine_node *input_node = node->inputs[i].node;
+
         /* If the input node data changed call its change handler. */
-        if (node->inputs[i].node->state == EN_UPDATED) {
+        if (input_node->state == EN_UPDATED) {
             /* If the input change can't be handled incrementally, run
              * the node handler.
              */
@@ -453,16 +455,18 @@ engine_compute(struct engine_node *node, bool recompute_allowed)
                 static struct vlog_rate_limit rl =
                     VLOG_RATE_LIMIT_INIT(20, 10);
                 VLOG_INFO_RL(&rl, "node: %s, handler for input %s took %lldms",
-                             node->name, node->inputs[i].node->name,
-                             delta_time);
+                             node->name, input_node->name, delta_time);
             } else {
                 VLOG_DBG("node: %s, handler for input %s took %lldms",
-                         node->name, node->inputs[i].node->name, delta_time);
+                         node->name, input_node->name, delta_time);
             }
             if (handled == EN_UNHANDLED) {
+                if (input_node->dump_compute_failure_info) {
+                    input_node->dump_compute_failure_info(input_node);
+                }
                 engine_recompute(node, recompute_allowed,
                                  "failed handler for input %s",
-                                 node->inputs[i].node->name);
+                                 input_node->name);
                 return (node->state != EN_CANCELED);
             } else if (!engine_node_changed(node)) {
                 /* We only want to update the state if the node is unchanged.
@@ -470,8 +474,7 @@ engine_compute(struct engine_node *node, bool recompute_allowed)
                  * back to EN_UNCHANGED.
                  */
                 engine_set_node_state(node, (enum engine_node_state) handled,
-                                      "input %s updated",
-                                      node->inputs[i].node->name);
+                                      "input %s updated", input_node->name);
             }
         }
     }
@@ -501,14 +504,18 @@ engine_run_node(struct engine_node *node, bool recompute_allowed)
      */
     bool need_compute = false;
     for (size_t i = 0; i < node->n_inputs; i++) {
-        if (node->inputs[i].node->state == EN_UPDATED) {
+        struct engine_node *input_node = node->inputs[i].node;
+        if (input_node->state == EN_UPDATED) {
             need_compute = true;
 
             /* Trigger a recompute if we don't have a change handler. */
             if (!node->inputs[i].change_handler) {
                 engine_recompute(node, recompute_allowed,
                                  "missing handler for input %s",
-                                 node->inputs[i].node->name);
+                                 input_node->name);
+                if (input_node->dump_compute_failure_info) {
+                    input_node->dump_compute_failure_info(input_node);
+                }
                 return;
             }
         }
