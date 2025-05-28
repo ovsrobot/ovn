@@ -20,10 +20,11 @@
 #include "openvswitch/compiler.h"
 #include "route-exchange.h"
 
-void
+int
 route_exchange_run(const struct route_exchange_ctx_in *r_ctx_in OVS_UNUSED,
                    struct route_exchange_ctx_out *r_ctx_out OVS_UNUSED)
 {
+    return 0;
 }
 
 void

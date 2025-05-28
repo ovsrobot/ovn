@@ -33,8 +33,8 @@ struct route_exchange_ctx_out {
     struct hmap route_table_watches;
 };
 
-void route_exchange_run(const struct route_exchange_ctx_in *,
-                        struct route_exchange_ctx_out *);
+int route_exchange_run(const struct route_exchange_ctx_in *,
+                       struct route_exchange_ctx_out *);
 void route_exchange_cleanup_vrfs(void);
 void route_exchange_destroy(void);
 

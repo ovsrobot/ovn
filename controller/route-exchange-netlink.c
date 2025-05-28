@@ -194,6 +194,7 @@ struct route_msg_handle_data {
     struct hmapx *routes_to_advertise;
     struct vector *learned_routes;
     const struct hmap *routes;
+    int ret;
 };
 
 static void
@@ -247,6 +248,9 @@ handle_route_msg(const struct route_table_msg *msg, void *data)
     }
     err = re_nl_delete_route(rd->rta_table_id, &rd->rta_dst,
                              rd->rtm_dst_len, rd->rta_priority);
+    /* Report return value and number of deleted routes to the caller. */
+    handle_data->ret |= err;
+
     if (err) {
         char addr_s[INET6_ADDRSTRLEN + 1];
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
@@ -259,13 +263,14 @@ handle_route_msg(const struct route_table_msg *msg, void *data)
     }
 }
 
-void
+int
 re_nl_sync_routes(uint32_t table_id, const struct hmap *routes,
                   struct vector *learned_routes,
                   const struct sbrec_datapath_binding *db)
 {
     struct hmapx routes_to_advertise = HMAPX_INITIALIZER(&routes_to_advertise);
     struct advertise_route_entry *ar;
+    int ret;
 
     HMAP_FOR_EACH (ar, node, routes) {
         hmapx_add(&routes_to_advertise, ar);
@@ -281,6 +286,7 @@ re_nl_sync_routes(uint32_t table_id, const struct hmap *routes,
         .db = db,
     };
     route_table_dump_one_table(table_id, handle_route_msg, &data);
+    ret = data.ret;
 
     /* Add any remaining routes in the routes_to_advertise hmapx to the
      * system routing table. */
@@ -298,12 +304,18 @@ re_nl_sync_routes(uint32_t table_id, const struct hmap *routes,
                              addr_s, &ar->addr) ? addr_s : "(invalid)",
                          ar->plen,
                          ovs_strerror(err));
+            if (err != EEXIST) {
+                ret = err;
+                break;
+            }
         }
     }
     hmapx_destroy(&routes_to_advertise);
+
+    return ret;
 }
 
-void
+int
 re_nl_cleanup_routes(uint32_t table_id)
 {
     /* Remove routes from the system that are not in the host_routes hmap and
@@ -314,4 +326,6 @@ re_nl_cleanup_routes(uint32_t table_id)
         .learned_routes = NULL,
     };
     route_table_dump_one_table(table_id, handle_route_msg, &data);
+
+    return data.ret;
 }
