@@ -173,6 +173,8 @@ struct pending_pkt {
 /* Registered ofctrl seqno type for nb_cfg propagation. */
 static size_t ofctrl_seq_type_nb_cfg;
 
+static bool conntroller_validate_actions = false;
+
 static void
 remove_newline(char *s)
 {
@@ -203,6 +205,57 @@ static char *get_file_system_id(void)
     free(filename);
     return ret;
 }
+
+static void
+log_actions_diff(const void *arg OVS_UNUSED,
+                 const char *item, bool northd_supported)
+{
+    VLOG_WARN("Validate actions: action %s supported by %s "
+              "but not supported by %s.", item,
+              northd_supported ? "northd" : "controller",
+              northd_supported ? "controller" : "northd");
+}
+
+static void
+validate_compatibility_with_northd(const struct sbrec_sb_global *sb,
+                                   bool sb_global_upgraded)
+{
+    static bool executed = false;
+
+    if (executed) {
+        return;
+    }
+
+    if (!sb || !sb->n_supported_actions) {
+        VLOG_WARN("Validate actions: %s",
+                  !sb ? "No SB Global record found." :
+                  "No northd actions available in SB Global.");
+        return;
+    }
+    struct svec controller_action_entries = SVEC_EMPTY_INITIALIZER;
+    ovn_action_get_names(&controller_action_entries);
+
+    struct sorted_array controller_actions =
+        sorted_array_from_svec(&controller_action_entries);
+
+    struct sorted_array northd_actions =
+        sorted_array_create((const char **) sb->supported_actions,
+                            sb->n_supported_actions,
+                            false);
+
+    sorted_array_apply_diff(&northd_actions,
+                            &controller_actions,
+                            log_actions_diff, NULL);
+
+    VLOG_WARN("Validate actions: All northd actions are validated. ");
+
+    executed = sb_global_upgraded ? false : true;
+
+    sorted_array_destroy(&northd_actions);
+    sorted_array_destroy(&controller_actions);
+    svec_destroy(&controller_action_entries);
+}
+
 /* Only set monitor conditions on tables that are available in the
  * server schema.
  */
@@ -755,6 +808,18 @@ update_sb_db(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
     if (monitor_all_p) {
         *monitor_all_p = monitor_all;
     }
+
+    /* Check actions compatibility when updating SB_DB. */
+    conntroller_validate_actions =
+        get_chassis_external_id_value_bool(
+            &cfg->external_ids, chassis_id,
+            "validate-northd-actions", false);
+
+    if (conntroller_validate_actions) {
+        const struct sbrec_sb_global *sb = sbrec_sb_global_first(ovnsb_idl);
+        validate_compatibility_with_northd(sb, false);
+    }
+
     if (reset_ovnsb_idl_min_index && *reset_ovnsb_idl_min_index) {
         VLOG_INFO("Resetting southbound database cluster state");
         engine_set_force_recompute();
@@ -3619,6 +3684,10 @@ en_northd_options_run(struct engine_node *node, void *data)
                         true)
         : true;
 
+    if (conntroller_validate_actions) {
+        validate_compatibility_with_northd(sb_global, false);
+    }
+
     return EN_UPDATED;
 }
 
@@ -3674,6 +3743,10 @@ en_northd_options_sb_sb_global_handler(struct engine_node *node, void *data)
     if (enable_ch_nb_cfg_update != n_opts->enable_ch_nb_cfg_update) {
         n_opts->enable_ch_nb_cfg_update = enable_ch_nb_cfg_update;
         result = EN_HANDLED_UPDATED;
+    }
+
+    if (conntroller_validate_actions) {
+        validate_compatibility_with_northd(sb_global, false);
     }
 
     return result;

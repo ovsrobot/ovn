@@ -43500,3 +43500,31 @@ AT_CHECK([grep -q "Postponing virtual lport sw0-vir" hv3/ovn-controller.log], [1
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Controller actions validating])
+ovn_start
+
+net_add n1
+
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl add-port br-int vif1 -- \
+          set Interface vif1 external-ids:iface-id=lp1 \
+          options:tx_pcap=hv1/vif1-tx.pcap options:rxq_pcap=hv1/vif1-rx.pcap \
+          ofport-request=1
+
+# Since from the tests we can't check the situation when the controller doesn't support all
+# northd actions - we will check the opposite situation.
+check  ovn-sbctl remove SB_G . supported_actions MOVE
+
+check ovs-vsctl set Open_Vswitch . external_ids:validate-northd-actions=true
+
+AT_CHECK([grep -o "action MOVE supported by controller but not supported by northd." hv1/ovn-controller.log], [0], [dnl
+action MOVE supported by controller but not supported by northd.
+])
+AT_CLEANUP
+])
+
