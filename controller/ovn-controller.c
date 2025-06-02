@@ -6148,6 +6148,16 @@ main(int argc, char *argv[])
             ovnsb_cond_seqno = new_ovnsb_cond_seqno;
         }
 
+        /* Check if we have received all initial dumps of the southbound
+         * based on the monitor condtions we set.
+         * If we have sb_monitor_all that means we have all data that we would
+         * ever need.
+         * In other cases we depend on engine runs. This is handled below. */
+        if (ovnsb_cond_seqno == ovnsb_expected_cond_seqno &&
+                ovnsb_expected_cond_seqno != UINT_MAX && sb_monitor_all) {
+            daemon_started_recently_ignore();
+        }
+
         struct engine_context eng_ctx = {
             .ovs_idl_txn = ovs_idl_txn,
             .ovnsb_idl_txn = ovnsb_idl_txn,
@@ -6305,9 +6315,6 @@ main(int argc, char *argv[])
 
                     stopwatch_stop(CONTROLLER_LOOP_STOPWATCH_NAME,
                                    time_msec());
-                    if (engine_has_updated()) {
-                        daemon_started_recently_countdown();
-                    }
 
                     ct_zones_data = engine_get_data(&en_ct_zones);
                     bfd_chassis_data = engine_get_data(&en_bfd_chassis);
@@ -6417,6 +6424,8 @@ main(int argc, char *argv[])
                          * logical datapath goups changed. */
                         if (engine_node_changed(&en_runtime_data)
                             || engine_node_changed(&en_sb_logical_dp_group)) {
+                            bool had_all_data = ovnsb_cond_seqno ==
+                                                ovnsb_expected_cond_seqno;
                             ovnsb_expected_cond_seqno =
                                 update_sb_monitors(
                                     ovnsb_idl_loop.idl, chassis,
@@ -6424,6 +6433,24 @@ main(int argc, char *argv[])
                                     &runtime_data->lbinding_data.bindings,
                                     &runtime_data->local_datapaths,
                                     sb_monitor_all);
+                            bool condition_changed = ovnsb_cond_seqno !=
+                                                     ovnsb_expected_cond_seqno;
+                            if (had_all_data && condition_changed) {
+                                /* We limit the amount of condition updates
+                                 * that we treat as daemon_started_recently.
+                                 * This allows us to proceed even if there is
+                                 * a continuous reason for monitor updates. */
+                                daemon_started_recently_countdown();
+                            }
+                        }
+                        /* If there is no new expected seqno we have
+                         * finished loading all needed data from
+                         * southbound. We then need to run one more time since
+                         * we might behave differently. */
+                        if (daemon_started_recently()
+                            && ovnsb_cond_seqno == ovnsb_expected_cond_seqno) {
+                            daemon_started_recently_ignore();
+                            poll_immediate_wake();
                         }
                         if (ovs_idl_txn) {
                             update_qos(sbrec_port_binding_by_name, ovs_idl_txn,
