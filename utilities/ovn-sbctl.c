@@ -1493,8 +1493,8 @@ static const struct ctl_table_class tables[SBREC_N_TABLES] = {
     [SBREC_TABLE_DATAPATH_BINDING].row_ids
      = {{&sbrec_datapath_binding_col_external_ids, "name", NULL},
         {&sbrec_datapath_binding_col_external_ids, "name2", NULL},
-        {&sbrec_datapath_binding_col_external_ids, "logical-switch", NULL},
-        {&sbrec_datapath_binding_col_external_ids, "logical-router", NULL}},
+        {&sbrec_datapath_binding_col_nb_uuid, NULL, NULL},
+        {&sbrec_datapath_binding_col_type, NULL, NULL}},
 
     [SBREC_TABLE_PORT_BINDING].row_ids
      = {{&sbrec_port_binding_col_logical_port, NULL, NULL},
