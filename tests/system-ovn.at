@@ -12571,7 +12571,7 @@ OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
 AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
-AT_SETUP([load balancing in gateway router - client behind LB with SNAT])
+AT_SETUP([load balancing in gateway router - ensure hw-offload with LB and SNAT])
 AT_SKIP_IF([test $HAVE_NC = no])
 AT_KEYWORDS([lb])
 
@@ -12622,18 +12622,62 @@ ADD_VETH(vm1, vm1, br-int, "41.41.41.1/24", "00:00:00:00:00:01", "41.41.41.2")
 ADD_NAMESPACES(vm2)
 ADD_VETH(vm2, vm2, br-int, "42.42.42.1/24", "00:00:00:00:00:02", "42.42.42.2")
 
-dnl Start a server on vm2.
-NETNS_DAEMONIZE([vm2], [nc -l -k 42.42.42.1 80], [vm2.pid])
+dnl Start a server on vm1.
+NETNS_DAEMONIZE([vm1], [nc -l -k 41.41.41.1 8080], [vm1.pid])
 
 dnl Wait for ovn-controller to catch up.
 wait_for_ports_up
 check ovn-nbctl --wait=hv sync
 
-dnl Test the connection originating something that uses the same source port
-dnl as the LB VIP.
-NS_CHECK_EXEC([vm1], [nc -z -p 8080 42.42.42.1 80], 0, [ignore], [ignore])
+dnl Test the connection to VIP in a loop so that we can capture all DP flows.
+for i in $(seq 10); do
+    NS_CHECK_EXEC([vm2], [nc -z 42.42.42.2 8080], 0, [ignore], [ignore])
+done
 
-OVN_CLEANUP_CONTROLLER([hv1])
+dnl For each DP flow with ct action, make sure a CT entry exists as established
+dnl for the zone the ct action is taken. Otherwise it means HW offload is
+dnl broken.
+check_flow_assured() {
+    local flow_str="$1"
+    local src_ip dst_ip
+
+    # extract only unmasked IPv4 src/dst
+    ipv4_src_dst=$(awk -F 'ipv4\\(src=' '{ print $2 }' <<< "$flow_str" | awk -F ',proto=' '{print $1}')
+    src_ip=$(awk -F ',dst=' '{ print $1 }' <<< "$ipv4_src_dst")
+    dst_ip=$(awk -F ',dst=' '{ print $2 }' <<< "$ipv4_src_dst")
+
+    if test "${src_ip#*/}" != "$src_ip"; then
+        src_ip=""
+    fi
+    if test "${dst_ip#*/}" != "$dst_ip"; then
+        dst_ip=""
+    fi
+
+    if test -z "$src_ip" && test -z "$dst_ip"; then
+        return
+    fi
+
+    zone=$(awk -F 'zone=' '{ print $2 }' <<< "$flow_str" | awk -F ',' '{print $1}')
+    echo Check if a conntrack entry exists for src=$src_ip, dst=$dst_ip, zone=$zone
+
+    if test -n "$src_ip" && test -n "$dst_ip"; then
+        AT_CHECK([grep -F "$src_ip" conntrack_file | grep -F "$dst_ip" | grep "zone=$zone" | grep -q "ASSURED"])
+    elif test -n "$src_ip"; then
+        AT_CHECK([grep -F "$src_ip" conntrack_file | grep "zone=$zone" | grep -q "ASSURED"])
+    else
+        AT_CHECK([grep -F "$dst_ip" conntrack_file | grep "zone=$zone" | grep -q "ASSURED"])
+    fi
+}
+
+ovs-appctl dpctl/dump-conntrack -m > conntrack_file
+
+ovs-appctl dpctl/dump-flows -m \
+    | grep 'ct(' \
+    | while read -r flow; do
+        check_flow_assured "$flow"
+done
+
+OVS_APP_EXIT_AND_WAIT([ovn-controller])
 
 as ovn-sb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
