@@ -554,6 +554,11 @@
           bridge, with the same <code>external_ids:ovn-localnet-port</code>
           value.
         </p>
+        <p>
+          When a <code>localnet</code> port has additional values in its
+          <code>external_ids</code> column, these key-value pairs are copied to
+          the corresponding patch ports.
+        </p>
       </dd>
 
       <dt>
