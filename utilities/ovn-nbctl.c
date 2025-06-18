@@ -483,6 +483,7 @@ Port group commands:\n\
   pg-add PG [PORTS]           Create port group PG with optional PORTS\n\
   pg-set-ports PG PORTS       Set PORTS on port group PG\n\
   pg-del PG                   Delete port group PG\n\
+  pg-get-ports PG             List port group PG\n\
 HA chassis group commands:\n\
   ha-chassis-group-add GRP    Create an HA chassis group GRP\n\
   ha-chassis-group-del GRP    Delete the HA chassis group GRP\n\
@@ -7489,6 +7490,59 @@ cmd_pg_del(struct ctl_context *ctx)
     nbrec_port_group_delete(pg);
 }
 
+static void
+cmd_pre_pg_get_ports(struct ctl_context *ctx)
+{
+    ovsdb_idl_add_column(ctx->idl, &nbrec_logical_switch_port_col_name);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_port_group_col_name);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_port_group_col_ports);
+}
+
+static int
+port_name_cmp(const void *s1_, const void *s2_)
+{
+    const char *s1 = *(char **) s1_, *s2 = *(char **) s2_;
+    return strcmp(s1, s2);
+}
+
+static void
+cmd_pg_get_ports(struct ctl_context *ctx)
+{
+    const struct nbrec_port_group *pg;
+    struct nbrec_logical_switch_port **ports;
+    size_t i;
+    char **port_names;
+    char *error;
+
+    error = pg_by_name_or_uuid(ctx, ctx->argv[1], true, &pg);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    ports = pg->ports;
+    if (pg->n_ports == 0) {
+        return;
+    }
+
+    port_names = xmalloc(sizeof(char *) * pg->n_ports);
+    for (i = 0; i < pg->n_ports; i++) {
+        port_names[i] = ports[i]->name;
+    }
+
+    qsort(port_names, pg->n_ports, sizeof(char *), port_name_cmp);
+    ds_put_format(&ctx->output, "%s", port_names[0]);
+    for (i = 1; i < pg->n_ports; i++) {
+        ds_put_format(&ctx->output, " %s", port_names[i]);
+    }
+
+    if (i > 0) {
+        ds_put_cstr(&ctx->output, "\n");
+    }
+
+    free(port_names);
+}
+
 static const struct nbrec_ha_chassis_group*
 ha_chassis_group_by_name_or_uuid(struct ctl_context *ctx, const char *id,
                                  bool must_exist)
@@ -8420,6 +8474,8 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     {"pg-set-ports", 2, INT_MAX, "", cmd_pre_pg_set_ports, cmd_pg_set_ports,
      NULL, "", RW },
     {"pg-del", 1, 1, "", cmd_pre_pg_del, cmd_pg_del, NULL, "", RW },
+    {"pg-get-ports", 1, 1, "", cmd_pre_pg_get_ports, cmd_pg_get_ports,
+        NULL, "", RO },
 
     /* HA chassis group commands. */
     {"ha-chassis-group-add", 1, 1, "[CHASSIS GROUP]",
