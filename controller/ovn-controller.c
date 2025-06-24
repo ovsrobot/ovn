@@ -5545,7 +5545,11 @@ garp_rarp_sb_port_binding_handler(struct engine_node *node,
         struct local_datapath *ld = get_local_datapath(
             &rt_data->local_datapaths, pb->datapath->tunnel_key);
 
-        if (!ld || ld->localnet_port) {
+        if (!ld) {
+            continue;
+        }
+
+        if (ld->localnet_port) {
             /* XXX: actually handle this incrementally. */
             return EN_UNHANDLED;
         }
@@ -5589,16 +5593,22 @@ garp_rarp_runtime_data_handler(struct engine_node *node, void *data OVS_UNUSED)
 
     struct tracked_datapath *tdp;
     HMAP_FOR_EACH (tdp, node, &rt_data->tracked_dp_bindings) {
-        if (tdp->tracked_type == TRACKED_RESOURCE_REMOVED) {
-            /* This is currently not handled incrementally in runtime_data
-             * so it should never happen. Recompute just in case. */
+        if (tdp->tracked_type == TRACKED_RESOURCE_REMOVED ||
+            tdp->tracked_type == TRACKED_RESOURCE_NEW) {
+            /* The removal is currently not handled incrementally in
+             * runtime_data so it should never happen. Addition can happen,
+             * recompute in both cases. */
             return EN_UNHANDLED;
         }
 
         struct local_datapath *ld = get_local_datapath(
             &rt_data->local_datapaths, tdp->dp->tunnel_key);
 
-        if (!ld || ld->localnet_port) {
+        if (!ld) {
+            continue;
+        }
+
+        if (ld->localnet_port) {
             /* XXX: actually handle this incrementally. */
             return EN_UNHANDLED;
         }
