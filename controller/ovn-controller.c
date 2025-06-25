@@ -1627,6 +1627,11 @@ en_sb_ro_cleanup(void *data OVS_UNUSED)
 static enum engine_input_handler_result
 runtime_data_sb_ro_handler(struct engine_node *node, void *data)
 {
+    /* Return right away if the SB is read only. */
+    if (!engine_get_context()->ovnsb_idl_txn) {
+        return EN_HANDLED_UNCHANGED;
+    }
+
     const struct sbrec_chassis *chassis = NULL;
     enum engine_input_handler_result result = EN_HANDLED_UNCHANGED;
 
@@ -1648,15 +1653,12 @@ runtime_data_sb_ro_handler(struct engine_node *node, void *data)
     }
     if (chassis) {
         struct ed_type_runtime_data *rt_data = data;
-        bool sb_readonly = !engine_get_context()->ovnsb_idl_txn;
         struct controller_engine_ctx *ctrl_ctx =
             engine_get_context()->client_ctx;
 
-        if (if_status_handle_claims(ctrl_ctx->if_mgr,
-                                    &rt_data->lbinding_data,
-                                    chassis,
-                                    &rt_data->tracked_dp_bindings,
-                                    pb_table, sb_readonly)) {
+        if (if_status_handle_claims(ctrl_ctx->if_mgr, &rt_data->lbinding_data,
+                                    chassis, &rt_data->tracked_dp_bindings,
+                                    pb_table)) {
             result = EN_HANDLED_UPDATED;
             rt_data->tracked = true;
         }
