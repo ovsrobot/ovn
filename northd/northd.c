@@ -577,20 +577,21 @@ ovn_datapath_from_sbrec(const struct hmap *ls_datapaths,
                         const struct hmap *lr_datapaths,
                         const struct sbrec_datapath_binding *sb)
 {
-    struct uuid key;
     const struct hmap *dps;
 
-    if (smap_get_uuid(&sb->external_ids, "logical-switch", &key)) {
+    if (!strcmp(sb->type, "logical-switch")) {
         dps = ls_datapaths;
-    } else if (smap_get_uuid(&sb->external_ids, "logical-router", &key)) {
+    } else if (!strcmp(sb->type, "logical-router")) {
         dps = lr_datapaths;
     } else {
         return NULL;
     }
-    if (!dps) {
+
+    if (!sb->nb_uuid) {
         return NULL;
     }
-    struct ovn_datapath *od = ovn_datapath_find_(dps, &key);
+
+    struct ovn_datapath *od = ovn_datapath_find_(dps, sb->nb_uuid);
     if (od && (od->sb == sb)) {
         return od;
     }
@@ -749,11 +750,9 @@ store_mcast_info_for_switch_datapath(const struct sbrec_ip_multicast *sb,
 static void
 ovn_datapath_update_external_ids(struct ovn_datapath *od)
 {
-    /* Get the logical-switch or logical-router UUID to set in
-     * external-ids. */
+    /* Get the NB  UUID to set in external-ids. */
     char uuid_s[UUID_LEN + 1];
     sprintf(uuid_s, UUID_FMT, UUID_ARGS(&od->key));
-    const char *key = od->nbs ? "logical-switch" : "logical-router";
 
     /* Get names to set in external-ids. */
     const char *name = od->nbs ? od->nbs->name : od->nbr->name;
@@ -765,7 +764,6 @@ ovn_datapath_update_external_ids(struct ovn_datapath *od)
 
     /* Set external-ids. */
     struct smap ids = SMAP_INITIALIZER(&ids);
-    smap_add(&ids, key, uuid_s);
     smap_add(&ids, "name", name);
     if (name2 && name2[0]) {
         smap_add(&ids, "name2", name2);
@@ -892,30 +890,26 @@ join_datapaths(const struct nbrec_logical_switch_table *nbrec_ls_table,
 
     const struct sbrec_datapath_binding *sb;
     SBREC_DATAPATH_BINDING_TABLE_FOR_EACH_SAFE (sb, sbrec_dp_table) {
-        struct uuid key;
-        if (!smap_get_uuid(&sb->external_ids, "logical-switch", &key) &&
-            !smap_get_uuid(&sb->external_ids, "logical-router", &key)) {
+        if (!sb->nb_uuid) {
             ovsdb_idl_txn_add_comment(
                 ovnsb_txn,
-                "deleting Datapath_Binding "UUID_FMT" that lacks "
-                "external-ids:logical-switch and "
-                "external-ids:logical-router",
+                "deleting Datapath_Binding "UUID_FMT" that lacks nb_uuid",
                 UUID_ARGS(&sb->header_.uuid));
             sbrec_datapath_binding_delete(sb);
             continue;
         }
 
-        if (ovn_datapath_find_(datapaths, &key)) {
+        if (ovn_datapath_find_(datapaths, sb->nb_uuid)) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
             VLOG_INFO_RL(
                 &rl, "deleting Datapath_Binding "UUID_FMT" with "
-                "duplicate external-ids:logical-switch/router "UUID_FMT,
-                UUID_ARGS(&sb->header_.uuid), UUID_ARGS(&key));
+                "duplicate nb_uuid "UUID_FMT,
+                UUID_ARGS(&sb->header_.uuid), UUID_ARGS(sb->nb_uuid));
             sbrec_datapath_binding_delete(sb);
             continue;
         }
 
-        struct ovn_datapath *od = ovn_datapath_create(datapaths, &key,
+        struct ovn_datapath *od = ovn_datapath_create(datapaths, sb->nb_uuid,
                                                       NULL, NULL, sb);
         ovs_list_push_back(sb_only, &od->list);
     }
@@ -1117,11 +1111,17 @@ build_datapaths(struct ovsdb_idl_txn *ovnsb_txn,
             sbrec_datapath_binding_set_tunnel_key(od->sb, od->tunnel_key);
         }
         ovn_datapath_update_external_ids(od);
+        sbrec_datapath_binding_set_nb_uuid(od->sb, &od->key, 1);
+        sbrec_datapath_binding_set_type(od->sb, od->nbs ? "logical-switch" :
+                                        "logical-router");
     }
     LIST_FOR_EACH (od, list, &nb_only) {
         od->sb = sbrec_datapath_binding_insert(ovnsb_txn);
         ovn_datapath_update_external_ids(od);
         sbrec_datapath_binding_set_tunnel_key(od->sb, od->tunnel_key);
+        sbrec_datapath_binding_set_nb_uuid(od->sb, &od->key, 1);
+        sbrec_datapath_binding_set_type(od->sb, od->nbs ? "logical-switch" :
+                                        "logical-router");
     }
     ovn_destroy_tnlids(&dp_tnlids);
 
