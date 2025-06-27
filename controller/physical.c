@@ -185,6 +185,8 @@ put_decapsulation(enum mf_field_id mff_ovn_geneve,
         put_move(MFF_TUN_ID, 0,  MFF_LOG_DATAPATH, 0, 24, ofpacts);
         put_move(mff_ovn_geneve, 16, MFF_LOG_INPORT, 0, 15, ofpacts);
         put_move(mff_ovn_geneve, 0, MFF_LOG_OUTPORT, 0, 16, ofpacts);
+        put_load(ofp_to_u16(tun->ofport), MFF_LOG_TUN_OFPORT,
+                 16, 16, ofpacts);
     } else if (tun->type == VXLAN) {
         /* Add flows for non-VTEP tunnels. Split VNI into two 12-bit
          * sections and use them for datapath and outport IDs. */
@@ -397,6 +399,15 @@ match_outport_dp_and_port_keys(struct match *match,
     match_set_reg(match, MFF_LOG_OUTPORT - MFF_REG0, port_key);
 }
 
+static void
+match_inport_dp_and_port_keys(struct match *match,
+                              uint32_t dp_key, uint32_t port_key)
+{
+    match_init_catchall(match);
+    match_set_metadata(match, htonll(dp_key));
+    match_set_reg(match, MFF_LOG_INPORT - MFF_REG0, port_key);
+}
+
 static struct sbrec_encap *
 find_additional_encap_for_chassis(const struct sbrec_port_binding *pb,
                                   const struct sbrec_chassis *chassis_rec)
@@ -495,6 +506,204 @@ put_remote_port_redirect_overlay(const struct sbrec_port_binding *binding,
         vector_destroy(&tuns);
         ofpbuf_delete(ofpacts_clone);
     }
+}
+
+static const struct sbrec_port_binding *
+get_binding_network_function_linked_port(
+                    struct ovsdb_idl_index *sbrec_port_binding_by_name,
+                    const struct sbrec_port_binding *binding)
+{
+    const char *nf_linked_name = smap_get(&binding->options,
+                                          "network-function-linked-port");
+    if (!nf_linked_name) {
+        return NULL;
+    }
+    VLOG_DBG("get NF linked port_binding %s:%s",
+             binding->logical_port, nf_linked_name);
+    const struct sbrec_port_binding *nf_linked_port = lport_lookup_by_name(
+        sbrec_port_binding_by_name, nf_linked_name);
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+    if (!nf_linked_port) {
+        VLOG_ERR_RL(&rl, "Binding not found for network-function-linked-port"
+                    " %s", nf_linked_name);
+        return NULL;
+    }
+    if (strcmp(nf_linked_port->type, binding->type)) {
+        VLOG_ERR_RL(&rl, "Binding type mismatch between %s and "
+                  "network-function-linked-port %s",
+                  binding->logical_port,  nf_linked_name);
+        return NULL;
+    }
+    const char *nf_linked_linked_name = smap_get(
+        &nf_linked_port->options, "network-function-linked-port");
+    if (!nf_linked_linked_name || strcmp(nf_linked_linked_name,
+                                         binding->logical_port)) {
+        VLOG_INFO("LSP name %s does not match linked_linked_name",
+                  binding->logical_port);
+        return NULL;
+    }
+
+    return nf_linked_port;
+}
+
+static void
+send_traffic_by_tunnel(
+    const struct sbrec_port_binding *binding,
+    struct match *match,
+    struct ofpbuf *ofpacts_p,
+    uint32_t dp_key,
+    uint32_t port_key,
+    struct chassis_tunnel *tun,
+    enum mf_field_id mff_ovn_geneve,
+    struct ovn_desired_flow_table *flow_table)
+{
+    match_init_catchall(match);
+    ofpbuf_clear(ofpacts_p);
+
+    match_inport_dp_and_port_keys(match, dp_key, port_key);
+    match_set_reg_masked(match, MFF_LOG_FLAGS - MFF_REG0, MLF_RECIRC,
+                         MLF_RECIRC);
+    ovs_u128 of_tun_ct_label_id_val = {
+        .u64.hi = ((uint32_t) ofp_to_u16(tun->ofport)) << 16,
+    };
+    ovs_u128 of_tun_ct_label_id_mask = {
+        .u64.hi = 0x00000000ffff0000,
+    };
+
+    match_set_ct_label_masked(match, of_tun_ct_label_id_val,
+                              of_tun_ct_label_id_mask);
+
+    put_load(binding->datapath->tunnel_key, MFF_TUN_ID, 0, 24, ofpacts_p);
+    put_move(MFF_LOG_OUTPORT, 0, mff_ovn_geneve, 0, 32, ofpacts_p);
+    put_load(port_key, mff_ovn_geneve, 16, 15, ofpacts_p);
+
+    ofpact_put_OUTPUT(ofpacts_p)->port = tun->ofport;
+    ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 109,
+                    binding->header_.uuid.parts[0], match,
+                    ofpacts_p, &binding->header_.uuid);
+}
+
+static void
+put_redirect_overlay_to_source_from_nf_port(
+    const struct sbrec_port_binding *binding,
+    struct ovsdb_idl_index *sbrec_port_binding_by_name,
+    const struct hmap *chassis_tunnels,
+    const struct shash *ct_zones,
+    enum mf_field_id mff_ovn_geneve,
+    uint32_t port_key,
+    struct match *match,
+    struct ofpbuf *ofpacts_p,
+    struct ovn_desired_flow_table *flow_table)
+{
+    uint32_t dp_key = binding->datapath->tunnel_key;
+    const struct sbrec_port_binding *linked_pb;
+
+    /* Say, a network function has ports nf1 and nf2. The source port p1 is on
+     * a different host. The packet redirected from p1 was tunneled to the NF
+     * host. In PHY_TO_LOG table the tunnel interface id is stored in
+     * MFF_LOG_TUN_OFPORT. The egress pipeline then commits it into ct_label
+     * tun_if_id in nf1's zone (out_stateful priority 120 rule). When the same
+     * packet comes out from nf2, two rules process it:
+     * first rule sets recirc bit to 1 and processes the packet through nf1's
+     * ct zone and resubmits to same table. When the recirculated packet comes
+     * back, the second rule (which checks recirc bit == 1) uses the tun_if_id
+     * from ct_label to send the packet back to p1's host.
+     */
+
+    linked_pb = get_binding_network_function_linked_port(
+        sbrec_port_binding_by_name, binding);
+    if (!linked_pb) {
+        return;
+    }
+    struct zone_ids linked_zone = get_zone_ids(linked_pb, ct_zones);
+    if (!linked_zone.ct) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_ERR_RL(&rl, "Zone not found for linked port");
+        return;
+    }
+
+    /* Table 44 (LOCAL_OUTPUT), priority 110
+     * =====================================
+     *
+     * Each flow matches a logical inport to a nf port and checks if
+     * recirc bit is 0 (i.e. packet first time being processed by this table).
+     * The action processes the packet through ct zone of the linked nf port
+     * and resubmits to the same table after setting recirc bit to 1.
+     * match: inport == svc-port[i] && MLF_RECIRC_BIT = 0
+     * action: MLF_RECIRC_BIT = 1, ct(zone=linked-zone[i], table=LOCAL)
+     */
+    match_init_catchall(match);
+    ofpbuf_clear(ofpacts_p);
+    match_inport_dp_and_port_keys(match, dp_key, port_key);
+    match_set_dl_type(match, htons(ETH_TYPE_IP));
+    match_set_reg_masked(match, MFF_LOG_FLAGS - MFF_REG0, 0, MLF_RECIRC);
+
+    put_load(1, MFF_LOG_FLAGS, MLF_RECIRC_BIT, 1, ofpacts_p);
+    put_load(linked_zone.ct, MFF_LOG_CT_ZONE, 0, 16, ofpacts_p);
+
+    struct ofpact_conntrack *ct = ofpact_put_CT(ofpacts_p);
+    ct->recirc_table = OFTABLE_LOCAL_OUTPUT;
+    ct->zone_src.field = mf_from_id(MFF_LOG_CT_ZONE);
+    ct->zone_src.ofs = 0;
+    ct->zone_src.n_bits = 16;
+    ct->flags = 0;
+    ct->alg = 0;
+    ofpact_finish(ofpacts_p, &ct->ofpact);
+
+    ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 110,
+                    binding->header_.uuid.parts[0], match,
+                    ofpacts_p, &binding->header_.uuid);
+
+    /* Table 44 (LOCAL_OUTPUT), priority 110
+     * In case NF is sending back a response on the port it received the
+     * packet on, instead of forwarding out of the other port (e.g. NF sending
+     * RST to the SYN received), the ct lookup in linked port's zone would
+     * fail. Based on ct.inv check the packet is then tunneled back using
+     * the tunnel id from this port's zone itself. The above rule has
+     * overwritten the zone info by now, so we recover it from the register
+     * that was populated by in_network_function stage with the tunnel id.
+     * match: inport == svc-port[i] && MLF_RECIRC_BIT = 1
+     *        && ct.inv && MFF_LOG_TUN_OFPORT == <tun-id>
+     * action: tunnel back using above tun-id
+     */
+    struct chassis_tunnel *tun;
+    HMAP_FOR_EACH (tun, hmap_node, chassis_tunnels) {
+        match_init_catchall(match);
+        ofpbuf_clear(ofpacts_p);
+        match_inport_dp_and_port_keys(match, dp_key, port_key);
+        match_set_reg_masked(match, MFF_LOG_FLAGS - MFF_REG0, MLF_RECIRC,
+                             MLF_RECIRC);
+        match_set_ct_state_masked(match, OVS_CS_F_INVALID, OVS_CS_F_INVALID);
+        match_set_reg_masked(match, MFF_LOG_TUN_OFPORT - MFF_REG0,
+                             ((uint32_t) ofp_to_u16(tun->ofport)) << 16,
+                             0xffff << 16);
+        put_load(binding->datapath->tunnel_key, MFF_TUN_ID, 0, 24, ofpacts_p);
+        put_move(MFF_LOG_OUTPORT, 0, mff_ovn_geneve, 0, 32, ofpacts_p);
+        put_load(port_key, mff_ovn_geneve, 16, 15, ofpacts_p);
+
+        ofpact_put_OUTPUT(ofpacts_p)->port = tun->ofport;
+        ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 110,
+                        binding->header_.uuid.parts[0], match,
+                        ofpacts_p, &binding->header_.uuid);
+    }
+
+    /* Table 44 (LOCAL_OUTPUT), priority 109
+     * =====================================
+     *
+     * A flow is installed For each {remote tunnel_id, nf port} combination. It
+     * matches the inport with the nf port and the ct_label.tun_if_id with the
+     * tunnel_id. Also checks if the recirc bit is 1 (i.e. packet being
+     * processed by this table second time). The action is to send the packet
+     * out using the tunnel interface.
+     * match: inport == svc-port[i] && MLF_RECIRC_BIT = 1
+     *        && ct_label.tun_if_id == <tun-id>
+     * action: tunnel back using tun-id
+     */
+    HMAP_FOR_EACH (tun, hmap_node, chassis_tunnels) {
+        send_traffic_by_tunnel(binding, match, ofpacts_p, dp_key, port_key,
+                               tun, mff_ovn_geneve, flow_table);
+    }
+    ofpbuf_clear(ofpacts_p);
 }
 
 static void
@@ -985,12 +1194,12 @@ put_local_common_flows(uint32_t dp_key,
 
     uint32_t port_key = pb->tunnel_key;
 
-    /* Table 43, priority 100.
+    /* Table 44, priority 100.
      * =======================
      *
      * Implements output to local hypervisor.  Each flow matches a
      * logical output port on the local hypervisor, and resubmits to
-     * table 44.
+     * table 45.
      */
 
     ofpbuf_clear(ofpacts_p);
@@ -1000,13 +1209,13 @@ put_local_common_flows(uint32_t dp_key,
 
     put_zones_ofpacts(zone_ids, ofpacts_p);
 
-    /* Resubmit to table 44. */
+    /* Resubmit to table 45. */
     put_resubmit(OFTABLE_CHECK_LOOPBACK, ofpacts_p);
     ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100,
                     pb->header_.uuid.parts[0], &match, ofpacts_p,
                     &pb->header_.uuid);
 
-    /* Table 44, Priority 100.
+    /* Table 45, Priority 100.
      * =======================
      *
      * Drop packets whose logical inport and outport are the same
@@ -1830,7 +2039,7 @@ consider_port_binding(const struct physical_ctx *ctx,
              * go out from the same tunnel inport. */
             put_load(ofp_to_u16(OFPP_NONE), MFF_IN_PORT, 0, 16, ofpacts_p);
 
-            /* Resubmit to table 41. */
+            /* Resubmit to table 45. */
             put_resubmit(OFTABLE_CHECK_LOOPBACK, ofpacts_p);
         }
 
@@ -1917,10 +2126,12 @@ consider_port_binding(const struct physical_ctx *ctx,
 
     /* Determine how the port is accessed. */
     enum access_type access_type = PORT_LOCAL;
+    bool is_nf = (smap_get(&binding->options, "network-function-linked-port") ?
+                           true: false);
     if (!ofport) {
         /* Enforce tunneling while we clone packets to additional chassis b/c
          * otherwise upstream switch won't flood the packet to both chassis. */
-        if (localnet_port && !binding->additional_chassis) {
+        if (localnet_port && !binding->additional_chassis && !is_nf) {
             ofport = u16_to_ofp(simap_get(ctx->patch_ofports,
                                           localnet_port->logical_port));
             if (!ofport) {
@@ -2132,7 +2343,7 @@ consider_port_binding(const struct physical_ctx *ctx,
             }
         }
 
-        /* Table 42, priority 150.
+        /* Table 43, priority 150.
          * =======================
          *
          * Handles packets received from ports of type "localport".  These
@@ -2150,9 +2361,24 @@ consider_port_binding(const struct physical_ctx *ctx,
                             binding->header_.uuid.parts[0], &match,
                             ofpacts_p, &binding->header_.uuid);
         }
+
+        /* Packets egressing from network function ports need to be sent to the
+         * source */
+        if (is_nf) {
+            put_redirect_overlay_to_source_from_nf_port(
+                                 binding,
+                                 ctx->sbrec_port_binding_by_name,
+                                 ctx->chassis_tunnels,
+                                 ctx->ct_zones,
+                                 ctx->mff_ovn_geneve,
+                                 port_key,
+                                 &match,
+                                 ofpacts_p,
+                                 flow_table);
+        }
     } else if (access_type == PORT_LOCALNET && !ctx->always_tunnel) {
         /* Remote port connected by localnet port */
-        /* Table 43, priority 100.
+        /* Table 44, priority 100.
          * =======================
          *
          * Implements switching to localnet port. Each flow matches a
@@ -2172,7 +2398,7 @@ consider_port_binding(const struct physical_ctx *ctx,
 
         put_load(localnet_port->tunnel_key, MFF_LOG_OUTPORT, 0, 32, ofpacts_p);
 
-        /* Resubmit to table 43. */
+        /* Resubmit to table 44. */
         put_resubmit(OFTABLE_LOCAL_OUTPUT, ofpacts_p);
         ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100,
                         binding->header_.uuid.parts[0],
@@ -2818,7 +3044,6 @@ physical_run(struct physical_ctx *p_ctx,
 
         ofpbuf_clear(&ofpacts);
         put_decapsulation(p_ctx->mff_ovn_geneve, tun, &ofpacts);
-
         put_resubmit(OFTABLE_LOCAL_OUTPUT, &ofpacts);
         ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 100, 0, &match,
                         &ofpacts, hc_uuid);
@@ -2948,12 +3173,12 @@ physical_run(struct physical_ctx *p_ctx,
     ofctrl_add_flow(flow_table, OFTABLE_OUTPUT_LARGE_PKT_PROCESS, 0, 0, &match,
                     &ofpacts, hc_uuid);
 
-    /* Table 42, priority 150.
+    /* Table 43, priority 150.
      * =======================
      *
      * Handles packets received from a VXLAN tunnel which get resubmitted to
      * OFTABLE_LOG_INGRESS_PIPELINE due to lack of needed metadata in VXLAN,
-     * explicitly skip sending back out any tunnels and resubmit to table 40
+     * explicitly skip sending back out any tunnels and resubmit to table 43
      * for local delivery, except packets which have MLF_ALLOW_LOOPBACK bit
      * set.
      */
@@ -2961,13 +3186,13 @@ physical_run(struct physical_ctx *p_ctx,
     match_set_reg_masked(&match, MFF_LOG_FLAGS - MFF_REG0, MLF_RCV_FROM_RAMP,
                          MLF_RCV_FROM_RAMP | MLF_ALLOW_LOOPBACK);
 
-    /* Resubmit to table 40. */
+    /* Resubmit to table 44. */
     ofpbuf_clear(&ofpacts);
     put_resubmit(OFTABLE_LOCAL_OUTPUT, &ofpacts);
     ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 150, 0,
                     &match, &ofpacts, hc_uuid);
 
-    /* Table 42, priority 150.
+    /* Table 43, priority 150.
      * =======================
      *
      * Packets that should not be sent to other hypervisors.
@@ -2975,13 +3200,13 @@ physical_run(struct physical_ctx *p_ctx,
     match_init_catchall(&match);
     match_set_reg_masked(&match, MFF_LOG_FLAGS - MFF_REG0,
                          MLF_LOCAL_ONLY, MLF_LOCAL_ONLY);
-    /* Resubmit to table 40. */
+    /* Resubmit to table 44. */
     ofpbuf_clear(&ofpacts);
     put_resubmit(OFTABLE_LOCAL_OUTPUT, &ofpacts);
     ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 150, 0,
                     &match, &ofpacts, hc_uuid);
 
-    /* Table 42, Priority 0.
+    /* Table 43, Priority 0.
      * =======================
      *
      * Resubmit packets that are not directed at tunnels or part of a
@@ -2992,24 +3217,30 @@ physical_run(struct physical_ctx *p_ctx,
     ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 0, 0, &match,
                     &ofpacts, hc_uuid);
 
-    /* Table 40, priority 0.
+    /* Table 44, priority 0.
      * ======================
      *
      * Drop packets that do not match previous flows.
      */
     add_default_drop_flow(p_ctx, OFTABLE_LOCAL_OUTPUT, flow_table);
 
-    /* Table 41, Priority 0.
+    /* Table 45, Priority 0.
      * =======================
      *
      * Resubmit packets that don't output to the ingress port (already checked
-     * in table 40) to the logical egress pipeline, clearing the logical
+     * in table 43) to the logical egress pipeline, clearing the logical
      * registers (for consistent behavior with packets that get tunneled). */
     match_init_catchall(&match);
     ofpbuf_clear(&ofpacts);
     for (int i = 0; i < MFF_N_LOG_REGS; i++) {
-        put_load(0, MFF_REG0 + i, 0, 32, &ofpacts);
+        if ((MFF_REG0 + i) != MFF_LOG_TUN_OFPORT) {
+            put_load(0, MFF_REG0 + i, 0, 32, &ofpacts);
+        }
     }
+    /* In MFF_LOG_TUN_OFPORT, the bits 16..31 are used to store geneve
+     * tunnel id of received packets and these need to be carried over to
+     * the egress pipeline. The remaining bits can be reset to zero. */
+    put_load(0, MFF_LOG_TUN_OFPORT, 0, 16, &ofpacts);
     put_resubmit(OFTABLE_LOG_EGRESS_PIPELINE, &ofpacts);
     ofctrl_add_flow(flow_table, OFTABLE_CHECK_LOOPBACK, 0, 0, &match,
                     &ofpacts, hc_uuid);
