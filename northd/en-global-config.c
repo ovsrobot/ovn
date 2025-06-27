@@ -20,6 +20,7 @@
 
 /* OVS includes */
 #include "openvswitch/vlog.h"
+#include "socket-util.h"
 
 /* OVN includes */
 #include "debug.h"
@@ -61,6 +62,35 @@ en_global_config_init(struct engine_node *node OVS_UNUSED,
     smap_init(&data->sb_options);
     northd_enable_all_features(data);
     return data;
+}
+
+static void
+update_svc_monitor_addr(const char *new_ip4, const char **old_ip4_pptr)
+{
+    if (new_ip4) {
+        struct sockaddr_storage svc_mon_addr;
+        if (inet_parse_address(new_ip4, &svc_mon_addr)) {
+            struct ds ip_s = DS_EMPTY_INITIALIZER;
+            ss_format_address_nobracks(&svc_mon_addr, &ip_s);
+            if ((*old_ip4_pptr == NULL)
+                || strcmp(*old_ip4_pptr, ds_steal_cstr(&ip_s))) {
+                if (*old_ip4_pptr) {
+                    free(CONST_CAST(void *, *old_ip4_pptr));
+                }
+                *old_ip4_pptr = ds_steal_cstr(&ip_s);
+            }
+        } else {
+            if (*old_ip4_pptr) {
+                free(CONST_CAST(void *, *old_ip4_pptr));
+                *old_ip4_pptr = NULL;
+            }
+        }
+    } else {
+        if (*old_ip4_pptr) {
+            free(CONST_CAST(void *, *old_ip4_pptr));
+            *old_ip4_pptr = NULL;
+        }
+    }
 }
 
 enum engine_node_state
@@ -110,6 +140,27 @@ en_global_config_run(struct engine_node *node , void *data)
         }
     }
 
+    const char *dst_monitor_mac = smap_get(&nb->options,
+                                           "svc_monitor_mac_dst");
+    if (dst_monitor_mac) {
+        if (eth_addr_from_string(dst_monitor_mac,
+                                 &config_data->svc_monitor_mac_ea_dst)) {
+            snprintf(config_data->svc_monitor_mac_dst,
+                     sizeof config_data->svc_monitor_mac_dst,
+                     ETH_ADDR_FMT,
+                     ETH_ADDR_ARGS(config_data->svc_monitor_mac_ea_dst));
+        } else {
+            dst_monitor_mac = NULL;
+        }
+    }
+
+    const char *monitor_ip4 = smap_get(&nb->options, "svc_monitor_ip4");
+    update_svc_monitor_addr(monitor_ip4, &config_data->svc_monitor_ip4);
+    const char *monitor_ip4_dst = smap_get(&nb->options,
+                                           "svc_monitor_ip4_dst");
+    update_svc_monitor_addr(monitor_ip4_dst,
+                            &config_data->svc_monitor_ip4_dst);
+
     struct smap *options = &config_data->nb_options;
     smap_destroy(options);
     smap_clone(options, &nb->options);
@@ -123,6 +174,15 @@ en_global_config_run(struct engine_node *node , void *data)
                  ETH_ADDR_ARGS(config_data->svc_monitor_mac_ea));
         smap_replace(options, "svc_monitor_mac",
                      config_data->svc_monitor_mac);
+    }
+
+    if (!dst_monitor_mac) {
+        eth_addr_random(&config_data->svc_monitor_mac_ea_dst);
+        snprintf(config_data->svc_monitor_mac_dst,
+                 sizeof config_data->svc_monitor_mac_dst, ETH_ADDR_FMT,
+                 ETH_ADDR_ARGS(config_data->svc_monitor_mac_ea_dst));
+        smap_replace(options, "svc_monitor_mac_dst",
+                     config_data->svc_monitor_mac_dst);
     }
 
     bool ic_vxlan_mode = false;
@@ -245,6 +305,21 @@ global_config_nb_global_handler(struct engine_node *node, void *data)
     if (config_out_of_sync(&nb->options, &config_data->nb_options,
                            "svc_monitor_mac", true)) {
         return EN_UNHANDLED;
+    }
+
+    if (config_out_of_sync(&nb->options, &config_data->nb_options,
+                           "svc_monitor_mac_dst", true)) {
+        return false;
+    }
+
+    if (config_out_of_sync(&nb->options, &config_data->nb_options,
+                           "svc_monitor_ip4", false)) {
+        return false;
+    }
+
+    if (config_out_of_sync(&nb->options, &config_data->nb_options,
+                           "svc_monitor_ip4_dst", false)) {
+        return false;
     }
 
     /* Check if max_tunid has changed or not. */
