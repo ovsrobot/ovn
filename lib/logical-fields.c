@@ -212,6 +212,22 @@ ovn_init_symtab(struct shash *symtab)
                                     "ct_label[0..95]", WR_CT_COMMIT);
     expr_symtab_add_subfield_scoped(symtab, "ct_label.acl_id", NULL,
                                     "ct_label[80..95]", WR_CT_COMMIT);
+    expr_symtab_add_subfield_scoped(symtab, "ct_label.network_function_group",
+                                    NULL, "ct_label["
+                                    OVN_CT_STR(
+                                    OVN_CT_NETWORK_FUNCTION_GROUP_BIT)
+                                    "]",
+                                    WR_CT_COMMIT);
+    expr_symtab_add_subfield_scoped(symtab,
+                                    "ct_label.network_function_group_id", NULL,
+                                    "ct_label["
+                                    OVN_CT_STR(
+                                    OVN_CT_NETWORK_FUNCTION_GROUP_ID_1ST_BIT)
+                                    ".."
+                                    OVN_CT_STR(
+                                    OVN_CT_NETWORK_FUNCTION_GROUP_ID_END_BIT)
+                                    "]",
+                                    WR_CT_COMMIT);
 
     expr_symtab_add_field(symtab, "ct_state", MFF_CT_STATE, NULL, false);
 

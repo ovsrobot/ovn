@@ -3153,3 +3153,86 @@ ovn-nbctl: 11111111-1111-1111-1111-111111111111: ha_chassis_group UUID not found
 ])
 OVN_NBCTL_TEST_STOP "/terminating with signal 15/d"
 AT_CLEANUP
+
+dnl ---------------------------------------------------------------------
+
+OVN_NBCTL_TEST([network_function], [Network function operations], [
+AT_CHECK([ovn-nbctl ls-add ls0])
+AT_CHECK([check ovn-nbctl lsp-add ls0 svc-port0])
+AT_CHECK([check ovn-nbctl lsp-add ls0 svc-port1])
+AT_CHECK([check ovn-nbctl set logical_switch_port svc-port0 options:receive_multicast=false options:lsp_learn_fdb=false options:network-function=true options:network-function-linked-port=svc-port1])
+AT_CHECK([check ovn-nbctl set logical_switch_port svc-port1 options:receive_multicast=false options:lsp_learn_fdb=false options:network-function=true options:network-function-linked-port=svc-port0])
+
+# Create network-function.
+AT_CHECK([ovn-nbctl network-function-add nf0 svc-port0 svc-port1])
+AT_CHECK([ovn-nbctl network-function-add nf0 svc-port0 svc-port1], [1], [],
+  [ovn-nbctl: nf0: same name network-function already exists
+])
+AT_CHECK([ovn-nbctl --may-exist network-function-add nf0 svc-port0 svc-port1])
+AT_CHECK([ovn-nbctl network-function-list | uuidfilt], [0], [dnl
+<0> (nf0) in:svc-port0 out:svc-port1
+])
+
+# Create two more network-functions, one with same inport and outport.
+AT_CHECK([check ovn-nbctl lsp-add ls0 svc-port2])
+AT_CHECK([check ovn-nbctl lsp-add ls0 svc-port3])
+AT_CHECK([ovn-nbctl network-function-add nf1 svc-port2 svc-port3])
+AT_CHECK([ovn-nbctl network-function-list | uuidfilt], [0], [dnl
+<0> (nf0) in:svc-port0 out:svc-port1
+<1> (nf1) in:svc-port2 out:svc-port3
+])
+
+AT_CHECK([ovn-nbctl network-function-add nf2 svc-port2 svc-port2])
+AT_CHECK([ovn-nbctl network-function-list | uuidfilt], [0], [dnl
+<0> (nf0) in:svc-port0 out:svc-port1
+<1> (nf1) in:svc-port2 out:svc-port3
+<2> (nf2) in:svc-port2 out:svc-port2
+])
+
+# Create a network-function-group.
+AT_CHECK([ovn-nbctl network-function-group-add nfg0 nf0])
+AT_CHECK([ovn-nbctl network-function-group-add nfg0 nf0], [1], [],
+  [ovn-nbctl: nfg0: a network-function-group with this name already exists
+])
+AT_CHECK([ovn-nbctl --may-exist network-function-group-add nfg0 nf0])
+AT_CHECK([ovn-nbctl network-function-group-list | uuidfilt], [0], [dnl
+<0> (nfg0)
+])
+AT_CHECK([ovn-nbctl network-function-group-add-network-function nfg0 nf0], [1], [],
+  [ovn-nbctl: network-function nf0 is already added to network-function-group nfg0
+])
+AT_CHECK([ovn-nbctl network-function-group-add-network-function nfg0 nf1])
+AT_CHECK([ovn-nbctl network-function-group-del-network-function nfg0 nf1])
+AT_CHECK([ovn-nbctl network-function-group-add nfg1 nf1])
+AT_CHECK([ovn-nbctl network-function-group-list | uuidfilt], [0], [dnl
+<0> (nfg0)
+<1> (nfg1)
+])
+
+# Access-list with network-function-group.
+AT_CHECK(ovn-nbctl lsp-add ls0 p0 -- lsp-set-addresses p0 "00:00:00:00:00:01 10.0.0.1")
+AT_CHECK(ovn-nbctl lsp-add ls0 p1 -- lsp-set-addresses p1 "00:00:00:00:00:02 10.0.0.2")
+AT_CHECK(ovn-nbctl pg-add pg0 p0 p1)
+check_uuid ovn-nbctl create Address_Set name=as0 addresses=\"10.1.1.5\"
+AT_CHECK([ovn-nbctl acl-add pg0 from-lport 100 'inport == @pg0 && ip4.dst == $as2' allow-related nfg0])
+AT_CHECK([ovn-nbctl acl-list pg0], [0], [dnl
+from-lport   100 (inport == @pg0 && ip4.dst == $as2) allow-related network-function-group=nfg0
+])
+AT_CHECK([ovn-nbctl acl-add pg0 to-lport 200 'outport == @pg0 && ip4.src == $as2' allow-related nfg1])
+AT_CHECK([ovn-nbctl acl-list pg0], [0], [dnl
+from-lport   100 (inport == @pg0 && ip4.dst == $as2) allow-related network-function-group=nfg0
+  to-lport   200 (outport == @pg0 && ip4.src == $as2) allow-related network-function-group=nfg1
+])
+AT_CHECK([ovn-nbctl acl-del pg0 to-lport 200 'outport == @pg0 && ip4.src == $as2'])
+AT_CHECK([ovn-nbctl acl-del pg0 from-lport 100 'inport == @pg0 && ip4.dst == $as2'])
+AT_CHECK([ovn-nbctl network-function-group-del nfg1])
+AT_CHECK([ovn-nbctl network-function-group-del nfg0])
+AT_CHECK([ovn-nbctl network-function-group-list | uuidfilt], [0], [])
+AT_CHECK([ovn-nbctl network-function-del nf1])
+AT_CHECK([ovn-nbctl network-function-del nf0])
+AT_CHECK([ovn-nbctl network-function-list | uuidfilt], [0], [dnl
+<0> (nf2) in:svc-port2 out:svc-port2
+])
+AT_CHECK([ovn-nbctl network-function-del nf2])
+AT_CHECK([ovn-nbctl network-function-list | uuidfilt], [0], [])
+])
