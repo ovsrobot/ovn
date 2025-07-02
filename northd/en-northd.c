@@ -156,7 +156,13 @@ northd_nb_logical_switch_handler(struct engine_node *node,
         return EN_UNHANDLED;
     }
 
-    if (northd_has_tracked_data(&nd->trk_data)) {
+    if (northd_has_tracked_data(&nd->trk_data) &&
+        !northd_has_ls_ipam_in_tracked_data(&nd->trk_data)) {
+        return EN_HANDLED_UPDATED;
+    }
+
+    if (northd_has_ls_ipam_in_tracked_data(&nd->trk_data) &&
+        northd_handle_ipam_changes(nd)) {
         return EN_HANDLED_UPDATED;
     }
 

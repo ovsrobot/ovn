@@ -21,6 +21,7 @@
 
 #include "daemon.h"
 #include "include/ovn/actions.h"
+#include "openvswitch/hmap.h"
 #include "openvswitch/ofp-parse.h"
 #include "openvswitch/rconn.h"
 #include "openvswitch/vlog.h"
@@ -34,6 +35,8 @@
 #include "svec.h"
 #include "unixctl.h"
 #include "dummy.h"
+#include "northd/northd.h"
+
 
 VLOG_DEFINE_THIS_MODULE(ovn_util);
 
@@ -1483,4 +1486,38 @@ ovn_mirror_port_name(const char *datapath_name,
                      const char *port_name)
 {
     return xasprintf("mp-%s-%s", datapath_name, port_name);
+}
+
+/* Returns the ovn_port that matches 'name'.  If 'prefer_bound' is true and
+ * multiple ports share the same name, gives precendence to ports bound to
+ * an ovn_datapath.
+ */
+static struct ovn_port *
+ovn_port_find__(const struct hmap *ports, const char *name,
+                bool prefer_bound)
+{
+    struct ovn_port *matched_op = NULL;
+    struct ovn_port *op;
+
+    HMAP_FOR_EACH_WITH_HASH (op, key_node, hash_string(name, 0), ports) {
+        if (!strcmp(op->key, name)) {
+            matched_op = op;
+            if (!prefer_bound || op->od) {
+                return op;
+            }
+        }
+    }
+    return matched_op;
+}
+
+struct ovn_port *
+ovn_port_find(const struct hmap *ports, const char *name)
+{
+    return ovn_port_find__(ports, name, false);
+}
+
+struct ovn_port *
+ovn_port_find_bound(const struct hmap *ports, const char *name)
+{
+    return ovn_port_find__(ports, name, true);
 }
