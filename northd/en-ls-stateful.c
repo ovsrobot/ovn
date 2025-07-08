@@ -179,11 +179,18 @@ ls_stateful_port_group_handler(struct engine_node *node, void *data_)
     struct port_group_data *pg_data =
         engine_get_input_data("port_group", node);
 
-    if (pg_data->ls_port_groups_sets_changed) {
-        return EN_UNHANDLED;
+    struct ed_type_ls_stateful *data = data_;
+    struct hmapx_node *hmap_node;
+    HMAPX_FOR_EACH (hmap_node, &pg_data->ls_port_groups_sets_changed) {
+        const struct nbrec_logical_switch *nbs = hmap_node->data;
+        struct ls_stateful_record *ls_stateful_rec =
+            ls_stateful_table_find_(&data->table, nbs);
+        ls_stateful_record_set_acls(ls_stateful_rec,
+                                    nbs,
+                                    &pg_data->ls_port_groups);
+        hmapx_add(&data->trk_data.crupdated, ls_stateful_rec);
     }
 
-    struct ed_type_ls_stateful *data = data_;
     if (ls_stateful_has_tracked_data(&data->trk_data)) {
         return EN_HANDLED_UPDATED;
     }
