@@ -348,7 +348,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_lflow, &en_sampling_app, NULL);
 
     engine_add_input(&en_lflow, &en_northd, lflow_northd_handler);
-    engine_add_input(&en_lflow, &en_port_group, lflow_port_group_handler);
+    engine_add_input(&en_lflow, &en_port_group, engine_noop_handler);
     engine_add_input(&en_lflow, &en_lr_stateful, lflow_lr_stateful_handler);
     engine_add_input(&en_lflow, &en_ls_stateful, lflow_ls_stateful_handler);
     engine_add_input(&en_lflow, &en_multicast_igmp,
