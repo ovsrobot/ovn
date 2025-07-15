@@ -5829,15 +5829,29 @@ lr_get_name(const struct nbrec_logical_router *lr, char uuid_s[UUID_LEN + 1],
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-gc_by_name_or_uuid(struct ctl_context *ctx, const char *id, bool must_exist,
-                   const struct nbrec_gateway_chassis **gc_p)
+gc_by_name_chassis_name_or_uuid(struct ctl_context *ctx, const char *id,
+                                const char *chassis_name, bool must_exist,
+                                const struct nbrec_gateway_chassis **gc_p,
+                                const struct nbrec_logical_router_port *lrp)
 {
     const struct nbrec_gateway_chassis *gc = NULL;
     *gc_p = NULL;
 
+    if (lrp && chassis_name) {
+        for (size_t i = 0; i < lrp->n_gateway_chassis; i++) {
+            if (strlen(lrp->gateway_chassis[i]->chassis_name) ==
+                strlen(chassis_name) &&
+                !strcmp(lrp->gateway_chassis[i]->chassis_name,
+                chassis_name)) {
+                gc = lrp->gateway_chassis[i];
+                break;
+            }
+        }
+    }
+
     struct uuid gc_uuid;
     bool is_uuid = uuid_from_string(&gc_uuid, id);
-    if (is_uuid) {
+    if (is_uuid && !gc) {
         gc = nbrec_gateway_chassis_get_for_uuid(ctx->idl, &gc_uuid);
     }
 
@@ -5867,6 +5881,7 @@ nbctl_pre_lrp_set_gateway_chassis(struct ctl_context *ctx)
 
     ovsdb_idl_add_column(ctx->idl, &nbrec_gateway_chassis_col_name);
     ovsdb_idl_add_column(ctx->idl, &nbrec_gateway_chassis_col_priority);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_gateway_chassis_col_chassis_name);
 }
 
 static void
@@ -5897,7 +5912,8 @@ nbctl_lrp_set_gateway_chassis(struct ctl_context *ctx)
 
     gc_name = xasprintf("%s-%s", lrp_name, chassis_name);
     const struct nbrec_gateway_chassis *gc;
-    error = gc_by_name_or_uuid(ctx, gc_name, false, &gc);
+    error = gc_by_name_chassis_name_or_uuid(ctx, gc_name, chassis_name, false,
+                                            &gc, lrp);
     if (error) {
         ctx->error = error;
         free(gc_name);
