@@ -1610,7 +1610,7 @@ priority=1100,ip,reg15=0x$port_key,metadata=0x$dp_key,nw_src=10.0.0.1 actions=lo
 ])
     fi
 
-    if test "$i" = 3; then
+   if test "$i" = 3; then
         AT_CHECK_UNQUOTED([ovs-ofctl dump-flows br-int table=$acl_eval,reg15=0x$port_key | \
             grep -v reply | awk '{print $7, $8}' | \
             sed -r 's/conjunction.*,/conjunction,/' | \
