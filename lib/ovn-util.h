@@ -504,6 +504,11 @@ const struct sbrec_port_binding *lport_lookup_by_name(
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
     const char *name);
 
+struct ovn_port;
+struct ovn_port *ovn_port_find(const struct hmap *ports, const char *name);
+struct ovn_port *ovn_port_find__(const struct hmap *ports, const char *name,
+                                 bool prefer_bound);
+
 /* __NARG__ provides a way to count the number of arguments passed to a
  * variadic macro. As defined below, it's capable of counting up to
  * 16 arguments. This should be more than enough for our purposes. However
