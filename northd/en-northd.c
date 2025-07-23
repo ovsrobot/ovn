@@ -156,6 +156,11 @@ northd_nb_logical_switch_handler(struct engine_node *node,
     }
 
     if (northd_has_tracked_data(&nd->trk_data)) {
+        if (northd_has_lsps_in_tracked_data(&nd->trk_data) &&
+            !hmapx_is_empty(&nd->trk_data.ls_with_changed_ipam) &&
+            !northd_handle_ipam_changes(nd)) {
+            return EN_HANDLED_UNCHANGED;
+        }
         return EN_HANDLED_UPDATED;
     }
 

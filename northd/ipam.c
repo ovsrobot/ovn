@@ -71,13 +71,14 @@ init_ipam_info(struct ipam_info *info, const struct smap *config, const char *id
 void
 init_ipam_info_for_datapath(struct ovn_datapath *od)
 {
-    if (!od->nbs) {
+    if (!od->nbs || od->ipam_info_initialized) {
         return;
     }
 
     char uuid_s[UUID_LEN + 1];
     sprintf(uuid_s, UUID_FMT, UUID_ARGS(&od->key));
     init_ipam_info(&od->ipam_info, &od->nbs->other_config, uuid_s);
+    od->ipam_info_initialized = true;
 }
 
 void
@@ -740,7 +741,7 @@ void update_ipam_ls(struct ovn_datapath *od, struct hmap *ls_ports,
             continue;
         }
 
-        int num_dynamic_addresses = 0;
+        bool num_dynamic_addresses = false;
         for (size_t j = 0; j < nbsp->n_addresses; j++) {
             if (!is_dynamic_lsp_address(nbsp->addresses[j])) {
                 continue;
@@ -753,7 +754,7 @@ void update_ipam_ls(struct ovn_datapath *od, struct hmap *ls_ports,
                              nbsp->name);
                 continue;
             }
-            num_dynamic_addresses++;
+            num_dynamic_addresses = true;
             struct dynamic_address_update update;
             update.op = op;
             update.od = od;
