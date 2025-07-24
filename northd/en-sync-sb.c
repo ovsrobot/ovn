@@ -676,7 +676,7 @@ sb_lb_table_build_and_sync(
     struct sb_lb_record *sb_lb;
 
     HMAP_FOR_EACH (lb_dps, hmap_node, lb_dps_map) {
-        if (!lb_dps->n_nb_ls && !lb_dps->n_nb_lr) {
+        if (!lb_dps->nb_ls_map.n_elems && !lb_dps->nb_lr_map.n_elems) {
             continue;
         }
 
@@ -754,10 +754,10 @@ sync_sb_lb_record(struct sb_lb_record *sb_lb,
         sbrec_lr_dp_group = sbrec_lb->lr_datapath_group;
     }
 
-    if (lb_dps->n_nb_ls) {
+    if (lb_dps->nb_ls_map.n_elems) {
         sb_lb->ls_dpg = ovn_dp_group_get(&sb_lbs->ls_dp_groups,
-                                         lb_dps->n_nb_ls,
-                                         lb_dps->nb_ls_map,
+                                         lb_dps->nb_ls_map.n_elems,
+                                         lb_dps->nb_ls_map.map,
                                          ods_size(ls_datapaths));
         if (sb_lb->ls_dpg) {
             /* Update the dpg's sb dp_group. */
@@ -787,7 +787,7 @@ sync_sb_lb_record(struct sb_lb_record *sb_lb,
         } else {
             sb_lb->ls_dpg = ovn_dp_group_create(
                 ovnsb_txn, &sb_lbs->ls_dp_groups, sbrec_ls_dp_group,
-                lb_dps->n_nb_ls, lb_dps->nb_ls_map,
+                lb_dps->nb_ls_map.n_elems, lb_dps->nb_ls_map.map,
                 ods_size(ls_datapaths), true,
                 ls_datapaths, lr_datapaths);
         }
@@ -809,10 +809,10 @@ sync_sb_lb_record(struct sb_lb_record *sb_lb,
     }
 
 
-    if (lb_dps->n_nb_lr) {
+    if (lb_dps->nb_lr_map.n_elems) {
         sb_lb->lr_dpg = ovn_dp_group_get(&sb_lbs->lr_dp_groups,
-                                         lb_dps->n_nb_lr,
-                                         lb_dps->nb_lr_map,
+                                         lb_dps->nb_lr_map.n_elems,
+                                         lb_dps->nb_lr_map.map,
                                          ods_size(lr_datapaths));
         if (sb_lb->lr_dpg) {
             /* Update the dpg's sb dp_group. */
@@ -842,7 +842,7 @@ sync_sb_lb_record(struct sb_lb_record *sb_lb,
         } else {
             sb_lb->lr_dpg = ovn_dp_group_create(
                 ovnsb_txn, &sb_lbs->lr_dp_groups, sbrec_lr_dp_group,
-                lb_dps->n_nb_lr, lb_dps->nb_lr_map,
+                lb_dps->nb_lr_map.n_elems, lb_dps->nb_lr_map.map,
                 ods_size(lr_datapaths), false,
                 ls_datapaths, lr_datapaths);
         }
@@ -919,7 +919,8 @@ sync_changed_lbs(struct sb_lb_table *sb_lbs,
 
         sb_lb = sb_lb_table_find(&sb_lbs->entries, nb_uuid);
 
-        if (!sb_lb && !lb_dps->n_nb_ls && !lb_dps->n_nb_lr) {
+        if (!sb_lb && !lb_dps->nb_ls_map.n_elems &&
+            !lb_dps->nb_lr_map.n_elems) {
             continue;
         }
 
@@ -933,7 +934,8 @@ sync_changed_lbs(struct sb_lb_table *sb_lbs,
                 sbrec_load_balancer_table_get_for_uuid(sb_lb_table, nb_uuid);
         }
 
-        if (sb_lb && !lb_dps->n_nb_ls && !lb_dps->n_nb_lr) {
+        if (sb_lb && !lb_dps->nb_ls_map.n_elems &&
+            !lb_dps->nb_lr_map.n_elems) {
             const struct sbrec_load_balancer *sbrec_lb =
                 sbrec_load_balancer_table_get_for_uuid(sb_lb_table, nb_uuid);
             if (sbrec_lb) {
