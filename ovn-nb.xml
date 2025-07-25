@@ -2576,6 +2576,14 @@ or
         Note that you can not create an ACL matching on a port with
         type=router or type=localnet.
       </p>
+
+      <p>
+        Note that matching directly on ct_state subfields such as
+        <code>ct.new</code>, <code>ct.trk</code>, or connection tracker
+        metadata fields such as <code>ct_proto</code>, <code>ct_udp</code>,
+        <code>ct_tcp</code>, <code>ct_sctp</code> is not recommended as their
+        use may impact performance and prevent hardware offload from working.
+      </p>
     </column>
 
     <column name="action">
