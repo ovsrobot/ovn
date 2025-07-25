@@ -71,13 +71,17 @@ struct northd_input {
     /* ACL ID inputs. */
     const struct acl_id_data *acl_id_data;
 
+    /* Service Monitor data for interconnect learned records.*/
+    struct hmap *ic_learned_svs;
+
     /* Indexes */
+    struct ovsdb_idl_index *nbrec_mirror_by_type_and_sink;
     struct ovsdb_idl_index *sbrec_chassis_by_name;
     struct ovsdb_idl_index *sbrec_chassis_by_hostname;
     struct ovsdb_idl_index *sbrec_ha_chassis_grp_by_name;
     struct ovsdb_idl_index *sbrec_ip_mcast_by_dp;
     struct ovsdb_idl_index *sbrec_fdb_by_dp_and_port;
-    struct ovsdb_idl_index *nbrec_mirror_by_type_and_sink;
+    struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type;
 };
 
 /* A collection of datapaths. E.g. all logical switch datapaths, or all
@@ -214,6 +218,10 @@ struct bfd_sync_data {
     struct sset bfd_ports;
 };
 
+struct ic_learned_svcs_data {
+    struct hmap ic_learned_svs;
+    struct lflow_ref *lflow_ref;
+};
 struct lflow_ref;
 struct lr_nat_table;
 
@@ -246,6 +254,8 @@ struct lflow_input {
     struct simap *route_tables;
     struct hmap *igmp_groups;
     struct lflow_ref *igmp_lflow_ref;
+    struct hmap *ic_learned_svcs;
+    struct lflow_ref *ic_leared_svcs_lflow_ref;
 };
 
 extern int parallelization_state;
@@ -860,6 +870,9 @@ void bfd_sync_init(struct bfd_sync_data *);
 void bfd_sync_swap(struct bfd_sync_data *, struct sset *bfd_ports);
 void bfd_sync_destroy(struct bfd_sync_data *);
 
+void ic_learned_svcs_init(struct ic_learned_svcs_data *data);
+void ic_learned_svcs_cleanup(struct ic_learned_svcs_data *data);
+
 struct lflow_table;
 struct lr_stateful_tracked_data;
 struct ls_stateful_tracked_data;
@@ -912,6 +925,9 @@ void bfd_table_sync(struct ovsdb_idl_txn *, const struct nbrec_bfd_table *,
                     struct sset *);
 void build_bfd_map(const struct nbrec_bfd_table *,
                    const struct sbrec_bfd_table *, struct hmap *);
+void build_ic_learned_svcs_map(struct hmap *ic_learned_svcs_map,
+    struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type);
+
 void run_update_worker_pool(int n_threads);
 
 const struct ovn_datapath *northd_get_datapath_for_port(
