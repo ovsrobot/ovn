@@ -33,6 +33,8 @@
 #endif
 #endif /* __APPLE__ */
 
+struct tracked_lport;
+
 enum neighbor_family {
     NEIGH_AF_INET = AF_INET,
     NEIGH_AF_INET6 = AF_INET6,
@@ -42,11 +44,18 @@ enum neighbor_family {
 struct neighbor_ctx_in {
     /* Contains 'struct local_datapath'. */
     const struct hmap *local_datapaths;
+    /* Index for Port Binding by Datapath. */
+    struct ovsdb_idl_index *sbrec_pb_by_dp;
+    /* Index for Port Binding by name. */
+    struct ovsdb_idl_index *sbrec_pb_by_name;
+    const struct sbrec_chassis *chassis;
 };
 
 struct neighbor_ctx_out {
     /* Contains struct neighbor_interface_monitor pointers. */
     struct vector *monitored_interfaces;
+    /* Contains set of PB names that are currently advertised. */
+    struct sset *advertised_pbs;
 };
 
 enum neighbor_interface_type {
@@ -79,5 +88,9 @@ uint32_t advertise_neigh_hash(const struct eth_addr *,
                               const struct in6_addr *);
 void neighbor_run(struct neighbor_ctx_in *, struct neighbor_ctx_out *);
 void neighbor_cleanup(struct vector *monitored_interfaces);
+bool neighbor_is_relevant_port_updated(
+    struct ovsdb_idl_index *sbrec_pb_by_name,
+    const struct sbrec_chassis *chassis, struct sset *advertised_pbs,
+    const struct tracked_lport *lport);
 
 #endif /* NEIGHBOR_H */
