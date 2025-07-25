@@ -49,6 +49,7 @@ struct svec;
 struct uuid;
 struct unixctl_conn;
 struct rconn;
+struct ovsrec_interface;
 
 struct ipv4_netaddr {
     ovs_be32 addr;            /* 192.168.10.123 */
@@ -166,6 +167,9 @@ void set_idl_probe_interval(struct ovsdb_idl *idl, const char *remote,
 #define OVN_MAX_DP_VXLAN_KEY_LOCAL  ((1u << 10) - 1)
 #define OVN_MIN_DP_VXLAN_KEY_GLOBAL (OVN_MAX_DP_VXLAN_KEY_LOCAL + 1)
 #define OVN_MAX_DP_VXLAN_KEY_GLOBAL ((1u << 12) - 1)
+
+#define OVN_MIN_EVPN_KEY (1u << 31)
+#define OVN_MAX_EVPN_KEY (OVN_MAX_DP_GLOBAL_NUM | OVN_MIN_EVPN_KEY)
 
 struct hmap;
 void ovn_destroy_tnlids(struct hmap *tnlids);
@@ -501,6 +505,7 @@ bool find_prefix_in_set(const struct in6_addr *prefix, unsigned int plen,
 void ovn_debug_commands_register(void);
 
 bool ovn_is_valid_vni(int64_t vni);
+bool ovn_is_evpn_tunnel_interface(const struct ovsrec_interface *iface);
 
 const struct sbrec_port_binding *lport_lookup_by_name(
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
