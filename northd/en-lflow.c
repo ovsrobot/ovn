@@ -62,6 +62,8 @@ lflow_get_input_data(struct engine_node *node,
         engine_get_input_data("ls_stateful", node);
     struct multicast_igmp_data *multicat_igmp_data =
         engine_get_input_data("multicast_igmp", node);
+    struct ic_learned_svcs_data *ic_learned_svcs_data =
+        engine_get_input_data("ic_learned_svcs", node);
 
     lflow_input->sbrec_logical_flow_table =
         EN_OVSDB_GET(engine_get_input("SB_logical_flow", node));
@@ -91,6 +93,8 @@ lflow_get_input_data(struct engine_node *node,
     lflow_input->route_policies = &route_policies_data->route_policies;
     lflow_input->igmp_groups = &multicat_igmp_data->igmp_groups;
     lflow_input->igmp_lflow_ref = multicat_igmp_data->lflow_ref;
+    lflow_input->ic_learned_svcs = &ic_learned_svcs_data->ic_learned_svs;
+    lflow_input->ic_leared_svcs_lflow_ref = ic_learned_svcs_data->lflow_ref;
 
     struct ed_type_global_config *global_config =
         engine_get_input_data("global_config", node);
