@@ -1484,3 +1484,9 @@ ovn_mirror_port_name(const char *datapath_name,
 {
     return xasprintf("mp-%s-%s", datapath_name, port_name);
 }
+
+bool
+ovn_is_valid_vni(int64_t vni)
+{
+    return vni >= 0 && (vni <= (1 << 24) - 1);
+}
