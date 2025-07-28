@@ -159,11 +159,15 @@ ls_stateful_northd_handler(struct engine_node *node, void *data_)
         struct ls_stateful_record *ls_stateful_rec =
             ls_stateful_table_find_(&data->table, od->nbs);
         ovs_assert(ls_stateful_rec);
-        ls_stateful_record_set_acls(ls_stateful_rec, od->nbs,
-                                    input_data.ls_port_groups);
+        /* Ensure that only one handler per engine run calls
+         * ls_stateful_record_set_acls on the same ls_stateful rec. */
+        if (!hmapx_contains(&data->trk_data.crupdated, ls_stateful_rec)) {
+            ls_stateful_record_set_acls(ls_stateful_rec, od->nbs,
+                                        input_data.ls_port_groups);
 
-        /* Add the ls_stateful_rec to the tracking data. */
-        hmapx_add(&data->trk_data.crupdated, ls_stateful_rec);
+            /* Add the ls_stateful_rec to the tracking data. */
+            hmapx_add(&data->trk_data.crupdated, ls_stateful_rec);
+        }
     }
 
     if (ls_stateful_has_tracked_data(&data->trk_data)) {
@@ -179,11 +183,24 @@ ls_stateful_port_group_handler(struct engine_node *node, void *data_)
     struct port_group_data *pg_data =
         engine_get_input_data("port_group", node);
 
-    if (pg_data->ls_port_groups_sets_changed) {
-        return EN_UNHANDLED;
+    struct ed_type_ls_stateful *data = data_;
+    struct hmapx_node *hmap_node;
+    HMAPX_FOR_EACH (hmap_node, &pg_data->ls_port_groups_sets_changed) {
+        const struct nbrec_logical_switch *nbs = hmap_node->data;
+        struct ls_stateful_record *ls_stateful_rec =
+            ls_stateful_table_find_(&data->table, nbs);
+        ovs_assert(ls_stateful_rec);
+        /* Ensure only one handler per engine run calls
+         * ls_stateful_record_set_acls on the same ls_stateful rec. */
+        if (!hmapx_contains(&data->trk_data.crupdated, ls_stateful_rec)) {
+            ls_stateful_record_set_acls(ls_stateful_rec,
+                                        nbs,
+                                        &pg_data->ls_port_groups);
+            /* Add the ls_stateful_rec to the tracking data. */
+            hmapx_add(&data->trk_data.crupdated, ls_stateful_rec);
+        }
     }
 
-    struct ed_type_ls_stateful *data = data_;
     if (ls_stateful_has_tracked_data(&data->trk_data)) {
         return EN_HANDLED_UPDATED;
     }
