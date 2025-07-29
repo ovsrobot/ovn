@@ -41,6 +41,9 @@ Post v25.03.0
    - Added support for running tests from the 'check-kernel' system test target
      under retis by setting OVS_TEST_WITH_RETIS=yes.  See the 'Testing' section
      of the documentation for more details.
+   - Added disable_arp_nd_rsp option to logical_router table in order to
+     disable GARP/RARP announcements by all the peer ports of this logical
+     router.
 
 OVN v25.03.0 - 07 Mar 2025
 --------------------------
