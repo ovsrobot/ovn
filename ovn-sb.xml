@@ -1147,6 +1147,16 @@
             </li>
           </ul>
         </li>
+        <li>
+          <p>
+            <code>ct_proto</code> and <code>ct_udp</code> subfields represent
+            connection tracker metadata containing L4 information for UDP
+            packets.  Note: for internal use, may be removed at any time.
+          </p>
+          <ul>
+            <li><code>ct_udp.src</code> <code>ct_udp.dst</code></li>
+          </ul>
+        </li>
       </ul>
 
       <p>

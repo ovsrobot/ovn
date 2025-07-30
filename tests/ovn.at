@@ -154,7 +154,10 @@ ct_mark.natted = ct_mark[1]
 ct_mark.obs_collector_id = ct_mark[16..23]
 ct_mark.obs_stage = ct_mark[4..5]
 ct_mark.skip_snat = ct_mark[2]
+ct_proto = NXM_NX_CT_NW_PROTO
 ct_state = NXM_NX_CT_STATE
+ct_udp = ct_proto == 17
+ct_udp.dst = NXM_NX_CT_TP_DST
 ]])
 AT_CLEANUP
 
