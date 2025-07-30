@@ -69,6 +69,7 @@
 #include "uuid.h"
 #include "ovs-thread.h"
 #include "openvswitch/vlog.h"
+#include <ctype.h>
 
 VLOG_DEFINE_THIS_MODULE(northd);
 
@@ -85,6 +86,12 @@ static bool use_common_zone = false;
 /* If this option is 'true' northd will make use of ct.inv match fields.
  * Otherwise, it will avoid using it.  The default is true. */
 static bool use_ct_inv_match = true;
+
+/* If this option is 'true' northd will rewrite stateful ACL rules that match
+ * on UDP port fields to use connection tracking fields to properly handle IP
+ * fragments. By default this option is set to 'false'.
+ */
+static bool udp_ct_translation = false;
 
 /* If this option is 'true' northd will implicitly add a lowest-priority
  * drop rule in the ACL stage of logical switches that have at least one
@@ -7335,6 +7342,113 @@ build_acl_sample_default_flows(const struct ovn_datapath *od,
                   "next;", lflow_ref);
 }
 
+/* We need toetect if an ACL match string contains L4 matches. */
+static bool
+acl_has_l4_match(const char *match_str)
+{
+    return (strstr(match_str, "udp."));
+}
+
+/* Extracts port number from a match string.
+ * Examples of match strings and extracted values:
+ * - "udp.dst == 4242" -> extracts "4242" for field "udp.dst"
+ * - "outport == \"server\" && udp && udp.dst == 4242" -> extracts "4242" for
+ * field "udp.dst"
+ */
+static char *
+extract_port_value(const char *match, const char *field)
+{
+    static char port_buf[16];
+    char *field_pos = strstr(match, field);
+    if (!field_pos) {
+        return NULL;
+    }
+
+    /* Move past the field name */
+    field_pos += strlen(field);
+
+    /* Skip spaces and == */
+    while (*field_pos && (*field_pos == ' ' || *field_pos == '=')) {
+        field_pos++;
+    }
+
+    /* Extract the port number */
+    int i = 0;
+    while (*field_pos && isdigit(*field_pos) && i < 15) {
+        port_buf[i++] = *field_pos++;
+    }
+    port_buf[i] = '\0';
+
+    return i > 0 ? port_buf : NULL;
+}
+
+/* This function implements a workaround for stateful ACLs with L4 matches that
+ * need to handle IP fragments properly. The issue is that UDP L4 headers are
+ * only present in the first fragment of a fragmented packet. Subsequent
+ * fragments don't have L4 headers, so they won't match ACL rules that look for
+ * L4 fields.
+ *
+ * The workaround replaces L4 protocol matches with connection tracking
+ * equivalents. For example:
+ *   "outport == "server" && udp && udp.dst == 4242"
+ * becomes:
+ *   "outport == "server" && ct.new && ct_udp.dst == 4242"
+ */
+static char *
+rewrite_match_for_fragments(const char *match_str)
+{
+    struct ds new_match = DS_EMPTY_INITIALIZER;
+    char *str_copy = xstrdup(match_str);
+    char *token;
+    char *saveptr;
+
+    /* First pass: Extract non-L4 parts and detect L4 protocol */
+    token = strtok_r(str_copy, "&&", &saveptr);
+    while (token) {
+        /* Skip leading/trailing spaces */
+        while (*token == ' ') {
+            token++;
+        }
+
+        /* Check if this token contains L4 protocol info */
+        if (!(strstr(token, "udp"))) {
+            /* Keep non-L4 parts of the match */
+            if (new_match.length > 0) {
+                ds_put_cstr(&new_match, " && ");
+            }
+            ds_put_cstr(&new_match, token);
+        }
+        token = strtok_r(NULL, "&&", &saveptr);
+    }
+
+    /* Add ct.new condition */
+    if (new_match.length > 0) {
+        ds_put_cstr(&new_match, " && ");
+    }
+    ds_put_cstr(&new_match, "ct.new");
+
+    /* Second pass: Add connection tracking L4 matches */
+    free(str_copy);
+    str_copy = xstrdup(match_str);
+
+    /* Use the extract_port_value helper function to get port numbers */
+
+    /* Add specific L4 field matches with port numbers */
+    char *port;
+    if ((port = extract_port_value(match_str, "udp.dst"))) {
+        ds_put_format(&new_match, " && ct_udp.dst == %s", port);
+    }
+    if ((port = extract_port_value(match_str, "udp.src"))) {
+        ds_put_format(&new_match, " && ct_udp.src == %s", port);
+    }
+
+    /* Clean up and return the result */
+    free(str_copy);
+    char *result = xstrdup(ds_cstr(&new_match));
+    ds_destroy(&new_match);
+    return result;
+}
+
 static void
 consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
              const struct nbrec_acl *acl, bool has_stateful,
@@ -7385,6 +7499,25 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
         match_tier_len = match->length;
     }
 
+    /* Check if this ACL has L4 matches that need fragment handling */
+    bool has_l4_match = acl_has_l4_match(acl->match);
+    char *modified_match = NULL;
+
+    /* For stateful ACLs with L4 matches, rewrite the match string to handle
+     * fragments, but only if udp_ct_translation is enabled */
+    if (has_stateful && has_l4_match && udp_ct_translation) {
+        modified_match = rewrite_match_for_fragments(acl->match);
+
+        /* Log the rewrite for debugging and visibility */
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_DBG_RL(&rl, "Rewriting ACL match for L4 fragment handling: "
+                    "original='%s' modified='%s'", acl->match, modified_match);
+    }
+
+    /* Use the original or modified match string based on whether L4 matches
+     * were detected */
+    const char *match_to_use = modified_match ? modified_match : acl->match;
+
     if (!has_stateful
         || !strcmp(acl->action, "pass")
         || !strcmp(acl->action, "allow-stateless")) {
@@ -7394,10 +7527,14 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
                                       obs_stage);
 
         ds_put_cstr(actions, "next;");
-        ds_put_format(match, "(%s)", acl->match);
+        ds_put_format(match, "(%s)", match_to_use);
         ovn_lflow_add_with_hint(lflows, od, stage, priority,
                                 ds_cstr(match), ds_cstr(actions),
                                 &acl->header_, lflow_ref);
+
+        if (modified_match) {
+            free(modified_match);
+        }
         return;
     }
 
@@ -7423,7 +7560,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
          */
         ds_truncate(match, match_tier_len);
         ds_put_format(match, REGBIT_ACL_HINT_ALLOW_NEW " == 1 && (%s)",
-                      acl->match);
+                      match_to_use);
 
         ds_truncate(actions, log_verdict_len);
 
@@ -7468,7 +7605,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
         ds_truncate(match, match_tier_len);
         ds_truncate(actions, log_verdict_len);
         ds_put_format(match, REGBIT_ACL_HINT_ALLOW " == 1 && (%s)",
-                      acl->match);
+                      match_to_use);
         if (acl->label || acl->sample_est) {
             ds_put_cstr(actions, REGBIT_CONNTRACK_COMMIT" = 1; ");
         }
@@ -7490,7 +7627,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
          * connection, then we can simply reject/drop it. */
         ds_truncate(match, match_tier_len);
         ds_put_cstr(match, REGBIT_ACL_HINT_DROP " == 1");
-        ds_put_format(match, " && (%s)", acl->match);
+        ds_put_format(match, " && (%s)", match_to_use);
 
         ds_truncate(actions, log_verdict_len);
 
@@ -7514,7 +7651,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
          */
         ds_truncate(match, match_tier_len);
         ds_put_cstr(match, REGBIT_ACL_HINT_BLOCK " == 1");
-        ds_put_format(match, " && (%s)", acl->match);
+        ds_put_format(match, " && (%s)", match_to_use);
 
         ds_truncate(actions, log_verdict_len);
 
@@ -7528,6 +7665,11 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
         ovn_lflow_add_with_hint(lflows, od, stage, priority,
                                 ds_cstr(match), ds_cstr(actions),
                                 &acl->header_, lflow_ref);
+    }
+
+    /* Free the modified match string if it was created */
+    if (modified_match) {
+        free(modified_match);
     }
 }
 
@@ -19537,6 +19679,10 @@ ovnnb_db_run(struct northd_input *input_data,
                                               false);
     use_common_zone = smap_get_bool(input_data->nb_options, "use_common_zone",
                                     false);
+
+    udp_ct_translation = smap_get_bool(input_data->nb_options,
+                                       "udp_ct_translation",
+                                       false);
 
     vxlan_mode = input_data->vxlan_mode;
 

@@ -17970,3 +17970,183 @@ OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
 /connection dropped.*/d"])
 AT_CLEANUP
 ])
+
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ACL correctly handles fragmented traffic])
+AT_KEYWORDS([ovnacl])
+
+CHECK_CONNTRACK()
+CHECK_CONNTRACK_NAT()
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+ADD_BR([br-int])
+ADD_BR([br-ext])
+
+# Logical network:
+# 2 logical switches "public" (192.168.1.0/24) and "internal" (172.16.1.0/24)
+# connected to a router lr.
+# internal has a server.
+# client is connected through localnet.
+
+check ovs-ofctl add-flow br-ext action=normal
+# Set external-ids in br-int needed for ovn-controller
+check ovs-vsctl \
+        -- set Open_vSwitch . external-ids:system-id=hv1 \
+        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+        -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+        -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+        -- set bridge br-int fail-mode=secure other-config:disable-in-band=true \
+        -- set Open_vSwitch . external-ids:ovn-bridge-mappings=phynet:br-ext
+
+
+# Start ovn-controller
+start_daemon ovn-controller
+
+# Set the minimal fragment size for userspace DP.
+# Note that this call will fail for system DP as this setting is not supported there.
+ovs-appctl dpctl/ipf-set-min-frag v4 500
+
+check ovn-nbctl lr-add lr
+check ovn-nbctl ls-add internal
+check ovn-nbctl ls-add public
+
+check ovn-nbctl lrp-add lr lr-pub 00:00:01:01:02:03 192.168.1.1/24
+check ovn-nbctl lsp-add  public pub-lr -- set Logical_Switch_Port pub-lr \
+    type=router options:router-port=lr-pub addresses=\"00:00:01:01:02:03\"
+
+check ovn-nbctl lrp-add lr lr-internal 00:00:01:01:02:04 172.16.1.1/24
+check ovn-nbctl lsp-add internal internal-lr -- set Logical_Switch_Port internal-lr \
+    type=router options:router-port=lr-internal addresses=\"00:00:01:01:02:04\"
+
+check ovn-nbctl lsp-add public ln_port \
+                -- lsp-set-addresses ln_port unknown \
+                -- lsp-set-type ln_port localnet \
+                -- lsp-set-options ln_port network_name=phynet
+
+ADD_NAMESPACES(client)
+ADD_VETH(client, client, br-ext, "192.168.1.2/24", "f0:00:00:01:02:03", \
+         "192.168.1.1")
+NS_EXEC([client], [ip l set dev client mtu 900])
+NS_EXEC([client], [ip a])
+NS_CHECK_EXEC([client], [ip route add 172.16.1.0/24 via 192.168.1.1 dev client])
+
+ADD_NAMESPACES(server)
+ADD_VETH(server, server, br-int, "172.16.1.2/24", "f0:00:0f:01:02:03", \
+         "172.16.1.1")
+check ovn-nbctl lsp-add internal server \
+-- lsp-set-addresses server "f0:00:0f:01:02:03 172.16.1.2"
+NS_EXEC([server], [ip a])
+NS_CHECK_EXEC([server], [ip route add 192.168.1.0/24 via 172.16.1.1 dev server])
+
+check ovn-nbctl set logical_router lr options:chassis=hv1
+
+# Adds debug logging for dpif
+check ovs-appctl vlog/set dpif:dbg
+
+dump_ovs_info() {
+    echo ====== $1 ======
+    ovs-ofctl show br-int
+    echo && echo
+    echo =======ovn-nbctl show========
+    ovn-nbctl show
+    echo ============br-int===========
+    ovs-ofctl dump-flows -O OpenFlow15 br-int
+    echo && echo
+    echo ============br-ext===========
+    ovs-ofctl dump-flows br-ext
+    echo && echo
+    echo ========lflow-list===========
+    ovn-sbctl lflow-list
+    echo && echo
+    ovn-sbctl list Logical_Flow
+    echo && echo
+    echo =========ofproto-trace==========
+    ovs-appctl ofproto/trace br-int "udp,vlan_tci=0x0000,dl_src=f0:00:00:01:02:03,dl_dst=00:00:01:01:02:03,nw_src=192.168.1.2,nw_dst=172.16.1.2,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=first,udp_src=46801,udp_dst=4242"
+    echo =============================
+}
+
+AT_DATA([udp_client.py], [dnl
+import socket
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.sendto(b"x" * 1000, ("172.16.1.2", 4242))
+])
+
+test_fragmented_udp_traffic() {
+    check ovn-nbctl --wait=hv sync
+    check ovs-appctl dpctl/flush-conntrack
+
+    NETNS_DAEMONIZE([server], [nc -l -u 172.16.1.2 4242 > /dev/null], [server.pid])
+
+    # Collect ICMP packets on client side
+    NETNS_START_TCPDUMP([client], [-U -i client -vnne udp], [tcpdump-client])
+
+    # Collect UDP packets on server side
+    NETNS_START_TCPDUMP([server], [-U -i server -vnne 'udp and ip[[6:2]] > 0 and not ip[[6]] = 64'], [tcpdump-server])
+
+    NS_CHECK_EXEC([client], [$PYTHON3 ./udp_client.py])
+    OVS_WAIT_UNTIL([test "$(cat tcpdump-server.tcpdump | wc -l)" = "4"])
+
+    echo ============conntrack-table============
+    ovs-appctl dpctl/dump-conntrack
+    echo =======================================
+
+    kill $(cat tcpdump-client.pid) $(cat tcpdump-server.pid) $(cat server.pid)
+}
+
+AS_BOX([Router without ACL])
+test_fragmented_udp_traffic
+
+AS_BOX([Router with ACL: UDP])
+
+# Add UDP ACL
+check ovn-nbctl --wait=hv acl-add internal to-lport 1000 "outport == \"server\" && udp && udp.dst == 4242" allow-related
+check ovn-nbctl --wait=hv --log --severity=info acl-add internal to-lport 100 "outport == \"server\"" drop
+
+# Test with udp_ct_translation disabled (default)
+AS_BOX([UDP CT Translation disabled (default)])
+dump_ovs_info "With UDP CT Translation disabled"
+
+# Capture logical flows to verify no CT field rewriting
+echo "Checking for CT field rewriting in logical flows (should NOT find any):"
+ovn-sbctl lflow-list | grep -i "ct_udp" || echo "No CT UDP rewriting found (expected)"
+
+# Test with udp_ct_translation enabled
+AS_BOX([UDP CT Translation enabled])
+check ovn-nbctl set NB_Global . options:udp_ct_translation=true
+
+# Wait for northd to process the option change
+sleep 2
+check ovn-nbctl --wait=hv sync
+
+dump_ovs_info "With UDP CT Translation enabled"
+
+# Capture logical flows to verify CT field rewriting
+echo "Checking for CT field rewriting in logical flows (should find some):"
+ovn-sbctl lflow-list | grep -i "ct_udp" && echo "CT UDP rewriting found (expected)" || echo "No CT UDP rewriting found (unexpected)"
+
+# Test UDP fragmented traffic with CT translation enabled
+test_fragmented_udp_traffic
+
+# Reset the option back to default
+check ovn-nbctl set NB_Global . options:udp_ct_translation=false
+
+as ovn-sb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as ovn-nb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as northd
+OVS_APP_EXIT_AND_WAIT([ovn-northd])
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d
+/WARN|netdev@ovs-netdev: execute.*/d
+/dpif|WARN|system@ovs-system: execute.*/d
+"])
+AT_CLEANUP
+])
