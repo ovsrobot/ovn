@@ -16125,7 +16125,7 @@ blackhole 198.51.100.0/24 proto ovn metric 1000])
 # The last 3 of them are local to the current chassis so we expect a better
 # prio.
 check ovn-nbctl --wait=hv set Logical_Router_Port internet-public \
-    options:dynamic-routing-redistribute="connected-as-host,static"
+    options:dynamic-routing-redistribute="connected-as-host,static,nat"
 
 OVN_ROUTE_EQUAL([ovnvrf1337], [dnl
 blackhole 192.0.2.1 proto ovn metric 1000
@@ -16155,7 +16155,7 @@ OVN_ROUTE_EQUAL([ovnvrf1337], [dnl
 blackhole 192.0.2.1 proto ovn metric 1000
 blackhole 192.0.2.2 proto ovn metric 100
 blackhole 192.0.2.3 proto ovn metric 100
-blackhole 192.0.2.10 proto ovn metric 100
+blackhole 192.0.2.10 proto ovn metric 1000
 blackhole 192.0.2.20 proto ovn metric 100
 blackhole 198.51.100.0/24 proto ovn metric 1000])
 
@@ -16165,7 +16165,7 @@ OVN_ROUTE_EQUAL([ovnvrf1337], [dnl
 blackhole 192.0.2.1 proto ovn metric 1000
 blackhole 192.0.2.2 proto ovn metric 100
 blackhole 192.0.2.3 proto ovn metric 100
-blackhole 192.0.2.10 proto ovn metric 100
+blackhole 192.0.2.10 proto ovn metric 1000
 blackhole 192.0.2.20 proto ovn metric 1000
 blackhole 198.51.100.0/24 proto ovn metric 1000])
 
@@ -16175,7 +16175,7 @@ OVN_ROUTE_EQUAL([ovnvrf1337], [dnl
 blackhole 192.0.2.1 proto ovn metric 1000
 blackhole 192.0.2.2 proto ovn metric 100
 blackhole 192.0.2.3 proto ovn metric 100
-blackhole 192.0.2.10 proto ovn metric 100
+blackhole 192.0.2.10 proto ovn metric 1000
 blackhole 192.0.2.20 proto ovn metric 100
 blackhole 198.51.100.0/24 proto ovn metric 1000])
 
@@ -16243,7 +16243,7 @@ OVN_ROUTE_EQUAL([ovnvrf1337], [dnl
 blackhole 192.0.2.1 proto ovn metric 1000
 blackhole 192.0.2.2 proto ovn metric 100
 blackhole 192.0.2.3 proto ovn metric 100
-blackhole 192.0.2.10 proto ovn metric 100
+blackhole 192.0.2.10 proto ovn metric 1000
 blackhole 192.0.2.20 proto ovn metric 100
 blackhole 198.51.100.0/24 proto ovn metric 1000
 233.252.0.0/24 via 192.168.10.10 dev lo onlink
@@ -16260,7 +16260,7 @@ OVN_ROUTE_EQUAL([ovnvrf1338], [dnl
 blackhole 192.0.2.1 proto ovn metric 1000
 blackhole 192.0.2.2 proto ovn metric 100
 blackhole 192.0.2.3 proto ovn metric 100
-blackhole 192.0.2.10 proto ovn metric 100
+blackhole 192.0.2.10 proto ovn metric 1000
 blackhole 192.0.2.20 proto ovn metric 100
 blackhole 198.51.100.0/24 proto ovn metric 1000
 233.252.0.0/24 via 192.168.10.10 dev lo onlink
@@ -16272,7 +16272,7 @@ OVN_ROUTE_EQUAL([ovnvrf1338], [dnl
 blackhole 192.0.2.1 proto ovn metric 1000
 blackhole 192.0.2.2 proto ovn metric 100
 blackhole 192.0.2.3 proto ovn metric 100
-blackhole 192.0.2.10 proto ovn metric 100
+blackhole 192.0.2.10 proto ovn metric 1000
 blackhole 192.0.2.20 proto ovn metric 100
 blackhole 198.51.100.0/24 proto ovn metric 1000
 233.252.0.0/24 via 192.168.10.10 dev lo onlink
@@ -16485,7 +16485,7 @@ blackhole 198.51.100.0/24 proto ovn metric 1000])
 # The last 3 of them are local to the current chassis so we expect a better
 # prio.
 check ovn-nbctl --wait=hv set Logical_Router_Port internet-public \
-    options:dynamic-routing-redistribute="connected-as-host,static"
+    options:dynamic-routing-redistribute="connected-as-host,static,nat"
 
 OVN_ROUTE_EQUAL([ovnvrf1337], [dnl
 blackhole 192.0.2.1 proto ovn metric 100
@@ -16515,7 +16515,7 @@ OVN_ROUTE_EQUAL([ovnvrf1337], [dnl
 blackhole 192.0.2.1 proto ovn metric 100
 blackhole 192.0.2.2 proto ovn metric 100
 blackhole 192.0.2.3 proto ovn metric 100
-blackhole 192.0.2.10 proto ovn metric 100
+blackhole 192.0.2.10 proto ovn metric 1000
 blackhole 192.0.2.20 proto ovn metric 100
 blackhole 198.51.100.0/24 proto ovn metric 1000])
 
@@ -16525,7 +16525,7 @@ OVN_ROUTE_EQUAL([ovnvrf1337], [dnl
 blackhole 192.0.2.1 proto ovn metric 100
 blackhole 192.0.2.2 proto ovn metric 100
 blackhole 192.0.2.3 proto ovn metric 100
-blackhole 192.0.2.10 proto ovn metric 100
+blackhole 192.0.2.10 proto ovn metric 1000
 blackhole 192.0.2.20 proto ovn metric 1000
 blackhole 198.51.100.0/24 proto ovn metric 1000])
 
@@ -16535,7 +16535,7 @@ OVN_ROUTE_EQUAL([ovnvrf1337], [dnl
 blackhole 192.0.2.1 proto ovn metric 100
 blackhole 192.0.2.2 proto ovn metric 100
 blackhole 192.0.2.3 proto ovn metric 100
-blackhole 192.0.2.10 proto ovn metric 100
+blackhole 192.0.2.10 proto ovn metric 1000
 blackhole 192.0.2.20 proto ovn metric 100
 blackhole 198.51.100.0/24 proto ovn metric 1000])
 
@@ -16603,7 +16603,7 @@ OVN_ROUTE_EQUAL([ovnvrf1337], [dnl
 blackhole 192.0.2.1 proto ovn metric 100
 blackhole 192.0.2.2 proto ovn metric 100
 blackhole 192.0.2.3 proto ovn metric 100
-blackhole 192.0.2.10 proto ovn metric 100
+blackhole 192.0.2.10 proto ovn metric 1000
 blackhole 192.0.2.20 proto ovn metric 100
 blackhole 198.51.100.0/24 proto ovn metric 1000
 233.252.0.0/24 via 192.168.10.10 dev lo onlink
@@ -16615,7 +16615,7 @@ OVN_ROUTE_EQUAL([ovnvrf1337], [dnl
 blackhole 192.0.2.1 proto ovn metric 100
 blackhole 192.0.2.2 proto ovn metric 100
 blackhole 192.0.2.3 proto ovn metric 100
-blackhole 192.0.2.10 proto ovn metric 100
+blackhole 192.0.2.10 proto ovn metric 1000
 blackhole 192.0.2.20 proto ovn metric 100
 blackhole 198.51.100.0/24 proto ovn metric 1000
 233.252.0.0/24 via 192.168.10.10 dev lo onlink
