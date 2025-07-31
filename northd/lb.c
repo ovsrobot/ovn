@@ -120,20 +120,29 @@ ovn_lb_vip_backends_health_check_init(const struct ovn_northd_lb *lb,
         }
 
         char *svc_mon_src_ip = NULL;
+        char *az_name = NULL;
         char *port_name = xstrdup(s);
-        char *p = strstr(port_name, ":");
-        if (p) {
-            *p = 0;
-            p++;
+
+        char *ip_part = strstr(port_name, ":");
+        if (ip_part) {
+            *ip_part = '\0';
+            ip_part++;
+
+            char *remote_marker = strstr(ip_part, ":remote:");
+            if (remote_marker) {
+                *remote_marker = '\0';
+                az_name = remote_marker + 8;
+            }
+
             struct sockaddr_storage svc_mon_src_addr;
-            if (!inet_parse_address(p, &svc_mon_src_addr)) {
+            if (!inet_parse_address(ip_part, &svc_mon_src_addr)) {
                 static struct vlog_rate_limit rl =
                     VLOG_RATE_LIMIT_INIT(5, 1);
-                VLOG_WARN_RL(&rl, "Invalid svc mon src IP %s", p);
+                VLOG_WARN_RL(&rl, "Invalid svc mon src IP %s", ip_part);
             } else {
                 struct ds src_ip_s = DS_EMPTY_INITIALIZER;
                 ss_format_address_nobracks(&svc_mon_src_addr,
-                                            &src_ip_s);
+                                           &src_ip_s);
                 svc_mon_src_ip = ds_steal_cstr(&src_ip_s);
             }
         }
@@ -144,6 +153,12 @@ ovn_lb_vip_backends_health_check_init(const struct ovn_northd_lb *lb,
             backend_nb->health_check = true;
             backend_nb->logical_port = xstrdup(port_name);
             backend_nb->svc_mon_src_ip = svc_mon_src_ip;
+            if (az_name) {
+                backend_nb->local_backend = false;
+                backend_nb->az_name = xstrdup(az_name);
+            } else {
+                backend_nb->local_backend = true;
+            }
         }
         free(port_name);
     }
@@ -158,6 +173,7 @@ void ovn_northd_lb_vip_destroy(struct ovn_northd_lb_vip *vip)
     for (size_t i = 0; i < vip->n_backends; i++) {
         free(vip->backends_nb[i].logical_port);
         free(vip->backends_nb[i].svc_mon_src_ip);
+        free(vip->backends_nb[i].az_name);
     }
     free(vip->backends_nb);
 }
