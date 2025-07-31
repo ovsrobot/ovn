@@ -16759,6 +16759,29 @@ OVN_ROUTE_EQUAL([ovnvrf$vrf], [dnl
 blackhole 10.42.10.10 proto ovn metric 1000
 blackhole 172.16.1.150 proto ovn metric 1000])
 
+# Set LR/LRP.options.dynamic-routing-redistribute-local-only=true
+# and verify that lower priority routes are not advertised anymore.
+check ovn-nbctl --wait=hv set logical_router_port r1-join \
+    options:dynamic-routing-redistribute-local-only=true
+
+OVN_ROUTE_EQUAL([ovnvrf$vrf], [dnl
+blackhole 172.16.1.150 proto ovn metric 1000])
+
+check ovn-nbctl --wait=hv remove logical_router_port r1-join     \
+    options dynamic-routing-redistribute-local-only              \
+    -- set logical_router R1                                     \
+            options:dynamic-routing-redistribute-local-only=true
+
+OVN_ROUTE_EQUAL([ovnvrf$vrf], [dnl
+blackhole 172.16.1.150 proto ovn metric 1000])
+
+check ovn-nbctl --wait=hv remove logical_router R1  \
+    options dynamic-routing-redistribute-local-only
+
+OVN_ROUTE_EQUAL([ovnvrf$vrf], [dnl
+blackhole 10.42.10.10 proto ovn metric 1000
+blackhole 172.16.1.150 proto ovn metric 1000])
+
 # Before cleanup of hv1 ovn-controller, trigger a recompute
 # to cleanup the local datapaths. Otherwise, the test will fail.
 # This is because we don't remove a datapath from
@@ -16899,6 +16922,29 @@ check ovn-nbctl                              \
     -- lrp-del-gateway-chassis r2-join hv1   \
     -- lrp-set-gateway-chassis r2-join hv123
 check ovn-nbctl --wait=hv sync
+
+OVN_ROUTE_V6_EQUAL([ovnvrf$vrf], [dnl
+blackhole 2001:db8:1001::150 dev lo proto ovn metric 1000 pref medium
+blackhole 2001:db8:3001::150 dev lo proto ovn metric 1000 pref medium])
+
+# Set LR/LRP.options.dynamic-routing-redistribute-local-only=true
+# and verify that lower priority routes are not advertised anymore.
+check ovn-nbctl --wait=hv set logical_router_port r1-join \
+    options:dynamic-routing-redistribute-local-only=true
+
+OVN_ROUTE_V6_EQUAL([ovnvrf$vrf], [dnl
+blackhole 2001:db8:1001::150 dev lo proto ovn metric 1000 pref medium])
+
+check ovn-nbctl --wait=hv remove logical_router_port r1-join     \
+    options dynamic-routing-redistribute-local-only              \
+    -- set logical_router R1                                     \
+            options:dynamic-routing-redistribute-local-only=true
+
+OVN_ROUTE_V6_EQUAL([ovnvrf$vrf], [dnl
+blackhole 2001:db8:1001::150 dev lo proto ovn metric 1000 pref medium])
+
+check ovn-nbctl --wait=hv remove logical_router R1  \
+    options dynamic-routing-redistribute-local-only
 
 OVN_ROUTE_V6_EQUAL([ovnvrf$vrf], [dnl
 blackhole 2001:db8:1001::150 dev lo proto ovn metric 1000 pref medium
@@ -17060,6 +17106,35 @@ check ovn-nbctl                             \
   -- ha-chassis-group-add-chassis g1 hv2 20 \
   -- ha-chassis-group-remove-chassis g1 hv1
 check ovn-nbctl --wait=hv sync
+
+OVN_ROUTE_EQUAL([ovnvrf$vrf], [dnl
+blackhole 10.42.10.10 proto ovn metric 1000
+blackhole 10.42.10.11 proto ovn metric 1000
+blackhole 10.42.10.12 proto ovn metric 1000
+blackhole 10.42.10.13 proto ovn metric 1000
+blackhole 172.16.1.10 proto ovn metric 1000
+blackhole 172.16.1.11 proto ovn metric 1000])
+
+# Set LR/LRP.options.dynamic-routing-redistribute-local-only=true
+# and verify that lower priority routes are not advertised anymore.
+check ovn-nbctl --wait=hv set logical_router_port r1-join \
+    options:dynamic-routing-redistribute-local-only=true
+
+OVN_ROUTE_EQUAL([ovnvrf$vrf], [dnl
+blackhole 172.16.1.10 proto ovn metric 1000
+blackhole 172.16.1.11 proto ovn metric 1000])
+
+check ovn-nbctl --wait=hv remove logical_router_port r1-join     \
+    options dynamic-routing-redistribute-local-only              \
+    -- set logical_router R1                                     \
+            options:dynamic-routing-redistribute-local-only=true
+
+OVN_ROUTE_EQUAL([ovnvrf$vrf], [dnl
+blackhole 172.16.1.10 proto ovn metric 1000
+blackhole 172.16.1.11 proto ovn metric 1000])
+
+check ovn-nbctl --wait=hv remove logical_router R1  \
+    options dynamic-routing-redistribute-local-only
 
 OVN_ROUTE_EQUAL([ovnvrf$vrf], [dnl
 blackhole 10.42.10.10 proto ovn metric 1000
@@ -17274,6 +17349,35 @@ check ovn-nbctl                             \
   -- ha-chassis-group-add-chassis g1 hv2 20 \
   -- ha-chassis-group-remove-chassis g1 hv1
 check ovn-nbctl --wait=hv sync
+
+OVN_ROUTE_V6_EQUAL([ovnvrf$vrf], [dnl
+blackhole 2001:db8:1003::150 dev lo proto ovn metric 1000 pref medium
+blackhole 2001:db8:1003::151 dev lo proto ovn metric 1000 pref medium
+blackhole 2001:db8:1004::150 dev lo proto ovn metric 1000 pref medium
+blackhole 2001:db8:1004::151 dev lo proto ovn metric 1000 pref medium
+blackhole 2001:db8:1004::152 dev lo proto ovn metric 1000 pref medium
+blackhole 2001:db8:1004::153 dev lo proto ovn metric 1000 pref medium])
+
+# Set LR/LRP.options.dynamic-routing-redistribute-local-only=true
+# and verify that lower priority routes are not advertised anymore.
+check ovn-nbctl --wait=hv set logical_router_port r1-join \
+    options:dynamic-routing-redistribute-local-only=true
+
+OVN_ROUTE_V6_EQUAL([ovnvrf$vrf], [dnl
+blackhole 2001:db8:1003::150 dev lo proto ovn metric 1000 pref medium
+blackhole 2001:db8:1003::151 dev lo proto ovn metric 1000 pref medium])
+
+check ovn-nbctl --wait=hv remove logical_router_port r1-join     \
+    options dynamic-routing-redistribute-local-only              \
+    -- set logical_router R1                                     \
+            options:dynamic-routing-redistribute-local-only=true
+
+OVN_ROUTE_V6_EQUAL([ovnvrf$vrf], [dnl
+blackhole 2001:db8:1003::150 dev lo proto ovn metric 1000 pref medium
+blackhole 2001:db8:1003::151 dev lo proto ovn metric 1000 pref medium])
+
+check ovn-nbctl --wait=hv remove logical_router R1  \
+    options dynamic-routing-redistribute-local-only
 
 OVN_ROUTE_V6_EQUAL([ovnvrf$vrf], [dnl
 blackhole 2001:db8:1003::150 dev lo proto ovn metric 1000 pref medium

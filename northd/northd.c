@@ -4387,6 +4387,17 @@ sync_pb_for_lrp(struct ovn_port *op,
         if (portname) {
             smap_add(&new, "dynamic-routing-port-name", portname);
         }
+        const char *redistribute_local_only_name =
+            "dynamic-routing-redistribute-local-only";
+        bool redistribute_local_only_val =
+            smap_get_bool(&op->nbrp->options,
+                          redistribute_local_only_name,
+                          smap_get_bool(&op->od->nbr->options,
+                                        redistribute_local_only_name,
+                                        false));
+        if (redistribute_local_only_val) {
+            smap_add(&new, redistribute_local_only_name, "true");
+        }
     }
 
     const char *ipv6_pd_list = smap_get(&op->sb->options, "ipv6_ra_pd_list");
