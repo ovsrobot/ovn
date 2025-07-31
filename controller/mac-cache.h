@@ -88,6 +88,9 @@ struct fdb {
     /* Reference to the SB FDB record. */
     const struct sbrec_fdb *sbrec_fdb;
     long long timestamp;
+    /* Set to true when FDB update has been sent, if it must be resent in
+     * case of transaction failure. */
+    bool resend_on_commit_failure;
 };
 
 struct mac_cache_stats {
