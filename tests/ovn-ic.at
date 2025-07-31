@@ -3643,3 +3643,383 @@ OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 2001 |
 OVN_CLEANUP_IC([az1], [az2])
 AT_CLEANUP
 ])
+
+AT_BANNER([OVN Interconnection Service Monitor synchronization])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-ic -- Service Monitor synchronization])
+
+ovn_init_ic_db
+ovn_start az1
+ovn_start az2
+ovn_start az3
+
+#  ┌─────────────────────────────────────────────────────────────────────────────┐
+#  │               Service Monitor Sync Check (Cross-AZ LB Setup)                │
+#  ├───────────────┬───────────────┬────────────────────────────────────────────-┤
+#  │     AZ1       │     AZ2       │      AZ3 (Backends only)                    │
+#  ├───────────────┼───────────────┼────────────────────────────────────────────-┤
+#  │  ┌─────────┐  │  ┌─────────┐  │  ┌─────────┐  ┌─────────┐  ┌─────────┐      │
+#  │  │  LB1    │  │  │  LB2    │  │  │ lport5  │  │ lport6  │  │ lport7  │      │
+#  │  ├─────────┤  │  ├─────────┤  │  │ (AZ3)   │  │ (AZ3)   │  │ (AZ3)   │      │
+#  │  │ - lport1├──┼──┤ - lport3│  │  └─────────┘  └─────────┘  └─────────┘      │
+#  │  │   (AZ1) │  │  │   (AZ2) │  │                                             │
+#  │  │ - lport3│  │  │ - lport1├──┼───────────────────┐                         │
+#  │  │   (AZ2) │  │  │   (AZ3) │  │                   │                         │
+#  │  │ - lport5│  │  └─────────┘  │                   │                         │
+#  │  │   (AZ3) │  │               │                   │                         │
+#  │  └─────────┘  │  ┌─────────┐  │                   │                         │
+#  │               │  │  LB3    │  │                   │                         │
+#  │               │  ├─────────┤  │                   │                         │
+#  │               │  │ - lport5├──┼───────────────────┘                         │
+#  │               │  │   (AZ3) │  │                                             │
+#  │               │  │ - lport6│  │                                             │
+#  │               │  │   (AZ3) │  │                                             │
+#  │               │  │ - lport2├──┘                                             │
+#  │               │  │   (AZ1) │                                                │
+#  │               │  └─────────┘                                                │
+#  └───────────────┴───────────────┴────────────────────────────────────────────-┘
+#
+#  Physical Backend Locations:
+#  - AZ1: lport1, lport2
+#  - AZ2: lport3, lport4
+#  - AZ3: lport5, lport6 , lport7
+#
+#  Load Balancer Configurations:
+#  - LB1 (AZ1): lport1(AZ1), lport3(AZ2), lport5(AZ3), lport4(az2)
+#  - LB2 (AZ2): lport3(AZ2), lport1(AZ3)
+#  - LB3 (AZ2): lport5(AZ3), lport6(AZ3), lport2(AZ1)
+
+
+# AZ1 Configuration
+ovn_as az1
+check ovn-nbctl ls-add az1_ls1
+check ovn-nbctl lsp-add az1_ls1 lport1_az1
+check ovn-nbctl lsp-add az1_ls1 lport2_az1
+
+check ovn-nbctl lb-add az1_lb1 10.10.10.1:80 1.1.1.1:10880,5.5.5.1:10880,3.3.3.1:10880,4.4.4.1:10880
+check ovn-nbctl ls-lb-add az1_ls1 az1_lb1
+AT_CHECK([ovn-nbctl --wait=sb \
+          -- --id=@hc create Load_Balancer_Health_Check vip="10.10.10.1\:80" \
+             options:failure_count=100 \
+          -- add Load_Balancer . health_check @hc | uuidfilt], [0], [<0>
+])
+
+check ovn-nbctl set load_balancer az1_lb1 ip_port_mappings:1.1.1.1=lport1_az1:1.1.1.9
+check ovn-nbctl set load_balancer az1_lb1 ip_port_mappings:3.3.3.1=lport3_az2:3.3.3.9:remote:az2
+check ovn-nbctl set load_balancer az1_lb1 ip_port_mappings:5.5.5.1=lport5_az3:5.5.5.9:remote:az3
+check ovn-nbctl set load_balancer az1_lb1 ip_port_mappings:4.4.4.1=lport4_az2:4.4.4.9:remote:az2
+
+check_row_count sb:Service_Monitor 4
+check_row_count ic-sb:Service_Monitor 3
+
+AT_CHECK([ovn-sbctl lflow-list az1_ls1 | grep arp | grep -c "1.1.1.9"], [0], [dnl
+1
+])
+
+AT_CHECK([ovn-sbctl lflow-list az1_ls1 | grep arp | grep -c "3.3.3.9"], [1], [dnl
+0
+])
+
+# AZ2 Configuration
+ovn_as az2
+check ovn-nbctl ls-add az2_ls1
+check ovn-nbctl lsp-add az2_ls1 lport3_az2
+check ovn-nbctl lsp-add az2_ls1 lport4_az2
+
+check ovn-nbctl lb-add az2_lb1 20.20.20.1:80 3.3.3.1:10880,1.1.1.1:10880
+check ovn-nbctl ls-lb-add az2_ls1 az2_lb1
+-nbctl ls-lb-add az2_ls1 az2_lb1
+AT_CHECK([ovn-nbctl --wait=sb \
+          -- --id=@hc create Load_Balancer_Health_Check vip="20.20.20.1\:80" \
+             options:failure_count=100 \
+          -- add Load_Balancer . health_check @hc | uuidfilt], [0], [<0>
+])
+
+check ovn-nbctl set load_balancer az2_lb1 ip_port_mappings:3.3.3.1=lport3_az2:3.3.3.9
+check ovn-nbctl set load_balancer az2_lb1 ip_port_mappings:1.1.1.1=lport1_az1:1.1.1.9:remote:az1
+
+check_row_count sb:Service_Monitor 3
+check_row_count ic-sb:Service_Monitor 4
+
+ovn_as az1
+check_row_count sb:Service_Monitor 4
+check_column false sb:Service_Monitor ic_learned logical_port=lport1_az1
+check_column true sb:Service_Monitor local logical_port=lport1_az1
+
+ovn_as az2
+check_column "3.3.3.1" sb:Service_Monitor ip logical_port=lport3_az2
+check_column 10880 sb:Service_Monitor port logical_port=lport3_az2
+check_column tcp sb:Service_Monitor protocol logical_port=lport3_az2
+check_column "3.3.3.9" sb:Service_Monitor src_ip logical_port=lport3_az2
+check_column true sb:Service_Monitor ic_learned logical_port=lport3_az2
+check_column true sb:Service_Monitor local logical_port=lport3_az2
+
+check_column false sb:Service_Monitor ic_learned logical_port=lport1_az1
+check_column false sb:Service_Monitor local logical_port=lport1_az1
+
+check_column true sb:Service_Monitor ic_learned logical_port=lport4_az2
+check_column true sb:Service_Monitor local logical_port=lport4_az2
+
+# Check ICSB records
+check_column "4.4.4.1" ic-sb:Service_Monitor ip logical_port=lport4_az2
+check_column 10880 ic-sb:Service_Monitor port logical_port=lport4_az2
+check_column tcp ic-sb:Service_Monitor protocol logical_port=lport4_az2
+check_column "4.4.4.9" ic-sb:Service_Monitor src_ip logical_port=lport4_az2
+check_column az2 ic-sb:Service_Monitor target_availability_zone logical_port=lport4_az2
+check_column az1 ic-sb:Service_Monitor source_availability_zone logical_port=lport4_az2
+
+check_column az2 ic-sb:Service_Monitor target_availability_zone logical_port=lport3_az2
+check_column az1 ic-sb:Service_Monitor source_availability_zone logical_port=lport3_az2
+
+check_column az1 ic-sb:Service_Monitor target_availability_zone logical_port=lport1_az1
+check_column az2 ic-sb:Service_Monitor source_availability_zone logical_port=lport1_az1
+
+check_column az3 ic-sb:Service_Monitor target_availability_zone logical_port=lport5_az3
+check_column az1 ic-sb:Service_Monitor source_availability_zone logical_port=lport5_az3
+
+# AZ3 Configuration
+ovn_as az3
+check ovn-nbctl ls-add az3_ls1
+
+# Check there no Service_Monitor when we have no ports.
+check_row_count sb:Service_Monitor 0
+check_row_count nb:Load_Balancer 0
+
+check ovn-nbctl lsp-add az3_ls1 lport5_az3
+check ovn-nbctl lsp-add az3_ls1 lport6_az3
+check ovn-nbctl lsp-add az3_ls1 lport7_az3
+
+# Check there is one Service Monitor learned from az1.
+check_row_count sb:Service_Monitor 1
+
+check_column "5.5.5.1" sb:Service_Monitor ip logical_port=lport5_az3
+check_column 10880 sb:Service_Monitor port logical_port=lport5_az3
+check_column tcp sb:Service_Monitor protocol logical_port=lport5_az3
+check_column "5.5.5.9" sb:Service_Monitor src_ip logical_port=lport5_az3
+check_column true sb:Service_Monitor ic_learned logical_port=lport5_az3
+check_column true sb:Service_Monitor local logical_port=lport5_az3
+
+AT_CHECK([ovn-sbctl lflow-list az3_ls1 | grep arp | grep -c "5.5.5.9"], [0], [dnl
+1
+])
+
+# Add more lb in AZ2, change port for one backend, check we will have one more
+# records for this Service_Monitor
+ovn_as az2
+check ovn-nbctl lb-add az2_lb2 20.20.20.2:80 2.2.2.1:10880,5.5.5.1:10881,6.6.6.1:10880
+check ovn-nbctl ls-lb-add az2_ls1 az2_lb2
+-nbctl ls-lb-add az2_ls1 az2_lb2
+AT_CHECK([ovn-nbctl --wait=sb \
+          -- --id=@hc create Load_Balancer_Health_Check vip="20.20.20.2\:80" \
+             options:failure_count=100 \
+          -- add Load_Balancer az2_lb2 health_check @hc | uuidfilt], [0], [<0>
+])
+
+check ovn-nbctl set load_balancer az2_lb2 ip_port_mappings:2.2.2.1=lport2_az1:2.2.2.9:remote:az1
+check ovn-nbctl set load_balancer az2_lb2 ip_port_mappings:5.5.5.1=lport5_az3:5.5.5.9:remote:az3
+check ovn-nbctl set load_balancer az2_lb2 ip_port_mappings:6.6.6.1=lport6_az3:6.6.6.9:remote:az3
+
+check_row_count sb:Service_Monitor 6
+
+AT_CHECK([ovn-sbctl lflow-list az2_ls1 | grep arp | grep -c "6.6.6.9"], [1], [dnl
+0
+])
+
+AT_CHECK([ovn-sbctl lflow-list az2_ls1 | grep arp | grep -c "5.5.5.9"], [1], [dnl
+0
+])
+
+AT_CHECK([ovn-sbctl lflow-list az2_ls1 | grep arp | grep -c "2.2.2.9"], [1], [dnl
+0
+])
+
+AT_CHECK([ovn-sbctl lflow-list az2_ls1 | grep arp | grep -c "3.3.3.9"], [0], [dnl
+1
+])
+
+ovn_as az1
+
+check_row_count sb:Service_Monitor 5
+
+check_column true sb:Service_Monitor ic_learned logical_port=lport2_az1
+check_column true sb:Service_Monitor local logical_port=lport2_az1
+
+ovn_as az3
+
+check_row_count sb:Service_Monitor 3
+
+AT_CHECK([ovn-sbctl lflow-list az3_ls1 | grep arp | wc -l], [0], [dnl
+3
+])
+
+AT_CHECK([ovn-sbctl lflow-list az3_ls1 | grep arp | grep -c "6.6.6.9"], [0], [dnl
+1
+])
+
+AT_CHECK([ovn-sbctl lflow-list az3_ls1 | grep arp | grep -c "5.5.5.9"], [0], [dnl
+1
+])
+
+# Check status propogation.
+
+ovn_as az1
+AT_CHECK([ovn-sbctl lflow-list az1_ls1 | grep ls_in_lb | grep backends | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.10.10.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 10.10.10.1; reg2[[0..15]] = 80; ct_lb_mark(backends=1.1.1.1:10880,5.5.5.1:10880,3.3.3.1:10880,4.4.4.1:10880);)
+])
+
+ovn_as az2
+AT_CHECK([ovn-sbctl lflow-list az2_ls1 | grep ls_in_lb | grep backends | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 20.20.20.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 20.20.20.1; reg2[[0..15]] = 80; ct_lb_mark(backends=3.3.3.1:10880,1.1.1.1:10880);)
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 20.20.20.2 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 20.20.20.2; reg2[[0..15]] = 80; ct_lb_mark(backends=2.2.2.1:10880,5.5.5.1:10881,6.6.6.1:10880);)
+])
+
+ovn_as az1
+svc_lport1_uuid=$(ovn-sbctl -d bare --no-headings --columns _uuid find Service_Monitor logical_port=lport1_az1)
+
+check ovn-sbctl set Service_Monitor $svc_lport1_uuid status="offline"
+
+check_column offline ic-sb:Service_Monitor status logical_port=lport1_az1
+
+ovn_as az1
+AT_CHECK([ovn-sbctl lflow-list az1_ls1 | grep ls_in_lb | grep backends | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.10.10.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 10.10.10.1; reg2[[0..15]] = 80; ct_lb_mark(backends=5.5.5.1:10880,3.3.3.1:10880,4.4.4.1:10880);)
+])
+
+ovn_as az2
+AT_CHECK([ovn-sbctl lflow-list az2_ls1 | grep ls_in_lb | grep backends | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 20.20.20.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 20.20.20.1; reg2[[0..15]] = 80; ct_lb_mark(backends=3.3.3.1:10880);)
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 20.20.20.2 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 20.20.20.2; reg2[[0..15]] = 80; ct_lb_mark(backends=2.2.2.1:10880,5.5.5.1:10881,6.6.6.1:10880);)
+])
+
+ovn_as az3
+svc_lport6_uuid=$(ovn-sbctl -d bare --no-headings --columns _uuid find Service_Monitor logical_port=lport6_az3)
+
+check ovn-sbctl set Service_Monitor $svc_lport6_uuid status="offline"
+
+check_column offline ic-sb:Service_Monitor status logical_port=lport6_az3
+
+ovn_as az2
+check_column offline sb:Service_Monitor status logical_port=lport6_az3
+
+AT_CHECK([ovn-sbctl lflow-list az2_ls1 | grep ls_in_lb | grep backends | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 20.20.20.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 20.20.20.1; reg2[[0..15]] = 80; ct_lb_mark(backends=3.3.3.1:10880);)
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 20.20.20.2 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 20.20.20.2; reg2[[0..15]] = 80; ct_lb_mark(backends=2.2.2.1:10880,5.5.5.1:10881);)
+])
+
+ovn_as az1
+svc_lport2_uuid=$(ovn-sbctl -d bare --no-headings --columns _uuid find Service_Monitor logical_port=lport2_az1)
+
+check ovn-sbctl set Service_Monitor $svc_lport2_uuid status="offline"
+
+check_column offline ic-sb:Service_Monitor status logical_port=lport2_az1
+
+ovn_as az2
+AT_CHECK([ovn-sbctl lflow-list az2_ls1 | grep ls_in_lb | grep backends | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 20.20.20.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 20.20.20.1; reg2[[0..15]] = 80; ct_lb_mark(backends=3.3.3.1:10880);)
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 20.20.20.2 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 20.20.20.2; reg2[[0..15]] = 80; ct_lb_mark(backends=5.5.5.1:10881);)
+])
+
+svc_lport4_uuid=$(ovn-sbctl -d bare --no-headings --columns _uuid find Service_Monitor logical_port=lport4_az2)
+
+check ovn-sbctl set Service_Monitor $svc_lport4_uuid status="offline"
+
+check_column offline ic-sb:Service_Monitor status logical_port=lport4_az2
+
+ovn_as az1
+AT_CHECK([ovn-sbctl lflow-list az1_ls1 | grep ls_in_lb | grep backends | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.10.10.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 10.10.10.1; reg2[[0..15]] = 80; ct_lb_mark(backends=5.5.5.1:10880,3.3.3.1:10880);)
+])
+
+ovn_as az2
+check_row_count sb:Service_Monitor 1 logical_port=lport4_az2
+
+ovn_as az1
+az1_lb1_uuid=$(ovn-nbctl --bare --no-headings --columns=_uuid find Load_Balancer name=az1_lb1)
+
+check_row_count sb:Service_Monitor 5
+
+check_row_count sb:Service_Monitor 1 logical_port=lport4_az2
+
+check ovn-nbctl set Load_Balancer $az1_lb1_uuid vip='"10.10.10.1:80"="1.1.1.1:10880,5.5.5.1:10880,3.3.3.1:10880,2.2.2.1:10880"'
+check ovn-nbctl set load_balancer az1_lb1 ip_port_mappings:2.2.2.1=lport2_az1:2.2.2.9
+
+check_row_count sb:Service_Monitor 4
+
+check_row_count sb:Service_Monitor 0 logical_port=lport4_az2
+
+check_row_count ic-sb:Service_Monitor 0 logical_port=lport4_az2
+
+ovn_as az3
+svc_lport6_uuid=$(ovn-sbctl -d bare --no-headings --columns _uuid find Service_Monitor logical_port=lport6_az3)
+
+check ovn-sbctl set Service_Monitor $svc_lport6_uuid status="online"
+
+check_column online ic-sb:Service_Monitor status logical_port=lport6_az3
+
+ovn_as az2
+check_column online sb:Service_Monitor status logical_port=lport6_az3
+
+ovn_as az2
+AT_CHECK([ovn-sbctl lflow-list az2_ls1 | grep ls_in_lb | grep backends | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 20.20.20.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 20.20.20.1; reg2[[0..15]] = 80; ct_lb_mark(backends=3.3.3.1:10880);)
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 20.20.20.2 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 20.20.20.2; reg2[[0..15]] = 80; ct_lb_mark(backends=5.5.5.1:10881,6.6.6.1:10880);)
+])
+
+ovn_as az1
+svc_lport1_uuid=$(ovn-sbctl -d bare --no-headings --columns _uuid find Service_Monitor logical_port=lport1_az1)
+lport1_uuid=$(ovn-sbctl -d bare --no-headings --columns _uuid find Port_Binding logical_port=lport1_az1)
+
+check ovn-sbctl set Port_Binding $lport1_uuid up=true
+
+check ovn-sbctl set Service_Monitor $svc_lport1_uuid status="online"
+
+check_column online ic-sb:Service_Monitor status logical_port=lport1_az1
+
+ovn_as az2
+AT_CHECK([ovn-sbctl lflow-list az2_ls1 | grep ls_in_lb | grep backends | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 20.20.20.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 20.20.20.1; reg2[[0..15]] = 80; ct_lb_mark(backends=3.3.3.1:10880,1.1.1.1:10880);)
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 20.20.20.2 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 20.20.20.2; reg2[[0..15]] = 80; ct_lb_mark(backends=5.5.5.1:10881,6.6.6.1:10880);)
+])
+
+ovn_as az1
+AT_CHECK([ovn-sbctl lflow-list az1_ls1 | grep ls_in_lb | grep backends | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.10.10.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 10.10.10.1; reg2[[0..15]] = 80; ct_lb_mark(backends=1.1.1.1:10880,5.5.5.1:10880,3.3.3.1:10880);)
+])
+
+check ovn-nbctl lb-del az1_lb1
+
+/* check ic_learned not deleted */
+
+check_row_count sb:Service_Monitor 2
+check_row_count sb:Service_Monitor 1 logical_port=lport1_az1
+check_row_count sb:Service_Monitor 1 logical_port=lport2_az1
+
+ovn_as az2
+
+check_row_count sb:Service_Monitor 0 logical_port=lport4_az2
+
+ovn-nbctl list load_balancer az2_lb2
+
+check ovn-nbctl lb-del az2_lb2
+check_row_count sb:Service_Monitor 2
+
+ovn_as az1
+check_row_count sb:Service_Monitor 1
+
+ovn_as az3
+check_row_count sb:Service_Monitor 0
+
+ovn_as az1
+check_row_count ic-sb:Service_Monitor 1
+
+ovn_as az2
+check ovn-nbctl lb-del az2_lb1
+check_row_count sb:Service_Monitor 0
+
+ovn_as az1
+check_row_count sb:Service_Monitor 0
+check_row_count ic-sb:Service_Monitor 0
+
+OVN_CLEANUP_IC([az1], [az2], [az3])
+AT_CLEANUP
+])
