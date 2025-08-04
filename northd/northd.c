@@ -16521,7 +16521,7 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
                       ds_cstr(match), "ct_snat;",
                       lflow_ref);
 
-        ds_put_cstr(match, " && ct.new");
+        ds_put_cstr(match, " && ct.new && flags.unsnat_not_tracked == 1");
         ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT, priority,
                       ds_cstr(match), "ct_commit_to_zone(snat);",
                       lflow_ref);
