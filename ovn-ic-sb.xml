@@ -355,6 +355,10 @@
         Nexthop IP address for this route.
       </column>
 
+      <column name="options">
+        Options of the route. Currently, only override-connected is supported.
+      </column>
+
       <column name="origin">
         Can be one of <code>connected</code>, <code>static</code> or
         <code>loadbalancer</code>.  Routes to directly-connected subnets -
