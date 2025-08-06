@@ -74,11 +74,41 @@ struct ovn_synced_datapath {
     struct hmap_node hmap_node;
     const struct ovsdb_idl_row *nb_row;
     const struct sbrec_datapath_binding *sb_dp;
+    /* This boolean indicates if the synced datapath
+     * has a transient sb_dp pointer. If "true", then
+     * it means the sb_dp field is the return value of
+     * sbrec_datapath_binding_insert(). If "false", then
+     * it means the sb_dp field was provided by an IDL
+     * update.
+     *
+     * This field is only necessary in order to distinguish
+     * duplicate southbound datapath binding records. If a
+     * mischievous agent inserts a datapath binding that walks,
+     * looks, and quacks like an existing datapath binding,
+     * this is what helps us distinguish that the inserted
+     * datapath is actually a duplicate of a known datapath.
+     */
+    bool pending_sb_dp;
 };
 
 struct ovn_synced_datapaths {
     struct hmap synced_dps;
     struct hmap dp_tnlids;
+
+    struct hmapx new;
+    struct hmapx updated;
+    struct hmapx deleted;
+
+    /* The new_sb hmapx contains synced datapaths whose southbound
+     * datapath pointer was detected as "new" from the datapath sync
+     * node. This means that the southbound datapath binding pointer
+     * has been updated to a new value, but the contents of the southbound
+     * datapath binding are the same as they had been in the previous
+     * engine run. Synced datapath binding handlers know to update
+     * their pointer but not to present the synced datapath as "new" or
+     * "updated" in this situation.
+     */
+    struct hmapx new_sb;
 };
 
 /* This is a simple wrapper for a southbound datapath binding. Its purpose
