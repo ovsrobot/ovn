@@ -1509,3 +1509,19 @@ ovn_is_valid_vni(int64_t vni)
 {
     return vni >= 0 && (vni <= (1 << 24) - 1);
 }
+
+bool
+ovn_is_evpn_tunnel_interface(const struct ovsrec_interface *iface)
+{
+    if (strcmp(iface->type, "vxlan")) {
+        return false;
+    }
+
+    if (strcmp(smap_get_def(&iface->options, "local_ip", ""), "flow") ||
+        strcmp(smap_get_def(&iface->options, "remote_ip", ""), "flow") ||
+        strcmp(smap_get_def(&iface->options, "key", ""), "flow")) {
+        return false;
+    }
+
+    return true;
+}
