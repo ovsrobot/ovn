@@ -818,6 +818,10 @@ ovn_datapath_update_external_ids(struct ovn_datapath *od)
             const char *vni = smap_get(&od->nbs->other_config,
                                        "dynamic-routing-vni");
             smap_add(&ids, "dynamic-routing-vni", vni);
+            smap_add(&ids, "dynamic-routing-advertise-fdb",
+                     drr_mode_FDB_is_set(od->dynamic_routing_redistribute)
+                     ? "true"
+                     : "false");
         }
     }
 
@@ -858,7 +862,7 @@ static enum dynamic_routing_redistribute_mode
 parse_dynamic_routing_redistribute(
     const struct smap *options,
     enum dynamic_routing_redistribute_mode default_dynamic_mode,
-    const char *nb_entity_name)
+    const char *nb_entity_name, bool lr)
 {
     char *save_ptr = NULL;
     enum dynamic_routing_redistribute_mode out = DRRM_NONE;
@@ -874,25 +878,29 @@ parse_dynamic_routing_redistribute(
          token != NULL;
          token = strtok_r(NULL, ",", &save_ptr)) {
 
-        if (!strcmp(token, "connected")) {
+        if (lr && !strcmp(token, "connected")) {
             out |= DRRM_CONNECTED;
             continue;
         }
-        if (!strcmp(token, "connected-as-host")) {
+        if (lr && !strcmp(token, "connected-as-host")) {
             /* Setting connected-as-host implies connected. */
             out |= DRRM_CONNECTED | DRRM_CONNECTED_AS_HOST;
             continue;
         }
-        if (!strcmp(token, "static")) {
+        if (lr && !strcmp(token, "static")) {
             out |= DRRM_STATIC;
             continue;
         }
-        if (!strcmp(token, "nat")) {
+        if (lr && !strcmp(token, "nat")) {
             out |= DRRM_NAT;
             continue;
         }
-        if (!strcmp(token, "lb")) {
+        if (lr && !strcmp(token, "lb")) {
             out |= DRRM_LB;
+            continue;
+        }
+        if (!lr && !strcmp(token, "fdb")) {
+            out |= DRRM_FDB;
             continue;
         }
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
@@ -984,6 +992,11 @@ join_datapaths(const struct nbrec_logical_switch_table *nbrec_ls_table,
         if (ovn_is_valid_vni(vni)) {
             od->has_evpn_vni = true;
         }
+
+        od->dynamic_routing_redistribute =
+            parse_dynamic_routing_redistribute(&od->nbs->other_config,
+                                               DRRM_NONE, od->nbs->name,
+                                               false);
     }
 
     const struct nbrec_logical_router *nbr;
@@ -1021,7 +1034,7 @@ join_datapaths(const struct nbrec_logical_switch_table *nbrec_ls_table,
                                             "dynamic-routing", false);
         od->dynamic_routing_redistribute =
             parse_dynamic_routing_redistribute(&od->nbr->options, DRRM_NONE,
-                                               od->nbr->name);
+                                               od->nbr->name, true);
     }
 }
 
@@ -1904,7 +1917,7 @@ join_logical_ports_lrp(struct hmap *ports,
     op->dynamic_routing_redistribute =
         parse_dynamic_routing_redistribute(&op->nbrp->options,
                                            od->dynamic_routing_redistribute,
-                                           op->nbrp->name);
+                                           op->nbrp->name, true);
 
     for (size_t j = 0; j < op->lrp_networks.n_ipv4_addrs; j++) {
         sset_add(&op->od->router_ips,
@@ -5824,7 +5837,7 @@ build_lswitch_learn_fdb_od(
     struct lflow_ref *lflow_ref)
 {
     ovs_assert(od->nbs);
-    const char *lkp_action =  od->has_evpn_vni
+    const char *lkp_action = od->has_evpn_vni
         ? "outport = get_fdb(eth.dst); "
           "remote_outport = get_remote_fdb(eth.dst); next;"
         : "outport = get_fdb(eth.dst); next;";
@@ -9378,6 +9391,8 @@ build_lswitch_lflows_evpn_l2_unknown(struct ovn_datapath *od,
             lflows, od, S_SWITCH_IN_L2_UNKNOWN, 50, "outport == \"none\" && "
             "remote_outport == \"none\"", "No L2 destination", lflow_ref);
     }
+    /* The following flows ensure that the remote FDB is prefered before local
+     * one. */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 25,
                   "remote_outport == \"none\"", "output;", lflow_ref);
     ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 0, "1",

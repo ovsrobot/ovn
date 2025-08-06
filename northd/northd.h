@@ -326,7 +326,8 @@ struct mcast_port_info {
     DRR_MODE(CONNECTED_AS_HOST, 1) \
     DRR_MODE(STATIC,            2) \
     DRR_MODE(NAT,               3) \
-    DRR_MODE(LB,                4)
+    DRR_MODE(LB,                4) \
+    DRR_MODE(FDB,               5)
 
 enum dynamic_routing_redistribute_mode_bits {
 #define DRR_MODE(PROTOCOL, BIT) DRRM_##PROTOCOL##_BIT = BIT,

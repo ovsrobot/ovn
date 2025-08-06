@@ -160,3 +160,9 @@ OVN To-do List
 
   * Allow CMS to set FDB priority for EVPN, currently the remote FDB has
    higher priority.
+
+  * Learn FDBs dynamically from the incoming traffic for EVPN. The same way
+    we do for other traffic passing through LS.
+
+  * Add support for EVPN L3, that involves MAC Binding learning and
+    advertisement.
