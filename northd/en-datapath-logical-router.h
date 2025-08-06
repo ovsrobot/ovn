@@ -26,6 +26,7 @@ void *en_datapath_logical_router_init(struct engine_node *,
 
 enum engine_node_state en_datapath_logical_router_run(struct engine_node *,
                                                       void *data);
+void en_datapath_logical_router_clear_tracked_data(void *data);
 void en_datapath_logical_router_cleanup(void *data);
 
 struct ovn_synced_logical_router {
@@ -45,5 +46,9 @@ enum engine_node_state en_datapath_synced_logical_router_run(
     struct engine_node *, void *data);
 
 void en_datapath_synced_logical_router_cleanup(void *data);
+
+enum engine_input_handler_result
+en_datapath_logical_router_logical_router_handler(struct engine_node *,
+                                                  void *);
 
 #endif /* EN_DATAPATH_LOGICAL_ROUTER_H */
