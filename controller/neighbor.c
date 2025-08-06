@@ -24,10 +24,27 @@
 static void neighbor_interface_monitor_destroy(
     struct neighbor_interface_monitor *);
 
-uint32_t
+static uint32_t
 advertise_neigh_hash(const struct eth_addr *eth, const struct in6_addr *ip)
 {
     return hash_bytes(ip, sizeof *ip, hash_bytes(eth, sizeof *eth, 0));
+}
+
+struct advertise_neighbor_entry *
+advertise_neigh_find(const struct hmap *neighbors, struct eth_addr mac,
+                     const struct in6_addr *ip)
+{
+    uint32_t hash = advertise_neigh_hash(&mac, ip);
+
+    struct advertise_neighbor_entry *ne;
+    HMAP_FOR_EACH_WITH_HASH (ne, node, hash, neighbors) {
+        if (eth_addr_equals(ne->lladdr, mac) &&
+            ipv6_addr_equals(&ne->addr, ip)) {
+            return ne;
+        }
+    }
+
+    return NULL;
 }
 
 void

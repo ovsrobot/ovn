@@ -64,8 +64,9 @@ struct advertise_neighbor_entry {
                              * all zero otherwise. */
 };
 
-uint32_t advertise_neigh_hash(const struct eth_addr *,
-                              const struct in6_addr *);
+struct advertise_neighbor_entry *advertise_neigh_find(
+    const struct hmap *neighbors, struct eth_addr mac,
+    const struct in6_addr *ip);
 void neighbor_run(struct neighbor_ctx_in *, struct neighbor_ctx_out *);
 void neighbor_cleanup(struct vector *monitored_interfaces);
 
