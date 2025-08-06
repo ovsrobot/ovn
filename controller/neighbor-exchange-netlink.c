@@ -133,10 +133,18 @@ ne_nl_sync_neigh(uint8_t family, int32_t if_index,
 /* OVN expects all static entries added on this ifindex to be OVN-owned.
  * Everything else must be learnt. */
 bool
-ne_is_ovn_owned(const struct ne_nl_received_neigh *nd)
-{
+ne_is_ovn_owned(const struct ne_nl_received_neigh *nd) {
     return !(nd->state & NUD_PERMANENT) && (nd->state & NUD_NOARP)
            && !(nd->flags & NTF_EXT_LEARNED);
+}
+
+/* OVN expects that the VTEP entry doesn't have any MAC address (zeroed out)
+ * and the entry is marked as "permanent". */
+bool
+ne_is_valid_remote_vtep(struct ne_nl_received_neigh *ne)
+{
+    return eth_addr_is_zero(ne->lladdr) && (ne->state & NUD_NOARP) &&
+           (ne->state & NUD_PERMANENT);
 }
 
 static bool
