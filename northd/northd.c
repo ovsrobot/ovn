@@ -811,6 +811,12 @@ ovn_datapath_update_external_ids(struct ovn_datapath *od)
             smap_add_format(&ids, "fdb_age_threshold",
                             "%u", age_threshold);
         }
+
+        int64_t vni = ovn_smap_get_llong(&od->nbs->other_config,
+                                         "dynamic-routing-vni", -1);
+        if (ovn_is_valid_vni(vni)) {
+            smap_add_format(&ids, "dynamic-routing-vni", "%"PRIi64, vni);
+        }
     }
 
     /* Set snat-ct-zone */
