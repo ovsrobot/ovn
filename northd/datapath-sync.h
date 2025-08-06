@@ -78,6 +78,7 @@ struct ovn_synced_datapath {
 
 struct ovn_synced_datapaths {
     struct hmap synced_dps;
+    struct hmap dp_tnlids;
 };
 
 /* This is a simple wrapper for a southbound datapath binding. Its purpose
