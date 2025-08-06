@@ -369,7 +369,7 @@ struct ovn_datapath {
 
     const struct nbrec_logical_switch *nbs;  /* May be NULL. */
     const struct nbrec_logical_router *nbr;  /* May be NULL. */
-    const struct sbrec_datapath_binding *sb; /* May be NULL. */
+    const struct ovn_datapath_binding *dp;   /* May be NULL. */
 
     struct ovs_list list;       /* In list of similar records. */
 

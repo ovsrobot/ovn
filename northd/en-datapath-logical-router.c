@@ -172,7 +172,9 @@ en_datapath_synced_logical_router_run(struct engine_node *node , void *data)
         *lr = (struct ovn_synced_logical_router) {
             .nb = CONTAINER_OF(sdp->nb_row, struct nbrec_logical_router,
                                header_),
-            .sb = sdp->sb_dp,
+            .dp = (struct ovn_datapath_binding) {
+                .sb_dp = sdp->sb_dp,
+            }
         };
         hmap_insert(&router_map->synced_routers, &lr->hmap_node,
                     uuid_hash(&lr->nb->header_.uuid));

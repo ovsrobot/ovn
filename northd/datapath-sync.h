@@ -74,6 +74,27 @@ struct ovn_synced_datapaths {
     struct hmap synced_dps;
 };
 
+/* This is a simple wrapper for a southbound datapath binding. Its purpose
+ * is to allow for engine nodes to cache datapath binding pointers safely.
+ *
+ * When an sbrec_datapath_binding is inserted into the southbound
+ * database, the pointer from sbrec_datapath_binding_insert() is not
+ * safe to cache. The pointer is freed when the IDL loop is run and
+ * the transaction is committed. Once the next IDL loop is run and the
+ * southbound database sends an update message with the newly-inserted
+ * datapath binding, the pointer provided by the IDL is now safe to cache
+ * until the datapath binding is deleted.
+ *
+ * Engine nodes can safely cache an ovn_datapath_binding, though. The
+ * reason is that datapath syncing nodes will update the inner sb_dp
+ * pointer to be the permanent version of the pointer once the IDL
+ * provides the pointer. So long as the outer ovn_datapath_binding is
+ * what is cached, it is perfectly safe.
+ */
+struct ovn_datapath_binding {
+    const struct sbrec_datapath_binding *sb_dp;
+};
+
 struct ovn_unsynced_datapath *ovn_unsynced_datapath_alloc(
     const char *name, enum ovn_datapath_type type,
     uint32_t requested_tunnel_key, const struct ovsdb_idl_row *nb_row);

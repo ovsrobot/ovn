@@ -18,6 +18,7 @@
 #define EN_DATAPATH_LOGICAL_ROUTER_H
 
 #include "lib/inc-proc-eng.h"
+#include "datapath-sync.h"
 #include "openvswitch/hmap.h"
 
 void *en_datapath_logical_router_init(struct engine_node *,
@@ -30,7 +31,7 @@ void en_datapath_logical_router_cleanup(void *data);
 struct ovn_synced_logical_router {
     struct hmap_node hmap_node;
     const struct nbrec_logical_router *nb;
-    const struct sbrec_datapath_binding *sb;
+    struct ovn_datapath_binding dp;
 };
 
 struct ovn_synced_logical_router_map {
