@@ -268,7 +268,7 @@ synced_logical_router_alloc(const struct ovn_synced_datapath *sdp)
     *lr = (struct ovn_synced_logical_router) {
         .nb = CONTAINER_OF(sdp->nb_row, struct nbrec_logical_router,
                            header_),
-        .sb = sdp->sb_dp,
+        .sdp = sdp,
     };
     return lr;
 }
@@ -363,7 +363,7 @@ en_datapath_synced_logical_router_datapath_sync_handler(
         }
         lr->nb = CONTAINER_OF(sdp->nb_row, struct nbrec_logical_router,
                               header_);
-        lr->sb = sdp->sb_dp;
+        lr->sdp = sdp;
         hmapx_add(&router_map->updated, lr);
     }
 

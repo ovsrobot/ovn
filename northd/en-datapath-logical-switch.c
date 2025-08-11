@@ -266,7 +266,7 @@ synced_logical_switch_alloc(const struct ovn_synced_datapath *sdp)
     *lsw = (struct ovn_synced_logical_switch) {
         .nb = CONTAINER_OF(sdp->nb_row, struct nbrec_logical_switch,
                            header_),
-        .sb = sdp->sb_dp,
+        .sdp = sdp,
     };
     return lsw;
 }
@@ -362,7 +362,7 @@ en_datapath_synced_logical_switch_datapath_sync_handler(
         }
         lsw->nb = CONTAINER_OF(sdp->nb_row, struct nbrec_logical_switch,
                                header_);
-        lsw->sb = sdp->sb_dp;
+        lsw->sdp = sdp;
         hmapx_add(&switch_map->updated, lsw);
     }
 
