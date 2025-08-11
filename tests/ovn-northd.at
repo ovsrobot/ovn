@@ -17714,3 +17714,64 @@ CHECK_NO_CHANGE_AFTER_RECOMPUTE
 AT_CLEANUP
 ])
 
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([Datapath Sync incremental processing])
+ovn_start
+
+net_add n1
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.11 24 geneve
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb ls-add sw0
+check_engine_stats datapath_sync norecompute compute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set logical_switch sw0 other_config:fdb_age_threshold=5
+check_engine_stats datapath_sync norecompute compute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set logical_switch sw0 other_config:requested-tnl-key=123
+check_engine_stats datapath_sync norecompute compute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb ls-del sw0
+check_engine_stats datapath_sync norecompute compute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lr-add lr0
+check_engine_stats datapath_sync norecompute compute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl set Logical_Router lr0 options:ct-zone-limit=10
+check_engine_stats datapath_sync norecompute compute
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lr-del lr0
+check_engine_stats datapath_sync norecompute compute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+# Global changes mostly should not trigger recomputes...
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set NB_Global . options:foo=bar
+check_engine_stats datapath_sync norecompute compute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+#...unless we're changing vxlan mode.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-sbctl set Encap . type=vxlan
+# Sync just to be sure the encap change has propagated to northd
+check ovn-nbctl --wait=sb sync
+check_engine_stats datapath_sync recompute nocompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
