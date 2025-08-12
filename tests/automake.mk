@@ -320,6 +320,7 @@ if HAVE_NETLINK
 tests_ovstest_LDADD += \
 	controller/neighbor.$(OBJEXT) \
 	controller/neighbor-exchange-netlink.$(OBJEXT) \
+	controller/neighbor-table-notify.$(OBJEXT) \
 	controller/route-exchange-netlink.$(OBJEXT) \
 	controller/test-ovn-netlink.$(OBJEXT)
 endif
