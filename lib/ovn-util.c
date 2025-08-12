@@ -1503,3 +1503,9 @@ put_load(uint64_t value, enum mf_field_id dst, size_t ofs, size_t n_bits,
     ovs_be64 n_value = htonll(value);
     put_load_bytes(&n_value, 8, dst, ofs, n_bits, ofpacts);
 }
+
+bool
+ovn_is_valid_vni(int64_t vni)
+{
+    return vni >= 0 && (vni <= (1 << 24) - 1);
+}
