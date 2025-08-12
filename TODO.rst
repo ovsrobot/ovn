@@ -157,3 +157,6 @@ OVN To-do List
   * Allow ovn-evpn-local-ip to accept list of
     $VNI1:$LOCAL_IP1,$VNI2:$LOCAL_IP2 combinations which will be properly
     reflected in physical flows for given LS with VNI.
+
+  * Allow CMS to set FDB priority for EVPN, currently the remote FDB has
+   higher priority.
