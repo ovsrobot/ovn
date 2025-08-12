@@ -318,6 +318,7 @@ tests_ovstest_LDADD = $(OVS_LIBDIR)/daemon.lo \
 
 if HAVE_NETLINK
 tests_ovstest_LDADD += \
+	controller/host-if-monitor.$(OBJEXT) \
 	controller/neighbor.$(OBJEXT) \
 	controller/neighbor-exchange-netlink.$(OBJEXT) \
 	controller/neighbor-table-notify.$(OBJEXT) \
