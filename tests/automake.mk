@@ -63,7 +63,8 @@ SYSTEM_USERSPACE_TESTSUITE_AT = \
 
 SYSTEM_TESTSUITE_AT = \
 	tests/system-common-macros.at \
-	tests/system-ovn.at
+	tests/system-ovn.at \
+	tests/system-ovn-netlink.at
 
 PERF_TESTSUITE_AT = \
 	tests/perf-testsuite.at \
@@ -292,6 +293,11 @@ tests_ovstest_SOURCES = \
 	lib/test-ovn-features.c \
 	northd/test-ipam.c
 
+if HAVE_NETLINK
+tests_ovstest_SOURCES += \
+	controller/test-ovn-netlink.c
+endif
+
 tests_ovstest_LDADD = $(OVS_LIBDIR)/daemon.lo \
     $(OVS_LIBDIR)/libopenvswitch.la lib/libovn.la \
 	controller/binding.$(OBJEXT) \
@@ -312,7 +318,10 @@ tests_ovstest_LDADD = $(OVS_LIBDIR)/daemon.lo \
 
 if HAVE_NETLINK
 tests_ovstest_LDADD += \
-	controller/route-exchange-netlink.$(OBJEXT)
+	controller/neighbor.$(OBJEXT) \
+	controller/neighbor-exchange-netlink.$(OBJEXT) \
+	controller/route-exchange-netlink.$(OBJEXT) \
+	controller/test-ovn-netlink.$(OBJEXT)
 endif
 
 # Python tests.
