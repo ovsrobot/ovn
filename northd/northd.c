@@ -344,15 +344,21 @@ static const char *reg_ct_state[] = {
 /*
  * Route offsets implement logic to prioritize traffic for routes with
  * same ip_prefix values:
- *  1. (highest priority) connected routes
- *  2. static routes
- *  3. routes learned from the outside via ovn-controller (e.g. bgp)
+ *  1. High-priority static routes,
+ *     (override-connected option is set), including ic-learned with
+ *     override-connected option set to true.
+ *  2. ic-learned connected routes with route_table set.
+ *  3. connected routes, including ic-learned.
+ *  4. static routes, including ic-learned.
+ *  5. routes learned from the outside via ovn-controller (e.g. bgp)
  * (src-ip routes have lower priority than all other routes regardless of
  * prefix length, so not included here.) */
-#define ROUTE_PRIO_OFFSET_MULTIPLIER 6
+#define ROUTE_PRIO_OFFSET_MULTIPLIER 10
 #define ROUTE_PRIO_OFFSET_LEARNED 0
 #define ROUTE_PRIO_OFFSET_STATIC 2
 #define ROUTE_PRIO_OFFSET_CONNECTED 4
+#define ROUTE_PRIO_OFFSET_IC_LEARNED_CONNECTED_WITH_TABLEID 6
+#define ROUTE_PRIO_OFFSET_PRIORITY_STATIC 8
 
 /* Returns the type of the datapath to which a flow with the given 'stage' may
  * be added. */
@@ -11029,6 +11035,10 @@ parsed_route_lookup(struct hmap *routes, size_t hash,
             continue;
         }
 
+        if (pr->override_connected != new_pr->override_connected) {
+            continue;
+        }
+
         if (pr->is_discard_route != new_pr->is_discard_route) {
             continue;
         }
@@ -11059,6 +11069,7 @@ parsed_route_init(const struct ovn_datapath *od,
                   uint32_t route_table_id,
                   bool is_src_route,
                   bool ecmp_symmetric_reply,
+                  bool override_connected,
                   const struct sset *ecmp_selection_fields,
                   enum route_source source,
                   const struct ovn_port *tracked_port,
@@ -11074,6 +11085,7 @@ parsed_route_init(const struct ovn_datapath *od,
     new_pr->is_src_route = is_src_route;
     new_pr->od = od;
     new_pr->ecmp_symmetric_reply = ecmp_symmetric_reply;
+    new_pr->override_connected = override_connected;
     new_pr->is_discard_route = is_discard_route;
     new_pr->lrp_addr_s = nullable_xstrdup(lrp_addr_s);
     new_pr->out_port = out_port;
@@ -11102,7 +11114,8 @@ parsed_route_clone(const struct parsed_route *pr)
     struct parsed_route *new_pr = parsed_route_init(
         pr->od, nexthop, pr->prefix, pr->plen, pr->is_discard_route,
         pr->lrp_addr_s, pr->out_port, pr->route_table_id, pr->is_src_route,
-        pr->ecmp_symmetric_reply, &pr->ecmp_selection_fields, pr->source,
+        pr->ecmp_symmetric_reply, pr->override_connected,
+        &pr->ecmp_selection_fields, pr->source,
         pr->tracked_port, pr->source_hint);
 
     new_pr->hash = pr->hash;
@@ -11163,6 +11176,7 @@ parsed_route_add(const struct ovn_datapath *od,
                  uint32_t route_table_id,
                  bool is_src_route,
                  bool ecmp_symmetric_reply,
+                 bool override_connected,
                  const struct sset *ecmp_selection_fields,
                  enum route_source source,
                  const struct ovsdb_idl_row *source_hint,
@@ -11172,7 +11186,7 @@ parsed_route_add(const struct ovn_datapath *od,
 
     struct parsed_route *new_pr = parsed_route_init(
         od, nexthop, *prefix, plen, is_discard_route, lrp_addr_s, out_port,
-        route_table_id, is_src_route, ecmp_symmetric_reply,
+        route_table_id, is_src_route, ecmp_symmetric_reply, override_connected,
         ecmp_selection_fields, source, tracked_port, source_hint);
 
     new_pr->hash = route_hash(new_pr);
@@ -11300,6 +11314,8 @@ parsed_routes_add_static(const struct ovn_datapath *od,
     bool ecmp_symmetric_reply = smap_get_bool(&route->options,
                                          "ecmp_symmetric_reply",
                                          false);
+    bool override_connected = smap_get_bool(&route->options,
+                                            ROUTE_OVERRIDE_CONNECTED, false);
 
     enum route_source source;
     if (!strcmp(smap_get_def(&route->options, "origin", ""),
@@ -11311,7 +11327,8 @@ parsed_routes_add_static(const struct ovn_datapath *od,
 
     parsed_route_add(od, nexthop, &prefix, plen, is_discard_route, lrp_addr_s,
                      out_port, route_table_id, is_src_route,
-                     ecmp_symmetric_reply, &ecmp_selection_fields, source,
+                     ecmp_symmetric_reply, override_connected,
+                     &ecmp_selection_fields, source,
                      &route->header_, NULL, routes);
     sset_destroy(&ecmp_selection_fields);
 }
@@ -11329,7 +11346,7 @@ parsed_routes_add_connected(const struct ovn_datapath *od,
         parsed_route_add(od, NULL, &prefix, addr->plen,
                          false, addr->addr_s, op,
                          0, false,
-                         false, NULL, ROUTE_SOURCE_CONNECTED,
+                         false, false, NULL, ROUTE_SOURCE_CONNECTED,
                          &op->nbrp->header_, NULL, routes);
     }
 
@@ -11341,7 +11358,7 @@ parsed_routes_add_connected(const struct ovn_datapath *od,
         parsed_route_add(od, NULL, &prefix, addr->plen,
                          false, addr->addr_s, op,
                          0, false,
-                         false, NULL, ROUTE_SOURCE_CONNECTED,
+                         false, false, NULL, ROUTE_SOURCE_CONNECTED,
                          &op->nbrp->header_, NULL, routes);
     }
 }
@@ -11396,61 +11413,46 @@ build_route_prefix_s(const struct in6_addr *prefix, unsigned int plen)
     return prefix_s;
 }
 
+
 static uint16_t
-route_source_to_offset(enum route_source source)
+calc_priority(int plen,
+              enum route_source source,
+              bool override_connected,
+              bool is_src_route,
+              bool has_protocol_match)
 {
+    uint16_t pri = (plen * ROUTE_PRIO_OFFSET_MULTIPLIER) + has_protocol_match;
+
+    if (is_src_route) {
+        return pri;
+    }
+
     switch (source) {
     case ROUTE_SOURCE_CONNECTED:
-        return ROUTE_PRIO_OFFSET_CONNECTED;
+        pri += (override_connected)
+               ? ROUTE_PRIO_OFFSET_IC_LEARNED_CONNECTED_WITH_TABLEID
+               : ROUTE_PRIO_OFFSET_CONNECTED;
+        break;
+
     case ROUTE_SOURCE_STATIC:
-        return ROUTE_PRIO_OFFSET_STATIC;
+        pri += (override_connected)
+               ? ROUTE_PRIO_OFFSET_PRIORITY_STATIC
+               : ROUTE_PRIO_OFFSET_STATIC;
+        break;
+
     case ROUTE_SOURCE_LEARNED:
-        return ROUTE_PRIO_OFFSET_LEARNED;
+        pri += ROUTE_PRIO_OFFSET_LEARNED;
+        break;
+
     case ROUTE_SOURCE_NAT:
     case ROUTE_SOURCE_LB:
     default:
         OVS_NOT_REACHED();
     }
+
+    return pri + (128 + 1) * ROUTE_PRIO_OFFSET_MULTIPLIER;
 }
 
-static void
-build_route_match(const struct ovn_port *op_inport, uint32_t rtb_id,
-                  const char *network_s, int plen, bool is_src_route,
-                  bool is_ipv4, struct ds *match, uint16_t *priority,
-                  enum route_source source, bool has_protocol_match)
-{
-    const char *dir;
-    int ofs = route_source_to_offset(source);
-    int base = 0;
-
-    /* The priority here is calculated to implement longest-prefix-match
-     * routing. */
-    if (is_src_route) {
-        dir = "src";
-        ofs = 0;
-    } else {
-        dir = "dst";
-        /* dst routes have higher priority than all src routes regardless of
-         * prefix length. */
-        base = (128 + 1) * ROUTE_PRIO_OFFSET_MULTIPLIER;
-    }
-
-    if (op_inport) {
-        ds_put_format(match, "inport == %s && ", op_inport->json_key);
-    }
-    if (rtb_id || source == ROUTE_SOURCE_STATIC ||
-            source == ROUTE_SOURCE_LEARNED) {
-        ds_put_format(match, "%s == %d && ", REG_ROUTE_TABLE_ID, rtb_id);
-    }
-
-    if (has_protocol_match) {
-        ofs += 1;
-    }
-    *priority = base + (plen * ROUTE_PRIO_OFFSET_MULTIPLIER) + ofs;
-
-    ds_put_format(match, "ip%s.%s == %s/%d", is_ipv4 ? "4" : "6", dir,
-                  network_s, plen);
-}
 
 bool
 find_route_outport(const struct hmap *lr_ports, const char *output_port,
@@ -11646,10 +11648,20 @@ build_ecmp_route_flow(struct lflow_table *lflows,
     struct ds route_match = DS_EMPTY_INITIALIZER;
 
     char *prefix_s = build_route_prefix_s(&eg->prefix, eg->plen);
-    build_route_match(NULL, eg->route_table_id, prefix_s, eg->plen,
-                      eg->is_src_route, is_ipv4_prefix, &route_match,
-                      &priority, eg->source,
-                      protocol != NULL);
+
+    if (eg->route_table_id || eg->source == ROUTE_SOURCE_STATIC
+        || eg->source == ROUTE_SOURCE_LEARNED) {
+        ds_put_format(&route_match, "%s == %d && ", REG_ROUTE_TABLE_ID,
+                      eg->route_table_id);
+    }
+
+    ds_put_format(&route_match, "ip%s.%s == %s/%d",
+                  is_ipv4_prefix ? "4" : "6",
+                  eg->is_src_route ? "src" : "dst",
+                  prefix_s, eg->plen);
+
+    priority = calc_priority(eg->plen, eg->source, false,
+                             eg->is_src_route, protocol != NULL);
     free(prefix_s);
 
     struct ds actions = DS_EMPTY_INITIALIZER;
@@ -11760,7 +11772,8 @@ add_route(struct lflow_table *lflows, const struct ovn_datapath *od,
           const struct sset *bfd_ports,
           const struct ovsdb_idl_row *stage_hint, bool is_discard_route,
           enum route_source source, struct lflow_ref *lflow_ref,
-          bool is_ipv4_prefix, bool is_ipv4_nexthop)
+          bool is_ipv4_prefix, bool is_ipv4_nexthop,
+          bool override_connected)
 {
     struct ds match = DS_EMPTY_INITIALIZER;
     uint16_t priority;
@@ -11774,8 +11787,22 @@ add_route(struct lflow_table *lflows, const struct ovn_datapath *od,
             op_inport = op;
         }
     }
-    build_route_match(op_inport, rtb_id, network_s, plen, is_src_route,
-                      is_ipv4_prefix, &match, &priority, source, false);
+
+    if (op_inport) {
+        ds_put_format(&match, "inport == %s && ", op_inport->json_key);
+    }
+    if (rtb_id || source == ROUTE_SOURCE_STATIC ||
+        source == ROUTE_SOURCE_LEARNED) {
+        ds_put_format(&match, "%s == %d && ", REG_ROUTE_TABLE_ID, rtb_id);
+    }
+
+    ds_put_format(&match, "ip%s.%s == %s/%d",
+                  is_ipv4_prefix ? "4" : "6",
+                  is_src_route ? "src" : "dst",
+                  network_s, plen);
+
+    priority = calc_priority(plen, source, override_connected, is_src_route,
+                             false);
 
     struct ds common_actions = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
@@ -11843,7 +11870,7 @@ build_route_flow(struct lflow_table *lflows, const struct ovn_datapath *od,
               route->route_table_id, bfd_ports,
               route->source_hint,
               route->is_discard_route, route->source, lflow_ref,
-              is_ipv4_prefix, is_ipv4_nexthop);
+              is_ipv4_prefix, is_ipv4_nexthop, route->override_connected);
 
     free(prefix_s);
 }
@@ -17329,7 +17356,7 @@ build_routable_flows_for_router_port(
                               bfd_ports, &router_port->nbrp->header_,
                               false, ROUTE_SOURCE_CONNECTED,
                               lrp->stateful_lflow_ref,
-                              true, is_ipv4_nexthop ? true : false);
+                              true, is_ipv4_nexthop ? true : false, false);
                 }
             }
         }
