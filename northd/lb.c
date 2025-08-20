@@ -632,7 +632,9 @@ ovn_lb_datapaths_create(const struct ovn_northd_lb *lb, size_t n_ls_datapaths,
     struct ovn_lb_datapaths *lb_dps = xzalloc(sizeof *lb_dps);
     lb_dps->lb = lb;
     lb_dps->nb_ls_map.map = bitmap_allocate(n_ls_datapaths);
+    lb_dps->nb_ls_map.capacity = n_ls_datapaths;
     lb_dps->nb_lr_map.map = bitmap_allocate(n_lr_datapaths);
+    lb_dps->nb_lr_map.capacity = n_lr_datapaths;
     lb_dps->lflow_ref = lflow_ref_create();
     hmapx_init(&lb_dps->ls_lb_with_stateless_mode);
     return lb_dps;
@@ -648,11 +650,23 @@ ovn_lb_datapaths_destroy(struct ovn_lb_datapaths *lb_dps)
     free(lb_dps);
 }
 
+static void
+dynamic_bitmap_realloc(struct dynamic_bitmap *db, size_t new_n_elems)
+{
+    if (new_n_elems > db->capacity) {
+        db->map = ovn_bitmap_realloc(db->map, db->capacity, new_n_elems);
+        db->capacity = new_n_elems;
+    }
+}
+
 void
 ovn_lb_datapaths_add_lr(struct ovn_lb_datapaths *lb_dps, size_t n,
-                        struct ovn_datapath **ods)
+                        struct ovn_datapath **ods,
+                        size_t n_lr_datapaths)
 {
+    dynamic_bitmap_realloc(&lb_dps->nb_lr_map, n_lr_datapaths);
     for (size_t i = 0; i < n; i++) {
+        ovs_assert(ods[i]->index < lb_dps->nb_lr_map.capacity);
         if (!bitmap_is_set(lb_dps->nb_lr_map.map, ods[i]->index)) {
             bitmap_set1(lb_dps->nb_lr_map.map, ods[i]->index);
             lb_dps->nb_lr_map.n_elems++;
@@ -662,9 +676,12 @@ ovn_lb_datapaths_add_lr(struct ovn_lb_datapaths *lb_dps, size_t n,
 
 void
 ovn_lb_datapaths_add_ls(struct ovn_lb_datapaths *lb_dps, size_t n,
-                        struct ovn_datapath **ods)
+                        struct ovn_datapath **ods,
+                        size_t n_ls_datapaths)
 {
+    dynamic_bitmap_realloc(&lb_dps->nb_ls_map, n_ls_datapaths);
     for (size_t i = 0; i < n; i++) {
+        ovs_assert(ods[i]->index < lb_dps->nb_ls_map.capacity);
         if (!bitmap_is_set(lb_dps->nb_ls_map.map, ods[i]->index)) {
             bitmap_set1(lb_dps->nb_ls_map.map, ods[i]->index);
             lb_dps->nb_ls_map.n_elems++;
@@ -694,8 +711,10 @@ ovn_lb_group_datapaths_create(const struct ovn_lb_group *lb_group,
     struct ovn_lb_group_datapaths *lb_group_dps =
         xzalloc(sizeof *lb_group_dps);
     lb_group_dps->lb_group = lb_group;
-    lb_group_dps->ls = xmalloc(max_ls_datapaths * sizeof *lb_group_dps->ls);
-    lb_group_dps->lr = xmalloc(max_lr_datapaths * sizeof *lb_group_dps->lr);
+    lb_group_dps->ls = VECTOR_CAPACITY_INITIALIZER(struct ovn_datapath *,
+                                                   max_ls_datapaths);
+    lb_group_dps->lr = VECTOR_CAPACITY_INITIALIZER(struct ovn_datapath *,
+                                                   max_lr_datapaths);
 
     return lb_group_dps;
 }
@@ -703,8 +722,8 @@ ovn_lb_group_datapaths_create(const struct ovn_lb_group *lb_group,
 void
 ovn_lb_group_datapaths_destroy(struct ovn_lb_group_datapaths *lb_group_dps)
 {
-    free(lb_group_dps->ls);
-    free(lb_group_dps->lr);
+    vector_destroy(&lb_group_dps->ls);
+    vector_destroy(&lb_group_dps->lr);
     free(lb_group_dps);
 }
 
