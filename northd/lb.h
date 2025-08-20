@@ -189,6 +189,7 @@ struct ovn_lb_datapaths *ovn_lb_datapaths_create(const struct ovn_northd_lb *,
 struct ovn_lb_datapaths *ovn_lb_datapaths_find(const struct hmap *,
                                                const struct uuid *);
 void ovn_lb_datapaths_destroy(struct ovn_lb_datapaths *);
+void dynamic_bitmap_realloc(struct dynamic_bitmap *, size_t new_n_elems);
 
 void ovn_lb_datapaths_add_lr(struct ovn_lb_datapaths *, size_t n,
                              struct ovn_datapath **,

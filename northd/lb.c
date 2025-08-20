@@ -650,7 +650,7 @@ ovn_lb_datapaths_destroy(struct ovn_lb_datapaths *lb_dps)
     free(lb_dps);
 }
 
-static void
+void
 dynamic_bitmap_realloc(struct dynamic_bitmap *db, size_t new_n_elems)
 {
     if (new_n_elems > db->capacity) {
