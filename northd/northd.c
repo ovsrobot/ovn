@@ -3036,7 +3036,9 @@ static struct service_monitor_info *
 create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
                           struct hmap *local_svc_monitors_map,
                           struct hmap *ic_learned_svc_monitors_map,
-                          const char *ip, const char *logical_port,
+                          const char *type, const char *ip,
+                          const char *logical_port,
+                          const char *logical_input_port,
                           uint16_t service_port, const char *protocol,
                           const char *chassis_name, bool local_backend)
 {
@@ -3069,9 +3071,14 @@ create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
 
     struct sbrec_service_monitor *sbrec_mon =
         sbrec_service_monitor_insert(ovnsb_txn);
+    sbrec_service_monitor_set_type(sbrec_mon, type);
     sbrec_service_monitor_set_ip(sbrec_mon, ip);
     sbrec_service_monitor_set_port(sbrec_mon, service_port);
     sbrec_service_monitor_set_logical_port(sbrec_mon, logical_port);
+    if (logical_input_port) {
+        sbrec_service_monitor_set_logical_input_port(sbrec_mon,
+            logical_input_port);
+    }
     sbrec_service_monitor_set_protocol(sbrec_mon, protocol);
     sbrec_service_monitor_set_local(sbrec_mon, local_backend);
     sbrec_service_monitor_set_ic_learned(sbrec_mon, false);
@@ -3082,6 +3089,103 @@ create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
     mon_info->sbrec_mon = sbrec_mon;
     hmap_insert(local_svc_monitors_map, &mon_info->hmap_node, hash);
     return mon_info;
+}
+
+static void
+ovn_nf_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
+                  struct hmap *local_svc_monitors_map,
+                  struct hmap *ic_learned_svc_monitors_map,
+                  struct sset *svc_monitor_lsps,
+                  struct hmap *ls_ports,
+                  const char *mac_src, const char *mac_dst,
+                  const char *ip_src, const char *ip_dst,
+                  const char *logical_port, const char *logical_input_port,
+                  const struct smap *health_check_options)
+{
+    if (!ip_src || !ip_dst || !mac_src || !mac_dst) {
+       static struct vlog_rate_limit rl =
+          VLOG_RATE_LIMIT_INIT(1, 1);
+       VLOG_ERR_RL(&rl, "NetworkFunction: invalid  service monitor src_mac:%s "
+                    "dst_mac:%s src_ip:%s dst_ip:%s\n",
+                     mac_src, mac_dst, ip_src, ip_dst);
+        return;
+    }
+
+    const char *ports[] = {logical_port, logical_input_port};
+    size_t n_ports = sizeof(ports) / sizeof(ports[0]);
+    const char *chassis_name = NULL;
+    bool port_up = true;
+
+    for (int i = 0; i < n_ports; i++) {
+        const char *port = ports[i];
+        sset_add(svc_monitor_lsps, port);
+        struct ovn_port *op = ovn_port_find(ls_ports, port);
+        if (op == NULL) {
+            static struct vlog_rate_limit rl =
+            VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_ERR_RL(&rl, "NetworkFunction: skip health check, port:%s "
+                        "not found\n",  port);
+            return;
+        }
+
+        if (op->sb && op->sb->chassis) {
+            if (chassis_name == NULL) {
+                chassis_name = op->sb->chassis->name;
+            } else if (strcmp(chassis_name, op->sb->chassis->name)) {
+                 static struct vlog_rate_limit rl =
+                    VLOG_RATE_LIMIT_INIT(1, 1);
+                 VLOG_ERR_RL(&rl, "NetworkFunction: chassis mismatch "
+                      " chassis:%s port:%s\n", op->sb->chassis->name, port);
+            }
+        }
+        port_up &= (op->sb->n_up && op->sb->up[0]);
+    }
+
+
+    struct service_monitor_info *mon_info =
+        create_or_get_service_mon(ovnsb_txn,
+                                  local_svc_monitors_map,
+                                  ic_learned_svc_monitors_map,
+                                  "network-function", ip_dst,
+                                  logical_port,
+                                  logical_input_port,
+                                  0,
+                                  "icmp",
+                                  chassis_name,
+                                  true);
+    ovs_assert(mon_info);
+    sbrec_service_monitor_set_options(
+        mon_info->sbrec_mon, health_check_options);
+
+    if (!mon_info->sbrec_mon->src_mac ||
+        strcmp(mon_info->sbrec_mon->src_mac, mac_src)) {
+        sbrec_service_monitor_set_src_mac(mon_info->sbrec_mon,
+                                          mac_src);
+    }
+
+    if (!mon_info->sbrec_mon->mac ||
+        strcmp(mon_info->sbrec_mon->mac, mac_dst)) {
+        sbrec_service_monitor_set_mac(mon_info->sbrec_mon,
+                                      mac_dst);
+    }
+
+    if (!mon_info->sbrec_mon->src_ip ||
+        strcmp(mon_info->sbrec_mon->src_ip, ip_src)) {
+        sbrec_service_monitor_set_src_ip(mon_info->sbrec_mon, ip_src);
+    }
+
+    if (!mon_info->sbrec_mon->ip ||
+        strcmp(mon_info->sbrec_mon->ip, ip_dst)) {
+        sbrec_service_monitor_set_ip(mon_info->sbrec_mon, ip_dst);
+    }
+
+    if (!port_up
+        && mon_info->sbrec_mon->status
+        && !strcmp(mon_info->sbrec_mon->status, "online")) {
+        sbrec_service_monitor_set_status(mon_info->sbrec_mon,
+                                         "offline");
+    }
+    mon_info->required = true;
 }
 
 static void
@@ -3135,8 +3239,10 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                 create_or_get_service_mon(ovnsb_txn,
                                           local_svc_monitors_map,
                                           ic_learned_svc_monitors_map,
+                                          "load-balancer",
                                           backend->ip_str,
                                           backend_nb->logical_port,
+                                          NULL,
                                           backend->port,
                                           protocol,
                                           chassis_name,
@@ -3380,12 +3486,16 @@ build_lb_datapaths(const struct hmap *lbs, const struct hmap *lb_groups,
 }
 
 static void
-build_lb_svcs(
+build_svcs(
     struct ovsdb_idl_txn *ovnsb_txn,
     struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type,
     const char *svc_monitor_mac,
     const struct eth_addr *svc_monitor_mac_ea,
+    const char *svc_monitor_mac_dst,
+    const char *svc_monitor_ip4,
+    const char *svc_monitor_ip4_dst,
     struct hmap *ls_ports, struct hmap *lb_dps_map,
+    const struct nbrec_network_function_table *nbrec_network_function_table,
     struct sset *svc_monitor_lsps,
     struct hmap *local_svc_monitors_map,
     struct hmap *ic_learned_svc_monitors_map)
@@ -3420,6 +3530,22 @@ build_lb_svcs(
                           svc_monitor_lsps,
                           local_svc_monitors_map,
                           ic_learned_svc_monitors_map);
+    }
+
+    const struct nbrec_network_function *nbrec_nf;
+    NBREC_NETWORK_FUNCTION_TABLE_FOR_EACH (nbrec_nf,
+                            nbrec_network_function_table) {
+        if (nbrec_nf->health_check) {
+            ovn_nf_svc_create(ovnsb_txn,
+                              local_svc_monitors_map,
+                              ic_learned_svc_monitors_map,
+                              svc_monitor_lsps,
+                              ls_ports,
+                              svc_monitor_mac, svc_monitor_mac_dst,
+                              svc_monitor_ip4, svc_monitor_ip4_dst,
+                              nbrec_nf->outport->name, nbrec_nf->inport->name,
+                              &nbrec_nf->health_check->options);
+        }
     }
 
     struct service_monitor_info *mon_info;
@@ -3490,20 +3616,9 @@ build_lb_count_dps(struct hmap *lb_dps_map,
  */
 static void
 build_lb_port_related_data(
-    struct ovsdb_idl_txn *ovnsb_txn,
-    struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type,
-    const char *svc_monitor_mac,
-    const struct eth_addr *svc_monitor_mac_ea,
-    struct ovn_datapaths *lr_datapaths, struct hmap *ls_ports,
-    struct hmap *lb_dps_map, struct hmap *lb_group_dps_map,
-    struct sset *svc_monitor_lsps,
-    struct hmap *local_svc_monitors_map,
-    struct hmap *ic_learned_svc_monitors_map)
+    struct ovn_datapaths *lr_datapaths,
+    struct hmap *lb_dps_map, struct hmap *lb_group_dps_map)
 {
-    build_lb_svcs(ovnsb_txn, sbrec_service_monitor_by_learned_type,
-                  svc_monitor_mac, svc_monitor_mac_ea, ls_ports,
-                  lb_dps_map, svc_monitor_lsps,
-                  local_svc_monitors_map, ic_learned_svc_monitors_map);
     build_lswitch_lbs_from_lrouter(lr_datapaths, lb_dps_map, lb_group_dps_map);
 }
 
@@ -17669,13 +17784,6 @@ build_ls_stateful_flows(const struct ls_stateful_record *ls_stateful_rec,
     build_lb_hairpin(ls_stateful_rec, od, lflows, ls_stateful_rec->lflow_ref);
 }
 
-static struct nbrec_network_function *
-network_function_get_active(const struct nbrec_network_function_group *nfg)
-{
-    /* Another patch adds the healthmon support. This is temporary. */
-    return nfg->n_network_function ? nfg->network_function[0] : NULL;
-}
-
 /* For packets received on tunnel and egressing towards a network-function port
  * commit the tunnel interface id in CT. This will be utilized when the packet
  * comes out of the other network-function interface of the service VM. The
@@ -17716,6 +17824,107 @@ build_lswitch_stateful_nf(struct ovn_port *op,
                     "ct_label.tun_if_id = " REG_TUN_OFPORT "; }; next;");
     ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_STATEFUL, 120,
                   ds_cstr(match), ds_cstr(actions), lflow_ref);
+}
+
+static struct nbrec_network_function *
+network_function_get_active(const struct nbrec_network_function_group *nfg)
+{
+    return nfg->network_function_active;
+}
+
+static void
+network_function_update_active(const struct nbrec_network_function_group *nfg,
+                               struct hmap *local_svc_monitors_map,
+                               struct hmap *ic_learned_svc_monitors_map,
+                               const char *svc_monitor_ip4_dst)
+{
+    if (!nfg->n_network_function) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_ERR_RL(&rl, "NetworkFunction: No network_function found in "
+                         "network_function_group %s", nfg->name);
+        if (nfg->network_function_active) {
+            nbrec_network_function_group_set_network_function_active(nfg,
+                                                                     NULL);
+        }
+        return;
+    }
+    struct nbrec_network_function *nf_active = nfg->network_function[0];
+    struct nbrec_network_function *nf_active_prev = NULL;
+    uint16_t best_score = 0;
+    bool healthy_nf_available = false;
+    if (nfg->network_function_active) {
+        nf_active_prev = nfg->network_function_active;
+    }
+
+    for (int i = 0; i < nfg->n_network_function; i++) {
+        struct nbrec_network_function *nf = nfg->network_function[i];
+        uint16_t curr_score = 0;
+        if (nf->health_check == NULL) {
+            VLOG_DBG("NetworkFunction: Health check is not configured for "
+                     "network_function %s", nf->name);
+            /* Consider network_function as healthy if health_check is
+             * not configured. */
+            curr_score += 3;
+            healthy_nf_available = true;
+        } else {
+            struct service_monitor_info *mon_info =
+            get_service_mon(local_svc_monitors_map,
+                            ic_learned_svc_monitors_map,
+                            svc_monitor_ip4_dst,
+                            nf->outport->name, 0, "icmp");
+            if (mon_info == NULL) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_ERR_RL(&rl, "NetworkFunction: Service_monitor is not "
+                            "found for network_function:%s", nf->name);
+            } else if (mon_info->sbrec_mon->status
+                       && !strcmp(mon_info->sbrec_mon->status, "online")) {
+                curr_score += 3;
+                healthy_nf_available = true;
+            }
+        }
+
+        if (nf_active_prev && (nf == nf_active_prev)) {
+            curr_score += 1;
+        }
+
+        if (curr_score > best_score) {
+            nf_active = nf;
+            best_score = curr_score;
+        }
+    }
+
+    if (!healthy_nf_available) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "NetworkFunction: No healthy network_function found "
+                     "in network_function_group %s, "
+                     "selected network_function %s as active", nfg->name,
+                     nf_active->name);
+    }
+
+    if (nf_active_prev != nf_active) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_INFO_RL(&rl, "NetworkFunction: Update active network_function %s "
+                     "in network_function_group %s",
+                     nf_active->name, nfg->name);
+        nbrec_network_function_group_set_network_function_active(nfg,
+                                                                 nf_active);
+    }
+}
+
+static void build_network_function_active(
+    const struct nbrec_network_function_group_table *nbrec_nfg_table,
+    struct hmap *local_svc_monitors_map,
+    struct hmap *ic_learned_svc_monitors_map,
+    const char *svc_monitor_ip4_dst)
+{
+    const struct nbrec_network_function_group *nbrec_nfg;
+    NBREC_NETWORK_FUNCTION_GROUP_TABLE_FOR_EACH (nbrec_nfg,
+                            nbrec_nfg_table) {
+        network_function_update_active(nbrec_nfg,
+                                       local_svc_monitors_map,
+                                       ic_learned_svc_monitors_map,
+                                       svc_monitor_ip4_dst);
+    }
 }
 
 static void
@@ -19706,16 +19915,28 @@ ovnnb_db_run(struct northd_input *input_data,
                 input_data->sbrec_ha_chassis_grp_by_name,
                 &data->ls_datapaths.datapaths, &data->lr_datapaths.datapaths,
                 &data->ls_ports, &data->lr_ports);
-    build_lb_port_related_data(ovnsb_txn,
-        input_data->sbrec_service_monitor_by_learned_type,
-        input_data->svc_monitor_mac, &input_data->svc_monitor_mac_ea,
-        &data->lr_datapaths, &data->ls_ports, &data->lb_datapaths_map,
-        &data->lb_group_datapaths_map, &data->svc_monitor_lsps,
-        &data->local_svc_monitors_map,
-        input_data->ic_learned_svc_monitors_map);
+    build_lb_port_related_data(&data->lr_datapaths,
+                               &data->lb_datapaths_map,
+                               &data->lb_group_datapaths_map);
+    build_svcs(ovnsb_txn,
+               input_data->sbrec_service_monitor_by_learned_type,
+               input_data->svc_monitor_mac,
+               &input_data->svc_monitor_mac_ea,
+               input_data->svc_monitor_mac_dst,
+               input_data->svc_monitor_ip4,
+               input_data->svc_monitor_ip4_dst,
+               &data->ls_ports, &data->lb_datapaths_map,
+               input_data->nbrec_network_function_table,
+               &data->svc_monitor_lsps, &data->local_svc_monitors_map,
+               input_data->ic_learned_svc_monitors_map);
     build_lb_count_dps(&data->lb_datapaths_map,
                        ods_size(&data->ls_datapaths),
                        ods_size(&data->lr_datapaths));
+    build_network_function_active(
+        input_data->nbrec_network_function_group_table,
+        &data->local_svc_monitors_map,
+        input_data->ic_learned_svc_monitors_map,
+        input_data->svc_monitor_ip4_dst);
     build_ipam(&data->ls_datapaths.datapaths);
     build_lrouter_groups(&data->lr_ports, &data->lr_datapaths);
     build_ip_mcast(ovnsb_txn, input_data->sbrec_ip_multicast_table,

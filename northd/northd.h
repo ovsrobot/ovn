@@ -66,6 +66,10 @@ struct northd_input {
     const struct smap *sb_options;
     const char *svc_monitor_mac;
     struct eth_addr svc_monitor_mac_ea;
+    const char *svc_monitor_mac_dst;
+    struct eth_addr svc_monitor_mac_ea_dst;
+    const char *svc_monitor_ip4;
+    const char *svc_monitor_ip4_dst;
     const struct chassis_features *features;
     bool vxlan_mode;
 
@@ -261,6 +265,7 @@ struct lflow_input {
     const struct sset *bfd_ports;
     const struct chassis_features *features;
     bool ovn_internal_version_changed;
+    const struct hmap *svc_monitor_map;
     const char *svc_monitor_mac;
     const struct sampling_app_table *sampling_apps;
     struct group_ecmp_route_data *route_data;
