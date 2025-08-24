@@ -1187,8 +1187,24 @@ ovnact_ct_commit_to_zone_free(struct ovnact_ct_commit_to_zone *cn OVS_UNUSED)
 {
 }
 
+
+static bool
+parse_ct_lb_logical_port_name(struct action_context *ctx,
+                              struct ovnact_ct_lb_dst *dst)
+{
+    if (ctx->lexer->token.type != LEX_T_STRING) {
+        return false;
+    }
+
+    dst->port_name = xstrdup(ctx->lexer->token.s);
+
+    lexer_get(ctx->lexer);
+    return true;
+}
+
 static void
-parse_ct_lb_action(struct action_context *ctx, bool ct_lb_mark)
+parse_ct_lb_action(struct action_context *ctx,
+                   enum ovnact_ct_lb_type type)
 {
     if (ctx->pp->cur_ltable >= ctx->pp->n_tables) {
         lexer_error(ctx->lexer, "\"ct_lb\" action not allowed in last table.");
@@ -1211,7 +1227,20 @@ parse_ct_lb_action(struct action_context *ctx, bool ct_lb_mark)
 
         while (!lexer_match(ctx->lexer, LEX_T_SEMICOLON) &&
                !lexer_match(ctx->lexer, LEX_T_RPAREN)) {
-            struct ovnact_ct_lb_dst dst;
+            struct ovnact_ct_lb_dst dst = {0};
+
+            if (type == OVNACT_CT_LB_LOCAL_TYPE_MARK) {
+
+                if (!parse_ct_lb_logical_port_name(ctx, &dst)) {
+                    vector_destroy(&dsts);
+                    lexer_syntax_error(ctx->lexer,
+                                       "expecting logicl port name "
+                                       "for distributed load balancer");
+                    return;
+                }
+                lexer_get(ctx->lexer);
+            }
+
             if (lexer_match(ctx->lexer, LEX_T_LSQUARE)) {
                 /* IPv6 address and port */
                 if (ctx->lexer->token.type != LEX_T_INTEGER
@@ -1298,8 +1327,19 @@ parse_ct_lb_action(struct action_context *ctx, bool ct_lb_mark)
         }
     }
 
-    struct ovnact_ct_lb *cl = ct_lb_mark ? ovnact_put_CT_LB_MARK(ctx->ovnacts)
-                                         : ovnact_put_CT_LB(ctx->ovnacts);
+    struct ovnact_ct_lb *cl;
+    switch (type) {
+        case OVNACT_CT_LB_TYPE_LABEL:
+            cl = ovnact_put_CT_LB(ctx->ovnacts);
+            break;
+        case OVNACT_CT_LB_TYPE_MARK:
+            cl = ovnact_put_CT_LB_MARK(ctx->ovnacts);
+            break;
+        case OVNACT_CT_LB_LOCAL_TYPE_MARK:
+            cl = ovnact_put_CT_LB_MARK_LOCAL(ctx->ovnacts);
+            break;
+    }
+
     cl->ltable = ctx->pp->cur_ltable + 1;
     cl->n_dsts = vector_len(&dsts);
     cl->dsts = vector_steal_array(&dsts);
@@ -1308,13 +1348,16 @@ parse_ct_lb_action(struct action_context *ctx, bool ct_lb_mark)
 }
 
 static void
-format_ct_lb(const struct ovnact_ct_lb *cl, struct ds *s, bool ct_lb_mark)
+format_ct_lb(const struct ovnact_ct_lb *cl, struct ds *s,
+             enum ovnact_ct_lb_type type)
 {
-    if (ct_lb_mark) {
-        ds_put_cstr(s, "ct_lb_mark");
-    } else {
-        ds_put_cstr(s, "ct_lb");
-    }
+    static const char *const lb_action_strings[] = {
+        [OVNACT_CT_LB_TYPE_LABEL] = "ct_lb",
+        [OVNACT_CT_LB_TYPE_MARK] = "ct_lb_mark",
+        [OVNACT_CT_LB_LOCAL_TYPE_MARK] = "ct_lb_mark_local",
+    };
+    ds_put_cstr(s, lb_action_strings[type]);
+
     if (cl->n_dsts) {
         ds_put_cstr(s, "(backends=");
         for (size_t i = 0; i < cl->n_dsts; i++) {
@@ -1336,6 +1379,9 @@ format_ct_lb(const struct ovnact_ct_lb *cl, struct ds *s, bool ct_lb_mark)
                 if (dst->port) {
                     ds_put_format(s, "]:%"PRIu16, dst->port);
                 }
+            }
+            if (type == OVNACT_CT_LB_LOCAL_TYPE_MARK) {
+                ds_put_format(s, ":%s", dst->port_name);
             }
         }
 
@@ -1363,20 +1409,36 @@ format_ct_lb(const struct ovnact_ct_lb *cl, struct ds *s, bool ct_lb_mark)
 static void
 format_CT_LB(const struct ovnact_ct_lb *cl, struct ds *s)
 {
-    format_ct_lb(cl, s, false);
+    format_ct_lb(cl, s, OVNACT_CT_LB_TYPE_LABEL);
 }
 
 static void
 format_CT_LB_MARK(const struct ovnact_ct_lb *cl, struct ds *s)
 {
-    format_ct_lb(cl, s, true);
+    format_ct_lb(cl, s, OVNACT_CT_LB_TYPE_MARK);
+}
+
+static void
+format_CT_LB_MARK_LOCAL(const struct ovnact_ct_lb *cl, struct ds *s)
+{
+    format_ct_lb(cl, s, OVNACT_CT_LB_LOCAL_TYPE_MARK);
+}
+
+static inline void
+append_nat_destination(struct ds *ds, const char *ip_addr,
+                       bool needs_brackets)
+{
+    ds_put_format(ds, "ct(nat(dst=%s%s%s",
+                  needs_brackets ? "[" : "",
+                  ip_addr,
+                  needs_brackets ? "]" : "");
 }
 
 static void
 encode_ct_lb(const struct ovnact_ct_lb *cl,
              const struct ovnact_encode_params *ep,
              struct ofpbuf *ofpacts,
-             bool ct_lb_mark)
+             enum ovnact_ct_lb_type type)
 {
     uint8_t recirc_table = cl->ltable + first_ptable(ep, ep->pipeline);
     if (!cl->n_dsts) {
@@ -1408,7 +1470,8 @@ encode_ct_lb(const struct ovnact_ct_lb *cl,
     struct ofpact_group *og;
     uint32_t zone_reg = ep->is_switch ? MFF_LOG_CT_ZONE - MFF_REG0
                             : MFF_LOG_DNAT_ZONE - MFF_REG0;
-    const char *flag_reg = ct_lb_mark ? "ct_mark" : "ct_label";
+    const char *flag_reg = (type == OVNACT_CT_LB_TYPE_LABEL)
+                            ? "ct_label" : "ct_mark";
 
     const char *ct_flag_value;
     switch (cl->ct_flag) {
@@ -1443,11 +1506,14 @@ encode_ct_lb(const struct ovnact_ct_lb *cl,
         } else {
             inet_ntop(AF_INET6, &dst->ipv6, ip_addr, sizeof ip_addr);
         }
-        ds_put_format(&ds, ",bucket=bucket_id=%"PRIuSIZE",weight:100,actions="
-                      "ct(nat(dst=%s%s%s", bucket_id,
-                      dst->family == AF_INET6 && dst->port ? "[" : "",
-                      ip_addr,
-                      dst->family == AF_INET6 && dst->port ? "]" : "");
+        if (type == OVNACT_CT_LB_LOCAL_TYPE_MARK
+            && !ep->lookup_local_port(ep->aux, dst->port_name)) {
+            continue;
+        }
+        ds_put_format(&ds, ",bucket=bucket_id=%"PRIuSIZE",weight:100,actions=",
+                      bucket_id);
+        bool needs_brackets = (dst->family == AF_INET6 && dst->port);
+        append_nat_destination(&ds, ip_addr, needs_brackets);
         if (dst->port) {
             ds_put_format(&ds, ":%"PRIu16, dst->port);
         }
@@ -1480,7 +1546,7 @@ encode_CT_LB(const struct ovnact_ct_lb *cl,
              const struct ovnact_encode_params *ep,
              struct ofpbuf *ofpacts)
 {
-    encode_ct_lb(cl, ep, ofpacts, false);
+    encode_ct_lb(cl, ep, ofpacts, OVNACT_CT_LB_TYPE_LABEL);
 }
 
 static void
@@ -1488,13 +1554,30 @@ encode_CT_LB_MARK(const struct ovnact_ct_lb *cl,
                   const struct ovnact_encode_params *ep,
                   struct ofpbuf *ofpacts)
 {
-    encode_ct_lb(cl, ep, ofpacts, true);
+    encode_ct_lb(cl, ep, ofpacts, OVNACT_CT_LB_TYPE_MARK);
+}
+
+static void
+encode_CT_LB_MARK_LOCAL(const struct ovnact_ct_lb *cl,
+                        const struct ovnact_encode_params *ep,
+                        struct ofpbuf *ofpacts)
+{
+    encode_ct_lb(cl, ep, ofpacts, OVNACT_CT_LB_LOCAL_TYPE_MARK);
+}
+
+static void
+ovnact_ct_lb_free_dsts(struct ovnact_ct_lb *ct_lb)
+{
+    for (size_t i = 0; i < ct_lb->n_dsts; i++) {
+        free(ct_lb->dsts[i].port_name);
+    }
+    free(ct_lb->dsts);
 }
 
 static void
 ovnact_ct_lb_free(struct ovnact_ct_lb *ct_lb)
 {
-    free(ct_lb->dsts);
+    ovnact_ct_lb_free_dsts(ct_lb);
     free(ct_lb->hash_fields);
 }
 
@@ -5900,9 +5983,11 @@ parse_action(struct action_context *ctx)
     } else if (lexer_match_id(ctx->lexer, "ct_snat_in_czone")) {
         parse_CT_SNAT_IN_CZONE(ctx);
     } else if (lexer_match_id(ctx->lexer, "ct_lb")) {
-        parse_ct_lb_action(ctx, false);
+        parse_ct_lb_action(ctx, OVNACT_CT_LB_TYPE_LABEL);
     } else if (lexer_match_id(ctx->lexer, "ct_lb_mark")) {
-        parse_ct_lb_action(ctx, true);
+        parse_ct_lb_action(ctx, OVNACT_CT_LB_TYPE_MARK);
+    } else if (lexer_match_id(ctx->lexer, "ct_lb_mark_local")) {
+        parse_ct_lb_action(ctx, OVNACT_CT_LB_LOCAL_TYPE_MARK);
     } else if (lexer_match_id(ctx->lexer, "ct_clear")) {
         ovnact_put_CT_CLEAR(ctx->ovnacts);
     } else if (lexer_match_id(ctx->lexer, "ct_commit_nat")) {

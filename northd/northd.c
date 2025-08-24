@@ -473,6 +473,20 @@ od_has_lb_vip(const struct ovn_datapath *od)
     }
 }
 
+bool
+lr_has_distributed_lb(const struct ovn_datapath *od)
+{
+    for (size_t i = 0; i < od->nbr->n_load_balancer; i++) {
+        if (lb_has_vip(od->nbr->load_balancer[i]) &&
+            smap_get_bool(&od->nbr->load_balancer[i]->options,
+                          "distributed", false)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static const char *
 ovn_datapath_name(const struct sbrec_datapath_binding *sb)
 {
@@ -537,6 +551,7 @@ ovn_datapath_create(struct hmap *datapaths, const struct uuid *key,
     od->router_ports = VECTOR_EMPTY_INITIALIZER(struct ovn_port *);
     od->l3dgw_ports = VECTOR_EMPTY_INITIALIZER(struct ovn_port *);
     od->localnet_ports = VECTOR_EMPTY_INITIALIZER(struct ovn_port *);
+    od->distrubuted_lbs = VECTOR_EMPTY_INITIALIZER(struct ovn_northd_lb *);
     od->lb_with_stateless_mode = false;
     od->ipam_info_initialized = false;
     od->tunnel_key = sdp->sb_dp->tunnel_key;
@@ -567,6 +582,7 @@ ovn_datapath_destroy(struct hmap *datapaths, struct ovn_datapath *od)
         vector_destroy(&od->ls_peers);
         vector_destroy(&od->localnet_ports);
         vector_destroy(&od->l3dgw_ports);
+        vector_destroy(&od->distrubuted_lbs);
         destroy_mcast_info_for_datapath(od);
         destroy_ports_for_datapath(od);
         sset_destroy(&od->router_ips);
@@ -3140,6 +3156,53 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
     }
 }
 
+static inline void
+append_lb_backend_to_action(const struct ovn_lb_backend *backend,
+                            const struct ovn_northd_lb_backend *backend_nb,
+                            bool distributed_mode,
+                            struct ds *action)
+{
+    bool ipv6 = !IN6_IS_ADDR_V4MAPPED(&backend->ip);
+
+    if (distributed_mode) {
+        ds_put_format(action, "\"%s\":", backend_nb->logical_port);
+    }
+    ds_put_format(action, ipv6 ? "[%s]:%"PRIu16"," : "%s:%"PRIu16",",
+                  backend->ip_str, backend->port);
+}
+
+static bool
+is_backend_online(const struct ovn_northd_lb *lb,
+                  const struct ovn_lb_backend *backend,
+                  const struct ovn_northd_lb_backend *backend_nb,
+                  const struct svc_monitors_map_data *svc_mons_data)
+{
+    const char *protocol = lb->nlb->protocol;
+    if (!protocol || !protocol[0]) {
+        protocol = "tcp";
+    }
+
+    struct service_monitor_info *mon_info =
+        get_service_mon(svc_mons_data->local_svc_monitors_map,
+                        svc_mons_data->ic_learned_svc_monitors_map,
+                        backend->ip_str,
+                        backend_nb->logical_port,
+                        backend->port,
+                        protocol);
+
+    if (!mon_info) {
+        return false;
+    }
+
+    ovs_assert(mon_info->sbrec_mon);
+    if (mon_info->sbrec_mon->status &&
+        strcmp(mon_info->sbrec_mon->status, "online")) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool
 build_lb_vip_actions(const struct ovn_northd_lb *lb,
                      const struct ovn_lb_vip *lb_vip,
@@ -3165,12 +3228,14 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
         }
     }
 
-    if (lb_vip_nb->lb_health_check) {
-        ds_put_cstr(action, "ct_lb_mark(backends=");
+    ds_put_format(action, "%s", lb->distributed_mode
+                  ? "ct_lb_mark_local(backends="
+                  : "ct_lb_mark(backends=");
 
-        size_t i = 0;
-        size_t n_active_backends = 0;
-        const struct ovn_lb_backend *backend;
+    const struct ovn_lb_backend *backend;
+    size_t n_active_backends = 0;
+    size_t i = 0;
+    if (lb_vip_nb->lb_health_check) {
         VECTOR_FOR_EACH_PTR (&lb_vip->backends, backend) {
             struct ovn_northd_lb_backend *backend_nb =
                 &lb_vip_nb->backends_nb[i++];
@@ -3179,41 +3244,44 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
                 continue;
             }
 
-            const char *protocol = lb->nlb->protocol;
-            if (!protocol || !protocol[0]) {
-                protocol = "tcp";
+            if (is_backend_online(lb, backend,
+                    backend_nb, svc_mons_data)) {
+                n_active_backends++;
+                append_lb_backend_to_action(backend, backend_nb,
+                    false, action);
             }
-
-            struct service_monitor_info *mon_info =
-                get_service_mon(svc_mons_data->local_svc_monitors_map,
-                                svc_mons_data->ic_learned_svc_monitors_map,
-                                backend->ip_str,
-                                backend_nb->logical_port,
-                                backend->port,
-                                protocol);
-
-            if (!mon_info) {
-                continue;
-            }
-
-            ovs_assert(mon_info->sbrec_mon);
-            if (mon_info->sbrec_mon->status &&
-                    strcmp(mon_info->sbrec_mon->status, "online")) {
-                continue;
-            }
-
-            n_active_backends++;
-            bool ipv6 = !IN6_IS_ADDR_V4MAPPED(&backend->ip);
-            ds_put_format(action, ipv6 ? "[%s]:%"PRIu16"," : "%s:%"PRIu16",",
-                          backend->ip_str, backend->port);
         }
         ds_chomp(action, ',');
+    } else if (lb->distributed_mode) {
+        VECTOR_FOR_EACH_PTR (&lb_vip->backends, backend) {
+            struct ovn_northd_lb_backend *backend_nb =
+                &lb_vip_nb->backends_nb[i++];
 
+                if (lb_vip_nb->lb_health_check
+                    && !backend_nb->health_check) {
+                    continue;
+                }
+
+                if (lb_vip_nb->lb_health_check) {
+                    if (is_backend_online(lb, backend,
+                            backend_nb, svc_mons_data)) {
+                        n_active_backends++;
+                    } else {
+                        continue;
+                    }
+                }
+
+                append_lb_backend_to_action(backend, backend_nb,
+                    true, action);
+        }
+        ds_chomp(action, ',');
+    } else {
+        ds_put_format(action, "%s", lb_vip_nb->backend_ips);
+    }
+
+    if (lb_vip_nb->lb_health_check) {
         drop = !n_active_backends && !lb_vip->empty_backend_rej;
         reject = !n_active_backends && lb_vip->empty_backend_rej;
-    } else {
-        ds_put_format(action, "ct_lb_mark(backends=%s",
-                      lb_vip_nb->backend_ips);
     }
 
     if (reject) {
@@ -3248,6 +3316,20 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
     ds_put_cstr(action, enclose);
 
     return reject;
+}
+
+static inline void
+handle_lb_datapath_modes(struct ovn_datapath *od,
+                         struct ovn_lb_datapaths *lb_dps,
+                         bool ls_datapath)
+{
+    if (ls_datapath && od->lb_with_stateless_mode) {
+        hmapx_add(&lb_dps->ls_lb_with_stateless_mode, od);
+    }
+
+    if (!ls_datapath && lb_dps->lb->distributed_mode) {
+        vector_push(&od->distrubuted_lbs, &lb_dps->lb);
+    }
 }
 
 static void
@@ -3292,9 +3374,7 @@ build_lb_datapaths(const struct hmap *lbs, const struct hmap *lb_groups,
             lb_dps = ovn_lb_datapaths_find(lb_datapaths_map, lb_uuid);
             ovs_assert(lb_dps);
             ovn_lb_datapaths_add_ls(lb_dps, 1, &od);
-            if (od->lb_with_stateless_mode) {
-                hmapx_add(&lb_dps->ls_lb_with_stateless_mode, od);
-            }
+            handle_lb_datapath_modes(od, lb_dps, true);
         }
 
         for (size_t i = 0; i < od->nbs->n_load_balancer_group; i++) {
@@ -3328,6 +3408,7 @@ build_lb_datapaths(const struct hmap *lbs, const struct hmap *lb_groups,
             lb_dps = ovn_lb_datapaths_find(lb_datapaths_map, lb_uuid);
             ovs_assert(lb_dps);
             ovn_lb_datapaths_add_lr(lb_dps, 1, &od);
+            handle_lb_datapath_modes(od, lb_dps, false);
         }
     }
 
@@ -3664,6 +3745,7 @@ sync_pb_for_lrp(struct ovn_port *op,
 
         bool always_redirect =
             !lr_stateful_rec->lrnat_rec->has_distributed_nat &&
+            !lr_stateful_rec->has_distributed_lb &&
             !l3dgw_port_has_associated_vtep_lports(op->primary_port);
 
         const char *redirect_type = smap_get(&op->nbrp->options,
@@ -5067,11 +5149,7 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
             lb_dps = ovn_lb_datapaths_find(lb_datapaths_map, &uuidnode->uuid);
             ovs_assert(lb_dps);
             ovn_lb_datapaths_add_ls(lb_dps, 1, &od);
-
-            if (od->lb_with_stateless_mode) {
-                hmapx_add(&lb_dps->ls_lb_with_stateless_mode, od);
-            }
-
+            handle_lb_datapath_modes(od, lb_dps, true);
             /* Add the lb to the northd tracked data. */
             hmapx_add(&nd_changes->trk_lbs.crupdated, lb_dps);
         }
@@ -5108,7 +5186,7 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
             lb_dps = ovn_lb_datapaths_find(lb_datapaths_map, &uuidnode->uuid);
             ovs_assert(lb_dps);
             ovn_lb_datapaths_add_lr(lb_dps, 1, &od);
-
+            handle_lb_datapath_modes(od, lb_dps, false);
             /* Add the lb to the northd tracked data. */
             hmapx_add(&nd_changes->trk_lbs.crupdated, lb_dps);
         }
@@ -10134,6 +10212,12 @@ build_lswitch_ip_mcast_igmp_mld(struct ovn_igmp_group *igmp_group,
                   90, ds_cstr(match), ds_cstr(actions), lflow_ref);
 }
 
+static inline bool
+peer_has_distributed_lb(struct ovn_port *op)
+{
+    return op && op->od && !vector_is_empty(&op->od->distrubuted_lbs);
+}
+
 /* Ingress table 25: Destination lookup, unicast handling (priority 50), */
 static void
 build_lswitch_ip_unicast_lookup(struct ovn_port *op,
@@ -10208,7 +10292,8 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
                                       struct ovn_port *)->cr_port->json_key;
             }
 
-            if (add_chassis_resident_check) {
+            if (add_chassis_resident_check
+                && !peer_has_distributed_lb(op->peer)) {
                 ds_put_format(match, " && is_chassis_resident(%s)", json_key);
             }
         } else if (op->cr_port) {
@@ -11922,7 +12007,8 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
                                      struct ovn_datapath *od,
                                      struct lflow_ref *lflow_ref,
                                      struct ovn_port *dgp,
-                                     bool stateless_nat)
+                                     bool stateless_nat,
+                                     bool distributed_mode)
 {
     struct ds dnat_action = DS_EMPTY_INITIALIZER;
 
@@ -11964,8 +12050,9 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
         meter = copp_meter_get(COPP_REJECT, od->nbr->copp, ctx->meter_groups);
     }
 
-    if (!vector_is_empty(&ctx->lb_vip->backends) ||
-        !ctx->lb_vip->empty_backend_rej) {
+    if (!distributed_mode
+        && (!vector_is_empty(&ctx->lb_vip->backends)
+        || !ctx->lb_vip->empty_backend_rej)) {
         ds_put_format(ctx->new_match, " && is_chassis_resident(%s)",
                       dgp->cr_port->json_key);
     }
@@ -12008,23 +12095,33 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
     }
 
     /* We need to centralize the LB traffic to properly perform
-     * the undnat stage.
+     * the undnat stage in case of non distributed load balancer.
      */
     ds_put_format(ctx->undnat_match, ") && outport == %s", dgp->json_key);
     ds_clear(ctx->gw_redir_action);
-    ds_put_format(ctx->gw_redir_action, "outport = %s; next;",
-                  dgp->cr_port->json_key);
+    const char *outport = distributed_mode ?
+                          dgp->json_key :
+                          dgp->cr_port->json_key;
+
+    ds_put_format(ctx->gw_redir_action,
+                  "outport = %s; next;", outport);
 
     ovn_lflow_add_with_hint(ctx->lflows, od, S_ROUTER_IN_GW_REDIRECT,
                             200, ds_cstr(ctx->undnat_match),
                             ds_cstr(ctx->gw_redir_action),
                             &ctx->lb->nlb->header_,
                             lflow_ref);
+
     ds_truncate(ctx->undnat_match, undnat_match_len);
 
-    ds_put_format(ctx->undnat_match, ") && (inport == %s || outport == %s)"
-                  " && is_chassis_resident(%s)", dgp->json_key, dgp->json_key,
-                  dgp->cr_port->json_key);
+    ds_put_format(ctx->undnat_match, ") && (inport == %s || outport == %s)",
+                  dgp->json_key, dgp->json_key);
+
+    if (!distributed_mode) {
+        ds_put_format(ctx->undnat_match, " && is_chassis_resident(%s)",
+                      dgp->cr_port->json_key);
+    }
+
     /* Use the LB protocol as matching criteria for out undnat and snat when
      * creating LBs with stateless NAT. */
     if (stateless_nat) {
@@ -12153,6 +12250,8 @@ build_lrouter_nat_flows_for_lb(
                                        svc_mons_data,
                                        false);
 
+    bool distributed_mode = lb->distributed_mode;
+
     /* Higher priority rules are added for load-balancing in DNAT
      * table.  For every match (on a VIP[:port]), we add two flows.
      * One flow is for specific matching on ct.new with an action
@@ -12257,7 +12356,8 @@ build_lrouter_nat_flows_for_lb(
             VECTOR_FOR_EACH (&od->l3dgw_ports, dgp) {
                 build_distr_lrouter_nat_flows_for_lb(&ctx, type, od,
                                                      lb_dps->lflow_ref, dgp,
-                                                     stateless_nat);
+                                                     stateless_nat,
+                                                     distributed_mode);
             }
         }
 
@@ -13403,7 +13503,8 @@ build_adm_ctrl_flows_for_lrouter_port(
         ds_put_format(match, "%s", op->lrp_networks.ea_s);
     }
     ds_put_format(match, " && inport == %s", op->json_key);
-    if (consider_l3dgw_port_is_centralized(op)) {
+    bool l3dgw_port = consider_l3dgw_port_is_centralized(op);
+    if (l3dgw_port && vector_is_empty(&op->od->distrubuted_lbs)) {
         ds_put_format(match, " && is_chassis_resident(%s)",
                       op->cr_port->json_key);
     }
@@ -15830,7 +15931,8 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
                                       struct ovn_port *)->cr_port->json_key;
             }
 
-            if (add_chassis_resident_check) {
+            if (add_chassis_resident_check
+                && vector_is_empty(&op->od->distrubuted_lbs)) {
                 ds_put_format(match, " && is_chassis_resident(%s)",
                               json_key);
             }

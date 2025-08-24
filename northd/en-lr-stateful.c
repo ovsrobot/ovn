@@ -326,6 +326,7 @@ lr_stateful_lb_data_handler(struct engine_node *node, void *data_)
                 ovn_datapaths_find_by_index(input_data.lr_datapaths,
                                             lr_stateful_rec->lr_index);
             lr_stateful_rec->has_lb_vip = od_has_lb_vip(od);
+            lr_stateful_rec->has_distributed_lb = lr_has_distributed_lb(od);
         }
 
         return EN_HANDLED_UPDATED;
@@ -530,7 +531,9 @@ lr_stateful_record_create(struct lr_stateful_table *table,
     if (nbr->n_nat) {
         lr_stateful_rebuild_vip_nats(lr_stateful_rec);
     }
+
     lr_stateful_rec->has_lb_vip = od_has_lb_vip(od);
+    lr_stateful_rec->has_distributed_lb = lr_has_distributed_lb(od);
 
     hmap_insert(&table->entries, &lr_stateful_rec->key_node,
                 uuid_hash(&lr_stateful_rec->nbr_uuid));

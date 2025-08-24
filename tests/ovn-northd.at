@@ -17808,8 +17808,12 @@ AT_SETUP([ip_port_mappings validation])
 ovn_start
 
 # ip_port_mappings syntax: ip:lport_name:src_ip:<az_name>(for remote lports)
+# For distributed load balancer src_ip is optional when health checks are not configured.
 
 check ovn-nbctl ls-add ls1
+check ovn-nbctl lr-add lr1
+
+ovn-appctl -t ovn-northd vlog/disable-rate-limit
 
 check ovn-nbctl lb-add lb1_ipv4 1.1.1.1:80 192.168.0.1:10880,192.168.0.2:10880,192.168.0.3:10880
 AT_CHECK([ovn-nbctl --wait=sb \
@@ -17879,6 +17883,54 @@ check ovn-nbctl set load_balancer lb1_ipv4 ip_port_mappings:192.168.0.1=lport1:1
 check_row_count sb:Service_Monitor 0
 
 OVS_WAIT_UNTIL([grep "Empty AZ name specified" northd/ovn-northd.log])
+
+check ovn-nbctl lb-del lb1_ipv4
+
+# Check correct setup of distributed load balancers.
+echo > northd/ovn-northd.log
+check ovn-nbctl lb-add lb_distubuted 1.1.1.1:80 192.168.0.1:10880,192.168.0.2:10880
+check ovn-nbctl lr-lb-add lr1 lb_distubuted
+check ovn-nbctl set load_balancer lb_distubuted options:distributed=true
+
+OVS_WAIT_UNTIL([grep "Proper ip_port_mappings" northd/ovn-northd.log])
+echo > northd/ovn-northd.log
+
+# Ensure proper ip_port_mappings configuration for all health checks is required for distributed
+# load balancer functionality. src_ip is optional when health checks are not configured.
+ovn-sbctl lflow-list lr1 > lr1_lflow
+AT_CHECK([cat lr1_lflow | grep lr_in_dnat | grep priority=120 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_dnat         ), priority=120  , match=(ct.new && !ct.rel && ip4 && ip4.dst == 1.1.1.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(ct_lb_mark(backends=192.168.0.1:10880,192.168.0.2:10880);)
+])
+ovn-nbctl list load_balancer
+
+check ovn-nbctl set load_balancer lb_distubuted ip_port_mappings:192.168.0.1=lport1
+OVS_WAIT_UNTIL([grep "Proper ip_port_mappings" northd/ovn-northd.log])
+echo > northd/ovn-northd.log
+ovn-sbctl lflow-list lr1 > lr1_lflow
+AT_CHECK([cat lr1_lflow | grep lr_in_dnat | grep priority=120 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_dnat         ), priority=120  , match=(ct.new && !ct.rel && ip4 && ip4.dst == 1.1.1.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(ct_lb_mark(backends=192.168.0.1:10880,192.168.0.2:10880);)
+])
+
+check ovn-nbctl set load_balancer lb_distubuted ip_port_mappings:192.168.0.2=lport2
+ovn-sbctl lflow-list lr1 > lr1_lflow
+AT_CHECK([cat lr1_lflow | grep lr_in_dnat | grep priority=120 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_dnat         ), priority=120  , match=(ct.new && !ct.rel && ip4 && ip4.dst == 1.1.1.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(ct_lb_mark_local(backends="lport1":192.168.0.1:10880,"lport2":192.168.0.2:10880);)
+])
+echo > northd/ovn-northd.log
+
+# Check if health check is configured, ip_port_mappings must be provided.
+AT_CHECK([ovn-nbctl --wait=sb \
+          -- --id=@hc create Load_Balancer_Health_Check vip="1.1.1.1\:80" \
+             options:failure_count=100 \
+          -- add Load_Balancer lb_distubuted health_check @hc | uuidfilt], [0], [<0>
+])
+
+ovn-sbctl lflow-list lr1 > lr1_lflow
+OVS_WAIT_UNTIL([grep "Expected ':' separator for:" northd/ovn-northd.log])
+AT_CHECK([cat lr1_lflow | grep lr_in_dnat | grep priority=120 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_dnat         ), priority=120  , match=(ct.new && !ct.rel && ip4 && ip4.dst == 1.1.1.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(drop;)
+])
+
 AT_CLEANUP
 ])
 
@@ -17936,6 +17988,184 @@ AT_CHECK([grep 'ls_in_l2_unknown' lflows | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_l2_unknown   ), priority=0    , match=(1), action=(outport = remote_outport; output;)
   table=??(ls_in_l2_unknown   ), priority=25   , match=(remote_outport == "none"), action=(output;)
   table=??(ls_in_l2_unknown   ), priority=50   , match=(outport == "none" && remote_outport == "none"), action=(drop;)
+])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Distributed lb: logical-flow test])
+ovn_start
+
+net_add n1
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl add-port br-int lport1 -- set interface lport1 external_ids:iface-id=lport1
+
+net_add n2
+sim_add hv2
+as hv2
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.2
+ovs-vsctl add-port br-int lport2 -- set interface lport2 external_ids:iface-id=lport2
+
+# If load balancer becomes distributed, it operates in a distributed manner on
+# separate compute nodes and balances traffic to local backends (located on that compute node).
+# Test topology: one switch, two hypervisors, to verify that OpenFlow groups are created
+# only from local backends. Logical_switch is connected to a router, a distributed load
+# balancer is added on Logical_Router, and router is connected to a switch which is
+# connected to the physical network.
+check ovn-nbctl ls-add outside
+
+check ovn-nbctl lsp-add outside outside \
+      -- lsp-set-addresses outside unknown \
+      -- lsp-set-type outside localnet
+
+check ovn-nbctl --wait=sb set Logical_Switch_Port outside tag_request=2
+
+check ovn-nbctl lsp-add outside outside-down \
+      -- lsp-set-type outside-down router \
+      -- lsp-set-addresses outside-down router \
+      -- lsp-set-options outside-down router-port=lr1-up
+
+check ovn-nbctl lr-add lr1 \
+      -- lrp-add lr1 lr1-up 11:11:11:11:11:11 169.254.0.1/24 \
+      -- lrp-add lr1 lr1-down 12:12:12:12:12:12 192.168.0.1/24
+
+check ovn-nbctl ls-add ls1 \
+      -- lsp-add ls1 lport1 \
+      -- lsp-set-addresses lport1 "13:13:13:13:13:13 192.168.0.101" \
+      -- lsp-add ls1 lport2 \
+      -- lsp-set-addresses lport2 "14:14:14:14:14:14 192.168.0.102"
+
+check ovn-nbctl lsp-add ls1 ls1-up \
+      -- lsp-set-type ls1-up router \
+      -- lsp-set-addresses ls1-up router \
+      -- lsp-set-options ls1-up router-port=lr1-down
+
+check ovn-nbctl --wait=sb sync
+wait_for_ports_up
+
+check ovn-nbctl ha-chassis-group-add gateway
+check ovn-nbctl ha-chassis-group-add-chassis gateway test 1
+ha_g_uuid=$(fetch_column nb:HA_Chassis_Group _uuid name=gateway)
+lr1_up_uuid=$(fetch_column nb:Logical_Router_Port _uuid name=lr1-up)
+check ovn-nbctl set logical_router_port $lr1_up_uuid ha_chassis_group=$ha_g_uuid
+check ovn-nbctl --wait=hv sync
+
+check ovn-nbctl lb-add lb1 1.1.1.1:80 192.168.0.101:10880,192.168.0.102:10880
+check ovn-nbctl set Load_Balancer lb1 ip_port_mappings:192.168.0.101=lport1:192.168.0.199
+check ovn-nbctl set Load_Balancer lb1 ip_port_mappings:192.168.0.102=lport2:192.168.0.199
+check ovn-nbctl lr-lb-add lr1 lb1
+
+ovn-sbctl lflow-list lr1 > lr1_lflows_before
+ovn-sbctl lflow-list outside > outside_lflows_before
+
+AT_CHECK([cat outside_lflows_before | grep ls_in_l2_lkup | grep priority=50 | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=50   , match=(eth.dst == 11:11:11:11:11:11 && is_chassis_resident("cr-lr1-up")), action=(outport = "outside-down"; output;)
+])
+
+AT_CHECK([cat lr1_lflows_before | grep lr_in_ip_input | grep priority=90 | grep 169.254.0.1 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "lr1-up" && arp.op == 1 && arp.tpa == 169.254.0.1 && arp.spa == 169.254.0.0/24 && is_chassis_resident("cr-lr1-up")), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=90   , match=(ip4.dst == 169.254.0.1 && icmp4.type == 8 && icmp4.code == 0), action=(ip4.dst <-> ip4.src; ip.ttl = 255; icmp4.type = 0; flags.loopback = 1; next; )
+])
+
+AT_CHECK([cat lr1_lflows_before | grep lr_in_admission | grep  priority=50 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_admission    ), priority=50   , match=(eth.dst == 11:11:11:11:11:11 && inport == "lr1-up" && is_chassis_resident("cr-lr1-up")), action=(xreg0[[0..47]] = 11:11:11:11:11:11; next;)
+  table=??(lr_in_admission    ), priority=50   , match=(eth.dst == 12:12:12:12:12:12 && inport == "lr1-down"), action=(xreg0[[0..47]] = 12:12:12:12:12:12; next;)
+  table=??(lr_in_admission    ), priority=50   , match=(eth.mcast && inport == "lr1-down"), action=(xreg0[[0..47]] = 12:12:12:12:12:12; next;)
+  table=??(lr_in_admission    ), priority=50   , match=(eth.mcast && inport == "lr1-up"), action=(xreg0[[0..47]] = 11:11:11:11:11:11; next;)
+])
+
+AT_CHECK([cat lr1_lflows_before | grep lr_in_dnat | grep priority=120 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_dnat         ), priority=120  , match=(ct.new && !ct.rel && ip4 && ip4.dst == 1.1.1.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80 && is_chassis_resident("cr-lr1-up")), action=(ct_lb_mark(backends=192.168.0.101:10880,192.168.0.102:10880);)
+])
+
+AT_CHECK([cat lr1_lflows_before | grep lr_out_undnat | grep priority=120 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_out_undnat      ), priority=120  , match=(ip4 && ((ip4.src == 192.168.0.101 && tcp.src == 10880) || (ip4.src == 192.168.0.102 && tcp.src == 10880)) && (inport == "lr1-up" || outport == "lr1-up") && is_chassis_resident("cr-lr1-up")), action=(ct_dnat;)
+])
+
+AT_CHECK([cat lr1_lflows_before | grep lr_in_gw_redirect | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_gw_redirect  ), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_gw_redirect  ), priority=200  , match=(ip4 && ((ip4.src == 192.168.0.101 && tcp.src == 10880) || (ip4.src == 192.168.0.102 && tcp.src == 10880)) && outport == "lr1-up"), action=(outport = "cr-lr1-up"; next;)
+  table=??(lr_in_gw_redirect  ), priority=50   , match=(outport == "lr1-up"), action=(outport = "cr-lr1-up"; next;)
+])
+
+# OVN controller currently does not recalculate local datapaths when the 'ha_chassis_group'
+# changes, so we reboot it.
+as hv1
+OVS_APP_EXIT_AND_WAIT([ovn-controller])
+start_daemon ovn-controller
+wait_for_ports_up
+
+AT_CHECK([ovn-appctl -t ovn-controller debug/dump-local-datapaths], [0], [dnl
+Local datapaths:
+Datapath: lr1, type: router
+Datapath: ls1, type: switch
+])
+
+check ovn-nbctl set load_balancer lb1 options:distributed=true
+check ovn-nbctl --wait=hv sync
+
+# Check that flows for router's distributed gw port are now distributed.
+ovn-sbctl lflow-list outside > outside_lflows_after
+AT_CHECK([cat outside_lflows_after | grep ls_in_l2_lkup | grep priority=50 | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=50   , match=(eth.dst == 11:11:11:11:11:11), action=(outport = "outside-down"; output;)
+])
+
+ovn-sbctl lflow-list lr1 > lr1_lflows_after
+
+AT_CHECK([cat lr1_lflows_after | grep lr_in_ip_input | grep priority=90 | grep 169.254.0.1 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_ip_input     ), priority=90   , match=(inport == "lr1-up" && arp.op == 1 && arp.tpa == 169.254.0.1 && arp.spa == 169.254.0.0/24), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=90   , match=(ip4.dst == 169.254.0.1 && icmp4.type == 8 && icmp4.code == 0), action=(ip4.dst <-> ip4.src; ip.ttl = 255; icmp4.type = 0; flags.loopback = 1; next; )
+])
+
+AT_CHECK([cat lr1_lflows_after | grep lr_in_admission | grep priority=50 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_admission    ), priority=50   , match=(eth.dst == 11:11:11:11:11:11 && inport == "lr1-up"), action=(xreg0[[0..47]] = 11:11:11:11:11:11; next;)
+  table=??(lr_in_admission    ), priority=50   , match=(eth.dst == 12:12:12:12:12:12 && inport == "lr1-down"), action=(xreg0[[0..47]] = 12:12:12:12:12:12; next;)
+  table=??(lr_in_admission    ), priority=50   , match=(eth.mcast && inport == "lr1-down"), action=(xreg0[[0..47]] = 12:12:12:12:12:12; next;)
+  table=??(lr_in_admission    ), priority=50   , match=(eth.mcast && inport == "lr1-up"), action=(xreg0[[0..47]] = 11:11:11:11:11:11; next;)
+])
+
+# Check that load balancer flows are now also distributed.
+AT_CHECK([cat lr1_lflows_after | grep lr_in_dnat | grep priority=120 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_dnat         ), priority=120  , match=(ct.new && !ct.rel && ip4 && ip4.dst == 1.1.1.1 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(ct_lb_mark_local(backends="lport1":192.168.0.101:10880,"lport2":192.168.0.102:10880);)
+])
+
+AT_CHECK([cat lr1_lflows_after | grep lr_out_undnat | grep priority=120 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_out_undnat      ), priority=120  , match=(ip4 && ((ip4.src == 192.168.0.101 && tcp.src == 10880) || (ip4.src == 192.168.0.102 && tcp.src == 10880)) && (inport == "lr1-up" || outport == "lr1-up")), action=(ct_dnat;)
+])
+
+# Check that distributed load balancers do not redirect traffic to gateway port.
+AT_CHECK([cat lr1_lflows_after | grep lr_in_gw_redirect | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_gw_redirect  ), priority=0    , match=(1), action=(next;)
+  table=??(lr_in_gw_redirect  ), priority=200  , match=(ip4 && ((ip4.src == 192.168.0.101 && tcp.src == 10880) || (ip4.src == 192.168.0.102 && tcp.src == 10880)) && outport == "lr1-up"), action=(outport = "lr1-up"; next;)
+  table=??(lr_in_gw_redirect  ), priority=50   , match=(outport == "lr1-up"), action=(outport = "cr-lr1-up"; next;)
+])
+
+# Check that external switch has been added to local datapaths on compute nodes
+# when 'distributed' option is enabled on load balancer.
+as hv1
+AT_CHECK([ovn-appctl -t ovn-controller debug/dump-local-datapaths], [0], [dnl
+Local datapaths:
+Datapath: outside, type: switch
+Datapath: lr1, type: router
+Datapath: ls1, type: switch
+])
+
+as hv1
+# Verify that OpenFlow groups were created only for local backends.
+AT_CHECK([ovs-ofctl dump-groups br-int | sed -e 's/table=[[0-9]]*/table=<cleared>/'], [0], [dnl
+NXST_GROUP_DESC reply (xid=0x2):
+ group_id=1,type=select,selection_method=dp_hash,bucket=bucket_id:0,weight:100,actions=ct(commit,table=<cleared>,zone=NXM_NX_REG11[[0..15]],nat(dst=192.168.0.101:10880),exec(load:0x1->NXM_NX_CT_MARK[[1]]))
+])
+
+as hv2
+AT_CHECK([ovs-ofctl dump-groups br-int | sed -e 's/table=[[0-9]]*/table=<cleared>/'], [0], [dnl
+NXST_GROUP_DESC reply (xid=0x2):
+ group_id=1,type=select,selection_method=dp_hash,bucket=bucket_id:1,weight:100,actions=ct(commit,table=<cleared>,zone=NXM_NX_REG11[[0..15]],nat(dst=192.168.0.102:10880),exec(load:0x1->NXM_NX_CT_MARK[[1]]))
 ])
 
 AT_CLEANUP

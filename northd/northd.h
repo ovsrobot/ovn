@@ -106,6 +106,7 @@ struct ovn_datapath *
 ovn_datapath_find_by_key(struct hmap *datapaths, uint32_t dp_key);
 
 bool od_has_lb_vip(const struct ovn_datapath *od);
+bool lr_has_distributed_lb(const struct ovn_datapath *od);
 
 /* List of routing and routing-related protocols which
  * OVN is capable of redirecting from LRP to specific LSP. */
@@ -448,6 +449,10 @@ struct ovn_datapath {
     /* Map of ovn_port objects belonging to this datapath.
      * This map doesn't include derived ports. */
     struct hmap ports;
+
+    /* A set of distributed load balancers associated
+     * with this datapath. The datapath must be a router. */
+    struct vector distrubuted_lbs;
 };
 
 const struct ovn_datapath *ovn_datapath_find(const struct hmap *datapaths,

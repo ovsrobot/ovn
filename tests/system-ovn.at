@@ -18484,3 +18484,86 @@ OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
 /connection dropped.*/d"])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([Distributed lb: system test])
+AT_KEYWORDS([ovnlb])
+
+# Simple test for basic functionality verification
+# topology:
+# client - br-ext - br-int - outside-switch - lr - backend
+# test case:
+# 1. create a centralized load balancer, specifying gateway chassis for router.
+# 2. enable distributed option on load balancer.
+# 3. change the gateway to a non-existent one - we expect the distributed load balancer to continue working.
+
+CHECK_CONNTRACK()
+CHECK_CONNTRACK_NAT()
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+ADD_BR([br-int])
+ADD_BR([br-ext])
+
+check ovs-ofctl add-flow br-ext action=normal
+# Set external-ids in br-int needed for ovn-controller
+check ovs-vsctl \
+        -- set Open_vSwitch . external-ids:system-id=hv1 \
+        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+        -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+        -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+        -- set bridge br-int fail-mode=secure other-config:disable-in-band=true \
+        -- set Open_vSwitch . external-ids:ovn-bridge-mappings=phynet:br-ext
+
+# Start ovn-controller
+start_daemon ovn-controller
+
+check ovn-nbctl lr-add lr
+check ovn-nbctl ls-add internal
+check ovn-nbctl ls-add public
+
+check ovn-nbctl lrp-add lr lr-pub 00:00:01:01:02:03 192.168.100.1/24 1000::1/64
+check ovn-nbctl lsp-add  public pub-lr -- set Logical_Switch_Port pub-lr \
+    type=router options:router-port=lr-pub addresses=\"00:00:01:01:02:03\"
+
+check ovn-nbctl lrp-add lr lr-internal 00:00:01:01:02:04 192.168.200.1/24 2000::1/64
+check ovn-nbctl lsp-add internal internal-lr -- set Logical_Switch_Port internal-lr \
+    type=router options:router-port=lr-internal addresses=\"00:00:01:01:02:04\"
+
+check ovn-nbctl lsp-add internal server -- lsp-set-addresses server "unknown"
+
+check ovn-nbctl lsp-add public ln_port \
+                -- lsp-set-addresses ln_port unknown \
+                -- lsp-set-type ln_port localnet \
+                -- lsp-set-options ln_port network_name=phynet
+
+check ovn-nbctl set logical_router lr options:chassis=hv1
+
+check ovn-nbctl lb-add lb1 192.168.100.20:80 192.168.200.10:10880
+check ovn-nbctl lr-lb-add lr lb1
+check ovn-nbctl --wait=hv sync
+
+ADD_NAMESPACES(client)
+ADD_VETH(client, client, br-ext, "192.168.100.10/24", "f0:00:00:01:02:03", \
+         "192.168.100.1")
+
+ADD_NAMESPACES(server)
+ADD_VETH(server, server, br-int, "192.168.200.10/24", "f0:00:0f:01:02:03", \
+         "192.168.200.1")
+
+NETNS_DAEMONIZE([server], [nc -l -u 192.168.200.10 10880 > /dev/null], [serverv4.pid])
+
+NS_CHECK_EXEC([client], [nc -z -u 192.168.100.20 80], [ignore], [ignore], [ignore])
+
+check ovn-nbctl set load_balancer lb1 options:distributed=true
+check ovn-nbctl set Load_Balancer lb1 ip_port_mappings:192.168.200.10=lport1
+check ovn-nbctl --wait=hv sync
+
+check ovn-nbctl set logical_router lr options:chassis=hv2
+
+NS_CHECK_EXEC([client], [nc -z -u 192.168.100.20 80], [ignore], [ignore], [ignore])
+
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+AT_CLEANUP
+])

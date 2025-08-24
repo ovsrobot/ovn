@@ -75,6 +75,7 @@ struct collector_set_ids;
     OVNACT(CT_SNAT_IN_CZONE,  ovnact_ct_nat)          \
     OVNACT(CT_LB,             ovnact_ct_lb)           \
     OVNACT(CT_LB_MARK,        ovnact_ct_lb)           \
+    OVNACT(CT_LB_MARK_LOCAL,  ovnact_ct_lb)           \
     OVNACT(SELECT,            ovnact_select)          \
     OVNACT(CT_CLEAR,          ovnact_null)            \
     OVNACT(CT_COMMIT_NAT,     ovnact_ct_commit_to_zone) \
@@ -311,6 +312,12 @@ struct ovnact_ct_commit_to_zone {
     uint8_t ltable;
 };
 
+enum ovnact_ct_lb_type {
+    OVNACT_CT_LB_TYPE_LABEL,
+    OVNACT_CT_LB_TYPE_MARK,
+    OVNACT_CT_LB_LOCAL_TYPE_MARK,
+};
+
 enum ovnact_ct_lb_flag {
     OVNACT_CT_LB_FLAG_NONE,
     OVNACT_CT_LB_FLAG_SKIP_SNAT,
@@ -324,6 +331,7 @@ struct ovnact_ct_lb_dst {
         ovs_be32 ipv4;
     };
     uint16_t port;
+    char *port_name;
 };
 
 /* OVNACT_CT_LB/OVNACT_CT_LB_MARK. */
@@ -896,6 +904,9 @@ struct ovnact_encode_params {
      * otherwise, returns false. */
     bool (*tunnel_ofport)(const void *aux, const char *port_name,
                           ofp_port_t *ofport);
+
+    /* Checks if the logical port exists and is bound to this chassis. */
+    bool (*lookup_local_port)(const void *aux, const char *port_name);
 
     const void *aux;
 

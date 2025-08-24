@@ -63,6 +63,7 @@ struct lookup_port_aux {
     const struct sbrec_logical_flow *lflow;
     struct objdep_mgr *deps_mgr;
     const struct hmap *chassis_tunnels;
+    const struct shash *local_bindings;
 };
 
 struct condition_aux {
@@ -170,6 +171,17 @@ tunnel_ofport_cb(const void *aux_, const char *port_name, ofp_port_t *ofport)
     }
 
     return true;
+}
+
+static bool
+lookup_local_port_cb(const void *aux_, const char *port_name)
+{
+    const struct lookup_port_aux *aux = aux_;
+
+    if (local_binding_get_primary_pb(aux->local_bindings, port_name)) {
+        return true;
+    }
+    return false;
 }
 
 static bool
@@ -850,6 +862,7 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
         .lflow = lflow,
         .deps_mgr = l_ctx_out->lflow_deps_mgr,
         .chassis_tunnels = l_ctx_in->chassis_tunnels,
+        .local_bindings = l_ctx_in->lbinding_lports,
     };
 
     /* Parse any meter to be used if this flow should punt packets to
@@ -865,6 +878,7 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
     struct ovnact_encode_params ep = {
         .lookup_port = lookup_port_cb,
         .tunnel_ofport = tunnel_ofport_cb,
+        .lookup_local_port = lookup_local_port_cb,
         .aux = &aux,
         .is_switch = ldp->is_switch,
         .group_table = l_ctx_out->group_table,

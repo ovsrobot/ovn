@@ -85,12 +85,12 @@ ovn_lb_ip_set_clone(struct ovn_lb_ip_set *lb_ip_set)
     return clone;
 }
 
-static
-void ovn_northd_lb_vip_init(struct ovn_northd_lb_vip *lb_vip_nb,
-                            const struct ovn_lb_vip *lb_vip,
-                            const struct nbrec_load_balancer *nbrec_lb,
-                            const char *vip_port_str, const char *backend_ips,
-                            bool template)
+static void
+ovn_northd_lb_vip_init(struct ovn_northd_lb_vip *lb_vip_nb,
+                       const struct ovn_lb_vip *lb_vip,
+                       const struct nbrec_load_balancer *nbrec_lb,
+                       const char *vip_port_str, const char *backend_ips,
+                       bool template)
 {
     lb_vip_nb->backend_ips = xstrdup(backend_ips);
     lb_vip_nb->n_backends = vector_len(&lb_vip->backends);
@@ -101,43 +101,57 @@ void ovn_northd_lb_vip_init(struct ovn_northd_lb_vip *lb_vip_nb,
 }
 
 /*
- * Initializes health check configuration for load balancer VIP
- * backends. Parses the ip_port_mappings in the format :
+ * Initializes health check configuration for load balancer VIP backends.
+ * Parses the ip_port_mappings in the format:
  * "ip:logical_port:src_ip[:az_name]".
- * If az_name is present and non-empty, it indicates this is a
- * remote service monitor (backend is in another availability zone),
- * it should be propogated to another AZ by interconnection processing.
+ * If az_name is present and non-empty, it indicates this is a remote service
+ * monitor (backend is in another availability zone), it should be propogated
+ * to another AZ by interconnection processing.
+ * src_ip parameter becomes optional when distributed mode is enabled without
+ * health checks configured.
  */
 static void
-ovn_lb_vip_backends_health_check_init(const struct ovn_northd_lb *lb,
-                                      const struct ovn_lb_vip *lb_vip,
-                                      struct ovn_northd_lb_vip *lb_vip_nb)
+ovn_lb_vip_backends_ip_port_mappings_init(const struct ovn_northd_lb *lb,
+                                          const struct ovn_lb_vip *lb_vip,
+                                          struct ovn_northd_lb_vip *lb_vip_nb,
+                                          bool *is_lb_correctly_configured)
 {
     struct ds key = DS_EMPTY_INITIALIZER;
+    bool allow_without_src_ip = lb->distributed_mode
+                                && !lb_vip_nb->lb_health_check;
 
     for (size_t j = 0; j < vector_len(&lb_vip->backends); j++) {
         const struct ovn_lb_backend *backend =
             vector_get_ptr(&lb_vip->backends, j);
+        struct ovn_northd_lb_backend *backend_nb = NULL;
+        char *port_name = NULL, *az_name = NULL, *first_colon = NULL;
+        char *svc_mon_src_ip = NULL, *src_ip = NULL;
+        bool is_remote = false;
         ds_clear(&key);
         ds_put_format(&key, IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)
                       ? "%s" : "[%s]", backend->ip_str);
-
         const char *s = smap_get(&lb->nlb->ip_port_mappings, ds_cstr(&key));
         if (!s) {
-            continue;
+            goto mark_error_and_cleanup;
         }
 
-        char *svc_mon_src_ip = NULL;
-        char *az_name = NULL;
-        bool is_remote = false;
-        char *port_name = xstrdup(s);
-        char *src_ip = NULL;
-
-        char *first_colon = strchr(port_name, ':');
-        if (!first_colon) {
-            free(port_name);
-            continue;
+        port_name = xstrdup(s);
+        first_colon = strchr(port_name, ':');
+        if (!first_colon && allow_without_src_ip) {
+            if (!*port_name) {
+                VLOG_WARN("Empty port name in distributed mode for IP %s",
+                          ds_cstr(&key));
+                goto mark_error_and_cleanup;
+            }
+            src_ip = NULL;
+            az_name = NULL;
+            is_remote = false;
+            goto init_backend_nb;
+        } else if (!first_colon) {
+            VLOG_WARN("Expected ':' separator for: %s", port_name);
+            goto mark_error_and_cleanup;
         }
+
         *first_colon = '\0';
 
         if (first_colon[1] == '[') {
@@ -145,8 +159,7 @@ ovn_lb_vip_backends_health_check_init(const struct ovn_northd_lb *lb,
             char *ip_end = strchr(first_colon + 2, ']');
             if (!ip_end) {
                 VLOG_WARN("Malformed IPv6 address in backend %s", s);
-                free(port_name);
-                continue;
+                goto mark_error_and_cleanup;
             }
 
             src_ip = first_colon + 2;
@@ -157,8 +170,7 @@ ovn_lb_vip_backends_health_check_init(const struct ovn_northd_lb *lb,
                 if (!*az_name) {
                     VLOG_WARN("Empty AZ name specified for backend %s",
                               port_name);
-                    free(port_name);
-                    continue;
+                    goto mark_error_and_cleanup;
                 }
                 is_remote = true;
             }
@@ -172,32 +184,37 @@ ovn_lb_vip_backends_health_check_init(const struct ovn_northd_lb *lb,
                 if (!*az_name) {
                     VLOG_WARN("Empty AZ name specified for backend %s",
                               port_name);
-                    free(port_name);
-                    continue;
+                    goto mark_error_and_cleanup;
                 }
-            is_remote = true;
+                is_remote = true;
             }
         }
 
         struct sockaddr_storage svc_mon_src_addr;
         if (!src_ip || !inet_parse_address(src_ip, &svc_mon_src_addr)) {
             VLOG_WARN("Invalid svc mon src IP %s", src_ip ? src_ip : "NULL");
+            goto mark_error_and_cleanup;
         } else {
             struct ds src_ip_s = DS_EMPTY_INITIALIZER;
             ss_format_address_nobracks(&svc_mon_src_addr, &src_ip_s);
             svc_mon_src_ip = ds_steal_cstr(&src_ip_s);
         }
 
-        if (svc_mon_src_ip) {
-            struct ovn_northd_lb_backend *backend_nb =
-                &lb_vip_nb->backends_nb[j];
-            backend_nb->health_check = true;
-            backend_nb->logical_port = xstrdup(port_name);
-            backend_nb->svc_mon_src_ip = svc_mon_src_ip;
-            backend_nb->az_name = is_remote ? xstrdup(az_name) : NULL;
-            backend_nb->local_backend = !is_remote;
-        }
+init_backend_nb:
+        backend_nb = &lb_vip_nb->backends_nb[j];
+        backend_nb->health_check = lb_vip_nb->lb_health_check;
+        backend_nb->logical_port = xstrdup(port_name);
+        backend_nb->svc_mon_src_ip = svc_mon_src_ip;
+        backend_nb->az_name = is_remote ? xstrdup(az_name) : NULL;
+        backend_nb->local_backend = !is_remote;
+        goto cleanup_and_continue;
+
+mark_error_and_cleanup:
+        *is_lb_correctly_configured = false;
+
+cleanup_and_continue:
         free(port_name);
+        continue;
     }
 
     ds_destroy(&key);
@@ -364,6 +381,9 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
         lb->hairpin_snat_ip = xstrdup(snat_ip);
     }
 
+    lb->distributed_mode = smap_get_bool(&nbrec_lb->options,
+                                         "distributed",
+                                         false);
     sset_init(&lb->ips_v4);
     sset_init(&lb->ips_v6);
     struct smap_node *node;
@@ -403,8 +423,16 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
         }
         n_vips++;
 
-        if (lb_vip_nb->lb_health_check) {
-            ovn_lb_vip_backends_health_check_init(lb, lb_vip, lb_vip_nb);
+        if (lb->distributed_mode || lb_vip_nb->lb_health_check) {
+            bool is_lb_correctly_configured = true;
+            ovn_lb_vip_backends_ip_port_mappings_init(lb,
+                lb_vip, lb_vip_nb, &is_lb_correctly_configured);
+            if (lb->distributed_mode && !is_lb_correctly_configured) {
+                VLOG_ERR("Proper ip_port_mappings configuration for "
+                         "all backends is required for distributed load "
+                         "balancer %s operation.", lb->nlb->name);
+                lb->distributed_mode = false;
+            }
         }
     }
 

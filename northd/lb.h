@@ -74,6 +74,9 @@ struct ovn_northd_lb {
     /* Indicates if the load balancer has health checks configured. */
     bool health_checks;
 
+    /* Indicates if the load balancer is distributed. */
+    bool distributed_mode;
+
     char *hairpin_snat_ip;
 };
 
