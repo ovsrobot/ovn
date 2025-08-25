@@ -1,7 +1,7 @@
 {
     "name": "OVN_IC_Southbound",
-    "version": "2.2.0",
-    "cksum": "2294868959 8438",
+    "version": "2.2.1",
+    "cksum": "3845118402 8592",
     "tables": {
         "IC_SB_Global": {
             "columns": {
@@ -148,6 +148,9 @@
             "maxRows": 1},
         "Service_Monitor": {
             "columns": {
+                "type": {"type": {"key": {
+                           "type": "string",
+                           "enum": ["set", ["load-balancer"]]}}},
                 "ip": {"type": "string"},
                 "protocol": {
                     "type": {"key": {"type": "string",
