@@ -839,18 +839,20 @@ parse_dynamic_routing_redistribute(
 static void
 ods_build_array_index(struct ovn_datapaths *datapaths)
 {
+    datapaths->dps = VECTOR_CAPACITY_INITIALIZER(struct ovn_datapath *,
+                                                 ods_size(datapaths));
+    dynamic_bitmap_alloc(&datapaths->dps_index_map, ods_size(datapaths));
+
     /* Assign unique sequential indexes to all datapaths.  These are not
      * visible outside of the northd loop, so, unlike the tunnel keys, it
      * doesn't matter if they are different on every iteration. */
-    size_t index = 0;
-
-    datapaths->array = xrealloc(datapaths->array,
-                            ods_size(datapaths) * sizeof *datapaths->array);
-
     struct ovn_datapath *od;
     HMAP_FOR_EACH (od, key_node, &datapaths->datapaths) {
+        size_t index = bitmap_scan(datapaths->dps_index_map.map, 0, 0,
+                                   datapaths->dps_index_map.capacity);
+        dynamic_bitmap_set1(&datapaths->dps_index_map, index);
         od->index = index;
-        datapaths->array[index++] = od;
+        vector_push(&datapaths->dps, &od);
         od->datapaths = datapaths;
     }
 }
@@ -3425,7 +3427,8 @@ build_lswitch_lbs_from_lrouter(struct ovn_datapaths *lr_datapaths,
 
     HMAP_FOR_EACH (lb_dps, hmap_node, lb_dps_map) {
         DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_lr_map) {
-            struct ovn_datapath *od = lr_datapaths->array[index];
+            struct ovn_datapath *od = vector_get(&lr_datapaths->dps, index,
+                                                 struct ovn_datapath *);
             ovn_lb_datapaths_add_ls(lb_dps, vector_len(&od->ls_peers),
                                     vector_get_array(&od->ls_peers),
                                     ods_size(ls_datapaths));
@@ -5025,7 +5028,7 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
 
         size_t index;
         DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_ls_map) {
-            od = ls_datapaths->array[index];
+            od = vector_get(&ls_datapaths->dps, index, struct ovn_datapath *);
 
             /* Add the ls datapath to the northd tracked data. */
             hmapx_add(&nd_changes->ls_with_changed_lbs, od);
@@ -5161,7 +5164,7 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
         size_t index;
         BITMAP_FOR_EACH_1 (index, ods_size(ls_datapaths),
                            lb_dps->nb_ls_map.map) {
-            od = ls_datapaths->array[index];
+            od = vector_get(&ls_datapaths->dps, index, struct ovn_datapath *);
 
             /* Add the ls datapath to the northd tracked data. */
             hmapx_add(&nd_changes->ls_with_changed_lbs, od);
@@ -8104,7 +8107,8 @@ build_lb_rules(struct lflow_table *lflows, struct ovn_lb_datapaths *lb_dps,
 
             dp_non_meter = dynamic_bitmap_clone_map(&lb_dps->nb_ls_map);
             DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_ls_map) {
-                struct ovn_datapath *od = ls_datapaths->array[index];
+                struct ovn_datapath *od = vector_get(&ls_datapaths->dps, index,
+                                                     struct ovn_datapath *);
 
                 meter = copp_meter_get(COPP_REJECT, od->nbs->copp,
                                        meter_groups);
@@ -12109,7 +12113,8 @@ build_gw_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
     if (ctx->reject) {
         dp_non_meter = bitmap_clone(dp_bitmap, bitmap_len);
         BITMAP_FOR_EACH_1 (index, bitmap_len, dp_bitmap) {
-            struct ovn_datapath *od = lr_datapaths->array[index];
+            struct ovn_datapath *od = vector_get(&lr_datapaths->dps, index,
+                                                 struct ovn_datapath *);
             const char *meter;
 
             meter = copp_meter_get(COPP_REJECT, od->nbr->copp,
@@ -12246,7 +12251,8 @@ build_lrouter_nat_flows_for_lb(
     bool use_stateless_nat = smap_get_bool(&lb->nlb->options,
                                            "use_stateless_nat", false);
     DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_lr_map) {
-        struct ovn_datapath *od = lr_datapaths->array[index];
+        struct ovn_datapath *od = vector_get(&lr_datapaths->dps, index,
+                                             struct ovn_datapath *);
         enum lrouter_nat_lb_flow_type type;
 
         const struct lr_stateful_record *lr_stateful_rec =
@@ -12345,7 +12351,8 @@ build_lswitch_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
 
         size_t index;
         DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_ls_map) {
-            struct ovn_datapath *od = ls_datapaths->array[index];
+            struct ovn_datapath *od = vector_get(&ls_datapaths->dps, index,
+                                                 struct ovn_datapath *);
 
             ovn_lflow_add_with_hint__(lflows, od,
                                       S_SWITCH_IN_PRE_LB, 130, ds_cstr(match),
@@ -12423,7 +12430,8 @@ build_lrouter_allow_vip_traffic_template(struct lflow_table *lflows,
 
     size_t index;
     DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_lr_map) {
-        struct ovn_datapath *od = lr_dps->array[index];
+        struct ovn_datapath *od = vector_get(&lr_dps->dps, index,
+                                             struct ovn_datapath *);
         /* Do not drop ip traffic with destination the template VIP. */
         ds_clear(&match);
         ds_put_format(&match, "ip%d.dst == %s",
@@ -12469,8 +12477,8 @@ build_lrouter_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
         }
 
         DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_lr_map) {
-            struct ovn_datapath *od = lr_datapaths->array[index];
-
+            struct ovn_datapath *od = vector_get(&lr_datapaths->dps, index,
+                                                 struct ovn_datapath *);
             ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_DNAT,
                                       130, ds_cstr(match), ds_cstr(action),
                                       NULL,
@@ -12483,8 +12491,8 @@ build_lrouter_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
 
     if (lb->skip_snat) {
         DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_lr_map) {
-            struct ovn_datapath *od = lr_datapaths->array[index];
-
+            struct ovn_datapath *od = vector_get(&lr_datapaths->dps, index,
+                                                 struct ovn_datapath *);
             ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 120,
                           "flags.skip_snat_for_lb == 1 && ip", "next;",
                           lb_dps->lflow_ref);
@@ -18945,7 +18953,6 @@ static void
 ovn_datapaths_init(struct ovn_datapaths *datapaths)
 {
     hmap_init(&datapaths->datapaths);
-    datapaths->array = NULL;
 }
 
 static void
@@ -18957,8 +18964,8 @@ ovn_datapaths_destroy(struct ovn_datapaths *datapaths)
     }
     hmap_destroy(&datapaths->datapaths);
 
-    free(datapaths->array);
-    datapaths->array = NULL;
+    dynamic_bitmap_free(&datapaths->dps_index_map);
+    vector_destroy(&datapaths->dps);
 }
 
 static void
