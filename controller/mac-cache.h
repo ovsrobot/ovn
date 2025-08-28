@@ -93,6 +93,8 @@ struct fdb {
 
 struct mac_cache_stats {
     int64_t idle_age_ms;
+    bool has_ever_hit; /* Defines if the entry might have been hit at all,
+                        * independent of idle_age_ms. */
 
     union {
         /* Common data to identify MAC binding. */

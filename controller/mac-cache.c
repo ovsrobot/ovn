@@ -348,6 +348,7 @@ mac_binding_stats_process_flow_stats(struct vector *stats_vec,
 {
     struct mac_cache_stats stats = (struct mac_cache_stats) {
         .idle_age_ms = ofp_stats->idle_age * 1000,
+        .has_ever_hit = ofp_stats->idle_age < ofp_stats->duration_sec,
         .data.mb = (struct mac_binding_data) {
             .cookie = ntohll(ofp_stats->cookie),
             /* The port_key must be zero to match
@@ -419,7 +420,7 @@ mac_binding_stats_run(
 
         /* If "idle_age" is under threshold it means that the mac binding is
          * used on this chassis. */
-        if (stats->idle_age_ms < threshold->value) {
+        if (stats->has_ever_hit && stats->idle_age_ms < threshold->value) {
             if (since_updated_ms >= threshold->cooldown_period) {
                 mac_binding_update_log("Updating active", &mb->data, true,
                                        threshold, stats->idle_age_ms,
@@ -452,6 +453,7 @@ fdb_stats_process_flow_stats(struct vector *stats_vec,
 {
     struct mac_cache_stats stats = (struct mac_cache_stats) {
         .idle_age_ms = ofp_stats->idle_age * 1000,
+        .has_ever_hit = ofp_stats->idle_age < ofp_stats->duration_sec,
         .data.fdb = (struct fdb_data) {
             .port_key = ofp_stats->match.flow.regs[MFF_LOG_INPORT - MFF_REG0],
             .dp_key = ntohll(ofp_stats->match.flow.metadata),
@@ -514,7 +516,7 @@ fdb_stats_run(struct rconn *swconn OVS_UNUSED,
 
         /* If "idle_age" is under threshold it means that the fdb entry is
          * used on this chassis. */
-        if (stats->idle_age_ms < threshold->value) {
+        if (stats->has_ever_hit && stats->idle_age_ms < threshold->value) {
             if (since_updated_ms >= threshold->cooldown_period) {
                 fdb_update_log("Updating active", &fdb->data, true,
                                threshold, stats->idle_age_ms,
@@ -838,6 +840,7 @@ mac_binding_probe_stats_process_flow_stats(
 {
     struct mac_cache_stats stats = (struct mac_cache_stats) {
         .idle_age_ms = ofp_stats->idle_age * 1000,
+        .has_ever_hit = ofp_stats->idle_age < ofp_stats->duration_sec,
         .data.mb = (struct mac_binding_data) {
             .cookie = ntohll(ofp_stats->cookie),
             /* The port_key must be zero to match
