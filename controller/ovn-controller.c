@@ -6864,6 +6864,7 @@ main(int argc, char *argv[])
                      dns_cache_sb_dns_handler);
 
     engine_add_input(&en_garp_rarp, &en_ovs_open_vswitch, NULL);
+    engine_add_input(&en_garp_rarp, &en_sb_datapath_binding, NULL);
     engine_add_input(&en_garp_rarp, &en_sb_chassis, NULL);
     engine_add_input(&en_garp_rarp, &en_sb_port_binding,
                      garp_rarp_sb_port_binding_handler);
