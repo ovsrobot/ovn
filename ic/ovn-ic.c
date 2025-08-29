@@ -1026,6 +1026,12 @@ parse_route(const char *s_prefix, const char *s_nexthop,
     return !in6_is_lla(nexthop);
 }
 
+static bool
+lr_is_enabled(const struct nbrec_logical_router *lr)
+{
+    return !lr->n_enabled || *lr->enabled;
+}
+
 /* Return false if can't be added due to bad format. */
 static bool
 add_to_routes_learned(struct hmap *routes_learned,
@@ -1519,6 +1525,10 @@ route_need_learn(const struct nbrec_logical_router *lr,
         return false;
     }
 
+    if (!lr_is_enabled(lr)) {
+        return false;
+    }
+
     if (prefix_is_link_local(prefix, plen)) {
         return false;
     }
@@ -1685,6 +1695,9 @@ sync_learned_routes(struct ic_context *ctx,
     const struct icsbrec_port_binding *isb_pb;
     const struct nbrec_logical_router_port *lrp;
     VECTOR_FOR_EACH (&ic_lr->isb_pbs, isb_pb) {
+        if (!strcmp(isb_pb->address, "")) {
+            continue;
+        }
         lrp_name = get_lrp_name_by_ts_port_name(ctx, isb_pb->logical_port);
         lrp = get_lrp_by_lrp_name(ctx, lrp_name);
         if (lrp) {
@@ -2943,6 +2956,8 @@ main(int argc, char *argv[])
                          &nbrec_logical_router_col_options);
     ovsdb_idl_add_column(ovnnb_idl_loop.idl,
                          &nbrec_logical_router_col_external_ids);
+    ovsdb_idl_add_column(ovnnb_idl_loop.idl,
+                         &nbrec_logical_router_col_enabled);
     ovsdb_idl_add_column(ovnnb_idl_loop.idl,
                          &nbrec_logical_router_col_load_balancer);
     ovsdb_idl_add_column(ovnnb_idl_loop.idl,
