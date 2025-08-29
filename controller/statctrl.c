@@ -20,6 +20,7 @@
 #include "latch.h"
 #include "lflow.h"
 #include "lib/vec.h"
+#include "lib/oftable.h"
 #include "mac-cache.h"
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/ofp-flow.h"

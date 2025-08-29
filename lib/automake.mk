@@ -10,6 +10,8 @@ lib_libovn_la_LDFLAGS += $(VIF_PLUG_PROVIDER_LDFLAGS)
 endif
 
 lib_libovn_la_SOURCES = \
+	lib/oftable.c \
+	lib/oftable.h \
 	lib/acl-log.c \
 	lib/acl-log.h \
 	lib/actions.c \
@@ -22,8 +24,8 @@ lib_libovn_la_SOURCES = \
 	lib/extend-table.h \
 	lib/extend-table.c \
 	lib/features.c \
-	lib/ovn-parallel-hmap.h \
 	lib/ovn-parallel-hmap.c \
+	lib/ovn-parallel-hmap.h \
 	lib/ip-mcast-index.c \
 	lib/ip-mcast-index.h \
 	lib/mac-binding-index.c \

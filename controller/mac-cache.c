@@ -19,6 +19,7 @@
 #include "lflow.h"
 #include "lib/mac-binding-index.h"
 #include "lib/vec.h"
+#include "lib/oftable.h"
 #include "local_data.h"
 #include "lport.h"
 #include "mac-cache.h"

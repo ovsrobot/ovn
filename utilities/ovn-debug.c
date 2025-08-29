@@ -21,6 +21,7 @@
 #include "controller/lflow.h"
 #include "northd/northd.h"
 #include "ovn-util.h"
+#include "lib/oftable.h"
 
 struct ovn_lflow_stage {
     const char *name;

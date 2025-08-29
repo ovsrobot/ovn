@@ -39,6 +39,9 @@ VLOG_DEFINE_THIS_MODULE(ovn_util);
 
 #define DEFAULT_PROBE_INTERVAL_MSEC 5000
 
+int LOG_PIPELINE_INGRESS_LEN = 32;
+int LOG_PIPELINE_EGRESS_LEN = 14;
+
 void ovn_conn_show(struct unixctl_conn *conn, int argc OVS_UNUSED,
                    const char *argv[] OVS_UNUSED, void *idl_)
 {

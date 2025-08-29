@@ -27,6 +27,7 @@
 #include "openvswitch/uuid.h"
 #include "util.h"
 #include "ovn/features.h"
+#include "oftable.h"
 
 struct expr;
 struct lexer;
