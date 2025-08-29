@@ -407,6 +407,17 @@
         being specified. NOTE: this feature is experimental and may be subject
         to removal/change in the future.
       </dd>
+
+      <dt><code>external_ids:validate-northd-actions</code></dt>
+      <dd>
+        The boolean flag indicates whether <code>ovn-controller</code>
+        needs to verify support for all actions that  <code>ovn-northd</code>
+        supports.
+        If this flag is set to true and <code>ovn-controller</code> does not
+        support some of the actions available in ovn-northd,
+        it will stop processing southbound and local Open vSwitch database
+        changes.
+      </dd>
     </dl>
 
     <p>
