@@ -682,6 +682,13 @@ update_sb_config_options_to_sbrec(struct ed_type_global_config *config_data,
      * register usage. */
     smap_add(options, "register_consolidation", "true");
 
+
+    smap_add_format(options, "log-pipeline-ingress-len",
+        "%d", LOG_PIPELINE_INGRESS_LEN);
+
+    smap_add_format(options, "log-pipeline-egress-len",
+        "%d", LOG_PIPELINE_EGRESS_LEN);
+
     if (!smap_equal(&sb->options, options)) {
         sbrec_sb_global_set_options(sb, options);
     }

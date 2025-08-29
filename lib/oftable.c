@@ -15,6 +15,7 @@
 #include <config.h>
 
 #include "lib/oftable.h"
+#include "lib/ovn-util.h"
 
 int OFTABLE_PHY_TO_LOG = 0;
 
@@ -53,3 +54,49 @@ int OFTABLE_FLOOD_REMOTE_CHASSIS = 84;
 int OFTABLE_CT_STATE_SAVE        = 85;
 int OFTABLE_CT_ORIG_PROTO_LOAD   = 86;
 int OFTABLE_GET_REMOTE_FDB       = 87;
+
+void
+recalculate_oftable_offsets(int new_ingress_len,
+                            int new_egress_len)
+{
+    const int ingress_delta =
+        new_ingress_len - LOG_PIPELINE_INGRESS_LEN;
+
+    OFTABLE_OUTPUT_LARGE_PKT_DETECT += ingress_delta;
+    OFTABLE_OUTPUT_INIT += ingress_delta;
+    OFTABLE_OUTPUT_LARGE_PKT_PROCESS += ingress_delta;
+    OFTABLE_REMOTE_OUTPUT += ingress_delta;
+    OFTABLE_REMOTE_VTEP_OUTPUT += ingress_delta;
+    OFTABLE_LOCAL_OUTPUT += ingress_delta;
+    OFTABLE_CHECK_LOOPBACK += ingress_delta;
+
+    /* Start of LOG_PIPELINE_LEN tables. */
+    OFTABLE_LOG_EGRESS_PIPELINE += ingress_delta;
+    OFTABLE_SAVE_INPORT += ingress_delta;
+    OFTABLE_LOG_TO_PHY += ingress_delta;
+    OFTABLE_MAC_BINDING += ingress_delta;
+    OFTABLE_MAC_LOOKUP += ingress_delta;
+    OFTABLE_CHK_LB_HAIRPIN += ingress_delta;
+    OFTABLE_CHK_LB_HAIRPIN_REPLY += ingress_delta;
+    OFTABLE_CT_SNAT_HAIRPIN += ingress_delta;
+    OFTABLE_GET_FDB += ingress_delta;
+    OFTABLE_LOOKUP_FDB += ingress_delta;
+    OFTABLE_CHK_IN_PORT_SEC += ingress_delta;
+    OFTABLE_CHK_IN_PORT_SEC_ND += ingress_delta;
+    OFTABLE_CHK_OUT_PORT_SEC += ingress_delta;
+    OFTABLE_ECMP_NH_MAC += ingress_delta;
+    OFTABLE_ECMP_NH += ingress_delta;
+    OFTABLE_CHK_LB_AFFINITY += ingress_delta;
+    OFTABLE_MAC_CACHE_USE += ingress_delta;
+    OFTABLE_CT_ZONE_LOOKUP += ingress_delta;
+    OFTABLE_CT_ORIG_NW_DST_LOAD += ingress_delta;
+    OFTABLE_CT_ORIG_IP6_DST_LOAD += ingress_delta;
+    OFTABLE_CT_ORIG_TP_DST_LOAD  += ingress_delta;
+    OFTABLE_FLOOD_REMOTE_CHASSIS += ingress_delta;
+    OFTABLE_CT_STATE_SAVE += ingress_delta;
+    OFTABLE_CT_ORIG_PROTO_LOAD += ingress_delta;
+    OFTABLE_GET_REMOTE_FDB += ingress_delta;
+
+    LOG_PIPELINE_INGRESS_LEN = new_ingress_len;
+    LOG_PIPELINE_EGRESS_LEN = new_egress_len;
+}

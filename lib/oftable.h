@@ -56,3 +56,6 @@ extern int OFTABLE_FLOOD_REMOTE_CHASSIS;
 extern int OFTABLE_CT_STATE_SAVE;
 extern int OFTABLE_CT_ORIG_PROTO_LOAD;
 extern int OFTABLE_GET_REMOTE_FDB;
+
+void recalculate_oftable_offsets(int new_ingress_len,
+                                 int new_egress_len);

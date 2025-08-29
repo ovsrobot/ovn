@@ -61,6 +61,7 @@
 #include "lib/ovn-dirs.h"
 #include "lib/ovn-sb-idl.h"
 #include "lib/ovn-util.h"
+#include "lib/oftable.h"
 #include "ovsport.h"
 #include "patch.h"
 #include "vif-plug.h"
@@ -6465,6 +6466,52 @@ check_northd_version(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
     return true;
 }
 
+static bool
+verify_pipeline_length_compatibility(struct ovsdb_idl *ovnsb_idl)
+{
+    bool pipeline_length_mismatch;
+
+    const struct sbrec_sb_global *sb = sbrec_sb_global_first(ovnsb_idl);
+    if (!sb) {
+        pipeline_length_mismatch = true;
+        return false;
+    }
+
+    /* No results found - indicates legacy northd version;
+     * preserve backward compatibility by skipping processing. */
+    int northd_ingress_pipeline_len = smap_get_int(&sb->options,
+                                                   "log-pipeline-ingress-len",
+                                                   LOG_PIPELINE_INGRESS_LEN);
+    int northd_egress_pipeline_len = smap_get_int(&sb->options,
+                                                   "log-pipeline-egress-len",
+                                                    LOG_PIPELINE_EGRESS_LEN);
+
+    /* Check if northd pipeline lengths differ from
+     * controller's configuration. */
+    pipeline_length_mismatch = (northd_ingress_pipeline_len !=
+                               LOG_PIPELINE_INGRESS_LEN) ||
+                               (northd_egress_pipeline_len !=
+                               LOG_PIPELINE_EGRESS_LEN);
+
+    /* If the pipeline lengths don't match,
+     * shift the table numbers and force a full recompute.*/
+    if (pipeline_length_mismatch) {
+        VLOG_INFO("Pipeline length mismatch detected: "
+                  "northd(ingress=%d, egress=%d) "
+                  "vs controller(ingress=%d, egress=%d)",
+                  northd_ingress_pipeline_len,
+                  northd_egress_pipeline_len,
+                  LOG_PIPELINE_INGRESS_LEN,
+                  LOG_PIPELINE_EGRESS_LEN);
+        recalculate_oftable_offsets(northd_ingress_pipeline_len,
+                                    northd_egress_pipeline_len);
+        engine_set_force_recompute();
+    }
+
+    pipeline_length_mismatch = false;
+    return true;
+}
+
 static void
 br_int_remote_update(struct br_int_remote *remote,
                      const struct ovsrec_bridge *br_int,
@@ -7282,6 +7329,9 @@ main(int argc, char *argv[])
             check_northd_version(ovs_idl_loop.idl, ovnsb_idl_loop.idl,
                                  ovn_version);
 
+        bool pipeline_length_match =
+            verify_pipeline_length_compatibility(ovnsb_idl_loop.idl);
+
         init_validate_actions(ovs_idl_loop.idl);
 
         if (validate_actions.controller_validate_actions) {
@@ -7326,7 +7376,8 @@ main(int argc, char *argv[])
 
         if (ovsdb_idl_has_ever_connected(ovnsb_idl_loop.idl) &&
             northd_version_match && cfg &&
-            validate_actions.validated) {
+            validate_actions.validated &&
+            pipeline_length_match) {
             /* Unconditionally remove all deleted lflows from the lflow
              * cache.
              */
