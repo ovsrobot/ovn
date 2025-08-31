@@ -20,12 +20,14 @@
 #include "lib/ovn-util.h"
 #include "lib/ovs-atomic.h"
 #include "lib/sset.h"
+#include "lib/hmapx.h"
 #include "northd/en-port-group.h"
 #include "northd/ipam.h"
 #include "openvswitch/hmap.h"
 #include "simap.h"
 #include "ovs-thread.h"
 #include "en-lr-stateful.h"
+#include "en-ls-arp.h"
 #include "vec.h"
 #include "datapath-sync.h"
 
@@ -253,6 +255,7 @@ struct lflow_input {
     const struct ls_port_group_table *ls_port_groups;
     const struct lr_stateful_table *lr_stateful_table;
     const struct ls_stateful_table *ls_stateful_table;
+    const struct ls_arp_table *ls_arp_table;
     const struct shash *meter_groups;
     const struct hmap *lb_datapaths_map;
     const struct sset *bfd_ports;
@@ -444,6 +447,9 @@ struct ovn_datapath {
     /* The logical router group to which this datapath belongs.
      * Valid only if it is logical router datapath. NULL otherwise. */
     struct lrouter_group *lr_group;
+
+    /* Set of localnet or l2gw ports. */
+    struct hmapx ph_ports;
 
     /* Map of ovn_port objects belonging to this datapath.
      * This map doesn't include derived ports. */
@@ -922,6 +928,10 @@ bool lflow_handle_ls_stateful_changes(struct ovsdb_idl_txn *,
                                       struct ls_stateful_tracked_data *,
                                       struct lflow_input *,
                                       struct lflow_table *lflows);
+bool lflow_handle_ls_arp_changes(struct ovsdb_idl_txn *,
+                                 struct ls_arp_tracked_data *,
+                                 struct lflow_input *,
+                                 struct lflow_table *lflows);
 bool northd_handle_sb_port_binding_changes(
     const struct sbrec_port_binding_table *, struct hmap *ls_ports,
     struct hmap *lr_ports);
