@@ -460,6 +460,10 @@ ovn_datapaths_find_by_index(const struct ovn_datapaths *ovn_datapaths,
     return ovn_datapaths->array[od_index];
 }
 
+bool ovn_datapath_get_nb_uuid_and_type(const struct sbrec_datapath_binding *,
+                                       struct uuid *nb_uuid,
+                                       const char **type);
+
 struct ovn_datapath *ovn_datapath_from_sbrec(
     const struct hmap *ls_datapaths, const struct hmap *lr_datapaths,
     const struct sbrec_datapath_binding *);

@@ -1518,22 +1518,15 @@ put_load(uint64_t value, enum mf_field_id dst, size_t ofs, size_t n_bits,
     put_load_bytes(&n_value, 8, dst, ofs, n_bits, ofpacts);
 }
 
+/* Fetch the NB UUID and type of the datapath using the "old style" of
+ * UUIDs being stored in external_ids, and key as datapath type. This only
+ * works with logical switches and logical routers.  And should be used by
+ * all "non-writers" of SB datapath records (e.g., ovn-controller, ovn-ic).
+ */
 bool
-datapath_get_nb_uuid_and_type(const struct sbrec_datapath_binding *sb,
-                              struct uuid *nb_uuid, const char **type)
+datapath_get_nb_uuid_and_type_legacy(const struct sbrec_datapath_binding *sb,
+                                     struct uuid *nb_uuid, const char **type)
 {
-    if (sb->type && *sb->type) {
-        /* New style. The UUID is propagated from the NB logical datapath
-         * and the type is a direct column, so use those. */
-        *nb_uuid = sb->header_.uuid;
-        *type = sb->type;
-        return true;
-    }
-
-    /* Old style. The UUID is stored in external_ids, and the key
-     * corresponds to the datapath type. This only works with
-     * logical switches and logical routers.
-     */
     *type = "logical-switch";
     if (smap_get_uuid(&sb->external_ids, *type, nb_uuid)) {
         return true;
@@ -1552,7 +1545,7 @@ datapath_get_nb_uuid(const struct sbrec_datapath_binding *sb,
                      struct uuid *nb_uuid)
 {
     const char *type;
-    return datapath_get_nb_uuid_and_type(sb, nb_uuid, &type);
+    return datapath_get_nb_uuid_and_type_legacy(sb, nb_uuid, &type);
 }
 
 const char *
@@ -1560,7 +1553,7 @@ datapath_get_nb_type(const struct sbrec_datapath_binding *sb)
 {
     const char *type;
     struct uuid nb_uuid;
-    datapath_get_nb_uuid_and_type(sb, &nb_uuid, &type);
+    datapath_get_nb_uuid_and_type_legacy(sb, &nb_uuid, &type);
     return type;
 }
 

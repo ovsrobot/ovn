@@ -22,6 +22,7 @@
 #include "en-global-config.h"
 #include "datapath-sync.h"
 #include "ovn-sb-idl.h"
+#include "northd.h"
 #include "openvswitch/vlog.h"
 #include "vec.h"
 
@@ -52,7 +53,7 @@ find_unsynced_datapath(const struct ovn_unsynced_datapath_map **maps,
     const char *type;
     struct uuid nb_uuid;
 
-    if (!datapath_get_nb_uuid_and_type(sb_dp, &nb_uuid, &type)) {
+    if (!ovn_datapath_get_nb_uuid_and_type(sb_dp, &nb_uuid, &type)) {
         return NULL;
     }
 

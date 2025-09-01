@@ -609,6 +609,24 @@ ovn_datapath_find_by_key(struct hmap *datapaths, uint32_t dp_key)
     return NULL;
 }
 
+/* Fetch the NB UUID and type of the datapath using the "new style" of
+ * UUIDs being synced from NB to SB and the type is a direct column.
+ */
+bool
+ovn_datapath_get_nb_uuid_and_type(const struct sbrec_datapath_binding *sb,
+                                  struct uuid *nb_uuid, const char **type)
+{
+    if (sb->type && *sb->type) {
+        *nb_uuid = sb->header_.uuid;
+        *type = sb->type;
+        return true;
+    }
+
+    *type = "";
+    *nb_uuid = UUID_ZERO;
+    return false;
+}
+
 struct ovn_datapath *
 ovn_datapath_from_sbrec(const struct hmap *ls_datapaths,
                         const struct hmap *lr_datapaths,
@@ -617,7 +635,7 @@ ovn_datapath_from_sbrec(const struct hmap *ls_datapaths,
     const struct hmap *dps;
     struct uuid key;
     const char *type;
-    if (!datapath_get_nb_uuid_and_type(sb, &key, &type)) {
+    if (!ovn_datapath_get_nb_uuid_and_type(sb, &key, &type)) {
         return NULL;
     }
 
