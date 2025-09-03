@@ -71,6 +71,7 @@
 #include "uuid.h"
 #include "ovs-thread.h"
 #include "openvswitch/vlog.h"
+#include <ctype.h>
 
 VLOG_DEFINE_THIS_MODULE(northd);
 
@@ -87,6 +88,12 @@ static bool use_common_zone = false;
 /* If this option is 'true' northd will make use of ct.inv match fields.
  * Otherwise, it will avoid using it.  The default is true. */
 static bool use_ct_inv_match = true;
+
+/* If this option is 'true' northd will rewrite stateful ACL rules that match
+ * on UDP port fields to use connection tracking fields to properly handle IP
+ * fragments. By default this option is set to 'false'.
+ */
+static bool acl_udp_ct_translation = false;
 
 /* If this option is 'true' northd will implicitly add a lowest-priority
  * drop rule in the ACL stage of logical switches that have at least one
@@ -6765,6 +6772,201 @@ build_acl_sample_default_flows(const struct ovn_datapath *od,
                   "next;", lflow_ref);
 }
 
+/* Port extraction result structure */
+struct port_extract_result {
+    bool found;
+    char *operator;  /* "==", ">=", "<=" */
+    char port_value[16];
+};
+
+/* Extracts port number from a match string with support for exact matches and
+ * ranges.
+ * Examples of match strings and extracted values:
+ * - "udp.dst == 4242" -> operator="==", port_value="4242"
+ * - "udp.dst >= 3002" -> operator=">=", port_value="3002"
+ * - "udp.dst <= 3006" -> operator="<=", port_value="3006"
+ * - "outport == \"server\" && udp && udp.dst == 4242" -> operator="==",
+ *    port_value="4242"
+ *
+ * Fills the caller-allocated result struct with extracted values.
+ * Returns true if port was extracted, false otherwise.
+ */
+static bool
+extract_port_value(const char *match_str, const char *field,
+                   struct port_extract_result *result)
+{
+    char *str_copy = xstrdup(match_str);
+    char *token;
+    char *saveptr;
+
+    /* Initialize result struct */
+    if (result) {
+        result->found = false;
+        result->operator = NULL;
+        result->port_value[0] = '\0';
+    } else {
+        return false;
+    }
+
+    /* Tokenize by && to find the specific field condition */
+    token = strtok_r(str_copy, "&&", &saveptr);
+
+    while (token) {
+        /* Skip leading spaces */
+        while (*token == ' ') {
+            token++;
+        }
+
+        /* Check if this token contains our field */
+        if (strstr(token, field)) {
+            char *field_pos = strstr(token, field);
+            field_pos += strlen(field);
+
+            /* Skip spaces */
+            while (*field_pos == ' ') {
+                field_pos++;
+            }
+
+            /* Determine the operator and extract port */
+            if (strncmp(field_pos, ">=", 2) == 0) {
+                result->operator = ">=";
+                field_pos += 2;
+            } else if (strncmp(field_pos, "<=", 2) == 0) {
+                result->operator = "<=";
+                field_pos += 2;
+            } else if (strncmp(field_pos, "==", 2) == 0) {
+                result->operator = "==";
+                field_pos += 2;
+            } else {
+                /* No recognized operator found */
+                token = strtok_r(NULL, "&&", &saveptr);
+                continue;
+            }
+
+            /* Skip spaces after operator */
+            while (*field_pos == ' ') {
+                field_pos++;
+            }
+
+            /* Extract the port number */
+            size_t i = 0;
+            while (*field_pos && isdigit(*field_pos) &&
+                   i < (sizeof(result->port_value) - 1)) {
+                result->port_value[i++] = *field_pos++;
+            }
+            result->port_value[i] = '\0';
+
+            if (i > 0) {
+                result->found = true;
+                break;
+            }
+        }
+
+        token = strtok_r(NULL, "&&", &saveptr);
+    }
+
+    free(str_copy);
+    return result->found;
+}
+
+/* This function implements a workaround for stateful ACLs with UDP matches
+ * that need to handle IP fragments properly. The issue is that UDP L4 headers
+ * are only present in the first fragment of a fragmented packet. Subsequent
+ * fragments don't have L4 headers, so they won't match ACL rules that look for
+ * UDP fields.
+ *
+ * The workaround replaces UDP protocol matches with connection tracking
+ * equivalents. For example:
+ *   "outport == "server" && udp && udp.dst == 4242"
+ * becomes:
+ *   "outport == "server" && udp && ct.new && ct_udp.dst == 4242"
+ */
+static char *
+rewrite_match_for_fragments(const char *match_str)
+{
+    VLOG_DBG("rewrite_match_for_fragments called with: %s", match_str);
+    struct ds new_match = DS_EMPTY_INITIALIZER;
+    bool has_udp = false;
+    bool has_udp_dst = false;
+    bool has_udp_src = false;
+
+    char *str_copy = xstrdup(match_str);
+    char *token;
+    char *saveptr;
+
+    /* First token */
+    token = strtok_r(str_copy, "&&", &saveptr);
+
+    while (token) {
+        /* Skip leading spaces */
+        while (*token == ' ') {
+            token++;
+        }
+
+        /* Check what kind of token this is */
+        if (strstr(token, "udp") && !strstr(token, "udp.")) {
+            /* This is the UDP protocol marker */
+            has_udp = true;
+        } else if (strstr(token, "udp.dst")) {
+            /* This is a UDP destination port condition */
+            has_udp_dst = true;
+        } else if (strstr(token, "udp.src")) {
+            /* This is a UDP source port condition */
+            has_udp_src = true;
+        } else {
+            /* This is a non-UDP condition, keep it */
+            if (new_match.length > 0) {
+                ds_put_cstr(&new_match, " && ");
+            }
+            ds_put_cstr(&new_match, token);
+        }
+
+        /* Get next token */
+        token = strtok_r(NULL, "&&", &saveptr);
+    }
+
+    /* Free the string copy */
+    free(str_copy);
+
+    /* If we found UDP, always preserve it */
+    if (has_udp) {
+        if (new_match.length > 0) {
+            ds_put_cstr(&new_match, " && ");
+        }
+        ds_put_cstr(&new_match, "udp");
+
+        /* Handle destination port conditions */
+        if (has_udp_dst) {
+            struct port_extract_result dst_result;
+            if (extract_port_value(match_str, "udp.dst", &dst_result)) {
+                ds_put_format(&new_match, " && ct_udp.dst %s %s",
+                              dst_result.operator, dst_result.port_value);
+            }
+        }
+
+        /* Handle source port conditions */
+        if (has_udp_src) {
+            struct port_extract_result src_result;
+            if (extract_port_value(match_str, "udp.src", &src_result)) {
+                ds_put_format(&new_match, " && ct_udp.src %s %s",
+                              src_result.operator, src_result.port_value);
+            }
+        }
+
+        /* Add !ct.inv condition */
+        if (new_match.length > 0) {
+            ds_put_cstr(&new_match, " && ");
+        }
+        ds_put_cstr(&new_match, "!ct.inv && ct_proto == 17");
+    }
+
+    /* Return the result */
+    char *result = xstrdup(ds_cstr(&new_match));
+    ds_destroy(&new_match);
+    VLOG_DBG("rewrite_match_for_fragments returning: %s", result);
+    return result;
+}
+
 static void
 consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
              const struct nbrec_acl *acl, bool has_stateful,
@@ -6777,6 +6979,8 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
     bool ingress = !strcmp(acl->direction, "from-lport") ? true :false;
     enum ovn_stage stage;
     enum acl_observation_stage obs_stage;
+
+    VLOG_DBG("consider_acl: ingress=%d, acl=%s", ingress, acl->match);
 
     if (ingress && smap_get_bool(&acl->options, "apply-after-lb", false)) {
         stage = S_SWITCH_IN_ACL_AFTER_LB_EVAL;
@@ -6814,6 +7018,23 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
         ds_put_format(match, REG_ACL_TIER " == %"PRId64" && ", acl->tier);
         match_tier_len = match->length;
     }
+
+    /* Check if this ACL has L4 matches that need fragment handling */
+    bool has_udp_match = strstr(acl->match, "udp") != NULL;
+
+    char *modified_match = NULL;
+    /* For stateful ACLs with L4 matches, rewrite the match string to handle
+     * fragments, but only if acl_udp_ct_translation is enabled */
+    if (has_stateful && has_udp_match && acl_udp_ct_translation) {
+        modified_match = rewrite_match_for_fragments(acl->match);
+
+        VLOG_DBG("Rewriting ACL match for L4 fragment handling: "
+                "original='%s' modified='%s'", acl->match, modified_match);
+    }
+
+    /* Use the original or modified match string based on whether UDP L4
+     * matches were detected */
+    const char *match_to_use = modified_match ? modified_match : acl->match;
 
     if (!has_stateful
         || !strcmp(acl->action, "pass")
@@ -6853,7 +7074,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
          */
         ds_truncate(match, match_tier_len);
         ds_put_format(match, REGBIT_ACL_HINT_ALLOW_NEW " == 1 && (%s)",
-                      acl->match);
+                      match_to_use);
 
         ds_truncate(actions, log_verdict_len);
 
@@ -6898,7 +7119,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
         ds_truncate(match, match_tier_len);
         ds_truncate(actions, log_verdict_len);
         ds_put_format(match, REGBIT_ACL_HINT_ALLOW " == 1 && (%s)",
-                      acl->match);
+                      match_to_use);
         if (acl->label || acl->sample_est) {
             ds_put_cstr(actions, REGBIT_CONNTRACK_COMMIT" = 1; ");
         }
@@ -6920,7 +7141,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
          * connection, then we can simply reject/drop it. */
         ds_truncate(match, match_tier_len);
         ds_put_cstr(match, REGBIT_ACL_HINT_DROP " == 1");
-        ds_put_format(match, " && (%s)", acl->match);
+        ds_put_format(match, " && (%s)", match_to_use);
 
         ds_truncate(actions, log_verdict_len);
 
@@ -6944,7 +7165,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
          */
         ds_truncate(match, match_tier_len);
         ds_put_cstr(match, REGBIT_ACL_HINT_BLOCK " == 1");
-        ds_put_format(match, " && (%s)", acl->match);
+        ds_put_format(match, " && (%s)", match_to_use);
 
         ds_truncate(actions, log_verdict_len);
 
@@ -6959,6 +7180,12 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
                                 ds_cstr(match), ds_cstr(actions),
                                 &acl->header_, lflow_ref);
     }
+
+    /* Free the modified match string if it was created */
+    if (modified_match) {
+        free(modified_match);
+    }
+    VLOG_DBG("consider_acl done");
 }
 
 static void
@@ -19145,6 +19372,10 @@ ovnnb_db_run(struct northd_input *input_data,
                                               false);
     use_common_zone = smap_get_bool(input_data->nb_options, "use_common_zone",
                                     false);
+
+    acl_udp_ct_translation = smap_get_bool(input_data->nb_options,
+                                           "acl_udp_ct_translation",
+                                       false);
 
     vxlan_mode = input_data->vxlan_mode;
 

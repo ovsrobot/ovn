@@ -31,6 +31,10 @@ OVN v25.09.0 - xxx xx xxxx
      with stateless ACL to work with load balancer.
    - Added new ovn-nbctl command 'pg-get-ports' to get the ports assigned to
      the port group.
+   - Added new NB_Global option 'acl_udp_ct_translation' to control whether
+     stateful ACL rules that match on UDP port fields are rewritten to use
+     connection tracking fields to properly handle IP fragments. Default is
+     false.
    - The ovn-controller option ovn-ofctrl-wait-before-clear is no longer
      supported.  It will be ignored if used. ovn-controller will
      automatically care about proper delay before clearing lflow.
