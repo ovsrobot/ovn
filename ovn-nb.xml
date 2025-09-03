@@ -2644,6 +2644,14 @@ or
         Note that you can not create an ACL matching on a port with
         type=router or type=localnet.
       </p>
+
+      <p>
+        Note that matching directly on connection tracker metadata fields such
+        as <code>ct_proto</code>, <code>ct_udp</code> and their subfields is
+        for internal use between ovn-northd and ovn-controller, may be removed
+        at any time and consequently not supported as part of the Northbound
+        API.
+      </p>
     </column>
 
     <column name="action">
