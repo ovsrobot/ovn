@@ -513,6 +513,27 @@ find_sb_pb_by_name(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     return pb;
 }
 
+static const struct sbrec_datapath_binding *
+find_dp_by_name(struct ic_context *ctx,
+                const char *name)
+{
+    struct smap external_ids = SMAP_INITIALIZER(&external_ids);
+    smap_add(&external_ids, "name", name);
+
+    const struct sbrec_datapath_binding_table *dp_t =
+        sbrec_datapath_binding_table_get(ctx->ovnsb_idl);
+    const struct sbrec_datapath_binding *dp;
+    SBREC_DATAPATH_BINDING_TABLE_FOR_EACH (dp, dp_t) {
+        const char *found_value = smap_get(&dp->external_ids, "name");
+        if (found_value && !strcmp(found_value, name)) {
+            smap_destroy(&external_ids);
+            return dp;
+        }
+    }
+    smap_destroy(&external_ids);
+    return NULL;
+}
+
 static const struct sbrec_port_binding *
 find_peer_port(struct ic_context *ctx,
                const struct sbrec_port_binding *sb_pb)
@@ -1191,7 +1212,7 @@ add_to_routes_ad(struct hmap *routes_ad, const struct in6_addr prefix,
                  const struct nbrec_load_balancer *nb_lb,
                  const char *route_tag)
 {
-    ovs_assert(nb_route || nb_lrp || nb_lb);
+    ovs_assert(nb_route || nb_lrp || nb_lb || nb_lr);
 
     if (route_table == NULL) {
         route_table = "";
@@ -1223,9 +1244,12 @@ add_to_routes_ad(struct hmap *routes_ad, const struct in6_addr prefix,
         } else if (nb_lb) {
             VLOG_WARN_RL(&rl, msg_fmt, origin, "loadbalancer",
                          UUID_ARGS(&nb_lb->header_.uuid));
-        } else {
+        } else if (nb_lrp){
             VLOG_WARN_RL(&rl, msg_fmt, origin, "lrp",
                          UUID_ARGS(&nb_lrp->header_.uuid));
+        } else {
+            VLOG_WARN_RL(&rl, msg_fmt, origin, "route",
+                UUID_ARGS(&nb_lr->header_.uuid));
         }
     }
 }
@@ -1301,8 +1325,16 @@ add_network_to_routes_ad(struct hmap *routes_ad, const char *network,
 
     if (!route_need_advertise(NULL, &prefix, plen, nb_options,
                               nb_lr, ts_lrp)) {
-        VLOG_DBG("Route ad: skip network %s of lrp %s.",
-                 network, nb_lrp->name);
+        if (VLOG_IS_DBG_ENABLED()) {
+            struct ds msg = DS_EMPTY_INITIALIZER;
+            ds_put_format(&msg, "Route ad: skip network %s", network);
+            if (nb_lrp) {
+                ds_put_format(&msg, " of lrp %s", nb_lrp->name);
+            }
+            ds_put_format(&msg, ".");
+            VLOG_DBG("%s", ds_cstr(&msg));
+            ds_destroy(&msg);
+        }
         return;
     }
 
@@ -1316,8 +1348,12 @@ add_network_to_routes_ad(struct hmap *routes_ad, const char *network,
         struct ds msg = DS_EMPTY_INITIALIZER;
 
         ds_put_format(&msg, "Adding direct network route to <main> routing "
-                      "table: %s of lrp %s, nexthop ", network, nb_lrp->name);
+                      "table: %s", network);
 
+        if (nb_lrp) {
+            ds_put_format(&msg, " of lrp %s,", nb_lrp->name);
+        }
+        ds_put_format(&msg, " nexthop ");
         if (IN6_IS_ADDR_V4MAPPED(&nexthop)) {
             ds_put_format(&msg, IP_FMT,
                           IP_ARGS(in6_addr_get_mapped_ipv4(&nexthop)));
@@ -1498,7 +1534,8 @@ route_matches_local_lb(const struct nbrec_load_balancer *nb_lb,
 }
 
 static bool
-route_need_learn(const struct nbrec_logical_router *lr,
+route_need_learn(struct ic_context *ctx,
+                 const struct nbrec_logical_router *lr,
                  const struct icsbrec_route *isb_route,
                  struct in6_addr *prefix, unsigned int plen,
                  const struct smap *nb_options,
@@ -1561,6 +1598,21 @@ route_need_learn(const struct nbrec_logical_router *lr,
                          isb_route->route_table);
                 return false;
             }
+        }
+    }
+
+    const struct sbrec_datapath_binding *dp = find_dp_by_name(ctx, lr->name);
+    if (!dp) {
+        return true;
+    }
+    const struct sbrec_learned_route_table *sbrec_learned_route_table =
+                                sbrec_learned_route_table_get(ctx->ovnsb_idl);
+    const struct sbrec_learned_route *sb_route;
+    SBREC_LEARNED_ROUTE_TABLE_FOR_EACH_SAFE (sb_route,
+                                             sbrec_learned_route_table) {
+        if (uuid_equals(&sb_route->datapath->header_.uuid, &dp->header_.uuid)
+            && !strcmp(isb_route->ip_prefix, sb_route->ip_prefix)) {
+                return false;
         }
     }
 
@@ -1686,7 +1738,7 @@ sync_learned_routes(struct ic_context *ctx,
     const struct nbrec_logical_router_port *lrp;
     VECTOR_FOR_EACH (&ic_lr->isb_pbs, isb_pb) {
         lrp_name = get_lrp_name_by_ts_port_name(ctx, isb_pb->logical_port);
-        lrp = get_lrp_by_lrp_name(ctx, lrp_name);
+        lrp = lrp_name ? get_lrp_by_lrp_name(ctx, lrp_name) : NULL;
         if (lrp) {
             ts_route_table = smap_get_def(&lrp->options, "route_table", "");
             route_filter_tag = smap_get_def(&lrp->options,
@@ -1745,7 +1797,7 @@ sync_learned_routes(struct ic_context *ctx,
                              isb_route->nexthop);
                 continue;
             }
-            if (!route_need_learn(ic_lr->lr, isb_route, &prefix, plen,
+            if (!route_need_learn(ctx, ic_lr->lr, isb_route, &prefix, plen,
                                   &nb_global->options, lrp, &nexthop)) {
                 continue;
             }
@@ -1816,7 +1868,8 @@ ad_route_sync_external_ids(const struct ic_route_info *route_adv,
     smap_get_uuid(&isb_route->external_ids, "lr-id", &isb_ext_lr_id);
     nb_id = route_adv->nb_lb ? route_adv->nb_lb->header_.uuid :
             route_adv->nb_route ? route_adv->nb_route->header_.uuid :
-            route_adv->nb_lrp->header_.uuid;
+            route_adv->nb_lrp ? route_adv->nb_lrp->header_.uuid :
+            route_adv->nb_lr->header_.uuid;
 
     lr_id = route_adv->nb_lr->header_.uuid;
     if (!uuid_equals(&isb_ext_id, &nb_id)) {
@@ -2006,6 +2059,24 @@ build_ts_routes_to_adv(struct ic_context *ctx,
                                             lr, route_tag, ts_lrp);
                 }
             }
+        }
+    }
+
+    const struct sbrec_datapath_binding *dp = find_dp_by_name(ctx, lr->name);
+    if (!dp) {
+        return;
+    }
+    const struct sbrec_learned_route_table *sbrec_learned_route_table =
+                                sbrec_learned_route_table_get(ctx->ovnsb_idl);
+    const struct sbrec_learned_route *sb_route;
+    SBREC_LEARNED_ROUTE_TABLE_FOR_EACH_SAFE (sb_route,
+                                             sbrec_learned_route_table) {
+        if (uuid_equals(&sb_route->datapath->header_.uuid,
+                        &dp->header_.uuid)) {
+            add_network_to_routes_ad(routes_ad, sb_route->ip_prefix, NULL,
+                                     ts_port_addrs,
+                                     &nb_global->options,
+                                     lr, route_tag, ts_lrp);
         }
     }
 }
@@ -3067,6 +3138,15 @@ main(int argc, char *argv[])
     ovsdb_idl_add_column(ovnsb_idl_loop.idl,
                          &sbrec_service_monitor_col_options);
 
+    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_learned_route);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                         &sbrec_learned_route_col_nexthop);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                         &sbrec_learned_route_col_ip_prefix);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                         &sbrec_learned_route_col_logical_port);
+    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
+                         &sbrec_learned_route_col_datapath);
     /* Create IDL indexes */
     struct ovsdb_idl_index *nbrec_ls_by_name
         = ovsdb_idl_index_create1(ovnnb_idl_loop.idl,
