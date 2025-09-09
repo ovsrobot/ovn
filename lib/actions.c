@@ -5900,6 +5900,8 @@ parse_action(struct action_context *ctx)
     } else if (lexer_match_id(ctx->lexer, "ct_snat_in_czone")) {
         parse_CT_SNAT_IN_CZONE(ctx);
     } else if (lexer_match_id(ctx->lexer, "ct_lb")) {
+        VLOG_WARN("The \"ct_lb\" action is deprecated please consider using"
+                  " a different action.");
         parse_ct_lb_action(ctx, false);
     } else if (lexer_match_id(ctx->lexer, "ct_lb_mark")) {
         parse_ct_lb_action(ctx, true);
