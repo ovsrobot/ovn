@@ -5832,7 +5832,7 @@ build_lswitch_output_port_sec_od(struct ovn_datapath *od,
 
 static void
 skip_port_from_conntrack(const struct ovn_datapath *od, struct ovn_port *op,
-                         bool has_stateful_acl, enum ovn_stage in_stage,
+                         bool apply_ct, enum ovn_stage in_stage,
                          enum ovn_stage out_stage, uint16_t priority,
                          struct lflow_table *lflows,
                          struct lflow_ref *lflow_ref)
@@ -5848,9 +5848,17 @@ skip_port_from_conntrack(const struct ovn_datapath *od, struct ovn_port *op,
      * conntrack state across all chassis. */
 
     const char *ingress_action = "next;";
-    const char *egress_action = has_stateful_acl
-                                ? "next;"
-                                : "ct_clear; next;";
+    struct ovn_port *peer = op->peer;
+    if (peer && lsp_is_router(op->nbsp)) {
+        struct ovn_datapath *peer_od = peer->od;
+
+        if (peer_od &&
+            !peer_od->is_gw_router && vector_is_empty(&peer_od->l3dgw_ports)) {
+            /* We can clear ct for distributed routers. */
+            apply_ct = false;
+        }
+    }
+    const char *egress_action = apply_ct ? "next;" : "ct_clear; next;";
 
     char *ingress_match = xasprintf("ip && inport == %s", op->json_key);
     char *egress_match = xasprintf("ip && outport == %s", op->json_key);
