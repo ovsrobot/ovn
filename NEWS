@@ -22,6 +22,11 @@ Post v25.09.0
      NOTE:
      * Network functions must not modify packet headers.
      * The feature is not supported in conjunction with Load Balancer.
+     * The feature is supported for both VLAN and overlay networks.
+       When network function is used in a VLAN network, geneve tunneling is used
+       for cross host traffic (between the chassis hosting network function and
+       the chassis hosting the port where the ACL is being enforced). Proper
+       MTU needs to be configured to accomodate this encapsulation.
    - Added disable_garp_rarp option to logical_router table in order to disable
      GARP/RARP announcements by all the peer ports of this logical router.
 

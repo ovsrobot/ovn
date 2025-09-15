@@ -240,6 +240,10 @@ static const char *reg_ct_state[] = {
 #undef CS_STATE
 };
 
+/* Register used for storing tunnel openflow interface id, in a Logical Switch.
+ * Must match the MFF_LOG_TUN_OFPORT in logical-fields.h */
+#define REG_TUN_OFPORT "reg5[16..31]"
+
 /* Register used for temporarily store ECMP eth.src to avoid masked ct_label
  * access. It doesn't really occupy registers because the content of the
  * register is saved to stack and then restored in the same flow.
@@ -283,7 +287,7 @@ static const char *reg_ct_state[] = {
  * | R4 |                 REG_LB_IPV4                  |   |                                   |
  * | R4 |    (>= IN_PRE_STATEFUL && <= IN_HAIRPIN)     | X |                                   |
  * +----+----------------------------------------------+ X |           REG_LB_IPV6             |
- * | R5 |                   UNUSED                     | R |      (>= IN_PRE_STATEFUL &&       |
+ * | R5 |           REG_TUN_OFPORT (16..31)            | R |      (>= IN_PRE_STATEFUL &&       |
  * +----+----------------------------------------------+ E |       <= IN_HAIRPIN)              |
  * | R6 |                   UNUSED                     | G |                                   |
  * +----+----------------------------------------------+ 1 |                                   |
@@ -17789,11 +17793,53 @@ network_function_get_active(const struct nbrec_network_function_group *nfg)
     return nfg->n_network_function ? nfg->network_function[0] : NULL;
 }
 
+/* For packets received on tunnel and egressing towards a network-function port
+ * commit the tunnel interface id in CT. This will be utilized when the packet
+ * comes out of the other network-function interface of the service VM. The
+ * packet then will be tunneled back to the source host. */
 static void
-consider_network_function(struct lflow_table *lflows,
-                          const struct ovn_datapath *od,
+build_lswitch_stateful_nf(struct ovn_port *op,
+                          struct ds *actions, struct ds *match,
+                          struct lflow_table *lflows,
+                          struct lflow_ref *lflow_ref)
+{
+    ds_clear(actions);
+    ds_clear(match);
+
+    ds_put_cstr(actions,
+                 "ct_commit { "
+                    "ct_mark.blocked = 0; "
+                    "ct_mark.allow_established = " REGBIT_ACL_PERSIST_ID "; "
+                    "ct_label.acl_id = " REG_ACL_ID "; "
+                    "ct_label.tun_if_id = " REG_TUN_OFPORT "; }; next;");
+    ds_put_format(match,
+                  "outport == %s && " REGBIT_ACL_LABEL" == 0", op->json_key);
+    ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_STATEFUL, 120,
+                  ds_cstr(match), ds_cstr(actions), lflow_ref);
+
+    ds_clear(actions);
+    ds_clear(match);
+    ds_put_format(match,
+                  "outport == %s && " REGBIT_ACL_LABEL" == 1",
+                  op->json_key);
+    ds_put_cstr(actions,
+                 "ct_commit { "
+                    "ct_mark.blocked = 0; "
+                    "ct_mark.allow_established = " REGBIT_ACL_PERSIST_ID "; "
+                    "ct_label.acl_id = " REG_ACL_ID "; "
+                    "ct_mark.obs_stage = " REGBIT_ACL_OBS_STAGE "; "
+                    "ct_mark.obs_collector_id = " REG_OBS_COLLECTOR_ID_EST "; "
+                    "ct_label.obs_point_id = " REG_OBS_POINT_ID_EST "; "
+                    "ct_label.tun_if_id = " REG_TUN_OFPORT "; }; next;");
+    ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_STATEFUL, 120,
+                  ds_cstr(match), ds_cstr(actions), lflow_ref);
+}
+
+static void
+consider_network_function(const struct ovn_datapath *od,
                           struct nbrec_network_function_group *nfg,
-                          struct lflow_ref *lflow_ref, bool ingress)
+                          bool ingress, struct lflow_table *lflows,
+                          struct lflow_ref *lflow_ref)
 {
     struct ds match = DS_EMPTY_INITIALIZER;
     struct ds action = DS_EMPTY_INITIALIZER;
@@ -17906,7 +17952,7 @@ consider_network_function(struct lflow_table *lflows,
      * match.
      */
     ds_put_format(&match, "inport == %s", input_port->json_key);
-    ds_put_format(&action, "next;");
+    ds_put_format(&action, REG_TUN_OFPORT" = ct_label.tun_if_id; next;");
     ovn_lflow_add(lflows, od, S_SWITCH_IN_NETWORK_FUNCTION, 100,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
@@ -17948,14 +17994,21 @@ consider_network_function(struct lflow_table *lflows,
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110, ds_cstr(&match),
                   ds_cstr(&action), lflow_ref);
 
+    /* Priority 120 flows in out_stateful:
+     * If packet was received on a tunnel interface and being forwarded to a
+     * NF port, commit openflow tunnel interface id in ct_label.
+     */
+    build_lswitch_stateful_nf(output_port, &action, &match, lflows, lflow_ref);
+    build_lswitch_stateful_nf(input_port, &action, &match, lflows, lflow_ref);
+
     ds_destroy(&match);
     ds_destroy(&action);
 }
 
 static void
 build_network_function(const struct ovn_datapath *od,
-                       struct lflow_table *lflows,
                        const struct ls_port_group_table *ls_pgs,
+                       struct lflow_table *lflows,
                        struct lflow_ref *lflow_ref)
 {
     unsigned long *nfg_ingress_bitmap
@@ -18016,8 +18069,8 @@ build_network_function(const struct ovn_datapath *od,
                 continue;
             }
             nfg_bitmap = bitmap_set1(nfg_bitmap, nfg_id);
-            consider_network_function(lflows, od, acl->network_function_group,
-                                      lflow_ref, ingress);
+            consider_network_function(od, acl->network_function_group,
+                                      ingress, lflows, lflow_ref);
         }
     }
 
@@ -18041,9 +18094,8 @@ build_network_function(const struct ovn_datapath *od,
                         continue;
                     }
                     nfg_bitmap = bitmap_set1(nfg_bitmap, nfg_id);
-                    consider_network_function(lflows, od,
-                                              acl->network_function_group,
-                                              lflow_ref, ingress);
+                    consider_network_function(od, acl->network_function_group,
+                                              ingress, lflows, lflow_ref);
                 }
             }
         }
@@ -18093,8 +18145,7 @@ build_lswitch_and_lrouter_iterate_by_ls(struct ovn_datapath *od,
     build_mirror_default_lflow(od, lsi->lflows);
     build_lswitch_lflows_pre_acl_and_acl(od, lsi->lflows,
                                          lsi->meter_groups, NULL);
-    build_network_function(od, lsi->lflows, lsi->ls_port_groups,
-                           NULL);
+    build_network_function(od, lsi->ls_port_groups, lsi->lflows, NULL);
     build_fwd_group_lflows(od, lsi->lflows, NULL);
     build_lswitch_lflows_admission_control(od, lsi->lflows, NULL);
     build_lswitch_learn_fdb_od(od, lsi->lflows, NULL);
@@ -19119,9 +19170,8 @@ lflow_handle_ls_stateful_changes(struct ovsdb_idl_txn *ovnsb_txn,
                                 lflow_input->features,
                                 lflows,
                                 lflow_input->sbrec_acl_id_table);
-        build_network_function(od, lflows,
-                               lflow_input->ls_port_groups,
-                               ls_stateful_rec->lflow_ref);
+        build_network_function(od, lflow_input->ls_port_groups,
+                               lflows, ls_stateful_rec->lflow_ref);
 
         /* Sync the new flows to SB. */
         bool handled = lflow_ref_sync_lflows(

@@ -233,6 +233,16 @@ ovn_init_symtab(struct shash *symtab)
                                     OVN_CT_NETWORK_FUNCTION_GROUP_ID_END_BIT)
                                     "]",
                                     WR_CT_COMMIT);
+    expr_symtab_add_subfield_scoped(symtab, "ct_label.tun_if", NULL,
+                                    "ct_label["
+                                    OVN_CT_STR(OVN_CT_TUN_IF_BIT)
+                                    "]",
+                                    WR_CT_COMMIT);
+    expr_symtab_add_subfield_scoped(symtab, "ct_label.tun_if_id", NULL,
+                                    "ct_label["
+                                    OVN_CT_STR(OVN_CT_TUN_IF_1ST_BIT) ".."
+                                    OVN_CT_STR(OVN_CT_TUN_IF_END_BIT) "]",
+                                    WR_CT_COMMIT);
 
     expr_symtab_add_field(symtab, "ct_state", MFF_CT_STATE, NULL, false);
 

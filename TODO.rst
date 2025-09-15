@@ -171,6 +171,11 @@ OVN To-do List
     allow for the eventual removal of the ovn\_datapath structure from the
     codebase.
 
+* Network function insertion
+
+  * Geneve tunnel is used for supporting this feature for VLAN network.
+    Extend the support over VxLAN tunnel as well.
+
 * CI
 
   * ovn-kubernetes: Only a subset of the ovn-kubernetes features is currently
