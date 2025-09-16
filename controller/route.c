@@ -207,8 +207,7 @@ route_run(struct route_ctx_in *r_ctx_in,
                                             "dynamic-routing-port-name");
             if (!port_name) {
                 /* No port-name set, so we learn routes from all ports. */
-                smap_add_nocopy(&ad->bound_ports,
-                                xstrdup(local_peer->logical_port), NULL);
+                smap_add(&ad->bound_ports, local_peer->logical_port, "");
             } else {
                 /* If a port_name is set the we filter for the name as set in
                  * the port-mapping or the interface name of the local
