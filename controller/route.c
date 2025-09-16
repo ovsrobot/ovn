@@ -152,6 +152,7 @@ route_run(struct route_ctx_in *r_ctx_in,
 {
     struct advertise_datapath_entry *ad;
     const struct local_datapath *ld;
+    bool lr_has_port_name_filter;
     struct smap port_mapping = SMAP_INITIALIZER(&port_mapping);
 
     build_port_mapping(&port_mapping, r_ctx_in->dynamic_routing_port_mapping);
@@ -161,6 +162,7 @@ route_run(struct route_ctx_in *r_ctx_in,
             continue;
         }
         ad = NULL;
+        lr_has_port_name_filter = false;
 
         /* This is a LR datapath, find LRPs with route exchange options
          * that are bound locally. */
@@ -209,6 +211,8 @@ route_run(struct route_ctx_in *r_ctx_in,
                 /* No port-name set, so we learn routes from all ports. */
                 smap_add(&ad->bound_ports, local_peer->logical_port, "");
             } else {
+                lr_has_port_name_filter = true;
+
                 /* If a port_name is set the we filter for the name as set in
                  * the port-mapping or the interface name of the local
                  * binding. If the port is not in the port_mappings and not
@@ -224,6 +228,16 @@ route_run(struct route_ctx_in *r_ctx_in,
         }
 
         if (ad) {
+            if (lr_has_port_name_filter) {
+                struct smap_node *node;
+
+                SMAP_FOR_EACH_SAFE (node, &ad->bound_ports) {
+                    if (node->value && *node->value == '\0') {
+                        smap_remove_node(&ad->bound_ports, node);
+                    }
+                }
+            }
+
             tracked_datapath_add(ld->datapath, TRACKED_RESOURCE_NEW,
                                  r_ctx_out->tracked_re_datapaths);
             hmap_insert(r_ctx_out->announce_routes, &ad->node,
