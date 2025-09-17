@@ -97,6 +97,8 @@ struct lr_nat_record {
 struct lr_nat_tracked_data {
     /* Created or updated logical router with NAT data. */
     struct hmapx crupdated;
+    /* Deleted logical router with NAT data. */
+    struct hmapx deleted;
 };
 
 struct lr_nat_table {
@@ -134,7 +136,7 @@ nat_entry_is_v6(const struct ovn_nat *nat_entry)
 
 static inline bool
 lr_nat_has_tracked_data(struct lr_nat_tracked_data *trk_data) {
-    return !hmapx_is_empty(&trk_data->crupdated);
+    return !hmapx_is_empty(&trk_data->crupdated) || !hmapx_is_empty(&trk_data->deleted);
 }
 
 #endif /* EN_LR_NAT_H */
