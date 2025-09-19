@@ -614,3 +614,45 @@ m4_define([OVN_NEIGH_EQUAL],
 m4_define([OVN_NEIGH_V6_EQUAL],
   [OVS_WAIT_UNTIL_EQUAL([ip -6 neigh show dev $1 $2 | sed -e 's|[[[[:space:]]]]*$||g' | grep $3 | sort], [$4])
 ])
+
+# NS_CHECK_CONNECTIVITY([NS_SRC], [NS_DST], [IP_ADDR])
+#
+# Ensures that network namespace NS_SRC can reach NS_DST on IP_ADDR. The check performs:
+#   * Ping
+#   * Exchange of multiple messages over TCP
+#   * Exchange of multiple messages over UDP
+m4_define([NS_CHECK_CONNECTIVITY],
+[
+    ns_src="$1"
+    ns_dst="$2"
+    ip="$3"
+    # Start a simple TCP echo server that replies with "ack <received_msg>".
+    NETNS_DAEMONIZE($ns_dst, [nc -l -k -p 1235 -c 'while read msg; do echo "ack $msg"; done'], [nc-$ns_dst-$ip-tcp.pid])
+    # Start a simple UDP echo server that replies with "ack <received_msg>".
+    NETNS_DAEMONIZE($ns_dst, [nc -l -u -k -p 1234 -c 'read msg; echo "ack $msg"'], [nc-$ns_dst-$ip-udp.pid])
+
+    # Ensure that the destination NS can be pinged on the specified IP
+    NS_CHECK_EXEC([$ns_src], [ping -q -c 3 -i 0.3 -w 2 $ip | FORMAT_PING], \
+    [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+    # Exchange multiple messages over TCP and UDP to verify connectivity
+    # Note(mkalcok): Server replies are printed to STDERR because STDOUT is captured by the nc.
+    # Note2(mkalcok): The variables inside the 'nc -c' argument have to be escaped, otherwise they
+    # get interpreted by the outer shell (from NS_CHECK_EXEC).
+    NS_CHECK_EXEC([$ns_src], [timeout 2 nc $ip 1235 -c 'for i in \$(seq 1 3); do echo "tcp_data \$i"; read msg; echo "\$msg" 1>&2; done'], [0], [],  [dnl
+ack tcp_data 1
+ack tcp_data 2
+ack tcp_data 3
+])
+    NS_CHECK_EXEC([$ns_src], [timeout 2 nc -u $ip 1234 -c 'for i in \$(seq 1 3); do echo "udp_data \$i"; read msg; echo "\$msg" 1>&2; done'], [0], [], [dnl
+ack udp_data 1
+ack udp_data 2
+ack udp_data 3
+])
+
+    # cleanup echo servers
+    kill $(cat nc-$ns_dst-$ip-tcp.pid)
+    kill $(cat nc-$ns_dst-$ip-udp.pid)
+])

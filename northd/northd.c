@@ -16624,28 +16624,52 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
      * properly tracked so we can decide whether to perform SNAT on traffic
      * exiting the network. */
     if (features->ct_commit_to_zone && features->ct_next_zone &&
-        nat_entry->type == SNAT && !od->is_gw_router && !commit_all) {
-        /* For traffic that comes from SNAT network, initiate CT state before
-         * entering S_ROUTER_OUT_SNAT to allow matching on various CT states.
-         */
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 70,
-                      ds_cstr(match), "ct_next(snat);",
-                      lflow_ref);
+        !od->is_gw_router && !commit_all) {
+        /* Traffic to/from hosts behind SNAT is tracked through the
+         * SNAT CT zone.*/
+        if (nat_entry->type == SNAT) {
+            /* For traffic that comes from the SNAT network, initiate CT state
+             * from the SNAT zone, before entering S_ROUTER_OUT_SNAT to allow
+             * matching on various CT states.*/
+            ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 70,
+                          ds_cstr(match), "ct_next(snat);",
+                          lflow_ref);
 
-        build_lrouter_out_snat_match(lflows, od, nat, match,
-                                     distributed_nat, cidr_bits, is_v6,
-                                     l3dgw_port, lflow_ref, true);
+            /* New traffic that goes into the SNAT network is committed to SNAT
+             * CT zone to avoid SNAT-ing replies.*/
+            build_lrouter_out_snat_match(lflows, od, nat, match,
+                                         distributed_nat, cidr_bits, is_v6,
+                                         l3dgw_port, lflow_ref, true);
+            ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, priority,
+                          ds_cstr(match), "ct_snat;",
+                          lflow_ref);
+            ds_put_cstr(match, " && ct.new");
+            ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT, priority,
+                          ds_cstr(match), "ct_commit_to_zone(snat);",
+                          lflow_ref);
+        /* Traffic to/from hosts behind DNAT_AND_SNAT is tracked through the
+         * DNAT CT zone with slightly higher priority flows.*/
+        } else {
+            /* For traffic that comes from DNAT_AND_SNAT hosts, initiate CT
+             * state from the DNAT zone, before entering S_ROUTER_OUT_SNAT to
+             * allow matching on various CT states.*/
+            ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 75,
+                          ds_cstr(match), "ct_next(dnat);",
+                          lflow_ref);
 
-        /* New traffic that goes into SNAT network is committed to CT to avoid
-         * SNAT-ing replies.*/
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, priority,
-                      ds_cstr(match), "ct_snat;",
-                      lflow_ref);
-
-        ds_put_cstr(match, " && ct.new");
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT, priority,
-                      ds_cstr(match), "ct_commit_to_zone(snat);",
-                      lflow_ref);
+            /* New traffic addressed to the logical IP of the DNAT_AND_SNAT
+             * rule is committed to DNAT CT zone to avoid SNAT-ing replies.*/
+            build_lrouter_out_snat_match(lflows, od, nat, match,
+                                         distributed_nat, cidr_bits, is_v6,
+                                         l3dgw_port, lflow_ref, true);
+            ds_put_cstr(match, " && (!ct.trk || !ct.rpl)");
+            ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, priority + 5,
+                          ds_cstr(match), "ct_dnat;",
+                          lflow_ref);
+            ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT, priority + 5,
+                          ds_cstr(match), "ct_commit_to_zone(dnat);",
+                          lflow_ref);
+        }
     }
 }
 
