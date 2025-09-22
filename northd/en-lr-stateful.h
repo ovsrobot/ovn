@@ -107,6 +107,8 @@ struct lr_stateful_table {
 struct lr_stateful_tracked_data {
     /* Created or updated logical router with LB and/or NAT data. */
     struct hmapx crupdated; /* Stores 'struct lr_stateful_record'. */
+    /* Deleted logical router with LB and/or NAT data. */
+    struct hmapx deleted;
 
     /* Indicates if any router's NATs changed which were also LB vips
      * or vice versa. */
@@ -145,7 +147,9 @@ const struct lr_stateful_record *lr_stateful_table_find_by_index(
 static inline bool
 lr_stateful_has_tracked_data(struct lr_stateful_tracked_data *trk_data)
 {
-    return !hmapx_is_empty(&trk_data->crupdated) || trk_data->vip_nats_changed;
+    return !hmapx_is_empty(&trk_data->crupdated) ||
+           !hmapx_is_empty(&trk_data->deleted) ||
+           trk_data->vip_nats_changed;
 }
 
 static inline bool

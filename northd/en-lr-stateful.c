@@ -93,6 +93,7 @@ en_lr_stateful_init(struct engine_node *node OVS_UNUSED,
     struct ed_type_lr_stateful *data = xzalloc(sizeof *data);
     lr_stateful_table_init(&data->table);
     hmapx_init(&data->trk_data.crupdated);
+    hmapx_init(&data->trk_data.deleted);
     return data;
 }
 
@@ -102,6 +103,7 @@ en_lr_stateful_cleanup(void *data_)
     struct ed_type_lr_stateful *data = data_;
     lr_stateful_table_destroy(&data->table);
     hmapx_destroy(&data->trk_data.crupdated);
+    hmapx_destroy(&data->trk_data.deleted);
 }
 
 void
@@ -110,6 +112,11 @@ en_lr_stateful_clear_tracked_data(void *data_)
     struct ed_type_lr_stateful *data = data_;
 
     hmapx_clear(&data->trk_data.crupdated);
+    struct hmapx_node *hmapx_node;
+    HMAPX_FOR_EACH_SAFE (hmapx_node, &data->trk_data.deleted) {
+        lr_stateful_record_destroy(hmapx_node->data);
+        hmapx_delete(&data->trk_data.deleted, hmapx_node);
+    }
     data->trk_data.vip_nats_changed = false;
 }
 
@@ -132,11 +139,10 @@ en_lr_stateful_run(struct engine_node *node, void *data_)
 }
 
 enum engine_input_handler_result
-lr_stateful_northd_handler(struct engine_node *node, void *data OVS_UNUSED)
+lr_stateful_northd_handler(struct engine_node *node, void *data_)
 {
     struct northd_data *northd_data = engine_get_input_data("northd", node);
-    if (!northd_has_tracked_data(&northd_data->trk_data) ||
-        northd_has_lrouters_in_tracked_data(&northd_data->trk_data)) {
+    if (!northd_has_tracked_data(&northd_data->trk_data)) {
         return EN_UNHANDLED;
     }
 
@@ -144,10 +150,6 @@ lr_stateful_northd_handler(struct engine_node *node, void *data OVS_UNUSED)
      * See (lr_stateful_get_input_data())
      *   1. northd_data->lr_datapaths
      *      This data gets updated when a logical router is created or deleted.
-     *      northd engine node presently falls back to full recompute when
-     *      this happens and so does this node.
-     *      Note: When we add I-P to the created/deleted logical routers, we
-     *      need to revisit this handler.
      *
      *      This node also accesses the router ports of the logical router
      *      (od->ports).  When these logical router ports gets updated,
@@ -164,6 +166,19 @@ lr_stateful_northd_handler(struct engine_node *node, void *data OVS_UNUSED)
      * and (3) if any.
      *
      * */
+    if (northd_has_lrouters_in_tracked_data(&northd_data->trk_data)) {
+        struct ed_type_lr_stateful *data = data_;
+        struct lr_stateful_table  *table = &data->table;
+
+        if (hmap_count(&northd_data->lr_datapaths.datapaths) >
+            hmap_count(&table->entries)) {
+            table->array = xrealloc(table->array,
+                                    ods_size(&northd_data->lr_datapaths) *
+                                    sizeof *table->array);
+            return EN_HANDLED_UPDATED;
+        }
+    }
+
     return EN_HANDLED_UNCHANGED;
 }
 
@@ -347,6 +362,17 @@ lr_stateful_lr_nat_handler(struct engine_node *node, void *data_)
     struct lr_stateful_input input_data = lr_stateful_get_input_data(node);
     struct ed_type_lr_stateful *data = data_;
     struct hmapx_node *hmapx_node;
+
+    HMAPX_FOR_EACH (hmapx_node, &lr_nat_data->trk_data.deleted) {
+        struct lr_nat_record *lr_nat_rec = hmapx_node->data;
+        struct lr_stateful_record *lr_stateful_rec =
+            lr_stateful_table_find_by_index_(&data->table,
+                                             lr_nat_rec->lr_index);
+        if (lr_stateful_rec) {
+            hmap_remove(&data->table.entries, &lr_stateful_rec->key_node);
+            hmapx_add(&data->trk_data.deleted, lr_stateful_rec);
+        }
+    }
 
     HMAPX_FOR_EACH (hmapx_node, &lr_nat_data->trk_data.crupdated) {
         const struct lr_nat_record *lrnat_rec = hmapx_node->data;
