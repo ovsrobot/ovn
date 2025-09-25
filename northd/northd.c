@@ -4982,23 +4982,17 @@ northd_handle_sb_port_binding_changes(
     const struct sbrec_port_binding *pb;
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
     SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (pb, sbrec_port_binding_table) {
-        bool is_router_port = is_pb_router_type(pb);
-        struct ovn_port *op = NULL;
-
-        if (is_router_port) {
-            /* A router port binding 'pb' can belong to
-             *   - a logical switch port of type router or
-             *   - a logical router port.
-             *
-             * So, first search in lr_ports hmap.  If not found, search in
-             * ls_ports hmap.
-             * */
-            op = ovn_port_find(lr_ports, pb->logical_port);
-        }
-
+        bool is_router_port = true;
+        /* A router port binding 'pb' can belong to
+         *   - a logical switch port of type router or
+         *   - a logical router port.
+         *
+         * So, first search in lr_ports hmap.  If not found, search in
+         * ls_ports hmap.
+         * */
+        struct ovn_port *op = ovn_port_find(lr_ports, pb->logical_port);
         if (!op) {
             op = ovn_port_find(ls_ports, pb->logical_port);
-
             if (op) {
                 is_router_port = false;
             }
