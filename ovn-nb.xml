@@ -429,6 +429,17 @@
         </p>
       </column>
 
+      <column name="options" key="acl_udp_ct_translation">
+        <p>
+          If set to <code>true</code>, <code>ovn-northd</code> will rewrite
+          stateful ACL rules that match on UDP port fields to use connection
+          tracking fields (ct_udp.dst, ct_udp.src) to properly handle IP
+          fragments when HW offload is in use. This ensures that fragmented
+          UDP packets match ACLs correctly. By default this option is set to
+          <code>false</code>.
+        </p>
+      </column>
+
       <column name="options" key="enable_chassis_nb_cfg_update">
         <p>
           If set to <code>false</code>, ovn-controllers will no longer update
