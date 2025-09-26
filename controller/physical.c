@@ -3256,10 +3256,17 @@ physical_run(struct physical_ctx *p_ctx,
      *
      * Resubmit packets that don't output to the ingress port (already checked
      * in table 44) to the logical egress pipeline, clearing the logical
-     * registers (for consistent behavior with packets that get tunneled). */
+     * registers (for consistent behavior with packets that get tunneled).
+     * Do not clear reg0[22] since it contains the bit to allow sampling on
+     * egress pipeline. */
     match_init_catchall(&match);
     ofpbuf_clear(&ofpacts);
-    for (int i = 0; i < MFF_N_LOG_REGS; i++) {
+
+    ovs_be32 value = htonl(0);
+    ovs_be32 mask = htonl(~(1 << 22));
+    ofpact_put_set_field(
+        &ofpacts, mf_from_id(MFF_REG0), &value, &mask);
+    for (int i = 1; i < MFF_N_LOG_REGS; i++) {
         put_load(0, MFF_REG0 + i, 0, 32, &ofpacts);
     }
     put_resubmit(OFTABLE_LOG_EGRESS_PIPELINE, &ofpacts);
