@@ -7,6 +7,12 @@ Post v25.09.0
      the Logical_Router/Logical_Router_Port tables to allow users to
      deny filter advertised/learned IC routes.
 
+   - Added Transit Router support:
+    * Support the creation of Transit Routers.
+    * Support the creation of Transit Router Ports with replication
+        across availability zones.
+    * Added new ovn-ic-nbctl 'tr-add','tr-del','tr-list''trp-add','trp-del'
+        to manage Transit Router.
 OVN v25.09.0 - xxx xx xxxx
 --------------------------
    - STT tunnels are no longer supported in ovn-encap-type.
