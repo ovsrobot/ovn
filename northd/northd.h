@@ -242,11 +242,6 @@ struct ic_learned_svc_monitors_data {
     struct lflow_ref *lflow_ref;
 };
 
-struct svc_monitors_map_data
-svc_monitors_map_data_init(const struct hmap *local_svc_monitors_map,
-    const struct hmap *ic_learned_svc_monitors_map,
-    struct lflow_ref *ic_learned_svc_monitors_lflow_ref);
-
 struct lflow_ref;
 struct lr_nat_table;
 
@@ -903,6 +898,11 @@ void bfd_sync_init(struct bfd_sync_data *);
 void bfd_sync_swap(struct bfd_sync_data *, struct sset *bfd_ports);
 void bfd_sync_destroy(struct bfd_sync_data *);
 
+void
+svc_monitors_map_data_init(struct svc_monitors_map_data *svc_mons_data,
+    const struct hmap *local_svc_monitors_map,
+    const struct hmap *ic_learned_svc_monitors_map,
+    struct lflow_ref *ic_learned_svc_monitors_lflow_ref);
 void ic_learned_svc_monitors_init(
     struct ic_learned_svc_monitors_data *data);
 void ic_learned_svc_monitors_cleanup(

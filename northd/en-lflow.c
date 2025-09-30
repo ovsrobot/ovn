@@ -344,8 +344,9 @@ lflow_ic_learned_svc_mons_handler(struct engine_node *node,
     struct lflow_input lflow_input;
     lflow_get_input_data(node, &lflow_input);
 
-    struct svc_monitors_map_data svc_mons_data =
-        svc_monitors_map_data_init(
+    struct svc_monitors_map_data svc_mons_data;
+    svc_monitors_map_data_init(
+            &svc_mons_data,
             NULL,
             &ic_learned_svc_monitors_data->ic_learned_svc_monitors_map,
             ic_learned_svc_monitors_data->lflow_ref);

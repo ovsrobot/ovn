@@ -713,18 +713,6 @@ init_mcast_info_for_datapath(struct ovn_datapath *od)
     }
 }
 
-struct svc_monitors_map_data
-svc_monitors_map_data_init(const struct hmap *local_svc_monitors_map,
-                           const struct hmap *ic_learned_svc_monitors_map,
-                           struct lflow_ref *ic_learned_svc_monitors_lflow_ref)
-{
-    return (struct svc_monitors_map_data) {
-        .local_svc_monitors_map = local_svc_monitors_map,
-        .ic_learned_svc_monitors_map = ic_learned_svc_monitors_map,
-        .lflow_ref = ic_learned_svc_monitors_lflow_ref,
-    };
-}
-
 static void
 destroy_mcast_info_for_switch_datapath(struct ovn_datapath *od)
 {
@@ -18065,7 +18053,8 @@ build_lflows_thread(void *arg)
                         return NULL;
                     }
                     struct svc_monitors_map_data svc_mons_data;
-                    svc_mons_data = svc_monitors_map_data_init(
+                    svc_monitors_map_data_init(
+                        &svc_mons_data,
                         lsi->local_svc_monitor_map,
                         lsi->ic_learned_svc_monitor_map,
                         NULL);
@@ -18425,11 +18414,12 @@ void build_lflows(struct ovsdb_idl_txn *ovnsb_txn,
                   struct lflow_input *input_data,
                   struct lflow_table *lflows)
 {
-    struct svc_monitors_map_data svc_mons_data =
-        svc_monitors_map_data_init(
-            input_data->local_svc_monitors_map,
-            input_data->ic_learned_svc_monitors_map,
-            input_data->ic_learned_svc_monitors_lflow_ref);
+    struct svc_monitors_map_data svc_mons_data;
+    svc_monitors_map_data_init(
+        &svc_mons_data,
+        input_data->local_svc_monitors_map,
+        input_data->ic_learned_svc_monitors_map,
+        input_data->ic_learned_svc_monitors_lflow_ref);
 
     build_lswitch_and_lrouter_flows(input_data->ls_datapaths,
                                     input_data->lr_datapaths,
@@ -18722,10 +18712,12 @@ lflow_handle_northd_lb_changes(struct ovsdb_idl_txn *ovnsb_txn,
     struct ovn_lb_datapaths *lb_dps;
     struct hmapx_node *hmapx_node;
 
-    struct svc_monitors_map_data svc_mons_data =
-        svc_monitors_map_data_init(lflow_input->local_svc_monitors_map,
-                                   lflow_input->ic_learned_svc_monitors_map,
-                                   NULL);
+    struct svc_monitors_map_data svc_mons_data;
+    svc_monitors_map_data_init(
+        &svc_mons_data,
+        lflow_input->local_svc_monitors_map,
+        lflow_input->ic_learned_svc_monitors_map,
+        NULL);
 
     HMAPX_FOR_EACH (hmapx_node, &trk_lbs->deleted) {
         lb_dps = hmapx_node->data;
@@ -19359,6 +19351,17 @@ void
 bfd_sync_destroy(struct bfd_sync_data *data)
 {
     sset_destroy(&data->bfd_ports);
+}
+
+void
+svc_monitors_map_data_init(struct svc_monitors_map_data *svc_mons_data,
+                           const struct hmap *local_svc_monitors_map,
+                           const struct hmap *ic_learned_svc_monitors_map,
+                           struct lflow_ref *ic_learned_svc_monitors_lflow_ref)
+{
+    svc_mons_data->local_svc_monitors_map = local_svc_monitors_map;
+    svc_mons_data->ic_learned_svc_monitors_map = ic_learned_svc_monitors_map;
+    svc_mons_data->lflow_ref = ic_learned_svc_monitors_lflow_ref;
 }
 
 void
