@@ -1574,6 +1574,7 @@ join_logical_ports_lsp(struct hmap *ports,
     if (op->has_unknown) {
         od->has_unknown = true;
     }
+
     hmap_insert(&od->ports, &op->dp_node,
                 hmap_node_hash(&op->key_node));
 
@@ -1810,6 +1811,7 @@ join_logical_ports(const struct sbrec_port_binding_table *sbrec_pb_table,
             vector_push(&peer->od->ls_peers, &op->od);
             peer->peer = op;
             op->peer = peer;
+            peer->od->has_unknown = op->od->has_unknown;
 
             /* Fill op->lsp_addrs for op->nbsp->addresses[] with
              * contents "router", which was skipped in the loop above. */
@@ -14438,6 +14440,7 @@ build_arp_resolve_flows_for_lrouter(
         struct lflow_ref *lflow_ref)
 {
     ovs_assert(od->nbr);
+
     /* Multicast packets already have the outport set so just advance to
      * next table (priority 500). */
     ovn_lflow_add(lflows, od, S_ROUTER_IN_ARP_RESOLVE, 500,
@@ -14456,6 +14459,48 @@ build_arp_resolve_flows_for_lrouter(
 
     ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_ARP_RESOLVE,
                                lflow_ref);
+
+    if (!od->has_unknown) {
+        struct ds match = DS_EMPTY_INITIALIZER;
+        for (int i = 0; i < od->nbr->n_ports; i++) {
+            const struct nbrec_logical_router_port *lrp = od->nbr->ports[i];
+            struct lport_addresses lrp_networks;
+            if (!extract_lrp_networks(lrp, &lrp_networks)) {
+                destroy_lport_addresses(&lrp_networks);
+                continue;
+            }
+
+            for (int j = 0; j < lrp->n_networks; j++) {
+                struct in6_addr prefix;
+                unsigned int plen;
+                if (!ip46_parse_cidr(lrp->networks[j], &prefix, &plen)) {
+                    continue;
+                }
+
+                bool is_ipv4 = IN6_IS_ADDR_V4MAPPED(&prefix);
+                ds_clear(&match);
+                char *ip_prefix = build_route_prefix_s(&prefix, plen);
+                ds_put_format(&match, "%s.dst == %s/%u && %s != ",
+                    is_ipv4 ? "ip4" : "ip6", ip_prefix, plen,
+                    is_ipv4 ? REG_NEXT_HOP_IPV4 : REG_NEXT_HOP_IPV6);
+                if (is_ipv4) {
+                    ds_put_format(&match, "%s",
+                        lrp_networks.ipv4_addrs->addr_s);
+                } else {
+                    ds_put_format(&match, "%s",
+                        lrp_networks.ipv6_addrs->addr_s);
+                }
+
+                ovn_lflow_add_drop_with_desc(lflows, od,
+                    S_ROUTER_IN_ARP_RESOLVE, 50,
+                    ds_cstr(&match), "No L2 unknown",
+                    lflow_ref);
+                free(ip_prefix);
+            }
+            destroy_lport_addresses(&lrp_networks);
+        }
+        ds_destroy(&match);
+    }
 }
 
 /* Local router ingress table ARP_RESOLVE: ARP Resolution.
@@ -14899,23 +14944,6 @@ build_arp_resolve_flows_for_lsp(
                 ds_clear(actions);
                 ds_put_format(actions, "eth.dst = %s; next;",
                                           router_port->lrp_networks.ea_s);
-                ovn_lflow_add_with_hint(lflows, peer->od,
-                                        S_ROUTER_IN_ARP_RESOLVE, 100,
-                                        ds_cstr(match), ds_cstr(actions),
-                                        &op->nbsp->header_,
-                                        op->lflow_ref);
-            }
-
-            if (router_port->lrp_networks.n_ipv6_addrs) {
-                ds_clear(match);
-                ds_put_format(match, "outport == %s && "
-                              REG_NEXT_HOP_IPV6 " == ",
-                              peer->json_key);
-                op_put_v6_networks(match, router_port);
-
-                ds_clear(actions);
-                ds_put_format(actions, "eth.dst = %s; next;",
-                              router_port->lrp_networks.ea_s);
                 ovn_lflow_add_with_hint(lflows, peer->od,
                                         S_ROUTER_IN_ARP_RESOLVE, 100,
                                         ds_cstr(match), ds_cstr(actions),
