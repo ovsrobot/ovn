@@ -60,6 +60,7 @@ m4_define([ADD_BR], [ovs-vsctl _ADD_BR([$1]) -- $2])
 #
 m4_define([ADD_VETH],
     [ AT_CHECK([ip link add $1 type veth peer name ovs-$1])
+      on_exit "ip link del ovs-$1"
       CONFIGURE_VETH_OFFLOADS([$1])
       AT_CHECK([ip link set $1 netns $2])
       AT_CHECK([ip link set dev ovs-$1 up])
@@ -80,7 +81,6 @@ m4_define([ADD_VETH],
       if test -n "$9"; then
         NS_CHECK_EXEC([$2], [ip route add default via $9])
       fi
-      on_exit "ip link del ovs-$1"
     ]
 )
 
@@ -98,13 +98,14 @@ m4_define([ADD_VETH_BOND],
       BONDPORTS=""
       for port in $1; do
           AT_CHECK([ip link add $port type veth peer name ovs-$port])
+          on_exit 'ip link del ovs-$port'
           CONFIGURE_VETH_OFFLOADS([$port])
           AT_CHECK([ip link set $port netns $2])
           AT_CHECK([ip link set dev ovs-$port up])
           BONDPORTS="$BONDPORTS ovs-$port"
-          on_exit 'ip link del ovs-$port'
       done
       NS_CHECK_EXEC([$2], [ip link add name $4 type bond])
+      on_exit 'ip link del ovs-$4'
       case "$(echo $5 | sed 's/.*lacp=//' | sed 's/ .*//')" in
       active|passive)
           NS_CHECK_EXEC([$2], [sh -c "echo 802.3ad > /sys/class/net/$4/bonding/mode"])
@@ -117,7 +118,6 @@ m4_define([ADD_VETH_BOND],
       NS_CHECK_EXEC([$2], [ip addr add $6 dev $4])
       NS_CHECK_EXEC([$2], [ip link set dev $4 up])
       AT_CHECK([ovs-vsctl add-bond $3 ovs-$4 $BONDPORTS $5])
-      on_exit 'ip link del ovs-$4'
     ]
 )
 
