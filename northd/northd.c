@@ -557,6 +557,7 @@ ovn_datapath_create(struct hmap *datapaths, const struct uuid *key,
     od->tunnel_key = sdp->sb_dp->tunnel_key;
     init_mcast_info_for_datapath(od);
     od->datapath_lflows = lflow_ref_create();
+    od->proxy_arp_addrs = VECTOR_EMPTY_INITIALIZER(struct lport_addresses);
     return od;
 }
 
@@ -586,6 +587,11 @@ ovn_datapath_destroy(struct ovn_datapath *od)
         destroy_ports_for_datapath(od);
         sset_destroy(&od->router_ips);
         lflow_ref_destroy(od->datapath_lflows);
+        /* The ovn_ports own the proxy_arp_addresses, so we do not
+         * need to call destroy_lport_addresses() on the components
+         * of the vector
+         */
+        vector_destroy(&od->proxy_arp_addrs);
         free(od);
     }
 }
@@ -1876,6 +1882,7 @@ join_logical_ports(const struct sbrec_port_binding_table *sbrec_pb_table,
                 if (extract_addresses(arp_proxy, &op->proxy_arp_addrs, &ofs) ||
                     extract_ip_addresses(arp_proxy, &op->proxy_arp_addrs)) {
                     op->od->has_arp_proxy_port = true;
+                    vector_push(&op->od->proxy_arp_addrs, &op->proxy_arp_addrs);
                 } else {
                     static struct vlog_rate_limit rl =
                         VLOG_RATE_LIMIT_INIT(1, 5);
@@ -9836,6 +9843,85 @@ build_lswitch_arp_nd_responder_skip_local(struct ovn_port *op,
                                       &op->nbsp->header_, op->lflow_ref);
 }
 
+static void
+build_arp_match(struct ds *match, const char *ipv4_addr, const char *mac)
+{
+    ds_put_format(match, "arp.tpa == %s && arp.op == 1 && eth.dst == %s",
+                  ipv4_addr, mac);
+}
+
+static void
+build_nd_match(struct ds *match, const struct ipv6_netaddr *ipv6_addr,
+               bool is_multicast)
+{
+    if (is_multicast) {
+        ds_put_format(match, "nd_ns_mcast && ip6.dst == %s && nd.target == %s",
+                      ipv6_addr->sn_addr_s, ipv6_addr->addr_s);
+    } else {
+        ds_put_format(match, "nd_ns && ip6.dst == %s && nd.target == %s",
+                      ipv6_addr->addr_s, ipv6_addr->addr_s);
+    }
+}
+
+static void
+build_lswitch_arp_nd_unicast_flows(struct ovn_port *op,
+                                   struct lflow_table *lflows,
+                                   struct ds *match)
+{
+    /* Typically, we don't need to build any unicast flows for ARP or ND
+     * since the natural switching behavior of the logical switch will
+     * get the packet to its intended destination. However, if proxy ARP
+     * is configured, then we may need to install flows to ensure that
+     * we do not incorrectly respond to unicast ARPs destined to a known
+     * IP with the proxy ARP instead.
+     */
+    if (!op->od->nbs || !op->od->has_arp_proxy_port) {
+        return;
+    }
+
+    struct lport_addresses *proxy_arp_addrs;
+    VECTOR_FOR_EACH_PTR(&op->od->proxy_arp_addrs, proxy_arp_addrs) {
+        for (size_t i = 0; i < op->n_lsp_addrs; i++) {
+            for (size_t j = 0; j < proxy_arp_addrs->n_ipv4_addrs; j++) {
+                for (size_t k = 0; k < op->lsp_addrs[i].n_ipv4_addrs; k++) {
+                    struct ipv4_netaddr *ipv4_addr = &op->lsp_addrs[i].ipv4_addrs[k];
+                    ovs_be32 proxy_arp_mask = proxy_arp_addrs->ipv4_addrs[j].mask;
+                    ovs_be32 proxy_arp_network = proxy_arp_addrs->ipv4_addrs[j].network;
+                    if ((ipv4_addr->addr & proxy_arp_mask) != proxy_arp_network) {
+                        continue;
+                    }
+                    ds_clear(match);
+                    build_arp_match(match, ipv4_addr->addr_s,
+                                    op->lsp_addrs[i].ea_s);
+                    ovn_lflow_add_with_hint(lflows, op->od,
+                                            S_SWITCH_IN_ARP_ND_RSP, 50,
+                                            ds_cstr(match),
+                                            "next;", &op->nbsp->header_,
+                                            op->lflow_ref);
+                }
+            }
+            for (size_t j = 0; j < proxy_arp_addrs->n_ipv6_addrs; j++) {
+                for (size_t k = 0; k < op->lsp_addrs[j].n_ipv6_addrs; k++) {
+                    struct ipv6_netaddr *ipv6_addr = &op->lsp_addrs[i].ipv6_addrs[k];
+                    struct in6_addr *proxy_arp_mask = &proxy_arp_addrs->ipv6_addrs[j].mask;
+                    struct in6_addr *proxy_arp_network = &proxy_arp_addrs->ipv6_addrs[j].network;
+                    struct in6_addr network = ipv6_addr_bitand(&ipv6_addr->addr, proxy_arp_mask);
+                    if (!ipv6_addr_equals(proxy_arp_network, &network)) {
+                        continue;
+                    }
+                    ds_clear(match);
+                    build_nd_match(match, ipv6_addr, false);
+                    ovn_lflow_add_with_hint(lflows, op->od,
+                                            S_SWITCH_IN_ARP_ND_RSP, 50,
+                                            ds_cstr(match),
+                                            "next;", &op->nbsp->header_,
+                                            op->lflow_ref);
+                }
+            }
+        }
+    }
+}
+
 /* Ingress table 24: ARP/ND responder, reply for known IPs.
  * (priority 50). */
 static void
@@ -9956,15 +10042,8 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
         for (size_t i = 0; i < op->n_lsp_addrs; i++) {
             for (size_t j = 0; j < op->lsp_addrs[i].n_ipv4_addrs; j++) {
                 ds_clear(match);
-                /* Do not reply on unicast ARPs, forward them to the target
-                 * to have ability to monitor target liveness via unicast
-                 * ARP requests.
-                */
-                ds_put_format(match,
-                    "arp.tpa == %s && "
-                    "arp.op == 1 && "
-                    "eth.dst == ff:ff:ff:ff:ff:ff",
-                    op->lsp_addrs[i].ipv4_addrs[j].addr_s);
+                build_arp_match(match, op->lsp_addrs[i].ipv4_addrs[j].addr_s,
+                                "ff:ff:ff:ff:ff:ff");
                 ds_clear(actions);
                 ds_put_format(actions,
                     "eth.dst = eth.src; "
@@ -10017,11 +10096,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
              */
             for (size_t j = 0; j < op->lsp_addrs[i].n_ipv6_addrs; j++) {
                 ds_clear(match);
-                ds_put_format(
-                    match,
-                    "nd_ns_mcast && ip6.dst == %s && nd.target == %s",
-                    op->lsp_addrs[i].ipv6_addrs[j].sn_addr_s,
-                    op->lsp_addrs[i].ipv6_addrs[j].addr_s);
+                build_nd_match(match, &op->lsp_addrs[i].ipv6_addrs[j], true);
 
                 ds_clear(actions);
                 ds_put_format(actions,
@@ -10061,6 +10136,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                                                   op->lflow_ref);
             }
         }
+        build_lswitch_arp_nd_unicast_flows(op, lflows, match);
     }
     if (op->proxy_arp_addrs.n_ipv4_addrs ||
         op->proxy_arp_addrs.n_ipv6_addrs) {
