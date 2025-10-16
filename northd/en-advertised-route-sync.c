@@ -834,3 +834,253 @@ advertised_route_table_sync(
     hmap_destroy(&sync_routes);
 }
 
+struct evpn_type2 {
+    struct hmap_node hmap_node;
+
+    const struct sbrec_port_binding *sb;
+    char *ip;
+    char *mac;
+};
+
+static bool
+evpn_is_ip_redistribute_running(const struct ovn_datapath *od)
+{
+    int64_t vni = ovn_smap_get_llong(&od->nbs->other_config,
+                                     "dynamic-routing-vni", -1);
+    if (!ovn_is_valid_vni(vni)) {
+        return false;
+    }
+
+    const char *redistribute = smap_get(&od->nbs->other_config,
+                                        "dynamic-routing-redistribute");
+    return redistribute && !strcmp(redistribute, "ip");
+}
+
+static struct evpn_type2 *
+evpn_type2_entry_find(struct hmap *map,
+                      const char *ip, const char *mac)
+{
+    uint32_t hash = hash_string(ip, 0);
+    hash = hash_string(mac, hash);
+
+    struct evpn_type2 *e;
+    HMAP_FOR_EACH_WITH_HASH (e, hmap_node, hash, map) {
+        if (!strcmp(e->ip, ip) && !strcmp(e->mac, mac)) {
+            return e;
+        }
+    }
+
+    return NULL;
+}
+
+static void
+evpn_type2_entry_add(struct hmap *map,
+                     const struct sbrec_port_binding *sb,
+                     const char *ip, const char *mac)
+{
+    struct evpn_type2 *e = xmalloc(sizeof *e);
+    e->ip = xstrdup(ip);
+    e->mac = xstrdup(mac);
+    e->sb = sb;
+
+    uint32_t hash = hash_string(ip, 0);
+    hash = hash_string(mac, hash);
+    hmap_insert(map, &e->hmap_node, hash);
+}
+
+static void
+evpn_type2_entry_destroy(struct evpn_type2 *e)
+{
+    free(e->ip);
+    free(e->mac);
+    free(e);
+}
+
+static void
+evpn_add_type2(struct hmap *map, const struct sbrec_port_binding *sb,
+               struct lport_addresses *addr)
+{
+    struct ds ip = DS_EMPTY_INITIALIZER;
+
+    if (!addr) {
+        return;
+    }
+
+    for (size_t i = 0; i < addr->n_ipv4_addrs; i++) {
+        ds_clear(&ip);
+        ds_put_format(&ip, "%s/32", addr->ipv4_addrs[i].addr_s);
+        if (!evpn_type2_entry_find(map, ds_cstr(&ip), addr->ea_s)) {
+            evpn_type2_entry_add(map, sb, ds_cstr(&ip), addr->ea_s);
+        }
+    }
+
+    for (size_t i = 0; i < addr->n_ipv6_addrs; i++) {
+        if (prefix_is_link_local(&addr->ipv6_addrs[i].addr, 128)) {
+            continue;
+        }
+
+        ds_clear(&ip);
+        ds_put_format(&ip, "%s/128", addr->ipv6_addrs[i].addr_s);
+        if (!evpn_type2_entry_find(map, ds_cstr(&ip), addr->ea_s)) {
+            evpn_type2_entry_add(map, sb, ds_cstr(&ip), addr->ea_s);
+        }
+    }
+
+    ds_destroy(&ip);
+}
+
+static void
+build_evpn_type2_for_ls(const struct ovn_datapath *od, struct hmap *map)
+{
+    ovs_assert(od->nbs);
+
+    if (!evpn_is_ip_redistribute_running(od)) {
+        return;
+    }
+
+    struct ovn_port *op;
+    HMAP_FOR_EACH (op, dp_node, &od->ports) {
+        if (!op->sb) {
+            continue;
+        }
+
+        if (lsp_is_router(op->nbsp) && op->peer) {
+            evpn_add_type2(map, op->sb, &op->peer->lrp_networks);
+        }
+
+        if (!strcmp(op->nbsp->type, "")) { /* LSP */
+            evpn_add_type2(map, op->sb, op->lsp_addrs);
+        }
+    }
+}
+
+static void
+build_evpn_type2_for_lr(const struct ovn_datapath *od, struct hmap *map)
+{
+    ovs_assert(od->nbr);
+
+    struct ovn_port *op;
+    HMAP_FOR_EACH (op, dp_node, &od->ports) {
+        struct ovn_port *peer = op->peer;
+        if (!peer || !peer->od || !peer->od->nbs || !peer->sb) {
+            continue;
+        }
+
+        struct ovn_datapath *peer_od = peer->od;
+        if (evpn_is_ip_redistribute_running(peer_od)) {
+            evpn_add_type2(map, peer->sb, &op->lrp_networks);
+        }
+    }
+}
+
+void *
+en_evpn_type2_sync_init(struct engine_node *node OVS_UNUSED,
+                        struct engine_arg *arg OVS_UNUSED)
+{
+    return NULL;
+}
+
+enum engine_node_state
+en_evpn_type2_sync_run(struct engine_node *node, void *data OVS_UNUSED)
+{
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    const struct sbrec_advertised_mac_binding_table *sbrec_adv_mb_table =
+        EN_OVSDB_GET(engine_get_input("SB_advertised_mac_binding", node));
+    const struct engine_context *eng_ctx = engine_get_context();
+
+    struct hmap evpn_type2_map = HMAP_INITIALIZER(&evpn_type2_map);
+
+    struct ovn_datapath *od;
+    HMAP_FOR_EACH (od, key_node, &northd_data->lr_datapaths.datapaths) {
+        build_evpn_type2_for_lr(od, &evpn_type2_map);
+    }
+
+    HMAP_FOR_EACH (od, key_node, &northd_data->ls_datapaths.datapaths) {
+        build_evpn_type2_for_ls(od, &evpn_type2_map);
+    }
+
+    struct evpn_type2 *e;
+    const struct sbrec_advertised_mac_binding *sb_adv_mb;
+    SBREC_ADVERTISED_MAC_BINDING_TABLE_FOR_EACH_SAFE (sb_adv_mb,
+                                          sbrec_adv_mb_table) {
+        e = evpn_type2_entry_find(&evpn_type2_map, sb_adv_mb->ip,
+                                  sb_adv_mb->mac);
+        if (!e) {
+            sbrec_advertised_mac_binding_delete(sb_adv_mb);
+        } else {
+            hmap_remove(&evpn_type2_map, &e->hmap_node);
+            evpn_type2_entry_destroy(e);
+        }
+    }
+
+    HMAP_FOR_EACH_POP (e, hmap_node, &evpn_type2_map) {
+        sb_adv_mb =
+            sbrec_advertised_mac_binding_insert(eng_ctx->ovnsb_idl_txn);
+        sbrec_advertised_mac_binding_set_datapath(sb_adv_mb, e->sb->datapath);
+        sbrec_advertised_mac_binding_set_logical_port(sb_adv_mb, e->sb);
+        sbrec_advertised_mac_binding_set_ip(sb_adv_mb, e->ip);
+        sbrec_advertised_mac_binding_set_mac(sb_adv_mb, e->mac);
+        evpn_type2_entry_destroy(e);
+    }
+
+    hmap_destroy(&evpn_type2_map);
+
+    return EN_UPDATED;
+}
+
+void
+en_evpn_type2_sync_cleanup(void *data OVS_UNUSED)
+{
+}
+
+enum engine_input_handler_result
+evpn_type2_sync_northd_change_handler(struct engine_node *node,
+                                      void *data OVS_UNUSED)
+{
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    if (!northd_has_tracked_data(&northd_data->trk_data)) {
+        return EN_UNHANDLED;
+    }
+
+    struct northd_tracked_data *nd_changes = &northd_data->trk_data;
+
+    struct hmapx_node *n;
+    HMAPX_FOR_EACH (n, &nd_changes->trk_switches.crupdated) {
+        const struct ovn_datapath *od = n->data;
+        if (evpn_is_ip_redistribute_running(od)) {
+            return EN_UNHANDLED;
+        }
+    }
+    HMAPX_FOR_EACH (n, &nd_changes->trk_switches.deleted) {
+        const struct ovn_datapath *od = n->data;
+        if (evpn_is_ip_redistribute_running(od)) {
+            return EN_UNHANDLED;
+        }
+    }
+
+    HMAPX_FOR_EACH (n, &nd_changes->trk_routers.crupdated) {
+        const struct ovn_datapath *od = n->data;
+        struct ovn_port *op;
+        HMAP_FOR_EACH (op, dp_node, &od->ports) {
+            struct ovn_port *peer = op->peer;
+            if (peer && peer->od && peer->od->nbs &&
+                evpn_is_ip_redistribute_running(peer->od)) {
+                return EN_UNHANDLED;
+            }
+        }
+    }
+    HMAPX_FOR_EACH (n, &nd_changes->trk_routers.deleted) {
+        const struct ovn_datapath *od = n->data;
+        struct ovn_port *op;
+        HMAP_FOR_EACH (op, dp_node, &od->ports) {
+            struct ovn_port *peer = op->peer;
+            if (peer && peer->od && peer->od->nbs &&
+                evpn_is_ip_redistribute_running(peer->od)) {
+                return EN_UNHANDLED;
+            }
+        }
+    }
+
+    return EN_HANDLED_UNCHANGED;
+}
+

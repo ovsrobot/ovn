@@ -4077,7 +4077,7 @@ check_engine_stats northd recompute nocompute
 check_engine_stats bfd recompute nocompute
 check_engine_stats routes recompute nocompute
 check_engine_stats lflow recompute nocompute
-check_engine_stats northd_output norecompute compute
+check_engine_stats northd_output recompute nocompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 
@@ -4093,7 +4093,7 @@ check_engine_stats northd recompute nocompute
 check_engine_stats bfd recompute nocompute
 check_engine_stats routes recompute nocompute
 check_engine_stats lflow recompute nocompute
-check_engine_stats northd_output norecompute compute
+check_engine_stats northd_output recompute nocompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 
@@ -4105,7 +4105,7 @@ check_engine_stats northd recompute nocompute
 check_engine_stats bfd recompute nocompute
 check_engine_stats route_policies recompute nocompute
 check_engine_stats lflow recompute nocompute
-check_engine_stats northd_output norecompute compute
+check_engine_stats northd_output recompute nocompute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 
@@ -4140,7 +4140,7 @@ check_engine_stats northd recompute nocompute
 check_engine_stats bfd recompute nocompute
 check_engine_stats routes recompute nocompute
 check_engine_stats lflow recompute nocompute
-check_engine_stats northd_output norecompute compute
+check_engine_stats northd_output recompute compute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 
@@ -4155,7 +4155,7 @@ check_engine_stats northd recompute nocompute
 check_engine_stats bfd recompute nocompute
 check_engine_stats route_policies recompute nocompute
 check_engine_stats lflow recompute nocompute
-check_engine_stats northd_output norecompute compute
+check_engine_stats northd_output recompute compute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 
@@ -18713,6 +18713,44 @@ AT_CHECK(
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 0 && ct_label.nf_group_id == 1), action=(outport = "child-4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(outport = "child-4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
 ])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([LS EVPN Route Type2 sync])
+ovn_start ovn-northd
+
+AS_BOX([Create logical switch.])
+check ovn-nbctl ls-add ls-evpn                                          \
+    -- set logical_switch ls-evpn other_config:dynamic-routing-vni=10   \
+    -- lsp-add ls-evpn vm1                                              \
+    -- lsp-set-addresses vm1 "00:00:00:00:01:00 10.0.0.2"
+check ovn-nbctl --wait=sb sync
+check_row_count Advertised_Mac_Binding 0
+ls_evpn_uuid=$(fetch_column Datapath_Binding _uuid external_ids:name=ls-evpn)
+
+check ovn-nbctl --wait=sb set logical_switch ls-evpn other_config:dynamic-routing-redistribute=ip
+wait_row_count Advertised_Mac_Binding 1 ip=10.0.0.2/32 datapath=$ls_evpn_uuid mac='00\:00\:00\:00\:01\:00'
+
+check ovn-nbctl lr-add lr                                       \
+    -- lrp-add lr lrp 00:00:00:00:01:01 10.0.0.1/24             \
+    -- lsp-add ls-evpn ls-evpn-lrp                              \
+    -- lsp-set-type ls-evpn-lrp router                          \
+    -- lsp-set-addresses ls-evpn-lrp 00:00:00:00:01:01          \
+    -- lsp-set-options ls-evpn-lrp router-port=lrp
+check ovn-nbctl --wait=sb sync
+
+wait_row_count Advertised_Mac_Binding 1 ip=10.0.0.2/32 datapath=$ls_evpn_uuid mac='00\:00\:00\:00\:01\:00'
+wait_row_count Advertised_Mac_Binding 1 ip=10.0.0.1/32 datapath=$ls_evpn_uuid mac='00\:00\:00\:00\:01\:01'
+check_row_count Advertised_Mac_Binding 2
+
+check ovn-nbctl --wait=sb lsp-del vm1
+wait_row_count Advertised_Mac_Binding 1 ip=10.0.0.1/32 datapath=$ls_evpn_uuid mac='00\:00\:00\:00\:01\:01'
+check_row_count Advertised_Mac_Binding 1
+
+check ovn-nbctl --wait=sb clear logical_switch ls-evpn other_config
+wait_row_count Advertised_Mac_Binding 0
 
 AT_CLEANUP
 ])

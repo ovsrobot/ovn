@@ -118,7 +118,8 @@ static unixctl_cb_func chassis_features_list;
     SB_NODE(ecmp_nexthop) \
     SB_NODE(acl_id) \
     SB_NODE(advertised_route) \
-    SB_NODE(learned_route)
+    SB_NODE(learned_route) \
+    SB_NODE(advertised_mac_binding)
 
 enum sb_engine_node {
 #define SB_NODE(NAME) SB_##NAME,
@@ -181,6 +182,7 @@ static ENGINE_NODE(ecmp_nexthop);
 static ENGINE_NODE(multicast_igmp);
 static ENGINE_NODE(acl_id);
 static ENGINE_NODE(advertised_route_sync);
+static ENGINE_NODE(evpn_type2_sync);
 static ENGINE_NODE(learned_route_sync, CLEAR_TRACKED_DATA);
 static ENGINE_NODE(dynamic_routes);
 static ENGINE_NODE(group_ecmp_route, CLEAR_TRACKED_DATA);
@@ -355,6 +357,11 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_advertised_route_sync, &en_northd,
                      advertised_route_sync_northd_change_handler);
 
+    engine_add_input(&en_evpn_type2_sync, &en_sb_advertised_mac_binding, NULL);
+    engine_add_input(&en_evpn_type2_sync, &en_sb_port_binding, NULL);
+    engine_add_input(&en_evpn_type2_sync, &en_northd,
+                     evpn_type2_sync_northd_change_handler);
+
     engine_add_input(&en_learned_route_sync, &en_sb_learned_route,
                      learned_route_sync_sb_learned_route_change_handler);
     engine_add_input(&en_learned_route_sync, &en_northd,
@@ -452,6 +459,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_sync_from_sb, &en_sb_ha_chassis_group, NULL);
 
     engine_add_input(&en_northd_output, &en_acl_id, NULL);
+    engine_add_input(&en_northd_output, &en_evpn_type2_sync, NULL);
     engine_add_input(&en_northd_output, &en_sync_from_sb, NULL);
     engine_add_input(&en_northd_output, &en_sync_to_sb,
                      northd_output_sync_to_sb_handler);
