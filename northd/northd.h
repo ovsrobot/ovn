@@ -471,6 +471,13 @@ struct ovn_datapath {
     /* Reference to the lflows belonging to this datapath currently router
      * only lflows. */
     struct lflow_ref *datapath_lflows;
+
+    /* This vector contains pointers to struct lport_addresses. These are
+     * the configured "arp_proxy" addresses of all logical switch ports on
+     * this datapath. The ovn_ports own these addresses, so we should not
+     * free them when destroying the ovn_datapath.
+     */
+    struct vector proxy_arp_addrs;
 };
 
 const struct ovn_datapath *ovn_datapath_find(const struct hmap *datapaths,
