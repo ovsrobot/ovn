@@ -44,6 +44,10 @@ Post v25.09.0
        function and the chassis hosting the port where the ACL is being
        enforced). Proper MTU needs to be configured to accomodate this
        encapsulation.
+   - Add ovn-nbctl ls-add-router-port which will create router port on
+     specified LS.
+   - Add ovn-nbctl ls-add-localnet-port which will create localnet port on
+     specified LS.
 
 OVN v25.09.0 - xxx xx xxxx
 --------------------------
