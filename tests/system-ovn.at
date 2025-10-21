@@ -19183,3 +19183,144 @@ OVS_TRAFFIC_VSWITCHD_STOP(["/.*error receiving.*/d
 /.*terminating with signal 15.*/d"])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([Distributed Load Balancer: IPv4/IPv6 case])
+AT_KEYWORDS([ovnlb])
+
+# Simple Test for Basic Functionality Verification:
+# client - br-ext - br-int - outside-switch - (distrubuted port) lr - backend
+# test case:
+# 1. Create 2 centralized load balancer(ipv4/ipv6), specifying gateway chassis for router.
+# 2. Moving gateway to a non-existent chassis.
+# 3. Enable distributed option on load balancer.
+# 4. The distributed load balancer is expected to continue working.
+
+CHECK_CONNTRACK()
+CHECK_CONNTRACK_NAT()
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+ADD_BR([br-int])
+ADD_BR([br-ext])
+
+check ovs-ofctl add-flow br-ext action=normal
+# Set external-ids in br-int needed for ovn-controller
+check ovs-vsctl \
+        -- set Open_vSwitch . external-ids:system-id=hv1 \
+        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+        -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+        -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+        -- set bridge br-int fail-mode=secure other-config:disable-in-band=true \
+        -- set Open_vSwitch . external-ids:ovn-bridge-mappings=phynet:br-ext
+
+# Start ovn-controller
+start_daemon ovn-controller
+
+check ovn-nbctl lr-add lr
+check ovn-nbctl ls-add internal
+check ovn-nbctl ls-add public
+
+check ovn-nbctl lrp-add lr lr-pub 00:00:01:01:02:03 192.168.100.1/24 2001:db8:abcd:0002::bad/64
+check ovn-nbctl lsp-add public pub-lr -- set Logical_Switch_Port pub-lr \
+    type=router options:router-port=lr-pub addresses=\"00:00:01:01:02:03\"
+
+check ovn-nbctl lrp-add lr lr-internal 00:00:01:01:02:04 192.168.200.1/24 2001:db8:abcd:0001::c0fe/64
+check ovn-nbctl lsp-add internal internal-lr -- set Logical_Switch_Port internal-lr \
+    type=router options:router-port=lr-internal addresses=\"00:00:01:01:02:04\"
+
+check ovn-nbctl lsp-add internal server -- lsp-set-addresses server "unknown"
+
+check ovn-nbctl lsp-add public ln_port \
+                -- lsp-set-addresses ln_port unknown \
+                -- lsp-set-type ln_port localnet \
+                -- lsp-set-options ln_port network_name=phynet
+
+check ovn-nbctl lrp-set-gateway-chassis lr-pub hv1
+
+check ovn-nbctl lb-add lb1_ipv4 1.1.1.1:80 192.168.200.10:10880
+check ovn-nbctl lb-add lb1_ipv6 [[2000::1]]:80  [[2001:db8:abcd:1::2]]:10882
+check ovn-nbctl lr-lb-add lr lb1_ipv4
+check ovn-nbctl lr-lb-add lr lb1_ipv6
+
+check ovn-nbctl --wait=hv sync
+
+ADD_NAMESPACES(client)
+ADD_VETH(client, client, br-ext, "192.168.100.10/24", "f0:00:00:01:02:03", \
+         "192.168.100.1")
+
+ADD_NAMESPACES(server)
+ADD_VETH(server, server, br-int, "192.168.200.10/24", "f0:00:0f:01:02:03", \
+         "192.168.200.1")
+
+# set ipv6 addresses for client and server
+NS_CHECK_EXEC([server], [ip addr add 2001:db8:abcd:1::2/64 dev server], [0], [ignore], [ignore])
+NS_CHECK_EXEC([client], [ip addr add 2001:db8:abcd:2::f00d/64 dev client], [0], [ignore], [ignore])
+NS_CHECK_EXEC([client], [ip r add 2000::1 via 2001:db8:abcd:2::bad dev client], [0], [ignore], [ignore])
+NS_CHECK_EXEC([server], [ip r add 2001:db8:abcd:2::f00d via 2001:db8:abcd:0001::c0fe dev server], [0], [ignore], [ignore])
+
+# Wait for IPv6 address to be ready
+sleep 5
+
+NETNS_DAEMONIZE([server], [ncat -6 -l -k 2001:db8:abcd:1::2 10882], [serverv6.pid])
+NETNS_DAEMONIZE([server], [nc -l -k 192.168.200.10 10880], [serverv4.pid])
+
+# Checking backend availability.
+NS_CHECK_EXEC([client], [nc 1.1.1.1 80 -z], [0], [ignore], [ignore])
+NS_CHECK_EXEC([client], [nc -6 2000::1 80 -z], [0], [ignore], [ignore])
+
+# Changing the gateway to a non-existent one.
+check ovn-nbctl clear logical_router_port lr-pub gateway_chassis
+check ovn-nbctl lrp-set-gateway-chassis lr-pub hv2
+
+# ovn-controller currently does not recalculate local datapaths
+# when 'ha_chassis_group' change, so we reboot it.
+OVS_APP_EXIT_AND_WAIT([ovn-controller])
+start_daemon ovn-controller
+wait_for_ports_up
+
+# Check public switch not in local datapaths
+AT_CHECK([ovn-appctl -t ovn-controller debug/dump-local-datapaths], [0], [dnl
+Local datapaths:
+Datapath: lr, type: router
+Datapath: internal, type: switch
+])
+
+AT_CHECK([ovs-ofctl dump-groups br-int | sed -e 's/table=[[0-9]]*/table=<cleared>/'], [0], [dnl
+NXST_GROUP_DESC reply (xid=0x2):
+])
+
+check ovn-nbctl set load_balancer lb1_ipv4 options:distributed=true
+check ovn-nbctl set Load_Balancer lb1_ipv4 ip_port_mappings:192.168.200.10=server
+check ovn-nbctl --wait=hv sync
+
+check ovn-nbctl set load_balancer lb1_ipv6 options:distributed=true
+check ovn-nbctl set Load_Balancer lb1_ipv6 ip_port_mappings:\"[[2001:db8:abcd:1::2]]\"=\"server\"
+check ovn-nbctl --wait=hv sync
+
+# Check that external switch has been added to local datapaths on distrubuted nodes
+# when 'distributed' option is enabled on load balancer.
+AT_CHECK([ovn-appctl -t ovn-controller debug/dump-local-datapaths], [0], [dnl
+Local datapaths:
+Datapath: lr, type: router
+Datapath: internal, type: switch
+Datapath: public, type: switch
+])
+
+AT_CHECK([ovs-ofctl dump-groups br-int | sed -e 's/table=[[0-9]]*/table=<cleared>/'], [0], [dnl
+NXST_GROUP_DESC reply (xid=0x2):
+ group_id=1,type=select,selection_method=dp_hash,bucket=bucket_id:0,weight:100,actions=ct(commit,table=<cleared>,zone=NXM_NX_REG11[[0..15]],nat(dst=192.168.200.10:10880),exec(load:0x1->NXM_NX_CT_MARK[[1]]))
+ group_id=2,type=select,selection_method=dp_hash,bucket=bucket_id:0,weight:100,actions=ct(commit,table=<cleared>,zone=NXM_NX_REG11[[0..15]],nat(dst=[[2001:db8:abcd:1::2]]:10882),exec(load:0x1->NXM_NX_CT_MARK[[1]]))
+])
+
+# Checking backend availability.
+NS_CHECK_EXEC([client], [nc 1.1.1.1 80 -z], [0], [ignore], [ignore])
+NS_CHECK_EXEC([client], [nc -6 2000::1 80 -z], [0], [ignore], [ignore])
+
+check ovn-nbctl lb-del lb1_ipv4
+check ovn-nbctl lb-del lb1_ipv6
+
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+AT_CLEANUP
+])
