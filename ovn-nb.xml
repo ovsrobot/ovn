@@ -4499,6 +4499,19 @@ or
           routes in <code>ovn-ic</code> daemon.
         </p>
       </column>
+
+      <column name="options" key="disable_arp_resolve">
+        <p>
+          If set to <code>true</code>, disable get_arp for
+          known networks.
+        </p>
+      </column>
+      <column name="options" key="disable_nd_resolve">
+        <p>
+          If set to <code>true</code>, disable get_nd for
+          known networks.
+        </p>
+      </column>
     </group>
 
     <group title="Attachment">

@@ -14830,6 +14830,52 @@ build_arp_resolve_flows_for_lrp(struct ovn_port *op,
                                     &op->nbrp->header_,
                                     lflow_ref);
         }
+
+        bool discard_arp_resolve = smap_get_bool(&op->nbrp->options,
+            "disable_arp_resolve", false);
+        bool discard_nd_nd_resolve = smap_get_bool(&op->nbrp->options,
+            "disable_nd_resolve", false);
+        if (discard_arp_resolve || discard_nd_nd_resolve) {
+            ds_clear(match);
+
+            ds_put_format(match, "inport == %s && is_chassis_resident(%s) && "
+                "(", op->json_key, op->cr_port->json_key);
+
+            size_t match_len = match->length;
+            for (size_t i = 0; i < op->od->nbr->n_ports; i++) {
+                struct nbrec_logical_router_port *lrp = op->od->nbr->ports[i];
+                struct lport_addresses lrp_networks;
+                if (!extract_lrp_networks(lrp, &lrp_networks)) {
+                    destroy_lport_addresses(&lrp_networks);
+                    continue;
+                }
+                for (int j = 0; j < lrp->n_networks; j++) {
+                    struct in6_addr prefix;
+                    unsigned int plen;
+                    if (!ip46_parse_cidr(lrp->networks[j], &prefix, &plen)) {
+                        continue;
+                    }
+
+                    bool is_ipv4 = IN6_IS_ADDR_V4MAPPED(&prefix);
+                    char *ip_prefix = build_route_prefix_s(&prefix, plen);
+                    if ((is_ipv4 && discard_arp_resolve) ||
+                        (!is_ipv4 && discard_nd_nd_resolve)) {
+                        ds_put_format(match, "(%s.dst == %s/%u) || ",
+                            is_ipv4 ? "ip4" : "ip6", ip_prefix, plen);
+                    }
+                    free(ip_prefix);
+                }
+                destroy_lport_addresses(&lrp_networks);
+            }
+            if (match->length > match_len) {
+                ds_truncate(match, match->length - 4);
+                ds_put_format(match, ")");
+                ovn_lflow_add_drop_with_desc(lflows, op->od,
+                    S_ROUTER_IN_ARP_RESOLVE, 50,
+                    ds_cstr(match), "No L2 unknown",
+                    lflow_ref);
+            }
+        }
     }
 }
 

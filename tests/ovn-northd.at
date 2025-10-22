@@ -10111,6 +10111,87 @@ AT_CHECK([grep -e "ls_in_arp_rsp" S1flows | ovn_strip_lflows], [0], [dnl
 AT_CLEANUP
 ])
 
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([check options:disable_arp_resolve and options:disable_nd_resolve for LRP])
+ovn_start NORTHD_TYPE
+check ovn-nbctl lr-add S1
+check ovn-nbctl --wait=sb lrp-add S1 S1-vm1  50:54:00:00:00:010 192.168.0.10/24 fd00::2/64
+check ovn-nbctl --wait=sb lrp-set-gateway-chassis S1-vm1 chassis-1
+
+ovn-sbctl dump-flows S1 > S1flows
+AT_CAPTURE_FILE([S1flows])
+
+ovn-sbctl dump-flows S1 > S1flows
+AT_CAPTURE_FILE([S1flows])
+
+AT_CHECK([grep -e "lr_in_arp_resolve" S1flows | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_arp_resolve  ), priority=0    , match=(1), action=(drop;)
+  table=??(lr_in_arp_resolve  ), priority=1    , match=(reg9[[9]] == 0), action=(get_nd(outport, xxreg0); next;)
+  table=??(lr_in_arp_resolve  ), priority=1    , match=(reg9[[9]] == 1), action=(get_arp(outport, reg0); next;)
+  table=??(lr_in_arp_resolve  ), priority=500  , match=(ip4.mcast || ip6.mcast), action=(next;)
+])
+
+
+# Set the disable_arp_resolve option and verify the flow
+check ovn-nbctl --wait=sb set logical_router_port S1-vm1 options:disable_arp_resolve=true
+
+ovn-sbctl dump-flows S1 > S1flows
+AT_CAPTURE_FILE([S1flows])
+
+AT_CHECK([grep -e "lr_in_arp_resolve" S1flows | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_arp_resolve  ), priority=0    , match=(1), action=(drop;)
+  table=??(lr_in_arp_resolve  ), priority=1    , match=(reg9[[9]] == 0), action=(get_nd(outport, xxreg0); next;)
+  table=??(lr_in_arp_resolve  ), priority=1    , match=(reg9[[9]] == 1), action=(get_arp(outport, reg0); next;)
+  table=??(lr_in_arp_resolve  ), priority=50   , match=(inport == "S1-vm1" && is_chassis_resident("cr-S1-vm1") && ((ip4.dst == 192.168.0.0/24))), action=(drop;)
+  table=??(lr_in_arp_resolve  ), priority=500  , match=(ip4.mcast || ip6.mcast), action=(next;)
+])
+
+check ovn-nbctl --wait=sb set logical_router_port S1-vm1 options:disable_nd_resolve=true
+
+ovn-sbctl dump-flows S1 > S1flows
+AT_CAPTURE_FILE([S1flows])
+
+AT_CHECK([grep -e "lr_in_arp_resolve" S1flows | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_arp_resolve  ), priority=0    , match=(1), action=(drop;)
+  table=??(lr_in_arp_resolve  ), priority=1    , match=(reg9[[9]] == 0), action=(get_nd(outport, xxreg0); next;)
+  table=??(lr_in_arp_resolve  ), priority=1    , match=(reg9[[9]] == 1), action=(get_arp(outport, reg0); next;)
+  table=??(lr_in_arp_resolve  ), priority=50   , match=(inport == "S1-vm1" && is_chassis_resident("cr-S1-vm1") && ((ip4.dst == 192.168.0.0/24) || (ip6.dst == fd00::/64))), action=(drop;)
+  table=??(lr_in_arp_resolve  ), priority=500  , match=(ip4.mcast || ip6.mcast), action=(next;)
+])
+
+# Remove lrp from chassis
+check ovn-nbctl --wait=sb lrp-del-gateway-chassis S1-vm1 chassis-1
+
+ovn-sbctl dump-flows S1 > S1flows
+AT_CAPTURE_FILE([S1flows])
+
+AT_CHECK([grep -e "lr_in_arp_resolve" S1flows | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_arp_resolve  ), priority=0    , match=(1), action=(drop;)
+  table=??(lr_in_arp_resolve  ), priority=1    , match=(reg9[[9]] == 0), action=(get_nd(outport, xxreg0); next;)
+  table=??(lr_in_arp_resolve  ), priority=1    , match=(reg9[[9]] == 1), action=(get_arp(outport, reg0); next;)
+  table=??(lr_in_arp_resolve  ), priority=500  , match=(ip4.mcast || ip6.mcast), action=(next;)
+])
+
+check ovn-nbctl --wait=sb set logical_router_port S1-vm1 options:disable_arp_resolve=false
+check ovn-nbctl --wait=sb lrp-set-gateway-chassis S1-vm1 chassis-1
+
+ovn-sbctl dump-flows S1 > S1flows
+AT_CAPTURE_FILE([S1flows])
+
+AT_CHECK([grep -e "lr_in_arp_resolve" S1flows | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_arp_resolve  ), priority=0    , match=(1), action=(drop;)
+  table=??(lr_in_arp_resolve  ), priority=1    , match=(reg9[[9]] == 0), action=(get_nd(outport, xxreg0); next;)
+  table=??(lr_in_arp_resolve  ), priority=1    , match=(reg9[[9]] == 1), action=(get_arp(outport, reg0); next;)
+  table=??(lr_in_arp_resolve  ), priority=50   , match=(inport == "S1-vm1" && is_chassis_resident("cr-S1-vm1") && ((ip6.dst == fd00::/64))), action=(drop;)
+  table=??(lr_in_arp_resolve  ), priority=500  , match=(ip4.mcast || ip6.mcast), action=(next;)
+])
+
+
+AT_CLEANUP
+])
+
+
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([Address set incremental processing])
 ovn_start
