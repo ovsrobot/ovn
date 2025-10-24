@@ -462,7 +462,7 @@ Example
     From fa29a1c2c17682879e79a21bb0cdd5bbe67fa7c0 Mon Sep 17 00:00:00 2001
     From: Jesse Gross <jesse@nicira.com>
     Date: Thu, 8 Dec 2011 13:17:24 -0800
-    Subject: [PATCH] datapath: Alphabetize include/net/ipv6.h compat header.
+    Subject: [PATCH ovn] datapath: Alphabetize include/net/ipv6.h compat header.
 
     Signed-off-by: Jesse Gross <jesse@nicira.com>
     ---
