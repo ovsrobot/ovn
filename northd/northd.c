@@ -14830,6 +14830,60 @@ build_arp_resolve_flows_for_lrp(struct ovn_port *op,
                                     &op->nbrp->header_,
                                     lflow_ref);
         }
+
+        bool discard_arp_resolve = smap_get_bool(&op->nbrp->options,
+            "disable_arp_resolve", false);
+        bool discard_nd_resolve = smap_get_bool(&op->nbrp->options,
+            "disable_nd_resolve", false);
+        if (discard_arp_resolve || discard_nd_resolve) {
+            ds_clear(match);
+
+            ds_put_format(match, "inport == %s && is_chassis_resident(%s) && "
+                "(", op->json_key, op->cr_port->json_key);
+
+            size_t match_len = match->length;
+            for (size_t i = 0; i < op->od->nbr->n_ports; i++) {
+                struct nbrec_logical_router_port *lrp = op->od->nbr->ports[i];
+                struct lport_addresses lrp_networks;
+                if (!extract_lrp_networks(lrp, &lrp_networks)) {
+                    continue;
+                }
+
+                for (int j = 0; j < lrp_networks.n_ipv4_addrs; j++) {
+                    if (!discard_arp_resolve) {
+                        break;
+                    }
+                    struct ipv4_netaddr ipv4 = lrp_networks.ipv4_addrs[j];
+                    struct in6_addr ip = in6_addr_mapped_ipv4(ipv4.addr);
+                    if (prefix_is_link_local(&ip, ipv4.plen)) {
+                        continue;
+                    }
+                    ds_put_format(match, "(ip4.dst == %s/%u) || ",
+                        ipv4.network_s, ipv4.plen);
+                }
+                for (int j = 0; j < lrp_networks.n_ipv6_addrs; j++) {
+                    if (!discard_nd_resolve) {
+                        break;
+                    }
+                    struct ipv6_netaddr ipv6 = lrp_networks.ipv6_addrs[j];
+                    if (prefix_is_link_local(&ipv6.addr, ipv6.plen)) {
+                        continue;
+                    }
+                    ds_put_format(match, "(ip6.dst == %s/%u) || ",
+                        ipv6.network_s, ipv6.plen);
+                }
+                destroy_lport_addresses(&lrp_networks);
+            }
+
+            if (match->length > match_len) {
+                ds_truncate(match, match->length - 4);
+                ds_put_format(match, ")");
+                ovn_lflow_add_drop_with_desc(lflows, op->od,
+                    S_ROUTER_IN_ARP_RESOLVE, 50,
+                    ds_cstr(match), "No L2 unknown",
+                    lflow_ref);
+            }
+        }
     }
 }
 
