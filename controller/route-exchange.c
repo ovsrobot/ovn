@@ -244,6 +244,12 @@ route_exchange_run(const struct route_exchange_ctx_in *r_ctx_in,
     const struct advertise_datapath_entry *ad;
     HMAP_FOR_EACH (ad, node, r_ctx_in->announce_routes) {
         uint32_t table_id = route_get_table_id(ad->db);
+        if (!TABLE_ID_VALID(table_id)) {
+            VLOG_WARN_RL(&rl, "Unable to sync routes for datapath "UUID_FMT": "
+                              "invalid table id: %"PRIu32,
+                              UUID_ARGS(&ad->db->header_.uuid), table_id);
+            continue;
+        }
 
         if (ad->maintain_vrf) {
             if (!sset_contains(&old_maintained_vrfs, ad->vrf_name)) {
