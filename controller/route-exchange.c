@@ -19,6 +19,7 @@
 
 #include <errno.h>
 #include <net/if.h>
+#include <linux/rtnetlink.h>
 #include <stdbool.h>
 
 #include "openvswitch/poll-loop.h"
@@ -242,7 +243,7 @@ route_exchange_run(const struct route_exchange_ctx_in *r_ctx_in,
     CLEAR_ROUTE_EXCHANGE_NL_STATUS();
     const struct advertise_datapath_entry *ad;
     HMAP_FOR_EACH (ad, node, r_ctx_in->announce_routes) {
-        uint32_t table_id = ad->db->tunnel_key;
+        uint32_t table_id = route_get_table_id(ad->db);
 
         if (ad->maintain_vrf) {
             if (!sset_contains(&old_maintained_vrfs, ad->vrf_name)) {
@@ -250,8 +251,8 @@ route_exchange_run(const struct route_exchange_ctx_in *r_ctx_in,
                 if (error && error != EEXIST) {
                     VLOG_WARN_RL(&rl,
                                  "Unable to create VRF %s for datapath "
-                                 "%"PRIi32": %s.",
-                                 ad->vrf_name, table_id,
+                                 UUID_FMT": %s.", ad->vrf_name,
+                                 UUID_ARGS(&ad->db->header_.uuid),
                                  ovs_strerror(error));
                     SET_ROUTE_EXCHANGE_NL_STATUS(error);
                     continue;
@@ -270,7 +271,7 @@ route_exchange_run(const struct route_exchange_ctx_in *r_ctx_in,
         struct vector received_routes =
             VECTOR_EMPTY_INITIALIZER(struct re_nl_received_route_node);
 
-        error = re_nl_sync_routes(ad->db->tunnel_key, &ad->routes,
+        error = re_nl_sync_routes(table_id, &ad->routes,
                                   &received_routes, ad->db);
         SET_ROUTE_EXCHANGE_NL_STATUS(error);
 
