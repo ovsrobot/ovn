@@ -2375,6 +2375,17 @@ mirror("lsp1");
 mirror(lsp1);
     Syntax error at `lsp1' expecting port name string.
 
+ct_lb_mark_local(backends="lsp1":192.168.0.101:10880);
+    encodes as group:25
+    uses group: id(25), name(type=select,selection_method=dp_hash,bucket=bucket_id=0,weight:100,actions=ct(nat(dst=192.168.0.101:10880),commit,table=oflow_in_table,zone=NXM_NX_REG13[[0..15]],exec(set_field:2/2->ct_mark)))
+    has prereqs ip
+
+ct_lb_mark_local(backends=192.168.0.101:80);
+    Syntax error at `192.168.0.101' expecting logical port name for distributed load balancer.
+
+ct_lb_mark_local(backends=lsp1:192.168.0.101:10880);
+    Syntax error at `lsp1' expecting logical port name for distributed load balancer.
+
 # Miscellaneous negative tests.
 ;
     Syntax error at `;'.

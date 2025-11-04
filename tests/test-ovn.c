@@ -266,6 +266,16 @@ lookup_port_cb(const void *ports_, const char *port_name, unsigned int *portp)
 }
 
 static bool
+lookup_local_port_cb(const void *ports_, const char *port_name)
+{
+    const struct simap *ports = ports_;
+    const struct simap_node *node = simap_find(ports, port_name);
+
+
+    return node ? true : false;
+}
+
+static bool
 lookup_tunnel_ofport(const void *ports_, const char *port_name,
                      ofp_port_t *ofport)
 {
@@ -1361,6 +1371,7 @@ test_parse_actions(struct ovs_cmdl_context *ctx OVS_UNUSED)
             /* Encode the actions into OpenFlow and print. */
             const struct ovnact_encode_params ep = {
                 .lookup_port = lookup_port_cb,
+                .lookup_local_port = lookup_local_port_cb,
                 .tunnel_ofport = lookup_tunnel_ofport,
                 .aux = &ports,
                 .is_switch = true,
