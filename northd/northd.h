@@ -450,6 +450,11 @@ struct ovn_datapath {
     /* Indicates that the LS has valid vni associated with it. */
     bool has_evpn_vni;
 
+    /* True if datapath has some distributed dependencies.
+     * Currently, this only applies to load balancers attached to datapath
+     * with distributed mode enabled. */
+    bool is_distributed;
+
     /* OVN northd only needs to know about logical router gateway ports for
      * NAT/LB on a distributed router.  The "distributed gateway ports" are
      * populated only when there is a gateway chassis or ha chassis group
