@@ -1143,6 +1143,9 @@ put_zones_ofpacts(const struct zone_ids *zone_ids, struct ofpbuf *ofpacts_p)
     if (zone_ids) {
         if (zone_ids->ct) {
             put_load(zone_ids->ct, MFF_LOG_CT_ZONE, 0, 16, ofpacts_p);
+        } else {
+            /* Reset to default zone 0 for ports without CT zone allocation */		
+            put_load(0, MFF_LOG_CT_ZONE, 0, 16, ofpacts_p);
         }
         if (zone_ids->dnat) {
             put_load(zone_ids->dnat, MFF_LOG_DNAT_ZONE, 0, 32, ofpacts_p);
