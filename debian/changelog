@@ -2,7 +2,7 @@ ovn (25.09.1-1) unstable; urgency=low
    [ OVN team ]
    * New upstream version
 
- -- OVN team <dev@openvswitch.org>  Fri, 05 Sep 2025 13:40:46 -0400
+ -- OVN team <dev@openvswitch.org>  Thu, 06 Nov 2025 23:29:12 -0500
 
 ovn (25.09.0-1) unstable; urgency=low
 
