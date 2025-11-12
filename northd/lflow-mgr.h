@@ -159,7 +159,7 @@ void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
 struct sbrec_logical_dp_group;
 
 struct ovn_dp_group {
-    unsigned long *bitmap;
+    struct dynamic_bitmap bitmap;
     const struct sbrec_logical_dp_group *dp_group;
     struct uuid dpg_uuid;
     struct hmap_node node;
@@ -198,7 +198,7 @@ dec_ovn_dp_group_ref(struct hmap *dp_groups, struct ovn_dp_group *dpg)
 
     if (!dpg->refcnt) {
         hmap_remove(dp_groups, &dpg->node);
-        free(dpg->bitmap);
+        dynamic_bitmap_free(&dpg->bitmap);
         free(dpg);
     }
 }

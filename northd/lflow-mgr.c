@@ -836,7 +836,7 @@ ovn_dp_group_create(struct ovsdb_idl_txn *ovnsb_txn,
     bitmap_free(dpg_bitmap);
 
     dpg = xzalloc(sizeof *dpg);
-    dpg->bitmap = bitmap_clone(desired_bitmap, bitmap_len);
+    dynamic_bitmap_clone_from_bitmap(&dpg->bitmap, desired_bitmap, bitmap_len);
     if (!update_dp_group) {
         dpg->dp_group = sb_group;
     } else {
@@ -1239,7 +1239,9 @@ ovn_dp_group_find(const struct hmap *dp_groups,
     struct ovn_dp_group *dpg;
 
     HMAP_FOR_EACH_WITH_HASH (dpg, node, hash, dp_groups) {
-        if (bitmap_equal(dpg->bitmap, dpg_bitmap, bitmap_len)) {
+        if (bitmap_equal(dpg->bitmap.map, dpg_bitmap,
+                         MIN(bitmap_len, dpg->bitmap.capacity))) {
+            dynamic_bitmap_realloc(&dpg->bitmap, bitmap_len);
             return dpg;
         }
     }
@@ -1269,7 +1271,7 @@ ovn_dp_group_release(struct hmap *dp_groups, struct ovn_dp_group *dpg)
 static void
 ovn_dp_group_destroy(struct ovn_dp_group *dpg)
 {
-    bitmap_free(dpg->bitmap);
+    dynamic_bitmap_free(&dpg->bitmap);
     free(dpg);
 }
 
