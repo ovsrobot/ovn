@@ -561,11 +561,23 @@ dynamic_bitmap_get_n_elems(const struct dynamic_bitmap *db)
     return db->n_elems;
 }
 
+static inline bool
+dynamic_bitmap_is_set(const struct dynamic_bitmap *db, size_t offset)
+{
+    return bitmap_is_set(db->map, offset);
+}
+
+static inline size_t
+dynamic_bitmap_count1(const struct dynamic_bitmap *db)
+{
+    return bitmap_count1(db->map, db->capacity);
+}
+
 static inline void
 dynamic_bitmap_set1(struct dynamic_bitmap *db, int index)
 {
     ovs_assert(index < db->capacity);
-    if (!bitmap_is_set(db->map, index)) {
+    if (!dynamic_bitmap_is_set(db, index)) {
         bitmap_set1(db->map, index);
         db->n_elems++;
     }
@@ -575,10 +587,18 @@ static inline void
 dynamic_bitmap_set0(struct dynamic_bitmap *db, int index)
 {
     ovs_assert(index < db->capacity);
-    if (bitmap_is_set(db->map, index)) {
+    if (dynamic_bitmap_is_set(db, index)) {
         bitmap_set0(db->map, index);
         db->n_elems--;
     }
+}
+
+static inline void
+dynamic_bitmap_or(struct dynamic_bitmap *db,
+                  const unsigned long *arg, size_t n)
+{
+    ovs_assert(db->capacity == n);
+    bitmap_or(db->map, arg, n);
 }
 
 static inline unsigned long *
