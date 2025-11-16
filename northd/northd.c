@@ -2856,6 +2856,11 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
                     } else {
                         smap_add(&new, "peer", router_port);
                     }
+                    /* Add enable-router-port-acl option for CT zone alloc
+                    * to patch ports that need ACL processing. */
+                    if (op->enable_router_port_acl) {
+                        smap_add(&new, "enable-router-port-acl", "true");
+                    }
                 }
                 if (chassis) {
                     smap_add(&new, "l3gateway-chassis", chassis);
