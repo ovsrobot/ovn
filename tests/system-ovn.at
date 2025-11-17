@@ -19329,25 +19329,39 @@ OVS_WAIT_UNTIL([
 # Wait until the services are set to online.
 wait_row_count Service_Monitor 1 status=online
 
-# Create one more health check on logical switch port
-NETNS_DAEMONIZE([lport], [nc -l -k 192.168.0.10 4041], [lport_tcp.pid])
+# Check status
+check_column "online" nb:Logical_Switch_Port_Health_Check status protocol=icmp
 
+# Check tcp monitor
 check ovn-nbctl lsp-hc-add lport tcp 192.168.0.255 4041
 lport1_uuid2=$(fetch_column nb:Logical_Switch_Port_Health_Check _uuid protocol=tcp)
 
 check_row_count sb:Service_Monitor 2
 
+ovn-sbctl list service_monitor
+
+check_column "offline" nb:Logical_Switch_Port_Health_Check status protocol=tcp
+
+# Create one more health check on logical switch port
+NETNS_DAEMONIZE([lport], [nc -l -k 192.168.0.10 4041], [lport_tcp.pid])
+
 # Wait until the services are set to online.
 wait_row_count Service_Monitor 2 status=online
 
-NETNS_DAEMONIZE([lport], [nc -ulp 4042], [lport_udp.pid])
+check_column "online" nb:Logical_Switch_Port_Health_Check status protocol=tcp
 
 check ovn-nbctl lsp-hc-add lport udp 192.168.0.255 4042
 lport1_uuid3=$(fetch_column nb:Logical_Switch_Port_Health_Check _uuid protocol=udp)
 
+check_column "offline" nb:Logical_Switch_Port_Health_Check status protocol=udp
+
+NETNS_DAEMONIZE([lport], [nc -ulp 4042], [lport_udp.pid])
+
 check_row_count sb:Service_Monitor 3
 # Wait until the services are set to online.
 wait_row_count Service_Monitor 3 status=online
+
+check_column "online" nb:Logical_Switch_Port_Health_Check status protocol=udp
 
 AT_CLEANUP
 ])

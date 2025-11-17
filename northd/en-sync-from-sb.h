@@ -7,6 +7,9 @@ struct en_sync_from_sb_data {
     /* Southbound table references */
     const struct sbrec_port_binding_table *sb_pb_table;
     const struct sbrec_ha_chassis_group_table *sb_ha_ch_grp_table;
+
+    /* Indexes */
+    struct ovsdb_idl_index *sbrec_service_monitor_by_service_type;
 };
 
 void *en_sync_from_sb_init(struct engine_node *, struct engine_arg *);
