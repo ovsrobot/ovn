@@ -40,23 +40,33 @@ void *
 en_sync_from_sb_init(struct engine_node *node OVS_UNUSED,
                      struct engine_arg *arg OVS_UNUSED)
 {
-    return NULL;
+    struct en_sync_from_sb_data *data = xmalloc(sizeof *data);
+    return data;
+}
+
+static void
+en_sync_from_sb_get_input_data(struct engine_node *node,
+                               struct en_sync_from_sb_data *data)
+{
+    data->sb_pb_table =
+        EN_OVSDB_GET(engine_get_input("SB_port_binding", node));
+    data->sb_ha_ch_grp_table =
+        EN_OVSDB_GET(engine_get_input("SB_ha_chassis_group", node));
 }
 
 enum engine_node_state
-en_sync_from_sb_run(struct engine_node *node, void *data OVS_UNUSED)
+en_sync_from_sb_run(struct engine_node *node, void *data_)
 {
+    struct en_sync_from_sb_data *data =
+        (struct en_sync_from_sb_data *) data_;
     const struct engine_context *eng_ctx = engine_get_context();
-    struct northd_data *nd = engine_get_input_data("northd", node);
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
 
-    const struct sbrec_port_binding_table *sb_pb_table =
-        EN_OVSDB_GET(engine_get_input("SB_port_binding", node));
-    const struct sbrec_ha_chassis_group_table *sb_ha_ch_grp_table =
-        EN_OVSDB_GET(engine_get_input("SB_ha_chassis_group", node));
+    en_sync_from_sb_get_input_data(node, data);
+
     stopwatch_start(OVNSB_DB_RUN_STOPWATCH_NAME, time_msec());
     ovnsb_db_run(eng_ctx->ovnsb_idl_txn,
-                 sb_pb_table, sb_ha_ch_grp_table,
-                 &nd->ls_ports, &nd->lr_ports);
+                 data, northd_data);
     stopwatch_stop(OVNSB_DB_RUN_STOPWATCH_NAME, time_msec());
 
     return EN_UNCHANGED;
