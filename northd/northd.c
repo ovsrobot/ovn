@@ -3067,10 +3067,9 @@ configure_service_mon_rec(const struct sbrec_service_monitor *sbrec_mon,
 
 static inline void
 update_status_to_service_mon(const struct sbrec_service_monitor *sbrec_mon,
-                             const struct ovn_port *op,
-                             bool remote_backend)
+                             const struct ovn_port *op)
 {
-    if (!remote_backend && (!op->sb->n_up || !op->sb->up[0]) &&
+    if ((!op->sb->n_up || !op->sb->up[0]) &&
         sbrec_mon->status && !strcmp(sbrec_mon->status, "online")) {
         sbrec_service_monitor_set_status(sbrec_mon, "offline");
     }
@@ -3228,7 +3227,6 @@ ovn_nf_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
 
 static inline bool
 check_svc_port_available(const char *logical_port,
-                         const bool remote_backend,
                          struct hmap *ls_ports,
                          struct sset *svc_monitor_lsps,
                          struct ovn_port **op,
@@ -3238,13 +3236,11 @@ check_svc_port_available(const char *logical_port,
 
     struct ovn_port *op_p = ovn_port_find(ls_ports, logical_port);
 
-    if (!remote_backend &&
-        (!op_p || !lsp_is_enabled(op_p->nbsp))) {
+    if (!op_p || !lsp_is_enabled(op_p->nbsp)) {
         return false;
     }
 
-    if (!remote_backend &&
-        op_p->sb && op_p->sb->chassis) {
+    if (op_p->sb && op_p->sb->chassis) {
         *chassis_name = op_p->sb->chassis->name;
     }
 
@@ -3284,8 +3280,8 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                 continue;
             }
 
-            if (!check_svc_port_available(backend_nb->logical_port,
-                                          backend_nb->remote_backend,
+            if (!backend_nb->remote_backend &&
+                !check_svc_port_available(backend_nb->logical_port,
                                           ls_ports,
                                           svc_monitor_lsps,
                                           &op, &chassis_name)) {
@@ -3317,8 +3313,9 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                                       svc_monitor_mac_ea,
                                       &lb_vip_nb->lb_health_check->options);
 
-            update_status_to_service_mon(mon_info->sbrec_mon,
-                                         op, backend_nb->remote_backend);
+            if (!backend_nb->remote_backend) {
+                update_status_to_service_mon(mon_info->sbrec_mon, op);
+            }
 
             mon_info->required = true;
         }
@@ -3357,7 +3354,7 @@ ovn_lsp_svc_monitor_add_address(struct ovsdb_idl_txn *ovnsb_txn,
                               svc_monitor_mac_ea,
                               &lsp_hc->options);
 
-    update_status_to_service_mon(mon_info->sbrec_mon, op, false);
+    update_status_to_service_mon(mon_info->sbrec_mon, op);
 
     mon_info->required = true;
 }
