@@ -19283,3 +19283,72 @@ OVS_TRAFFIC_VSWITCHD_STOP(["/.*error receiving.*/d
 /.*terminating with signal 15.*/d"])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Logical Switch Port Health Check])
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+ADD_BR([br-int])
+
+# Set external-ids in br-int needed for ovn-controller
+ovs-vsctl \
+        -- set Open_vSwitch . external-ids:system-id=hv1 \
+        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+        -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+        -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+        -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+# Start ovn-controller
+start_daemon ovn-controller
+
+check ovn-nbctl ls-add ls1
+
+ADD_NAMESPACES(lport)
+ADD_VETH(lport, lport, br-int, "192.168.0.10", "f0:00:0f:01:02:04", \
+         "192.168.0.1")
+NS_EXEC([lport], [ip r del default via 192.168.0.1 dev lport])
+NS_EXEC([lport], [ip r add default dev lport])
+
+check ovn-nbctl lsp-add ls1 lport -- \
+    lsp-set-addresses lport "f0:00:0f:01:02:04 192.168.0.10"
+
+check ovn-nbctl --wait=hv sync
+
+check ovn-nbctl lsp-hc-add lport icmp 192.168.0.255
+lport1_uuid1=$(fetch_column nb:Logical_Switch_Port_Health_Check _uuid protocol=icmp)
+
+check_row_count sb:Service_Monitor 1
+
+NETNS_START_TCPDUMP([lport], [-n -c 2 -i lport], [lport])
+OVS_WAIT_UNTIL([
+    total_queries=`grep "ICMP" -c lport.tcpdump`
+    test "${total_queries}" = "2"
+])
+
+# Wait until the services are set to online.
+wait_row_count Service_Monitor 1 status=online
+
+# Create one more health check on logical switch port
+NETNS_DAEMONIZE([lport], [nc -l -k 192.168.0.10 4041], [lport_tcp.pid])
+
+check ovn-nbctl lsp-hc-add lport tcp 192.168.0.255 4041
+lport1_uuid2=$(fetch_column nb:Logical_Switch_Port_Health_Check _uuid protocol=tcp)
+
+check_row_count sb:Service_Monitor 2
+
+# Wait until the services are set to online.
+wait_row_count Service_Monitor 2 status=online
+
+NETNS_DAEMONIZE([lport], [nc -ulp 4042], [lport_udp.pid])
+
+check ovn-nbctl lsp-hc-add lport udp 192.168.0.255 4042
+lport1_uuid3=$(fetch_column nb:Logical_Switch_Port_Health_Check _uuid protocol=udp)
+
+check_row_count sb:Service_Monitor 3
+# Wait until the services are set to online.
+wait_row_count Service_Monitor 3 status=online
+
+AT_CLEANUP
+])
+
