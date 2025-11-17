@@ -3851,3 +3851,58 @@ OVN_CLEANUP([hv1], [hv2
 /already has encap ip.*cannot duplicate on/d])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller - Service Monitor conditional monitoring])
+AT_KEYWORDS([ovn])
+ovn_start
+
+net_add n1
+sim_add hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+check ovn-nbctl ls-add ls1 -- lsp-add ls1 lsp1 -- \
+    lsp-set-addresses lsp1 "50:54:00:00:00:03 10.0.0.1"
+
+as hv1
+check ovs-vsctl \
+    -- add-port br-int vif1 \
+    -- set Interface vif1 external_ids:iface-id=lsp1
+
+sim_add hv2
+as hv2
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.12
+
+AT_SKIP_IF([ovs-vsctl get Open_vSwitch . external_ids:ovn-monitor-all | grep -q "true"])
+
+check ovn-nbctl ls-add ls2 -- lsp-add ls1 lsp2 -- \
+    lsp-set-addresses lsp2 "50:54:00:00:00:04 10.0.0.2"
+
+as hv2
+check ovs-vsctl \
+    -- add-port br-int vif2 \
+    -- set Interface vif2 external_ids:iface-id=lsp2
+
+# Enable debug for check the received messages.
+as hv1 ovn-appctl -t ovn-controller vlog/set dbg
+as hv2 ovn-appctl -t ovn-controller vlog/set dbg
+
+check ovn-nbctl lsp-hc-add lsp1 icmp 10.0.0.255
+check ovn-nbctl lsp-hc-add lsp2 icmp 10.0.0.255
+
+check_row_count sb:Service_Monitor 2
+
+AT_CHECK([grep -c 'Service_Monitor' hv1/ovn-controller.log], [0], [dnl
+1
+])
+
+AT_CHECK([grep -c 'Service_Monitor' hv2/ovn-controller.log], [0], [dnl
+1
+])
+
+OVN_CLEANUP([hv1],[hv2])
+AT_CLEANUP
+])
+

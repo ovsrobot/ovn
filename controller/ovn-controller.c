@@ -268,6 +268,7 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
     struct ovsdb_idl_condition ar = OVSDB_IDL_CONDITION_INIT(&ar);
     struct ovsdb_idl_condition lr = OVSDB_IDL_CONDITION_INIT(&lr);
     struct ovsdb_idl_condition amb = OVSDB_IDL_CONDITION_INIT(&amb);
+    struct ovsdb_idl_condition sm = OVSDB_IDL_CONDITION_INIT(&sm);
 
     /* Always monitor all logical datapath groups. Otherwise, DPG updates may
      * be received *after* the lflows using it are seen by ovn-controller.
@@ -303,6 +304,7 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
         ovsdb_idl_condition_add_clause_true(&nh);
         ovsdb_idl_condition_add_clause_true(&ar);
         ovsdb_idl_condition_add_clause_true(&amb);
+        ovsdb_idl_condition_add_clause_true(&sm);
         goto out;
     }
 
@@ -344,6 +346,10 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
 
         sbrec_chassis_template_var_add_clause_chassis(&tv, OVSDB_F_EQ,
                                                       chassis->name);
+
+        sbrec_service_monitor_add_clause_chassis_name(&sm, OVSDB_F_EQ,
+                                                      chassis->name);
+
     } else {
         /* During initialization, we monitor all records in Chassis_Private so
          * that we don't try to recreate existing ones. */
@@ -373,6 +379,9 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
             name = n->name;
             /* Skip the VIFs we bound already, we should have a local datapath
              * for those. */
+            /* Always monitor service monitors that relate to local ports. */
+            sbrec_service_monitor_add_clause_logical_port(&sm,
+                                                          OVSDB_F_EQ, name);
             const struct sbrec_port_binding *local_pb
                 = local_binding_get_primary_pb(local_bindings, name);
             if (local_pb && get_lport_type(local_pb) == LP_VIF &&
@@ -436,6 +445,7 @@ out:;
         sb_table_set_opt_mon_condition(ovnsb_idl, learned_route, &lr),
         sb_table_set_opt_mon_condition(ovnsb_idl, advertised_mac_binding,
                                        &amb),
+        sb_table_set_opt_mon_condition(ovnsb_idl, service_monitor, &sm),
     };
 
     unsigned int expected_cond_seqno = 0;
@@ -459,6 +469,7 @@ out:;
     ovsdb_idl_condition_destroy(&ar);
     ovsdb_idl_condition_destroy(&lr);
     ovsdb_idl_condition_destroy(&amb);
+    ovsdb_idl_condition_destroy(&sm);
     return expected_cond_seqno;
 }
 
