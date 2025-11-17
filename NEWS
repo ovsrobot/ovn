@@ -63,6 +63,7 @@ Post v25.09.0
   - Add a new experimental service - ovn-br-controller to program and
     manage OVS bridges (not managed by ovn-controller) using OVN logical flows.
     For more details see man ovn-br(5).
+   - Add fallback support for Network Function.
 
 OVN v25.09.0 - xxx xx xxxx
 --------------------------
