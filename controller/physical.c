@@ -2012,8 +2012,10 @@ consider_port_binding(const struct physical_ctx *ctx,
         ofpact_put_CT_CLEAR(ofpacts_p);
         put_load(0, MFF_LOG_DNAT_ZONE, 0, 32, ofpacts_p);
         put_load(0, MFF_LOG_SNAT_ZONE, 0, 32, ofpacts_p);
-        put_load(0, MFF_LOG_CT_ZONE, 0, 16, ofpacts_p);
         struct zone_ids peer_zones = get_zone_ids(peer, ctx->ct_zones);
+        if (!peer_zones.ct) {
+            put_load(0, MFF_LOG_CT_ZONE, 0, 16, ofpacts_p);
+        }
         load_logical_ingress_metadata(peer, &peer_zones, ctx->n_encap_ips,
                                       ctx->encap_ips, ofpacts_p, false);
         put_load(0, MFF_LOG_FLAGS, 0, 32, ofpacts_p);
