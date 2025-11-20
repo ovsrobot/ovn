@@ -4074,6 +4074,13 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             int64_t cur_cfg)
 {
     ovs_mutex_lock(&pinctrl_mutex);
+
+    /* Do not wake up if no txn available. We will wake up on sb update.*/
+    if (ovnsb_idl_txn) {
+        int64_t new_seq = seq_read(pinctrl_main_seq);
+        seq_wait(pinctrl_main_seq, new_seq);
+    }
+
     run_put_mac_bindings(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
                          sbrec_port_binding_by_key,
                          sbrec_mac_binding_by_lport_ip);
@@ -4594,8 +4601,6 @@ pinctrl_wait(struct ovsdb_idl_txn *ovnsb_idl_txn)
     wait_put_mac_bindings(ovnsb_idl_txn);
     wait_controller_event(ovnsb_idl_txn);
     wait_put_vport_bindings(ovnsb_idl_txn);
-    int64_t new_seq = seq_read(pinctrl_main_seq);
-    seq_wait(pinctrl_main_seq, new_seq);
     wait_put_fdbs(ovnsb_idl_txn);
     wait_activated_ports();
     ovs_mutex_unlock(&pinctrl_mutex);
