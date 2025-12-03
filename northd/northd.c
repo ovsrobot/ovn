@@ -3246,6 +3246,25 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
             struct ovn_port *op = ovn_port_find(ls_ports,
                                                 backend_nb->logical_port);
 
+
+            /* If the service monitor is backed by a real port, use its MAC
+               address instead of the default service check MAC.*/
+            const char *source_mac = svc_monitor_mac;
+            const struct eth_addr *source_mac_ea = svc_monitor_mac_ea;
+            struct ovn_port *op2;
+            VECTOR_FOR_EACH (&op->od->router_ports, op2) {
+                for (size_t k = 0; k < op2->n_lsp_addrs; k++) {
+                    struct lport_addresses *op_addrs = &op2->lsp_addrs[k];
+                    for (size_t l =0; l < op_addrs->n_ipv4_addrs; l++) {
+                        const char *ip_s = op_addrs->ipv4_addrs[l].addr_s;
+                        if (!strcmp(ip_s, backend_nb->svc_mon_src_ip)) {
+                            source_mac = op_addrs->ea_s;
+                            source_mac_ea = &op_addrs->ea;
+                        }
+                    }
+                }
+            }
+
             if (!backend_nb->remote_backend &&
                 (!op || !lsp_is_enabled(op->nbsp))) {
                 continue;
@@ -3280,9 +3299,9 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
             struct eth_addr ea;
             if (!mon_info->sbrec_mon->src_mac ||
                 !eth_addr_from_string(mon_info->sbrec_mon->src_mac, &ea) ||
-                !eth_addr_equals(ea, *svc_monitor_mac_ea)) {
+                !eth_addr_equals(ea, *source_mac_ea)) {
                 sbrec_service_monitor_set_src_mac(mon_info->sbrec_mon,
-                                                  svc_monitor_mac);
+                                                  source_mac);
             }
 
             if (!mon_info->sbrec_mon->src_ip ||
@@ -8497,6 +8516,61 @@ build_lb_rules(struct lflow_table *lflows, struct ovn_lb_datapaths *lb_dps,
         const char *ip_match =
             lb_vip->address_family == AF_INET ? "ip4" : "ip6";
 
+        /* For each LB backend that is monitored by a source_ip belonging
+           to a real port, install rule that punts service check replies to the
+           controller.*/
+        size_t j = 0;
+        const struct ovn_lb_backend *backend;
+        VECTOR_FOR_EACH_PTR (&lb_vip->backends, backend) {
+            struct ovn_northd_lb_backend *backend_nb =
+                &lb->vips_nb->backends_nb[j++];
+
+            if (!backend_nb->health_check) {
+                continue;
+            }
+
+            const char *protocol = lb->nlb->protocol;
+            if (!protocol || !protocol[0]) {
+                protocol = "tcp";
+            }
+
+            size_t index;
+            DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_ls_map) {
+                struct ovn_datapath *od = vector_get(&ls_datapaths->dps, index,
+                                                     struct ovn_datapath *);
+                /* Only install the rule if the datapath has a port with
+                   monitor source IP.*/
+                struct ovn_port *svc_mon_op;
+                bool port_found = false;
+                VECTOR_FOR_EACH (&od->router_ports, svc_mon_op) {
+                    if (find_lport_address(
+                                svc_mon_op->lsp_addrs,
+                                backend_nb->svc_mon_src_ip)) {
+                        port_found = true;
+                        break;
+                    }
+                }
+                if (!port_found) {
+                    continue;
+                }
+
+                ds_clear(match);
+                ds_clear(action);
+                ds_put_format(
+                        match,
+                        "ip4.dst == %s && %s.src == %s",
+                        backend_nb->svc_mon_src_ip,
+                        protocol,
+                        backend->port_str);
+                ovn_lflow_add(lflows,
+                              od,
+                              S_SWITCH_IN_LB, 324,
+                              ds_cstr(match),
+                              "handle_svc_check(inport);",
+                              lb_dps->lflow_ref);
+            }
+        }
+
         ds_clear(action);
         ds_clear(match);
 
@@ -10379,6 +10453,23 @@ build_lswitch_arp_nd_local_svc_mon(const struct ovn_lb_datapaths *lb_dps,
             struct ovn_port *op = ovn_port_find(ls_ports,
                                                 backend_nb->logical_port);
             if (!op || !backend_nb->svc_mon_src_ip) {
+                continue;
+            }
+
+            /* ARP responder is necessary only if the service check is not
+               backed by a real port and an IP. */
+            struct ovn_port *svc_mon_src_op;
+            bool found = false;
+            VECTOR_FOR_EACH (&op->od->router_ports, svc_mon_src_op) {
+                if (find_lport_address(
+                            svc_mon_src_op->lsp_addrs,
+                            backend_nb->svc_mon_src_ip)
+                        ) {
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
                 continue;
             }
 
