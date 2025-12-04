@@ -3955,6 +3955,11 @@ sync_pbs_for_northd_changed_ovn_ports(
 {
     struct hmapx_node *hmapx_node;
 
+    HMAPX_FOR_EACH (hmapx_node, &trk_ovn_ports->deleted) {
+        struct ovn_port *op = (struct ovn_port *) hmapx_node->data;
+        hmapx_find_and_delete(&trk_ovn_ports->created, op);
+        hmapx_find_and_delete(&trk_ovn_ports->updated, op);
+    }
     HMAPX_FOR_EACH (hmapx_node, &trk_ovn_ports->created) {
         sync_pb_for_lsp(hmapx_node->data, lr_stateful_table);
     }
