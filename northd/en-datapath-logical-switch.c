@@ -92,6 +92,25 @@ gather_external_ids(const struct nbrec_logical_switch *nbs,
         smap_add(external_ids, "dynamic-routing-vni", vni);
     }
 
+    const char *bridge_ifname = smap_get(&nbs->other_config,
+                                         "dynamic-routing-bridge-ifname");
+    if (bridge_ifname) {
+        smap_add(external_ids, "dynamic-routing-bridge-ifname", bridge_ifname);
+    }
+
+    const char *vxlan_ifname = smap_get(&nbs->other_config,
+                                        "dynamic-routing-vxlan-ifname");
+    if (vxlan_ifname) {
+        smap_add(external_ids, "dynamic-routing-vxlan-ifname", vxlan_ifname);
+    }
+
+    const char *adv_ifname = smap_get(&nbs->other_config,
+                                      "dynamic-routing-advertise-ifname");
+    if (adv_ifname) {
+        smap_add(external_ids, "dynamic-routing-advertise-ifname",
+                 adv_ifname);
+    }
+
     const char *redistribute =
         smap_get(&nbs->other_config, "dynamic-routing-redistribute");
     if (redistribute) {
