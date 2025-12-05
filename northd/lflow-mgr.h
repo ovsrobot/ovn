@@ -92,18 +92,8 @@ struct lflow_table_add_args {
     struct lflow_ref *lflow_ref;
 };
 
-void lflow_table_add_lflow_(struct lflow_table_add_args args,
-                            const char *where);
-
-void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
-                           const unsigned long *dp_bitmap,
-                           size_t dp_bitmap_len, enum ovn_stage stage,
-                           uint16_t priority, const char *match,
-                           const char *actions, const char *io_port,
-                           const char *ctrl_meter,
-                           const struct ovsdb_idl_row *stage_hint,
-                           const char *where, const char *flow_desc,
-                           struct lflow_ref *);
+void lflow_table_add_lflow(struct lflow_table_add_args args,
+                           const char *where);
 
 #define WITH_HINT(HINT) .stage_hint = HINT
 #define WITH_DP_GROUP(DP_BITMAP, DP_BITMAP_LEN) \
@@ -125,7 +115,7 @@ void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
 
 #define ovn_lflow_add_10(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
                          LFLOW_REF, ARG8, ARG9, ARG10) \
-    lflow_table_add_lflow_((struct lflow_table_add_args) { \
+    lflow_table_add_lflow((struct lflow_table_add_args) { \
         .table = LFLOW_TABLE, \
         .od = OD, \
         .stage = STAGE, \
@@ -140,7 +130,7 @@ void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
 
 #define ovn_lflow_add_9(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
                         LFLOW_REF, ARG8, ARG9) \
-    lflow_table_add_lflow_((struct lflow_table_add_args) { \
+    lflow_table_add_lflow((struct lflow_table_add_args) { \
         .table = LFLOW_TABLE, \
         .od = OD, \
         .stage = STAGE, \
@@ -154,7 +144,7 @@ void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
 
 #define ovn_lflow_add_8(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
                         LFLOW_REF, ARG8) \
-    lflow_table_add_lflow_((struct lflow_table_add_args) { \
+    lflow_table_add_lflow((struct lflow_table_add_args) { \
         .table = LFLOW_TABLE, \
         .od = OD, \
         .stage = STAGE, \
@@ -167,7 +157,7 @@ void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
 
 #define ovn_lflow_add_7(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
                         LFLOW_REF) \
-    lflow_table_add_lflow_((struct lflow_table_add_args) { \
+    lflow_table_add_lflow((struct lflow_table_add_args) { \
         .table = LFLOW_TABLE, \
         .od = OD, \
         .stage = STAGE, \
