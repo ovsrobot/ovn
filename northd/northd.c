@@ -13993,8 +13993,7 @@ build_adm_ctrl_flows_for_lrouter(
                   lflow_ref);
 
     /* Default action for L2 security is to drop. */
-    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_ADMISSION,
-                               lflow_ref);
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_ADMISSION, DEFAULT_DROP, lflow_ref);
 }
 
 static int
@@ -14297,8 +14296,8 @@ build_neigh_learning_flows_for_lrouter(
                                      od->nbr->copp,
                                      meter_groups)));
 
-    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR,
-                               lflow_ref);
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR, DEFAULT_DROP,
+                  lflow_ref);
 }
 
 /* Logical router ingress Table 1: Neighbor lookup lflows
@@ -14522,10 +14521,10 @@ build_default_route_flows_for_lrouter(
         struct ovn_datapath *od, struct lflow_table *lflows,
         struct simap *route_tables)
 {
-    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_IP_ROUTING_ECMP,
-                               od->datapath_lflows);
-    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_IP_ROUTING,
-                               od->datapath_lflows);
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING_ECMP, DEFAULT_DROP,
+                  od->datapath_lflows);
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, DEFAULT_DROP,
+                  od->datapath_lflows);
     ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING_ECMP, 150,
                   REG_ECMP_GROUP_ID" == 0", "next;",
                   od->datapath_lflows);
@@ -14926,8 +14925,8 @@ build_ingress_policy_flows_for_lrouter(
     ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY_ECMP, 150,
                   REG_ECMP_GROUP_ID" == 0", "next;",
                   lflow_ref);
-    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_POLICY_ECMP,
-                               lflow_ref);
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY_ECMP, DEFAULT_DROP,
+                  lflow_ref);
 
     /* Convert routing policies to flows. */
     uint16_t ecmp_group_id = 1;
@@ -14972,8 +14971,8 @@ build_arp_resolve_flows_for_lrouter(
                   "get_nd(outport, " REG_NEXT_HOP_IPV6 "); next;",
                   lflow_ref);
 
-    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_ARP_RESOLVE,
-                               lflow_ref);
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_ARP_RESOLVE, DEFAULT_DROP,
+                  lflow_ref);
 }
 
 /* Local router ingress table ARP_RESOLVE: ARP Resolution.
@@ -18885,8 +18884,8 @@ build_lswitch_and_lrouter_iterate_by_lr(struct ovn_datapath *od,
     /* Default drop rule in lr_out_delivery stage.  See
      * build_egress_delivery_flows_for_lrouter_port() which adds a rule
      * for each router port. */
-    ovn_lflow_add_default_drop(lsi->lflows, od, S_ROUTER_OUT_DELIVERY,
-                               od->datapath_lflows);
+    ovn_lflow_add(lsi->lflows, od, S_ROUTER_OUT_DELIVERY, DEFAULT_DROP,
+                  od->datapath_lflows);
 }
 
 /* Helper function to combine all lflow generation which is iterated by logical

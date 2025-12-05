@@ -121,6 +121,7 @@ void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
  */
 #define WITH_IO_PORT(IO_PORT) .io_port = IO_PORT
 #define WITH_CTRL_METER(CTRL_METER) .ctrl_meter = CTRL_METER
+#define WITH_DESC(FLOW_DESC) .flow_desc = FLOW_DESC
 
 #define ovn_lflow_add_10(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
                          LFLOW_REF, ARG8, ARG9, ARG10) \
@@ -177,12 +178,12 @@ void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
         }, OVS_SOURCE_LOCATOR)
 
 /* Adds a row with the specified contents to the Logical_Flow table. */
-#define ovn_lflow_add_default_drop(LFLOW_TABLE, OD, STAGE, LFLOW_REF)   \
-    lflow_table_add_lflow(LFLOW_TABLE, OD, NULL, 0, STAGE, 0, "1", \
-                          debug_drop_action(), NULL, NULL, NULL,  \
-                          OVS_SOURCE_LOCATOR, NULL, LFLOW_REF)
-
 #define ovn_lflow_add(...) VFUNC(ovn_lflow_add_, __VA_ARGS__)
+
+/* Use this as a stand-in for the priority, match, and action when adding
+ * a default drop action to a stage.
+ */
+#define DEFAULT_DROP 0, "1", debug_drop_action()
 
 #define ovn_lflow_add_drop_with_desc(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, \
                                      DESCRIPTION, LFLOW_REF) \
