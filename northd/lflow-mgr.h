@@ -105,6 +105,21 @@ void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
                            const char *where, const char *flow_desc,
                            struct lflow_ref *);
 
+#define WITH_HINT(HINT) .stage_hint = HINT
+
+#define ovn_lflow_add_8(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
+                        LFLOW_REF, ARG8) \
+    lflow_table_add_lflow_((struct lflow_table_add_args) { \
+        .table = LFLOW_TABLE, \
+        .od = OD, \
+        .stage = STAGE, \
+        .priority = PRIORITY, \
+        .match = MATCH, \
+        .actions = ACTIONS, \
+        .lflow_ref = LFLOW_REF, \
+        ARG8, \
+        }, OVS_SOURCE_LOCATOR)
+
 #define ovn_lflow_add_7(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
                         LFLOW_REF) \
     lflow_table_add_lflow_((struct lflow_table_add_args) { \
@@ -123,12 +138,6 @@ void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
                                   STAGE_HINT, LFLOW_REF) \
     lflow_table_add_lflow(LFLOW_TABLE, OD, NULL, 0, STAGE, PRIORITY, MATCH, \
                           ACTIONS, IN_OUT_PORT, CTRL_METER, STAGE_HINT, \
-                          OVS_SOURCE_LOCATOR, NULL, LFLOW_REF)
-
-#define ovn_lflow_add_with_hint(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, \
-                                ACTIONS, STAGE_HINT, LFLOW_REF) \
-    lflow_table_add_lflow(LFLOW_TABLE, OD, NULL, 0, STAGE, PRIORITY, MATCH, \
-                          ACTIONS, NULL, NULL, STAGE_HINT,  \
                           OVS_SOURCE_LOCATOR, NULL, LFLOW_REF)
 
 #define ovn_lflow_add_with_dp_group(LFLOW_TABLE, DP_BITMAP, DP_BITMAP_LEN, \
