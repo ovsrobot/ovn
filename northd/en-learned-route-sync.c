@@ -227,6 +227,50 @@ routes_table_sync(
             sbrec_learned_route_delete(sb_route);
             continue;
         }
+        bool is_same_subnet = false;
+        for (size_t i = 0; !is_same_subnet &&
+             i < sb_route->logical_port->n_mac;
+             i++) {
+            struct lport_addresses logical_port_addrs;
+            if (!extract_lsp_addresses(sb_route->logical_port->mac[i],
+                                       &logical_port_addrs)) {
+                destroy_lport_addresses(&logical_port_addrs);
+                continue;
+            }
+            ovs_be32 neigh_prefix_v4;
+            struct in6_addr neigh_prefix_v6;
+
+            if (ip_parse(sb_route->nexthop, &neigh_prefix_v4)) {
+                for (size_t j = 0; j < logical_port_addrs.n_ipv4_addrs;
+                     j++) {
+                    struct ipv4_netaddr address =
+                        logical_port_addrs.ipv4_addrs[j];
+                    if (address.network ==
+                        (neigh_prefix_v4 & address.mask)) {
+                        is_same_subnet = true;
+                        break;
+                    }
+                }
+            } else if (ipv6_parse(sb_route->nexthop, &neigh_prefix_v6)) {
+                for (size_t j = 0; j < logical_port_addrs.n_ipv6_addrs; j++) {
+                    struct ipv6_netaddr address =
+                        logical_port_addrs.ipv6_addrs[j];
+                    struct in6_addr neigh_prefix =
+                        ipv6_addr_bitand(&neigh_prefix_v6, &address.mask);
+                    if (ipv6_addr_equals(&address.network, &neigh_prefix)) {
+                        is_same_subnet = true;
+                        break;
+                    }
+                }
+            }
+            destroy_lport_addresses(&logical_port_addrs);
+        }
+
+
+        if (!is_same_subnet) {
+            sbrec_learned_route_delete(sb_route);
+            continue;
+        }
         parse_route_from_sbrec_route(parsed_routes_out, lr_ports,
                                      &lr_datapaths->datapaths,
                                      sb_route);

@@ -15385,7 +15385,7 @@ AT_CHECK([grep -w "lr_in_ip_routing" lr0flows | ovn_strip_lflows], [0], [dnl
 ])
 
 # Learn a route to 2001:db8:2::/64 via 2001:db8:ffff::20 learned on lr0-sw1.
-# This is not reachable so will not produce a lflow.
+# This is not reachable so will not produce a lflow. Also, it'll be removed by northd
 check_uuid ovn-sbctl create Learned_Route \
     datapath=$datapath                    \
     logical_port=$sw1                     \
@@ -15393,7 +15393,9 @@ check_uuid ovn-sbctl create Learned_Route \
     nexthop=\"2001:db8:ffff::20\"
 check ovn-nbctl --wait=sb sync
 check_row_count Advertised_Route 4
-check_row_count Learned_Route 2
+check_row_count Learned_Route 1
+check_row_count Learned_Route 0 logical_port=$sw1 ip_prefix=\"2001:db8:2::/64\"
+
 ovn-sbctl dump-flows lr0 > lr0flows
 AT_CHECK([grep -w "lr_in_ip_routing" lr0flows | ovn_strip_lflows], [0], [dnl
   table=??(lr_in_ip_routing   ), priority=0    , match=(1), action=(drop;)
@@ -15412,6 +15414,14 @@ AT_CHECK([grep -w "lr_in_ip_routing" lr0flows | ovn_strip_lflows], [0], [dnl
 # active.
 check ovn-nbctl --wait=sb set Logical_Router_Port lr0-sw1 \
     networks="\"2001:db8::1/64\" \"2001:db8:ffff::1/64\""
+
+# Learn a route to 2001:db8:2::/64 via 2001:db8:ffff::20 learned on lr0-sw1.
+# Northd doesn not remove now because lrp have address in same subnet from nexthop
+check_uuid ovn-sbctl create Learned_Route \
+    datapath=$datapath                    \
+    logical_port=$sw1                     \
+    ip_prefix=\"2001:db8:2::/64\"         \
+    nexthop=\"2001:db8:ffff::20\"
 check_row_count Advertised_Route 5
 check_row_count Learned_Route 2
 ovn-sbctl dump-flows lr0 > lr0flows
