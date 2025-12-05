@@ -76,6 +76,24 @@ bool lflow_ref_sync_lflows(struct lflow_ref *,
                            const struct sbrec_logical_flow_table *,
                            const struct sbrec_logical_dp_group_table *);
 
+struct lflow_table_add_args {
+    struct lflow_table *table;
+    const struct ovn_datapath *od;
+    const unsigned long *dp_bitmap;
+    size_t dp_bitmap_len;
+    enum ovn_stage stage;
+    uint16_t priority;
+    const char *match;
+    const char *actions;
+    const char *io_port;
+    const char *ctrl_meter;
+    const struct ovsdb_idl_row *stage_hint;
+    const char *flow_desc;
+    struct lflow_ref *lflow_ref;
+};
+
+void lflow_table_add_lflow_(struct lflow_table_add_args args,
+                            const char *where);
 
 void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
                            const unsigned long *dp_bitmap,
@@ -86,6 +104,18 @@ void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
                            const struct ovsdb_idl_row *stage_hint,
                            const char *where, const char *flow_desc,
                            struct lflow_ref *);
+
+#define ovn_lflow_add_7(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
+                        LFLOW_REF) \
+    lflow_table_add_lflow_((struct lflow_table_add_args) { \
+        .table = LFLOW_TABLE, \
+        .od = OD, \
+        .stage = STAGE, \
+        .priority = PRIORITY, \
+        .match = MATCH, \
+        .actions = ACTIONS, \
+        .lflow_ref = LFLOW_REF, \
+        }, OVS_SOURCE_LOCATOR)
 
 /* Adds a row with the specified contents to the Logical_Flow table. */
 #define ovn_lflow_add_with_hint__(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, \
@@ -131,11 +161,7 @@ void lflow_table_add_lflow(struct lflow_table *, const struct ovn_datapath *,
                           ACTIONS, IN_OUT_PORT, NULL, STAGE_HINT, \
                           OVS_SOURCE_LOCATOR, NULL, LFLOW_REF)
 
-#define ovn_lflow_add(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
-                      LFLOW_REF) \
-    lflow_table_add_lflow(LFLOW_TABLE, OD, NULL, 0, STAGE, PRIORITY, MATCH, \
-                          ACTIONS, NULL, NULL, NULL, OVS_SOURCE_LOCATOR, \
-                          NULL, LFLOW_REF)
+#define ovn_lflow_add(...) VFUNC(ovn_lflow_add_, __VA_ARGS__)
 
 #define ovn_lflow_add_drop_with_desc(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, \
                                      DESCRIPTION, LFLOW_REF) \
