@@ -29,6 +29,9 @@ AC_PROG_CPP
 AC_PROG_MKDIR_P
 AC_PROG_FGREP
 AC_PROG_EGREP
+AC_PATH_PROG([WHICH], [which])
+AS_IF([test -z "$WHICH"],
+      [AC_MSG_ERROR([which command is required to build OVN])])
 PKG_PROG_PKG_CONFIG
 
 AM_MISSING_PROG([AUTOM4TE], [autom4te])
