@@ -43,9 +43,11 @@ route_exchange_relevant_port(const struct sbrec_port_binding *pb)
 }
 
 uint32_t
-advertise_route_hash(const struct in6_addr *dst, unsigned int plen)
+advertise_route_hash(const struct in6_addr *dst,
+                     const struct in6_addr *nexthop, unsigned int plen)
 {
-    uint32_t hash = hash_bytes(dst->s6_addr, 16, 0);
+    uint32_t hash = hash_add_in6_addr(0, dst);
+    hash = hash_add_in6_addr(hash, nexthop);
     return hash_int(plen, hash);
 }
 
@@ -318,11 +320,13 @@ route_run(struct route_ctx_in *r_ctx_in,
         }
 
         struct advertise_route_entry *ar = xmalloc(sizeof(*ar));
-        ar->addr = prefix;
-        ar->plen = plen;
-        ar->priority = priority;
+        *ar = (struct advertise_route_entry) {
+            .addr = prefix,
+            .plen = plen,
+            .priority = priority,
+        };
         hmap_insert(&ad->routes, &ar->node,
-                    advertise_route_hash(&prefix, plen));
+                    advertise_route_hash(&ar->addr, &ar->nexthop, plen));
     }
 
     smap_destroy(&port_mapping);
