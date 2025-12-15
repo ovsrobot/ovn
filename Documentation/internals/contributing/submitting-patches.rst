@@ -329,6 +329,22 @@ Examples of common tags follow.
   appropriate to cite the URL to the report in a Reported-at
   tag.  Use a Reported-by tag to acknowledge the reporters.
 
+``Assisted-by: Product Name``
+
+  When a patch has been created with the assistance of an AI tool,
+  this tag should be used to disclose that fact.  Only include the
+  product name of the AI assistant, not an email address.  For
+  example:
+
+  ::
+
+      Assisted-by: GitHub Copilot
+
+  The author of the patch remains fully responsible for the content
+  and must ensure it complies with the Developer's Certificate of
+  Origin.  See the "AI-assisted Contributions" section for more
+  information.
+
 Developer's Certificate of Origin
 ---------------------------------
 
