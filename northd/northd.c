@@ -19847,8 +19847,7 @@ lflow_handle_ls_stateful_changes(struct ovsdb_idl_txn *ovnsb_txn,
 
         if (!lflow_ref_resync_flows(
                     ls_stateful_rec->lflow_ref, lflows, ovnsb_txn,
-                    lflow_input->ls_datapaths,
-                    lflow_input->lr_datapaths,
+                    lflow_input->ls_datapaths, lflow_input->lr_datapaths,
                     lflow_input->ovn_internal_version_changed,
                     lflow_input->sbrec_logical_flow_table,
                     lflow_input->sbrec_logical_dp_group_table)) {
