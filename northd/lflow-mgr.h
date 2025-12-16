@@ -90,16 +90,16 @@ void lflow_table_add_lflow_default_drop(struct lflow_table *,
                                         struct lflow_ref *);
 
 /* Adds a row with the specified contents to the Logical_Flow table. */
-#define ovn_lflow_add_with_hint__(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, \
+#define ovn_lflow_add_with_hint__(LFLOW_TABLE, SDP, STAGE, PRIORITY, MATCH, \
                                   ACTIONS, IN_OUT_PORT, CTRL_METER, \
                                   STAGE_HINT, LFLOW_REF) \
-    lflow_table_add_lflow(LFLOW_TABLE, OD->sdp, NULL, 0, STAGE, PRIORITY, \
+    lflow_table_add_lflow(LFLOW_TABLE, SDP, NULL, 0, STAGE, PRIORITY, \
                           MATCH, ACTIONS, IN_OUT_PORT, CTRL_METER, \
                           STAGE_HINT, OVS_SOURCE_LOCATOR, NULL, LFLOW_REF)
 
-#define ovn_lflow_add_with_hint(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, \
+#define ovn_lflow_add_with_hint(LFLOW_TABLE, SDP, STAGE, PRIORITY, MATCH, \
                                 ACTIONS, STAGE_HINT, LFLOW_REF) \
-    lflow_table_add_lflow(LFLOW_TABLE, OD->sdp, NULL, 0, STAGE, PRIORITY, \
+    lflow_table_add_lflow(LFLOW_TABLE, SDP, NULL, 0, STAGE, PRIORITY, \
                           MATCH, ACTIONS, NULL, NULL, STAGE_HINT,  \
                           OVS_SOURCE_LOCATOR, NULL, LFLOW_REF)
 
@@ -110,8 +110,8 @@ void lflow_table_add_lflow_default_drop(struct lflow_table *,
                           PRIORITY, MATCH, ACTIONS, NULL, NULL, STAGE_HINT, \
                           OVS_SOURCE_LOCATOR, NULL, LFLOW_REF)
 
-#define ovn_lflow_add_default_drop(LFLOW_TABLE, OD, STAGE, LFLOW_REF)   \
-    lflow_table_add_lflow(LFLOW_TABLE, OD->sdp, NULL, 0, STAGE, 0, "1", \
+#define ovn_lflow_add_default_drop(LFLOW_TABLE, SDP, STAGE, LFLOW_REF)   \
+    lflow_table_add_lflow(LFLOW_TABLE, SDP, NULL, 0, STAGE, 0, "1", \
                           debug_drop_action(), NULL, NULL, NULL,  \
                           OVS_SOURCE_LOCATOR, NULL, LFLOW_REF)
 
@@ -126,37 +126,37 @@ void lflow_table_add_lflow_default_drop(struct lflow_table *,
  * - For egress pipeline, the lport that is used to match "outport".
  *
  * For now, only LS pipelines should use this macro.  */
-#define ovn_lflow_add_with_lport_and_hint(LFLOW_TABLE, OD, STAGE, PRIORITY, \
+#define ovn_lflow_add_with_lport_and_hint(LFLOW_TABLE, SDP, STAGE, PRIORITY, \
                                           MATCH, ACTIONS, IN_OUT_PORT, \
                                           STAGE_HINT, LFLOW_REF) \
-    lflow_table_add_lflow(LFLOW_TABLE, OD->sdp, NULL, 0, STAGE, PRIORITY, \
+    lflow_table_add_lflow(LFLOW_TABLE, SDP, NULL, 0, STAGE, PRIORITY, \
                           MATCH, ACTIONS, IN_OUT_PORT, NULL, STAGE_HINT, \
                           OVS_SOURCE_LOCATOR, NULL, LFLOW_REF)
 
-#define ovn_lflow_add(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
+#define ovn_lflow_add(LFLOW_TABLE, SDP, STAGE, PRIORITY, MATCH, ACTIONS, \
                       LFLOW_REF) \
-    lflow_table_add_lflow(LFLOW_TABLE, OD->sdp, NULL, 0, STAGE, PRIORITY, \
+    lflow_table_add_lflow(LFLOW_TABLE, SDP, NULL, 0, STAGE, PRIORITY, \
                           MATCH, ACTIONS, NULL, NULL, NULL, \
                           OVS_SOURCE_LOCATOR, NULL, LFLOW_REF)
 
-#define ovn_lflow_add_drop_with_desc(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, \
-                                     DESCRIPTION, LFLOW_REF) \
-    lflow_table_add_lflow(LFLOW_TABLE, OD->sdp, NULL, 0, STAGE, PRIORITY, \
+#define ovn_lflow_add_drop_with_desc(LFLOW_TABLE, SDP, STAGE, PRIORITY, \
+                                     MATCH, DESCRIPTION, LFLOW_REF) \
+    lflow_table_add_lflow(LFLOW_TABLE, SDP, NULL, 0, STAGE, PRIORITY, \
                           MATCH, debug_drop_action(), NULL, NULL, NULL,  \
                           OVS_SOURCE_LOCATOR, DESCRIPTION, LFLOW_REF)
 
-#define ovn_lflow_add_drop_with_lport_hint_and_desc(LFLOW_TABLE, OD, STAGE, \
+#define ovn_lflow_add_drop_with_lport_hint_and_desc(LFLOW_TABLE, SDP, STAGE, \
                                                     PRIORITY, MATCH,  \
                                                     IN_OUT_PORT, STAGE_HINT, \
                                                     DESCRIPTION, LFLOW_REF) \
-    lflow_table_add_lflow(LFLOW_TABLE, OD->sdp, NULL, 0, STAGE, PRIORITY, \
+    lflow_table_add_lflow(LFLOW_TABLE, SDP, NULL, 0, STAGE, PRIORITY, \
                           MATCH, debug_drop_action(), IN_OUT_PORT, NULL, \
                           STAGE_HINT, OVS_SOURCE_LOCATOR, DESCRIPTION, \
                           LFLOW_REF)
 
-#define ovn_lflow_metered(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
+#define ovn_lflow_metered(LFLOW_TABLE, SDP, STAGE, PRIORITY, MATCH, ACTIONS, \
                           CTRL_METER, LFLOW_REF) \
-    ovn_lflow_add_with_hint__(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, \
+    ovn_lflow_add_with_hint__(LFLOW_TABLE, SDP, STAGE, PRIORITY, MATCH, \
                               ACTIONS, NULL, CTRL_METER, NULL, LFLOW_REF)
 
 struct sbrec_logical_dp_group;

@@ -5772,8 +5772,8 @@ static void
 build_mirror_default_lflow(struct ovn_datapath *od,
                            struct lflow_table *lflows)
 {
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_MIRROR, 0, "1", "next;", NULL);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_MIRROR, 0, "1", "next;", NULL);
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_MIRROR, 0, "1", "next;", NULL);
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_MIRROR, 0, "1", "next;", NULL);
 }
 
 static void
@@ -5802,7 +5802,7 @@ build_mirror_lflow(struct ovn_port *op,
 
     ds_put_cstr(&action, "next;");
     ds_put_format(&match, "%s == %s && (%s)", dir, op->json_key, rule->match);
-    ovn_lflow_add(lflows, op->od, stage, priority, ds_cstr(&match),
+    ovn_lflow_add(lflows, op->od->sdp, stage, priority, ds_cstr(&match),
                   ds_cstr(&action), op->lflow_ref);
 
     ds_destroy(&match);
@@ -5829,7 +5829,7 @@ build_mirror_pass_lflow(struct ovn_port *op,
 
     ds_put_format(&action, "mirror(%s); next;", serving_port->json_key);
     ds_put_format(&match, "%s == %s", dir, op->json_key);
-    ovn_lflow_add(lflows, op->od, stage, OVN_LPORT_MIRROR_OFFSET,
+    ovn_lflow_add(lflows, op->od->sdp, stage, OVN_LPORT_MIRROR_OFFSET,
                   ds_cstr(&match), ds_cstr(&action), op->lflow_ref);
 
     ds_clear(&match);
@@ -5840,7 +5840,7 @@ build_mirror_pass_lflow(struct ovn_port *op,
                   ovn_stage_get_table(S_SWITCH_OUT_APPLY_PORT_SEC));
     ds_put_format(&match,  "outport == %s", serving_port->json_key);
 
-    ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_PRE_ACL, UINT16_MAX,
+    ovn_lflow_add(lflows, op->od->sdp, S_SWITCH_OUT_PRE_ACL, UINT16_MAX,
                   ds_cstr(&match), ds_cstr(&action), op->lflow_ref);
 
     ds_destroy(&match);
@@ -5925,14 +5925,14 @@ build_lswitch_port_sec_op(struct ovn_port *op, struct lflow_table *lflows,
     if (!lsp_is_enabled(op->nbsp)) {
         /* Drop packets from disabled logical ports. */
         ovn_lflow_add_with_lport_and_hint(
-            lflows, op->od, S_SWITCH_IN_CHECK_PORT_SEC,
+            lflows, op->od->sdp, S_SWITCH_IN_CHECK_PORT_SEC,
             100, ds_cstr(match), REGBIT_PORT_SEC_DROP" = 1; next;",
             op->key, &op->nbsp->header_, op->lflow_ref);
 
         ds_clear(match);
         ds_put_format(match, "outport == %s", op->json_key);
         ovn_lflow_add_with_lport_and_hint(
-            lflows, op->od, S_SWITCH_IN_L2_UNKNOWN, 50, ds_cstr(match),
+            lflows, op->od->sdp, S_SWITCH_IN_L2_UNKNOWN, 50, ds_cstr(match),
             debug_drop_action(), op->key, &op->nbsp->header_, op->lflow_ref);
         return;
     }
@@ -5946,7 +5946,7 @@ build_lswitch_port_sec_op(struct ovn_port *op, struct lflow_table *lflows,
         ds_put_format(actions, REGBIT_FROM_RAMP" = 1; ");
         ds_put_format(actions, "next(pipeline=ingress, table=%d);",
                       ovn_stage_get_table(S_SWITCH_IN_HAIRPIN));
-        ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+        ovn_lflow_add_with_lport_and_hint(lflows, op->od->sdp,
                                           S_SWITCH_IN_CHECK_PORT_SEC, 70,
                                           ds_cstr(match), ds_cstr(actions),
                                           op->key, &op->nbsp->header_,
@@ -5954,7 +5954,7 @@ build_lswitch_port_sec_op(struct ovn_port *op, struct lflow_table *lflows,
     } else if (queue_id) {
         ds_put_cstr(actions,
                     REGBIT_PORT_SEC_DROP" = check_in_port_sec(); next;");
-        ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+        ovn_lflow_add_with_lport_and_hint(lflows, op->od->sdp,
                                           S_SWITCH_IN_CHECK_PORT_SEC, 70,
                                           ds_cstr(match), ds_cstr(actions),
                                           op->key, &op->nbsp->header_,
@@ -5971,7 +5971,7 @@ build_lswitch_port_sec_op(struct ovn_port *op, struct lflow_table *lflows,
         ds_clear(match);
         if (lsp_is_localnet(op->nbsp)) {
             ds_put_format(match, "outport == %s", op->json_key);
-            ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+            ovn_lflow_add_with_lport_and_hint(lflows, op->od->sdp,
                                               S_SWITCH_OUT_APPLY_PORT_SEC, 100,
                                               ds_cstr(match), ds_cstr(actions),
                                               op->key, &op->nbsp->header_,
@@ -5981,14 +5981,14 @@ build_lswitch_port_sec_op(struct ovn_port *op, struct lflow_table *lflows,
                                                    struct ovn_port *);
             ds_put_format(match, "outport == %s && inport == %s",
                           lp->json_key, op->json_key);
-            ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+            ovn_lflow_add_with_lport_and_hint(lflows, op->od->sdp,
                     S_SWITCH_OUT_APPLY_PORT_SEC, 110,
                     ds_cstr(match), ds_cstr(actions),
                     lp->key, &lp->nbsp->header_, op->lflow_ref);
         }
     } else if (lsp_is_router(op->nbsp)) {
         ds_put_format(actions, REGBIT_FROM_ROUTER_PORT" = 1; next;");
-        ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+        ovn_lflow_add_with_lport_and_hint(lflows, op->od->sdp,
                                           S_SWITCH_IN_CHECK_PORT_SEC, 70,
                                           ds_cstr(match), ds_cstr(actions),
                                           op->key, &op->nbsp->header_,
@@ -6020,7 +6020,7 @@ build_lswitch_learn_fdb_op(
         }
         ds_put_format(actions, REGBIT_LKUP_FDB
                       " = lookup_fdb(inport, eth.src); next;");
-        ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+        ovn_lflow_add_with_lport_and_hint(lflows, op->od->sdp,
                                           remote ? S_SWITCH_OUT_LOOKUP_FDB
                                                  : S_SWITCH_IN_LOOKUP_FDB,
                                           100,
@@ -6031,7 +6031,7 @@ build_lswitch_learn_fdb_op(
         ds_put_cstr(match, " && "REGBIT_LKUP_FDB" == 0");
         ds_clear(actions);
         ds_put_cstr(actions, "put_fdb(inport, eth.src); next;");
-        ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+        ovn_lflow_add_with_lport_and_hint(lflows, op->od->sdp,
                                           remote ? S_SWITCH_OUT_PUT_FDB
                                                  : S_SWITCH_IN_PUT_FDB,
                                           100, ds_cstr(match),
@@ -6052,16 +6052,16 @@ build_lswitch_learn_fdb_od(
           "remote_outport = get_remote_fdb(eth.dst); next;"
         : "outport = get_fdb(eth.dst); next;";
 
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_LOOKUP_FDB, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_LOOKUP_FDB, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PUT_FDB, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PUT_FDB, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_LKUP, 0, "1",
                   lkp_action, lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_LOOKUP_FDB, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_LOOKUP_FDB, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PUT_FDB, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PUT_FDB, 0, "1", "next;",
                   lflow_ref);
 }
 
@@ -6074,18 +6074,18 @@ build_lswitch_output_port_sec_od(struct ovn_datapath *od,
                                  struct lflow_ref *lflow_ref)
 {
     ovs_assert(od->nbs);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_CHECK_PORT_SEC, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_CHECK_PORT_SEC, 100,
                   "eth.mcast", REGBIT_PORT_SEC_DROP" = 0; next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_CHECK_PORT_SEC, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_CHECK_PORT_SEC, 0, "1",
                   REGBIT_PORT_SEC_DROP" = check_out_port_sec(); next;",
                   lflow_ref);
 
     ovn_lflow_add_drop_with_desc(
-        lflows, od, S_SWITCH_OUT_APPLY_PORT_SEC, 50,
+        lflows, od->sdp, S_SWITCH_OUT_APPLY_PORT_SEC, 50,
         REGBIT_PORT_SEC_DROP" == 1",
         "Packet does not follow port security rules", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_APPLY_PORT_SEC, 0,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_APPLY_PORT_SEC, 0,
                   "1", "output;", lflow_ref);
 }
 
@@ -6115,10 +6115,10 @@ skip_port_from_conntrack(const struct ovn_datapath *od, struct ovn_port *op,
     char *ingress_match = xasprintf("ip && inport == %s", op->json_key);
     char *egress_match = xasprintf("ip && outport == %s", op->json_key);
 
-    ovn_lflow_add_with_lport_and_hint(lflows, od, in_stage, priority,
+    ovn_lflow_add_with_lport_and_hint(lflows, od->sdp, in_stage, priority,
                                       ingress_match, ingress_action,
                                       op->key, &op->nbsp->header_, lflow_ref);
-    ovn_lflow_add_with_lport_and_hint(lflows, od, out_stage, priority,
+    ovn_lflow_add_with_lport_and_hint(lflows, od->sdp, out_stage, priority,
                                       egress_match, egress_action,
                                       op->key, &op->nbsp->header_, lflow_ref);
 
@@ -6134,14 +6134,14 @@ build_stateless_filter(const struct ovn_datapath *od,
 {
     const char *action = REGBIT_ACL_STATELESS" = 1; next;";
     if (!strcmp(acl->direction, "from-lport")) {
-        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_PRE_ACL,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_SWITCH_IN_PRE_ACL,
                                 acl->priority + OVN_ACL_PRI_OFFSET,
                                 acl->match,
                                 action,
                                 &acl->header_,
                                 lflow_ref);
     } else {
-        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_SWITCH_OUT_PRE_ACL,
                                 acl->priority + OVN_ACL_PRI_OFFSET,
                                 acl->match,
                                 action,
@@ -6187,16 +6187,16 @@ build_pre_acls(struct ovn_datapath *od, struct lflow_table *lflows,
 {
     /* Ingress and Egress Pre-ACL Table (Priority 0): Packets are
      * allowed by default. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_ACL, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_ACL, 0, "1", "next;",
                   lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_ACL, 110,
                   "eth.dst == $svc_monitor_mac", "next;",
                   lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_ACL, 110,
                   "eth.src == $svc_monitor_mac", "next;",
                   lflow_ref);
 }
@@ -6236,19 +6236,19 @@ build_ls_stateful_rec_pre_acls(
          *
          * Not to do conntrack on ND and ICMP destination
          * unreachable packets. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 110,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_ACL, 110,
                       "nd || nd_rs || nd_ra || mldv1 || mldv2 || "
                       "(udp && udp.src == 546 && udp.dst == 547)", "next;",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_ACL, 110,
                       "nd || nd_rs || nd_ra || mldv1 || mldv2 || "
                       "(udp && udp.src == 546 && udp.dst == 547)", "next;",
                       lflow_ref);
 
         /* Do not send multicast packets to conntrack. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 110, "eth.mcast",
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_ACL, 110, "eth.mcast",
                       "next;", lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110, "eth.mcast",
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_ACL, 110, "eth.mcast",
                       "next;", lflow_ref);
 
         /* Ingress and Egress Pre-ACL Table (Priority 100).
@@ -6261,15 +6261,15 @@ build_ls_stateful_rec_pre_acls(
          * it to conntrack for tracking and defragmentation. */
 
         /* We do not want icmp type=3 code=4 (packet too big) to go to ct */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 110,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_ACL, 110,
                       "((ip4 && icmp4.type == 3 && icmp4.code == 4) ||"
                       " (ip6 && icmp6.type == 2 && icmp6.code == 0)) &&"
                       " flags.tunnel_rx == 1",
                       "next;", lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 100, "ip",
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_ACL, 100, "ip",
                       REGBIT_CONNTRACK_DEFRAG" = 1; next;",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 100, "ip",
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_ACL, 100, "ip",
                       REGBIT_CONNTRACK_DEFRAG" = 1; next;",
                       lflow_ref);
     } else if (ls_stateful_rec->has_lb_vip) {
@@ -6357,7 +6357,7 @@ build_interconn_mcast_snoop_flows(struct ovn_datapath *od,
         /* Punt IGMP traffic to controller. */
         char *match = xasprintf("inport == %s && igmp && "
                                 "flags.igmp_loopback == 0", op->json_key);
-        ovn_lflow_metered(lflows, od, S_SWITCH_OUT_PRE_LB, 120, match,
+        ovn_lflow_metered(lflows, od->sdp, S_SWITCH_OUT_PRE_LB, 120, match,
                           "clone { igmp; }; next;",
                           copp_meter_get(COPP_IGMP, od->nbs->copp,
                                          meter_groups),
@@ -6367,7 +6367,7 @@ build_interconn_mcast_snoop_flows(struct ovn_datapath *od,
         /* Punt MLD traffic to controller. */
         match = xasprintf("inport == %s && (mldv1 || mldv2) && "
                           "flags.igmp_loopback == 0", op->json_key);
-        ovn_lflow_metered(lflows, od, S_SWITCH_OUT_PRE_LB, 120, match,
+        ovn_lflow_metered(lflows, od->sdp, S_SWITCH_OUT_PRE_LB, 120, match,
                           "clone { igmp; }; next;",
                           copp_meter_get(COPP_IGMP, od->nbs->copp,
                                          meter_groups),
@@ -6384,39 +6384,41 @@ build_pre_lb(struct ovn_datapath *od, const struct shash *meter_groups,
     build_interconn_mcast_snoop_flows(od, meter_groups, lflows, lflow_ref);
 
     /* Do not send multicast packets to conntrack */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 110, "eth.mcast", "next;",
-                  lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 110, "eth.mcast", "next;",
-                  lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_LB, 110, "eth.mcast",
+                  "next;", lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_LB, 110, "eth.mcast",
+                  "next;", lflow_ref);
 
     /* Do not send ND packets to conntrack */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_LB, 110,
                   "nd || nd_rs || nd_ra || mldv1 || mldv2",
                   "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_LB, 110,
                   "nd || nd_rs || nd_ra || mldv1 || mldv2",
                   "next;", lflow_ref);
     /* Do not send icmp packet too big to conntrack in ingress */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_LB, 110,
                   "((ip4 && icmp4.type == 3 && icmp4.code == 4) ||"
                   "(ip6 && icmp6.type == 2 && icmp6.code == 0)) &&"
                   " flags.tunnel_rx == 1",
                   "next;", lflow_ref);
 
     /* Do not send service monitor packets to conntrack. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_LB, 110,
                   "eth.dst == $svc_monitor_mac", "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_LB, 110,
                   "eth.src == $svc_monitor_mac", "next;", lflow_ref);
 
     /* Allow all packets to go to next tables by default. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 0, "1", "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 0, "1", "next;", lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_LB, 0, "1", "next;",
+                  lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_LB, 0, "1", "next;",
+                  lflow_ref);
 
     /* Do not send statless flows via conntrack */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_LB, 110,
                   REGBIT_ACL_STATELESS" == 1", "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_LB, 110,
                   REGBIT_ACL_STATELESS" == 1", "next;", lflow_ref);
 }
 
@@ -6478,10 +6480,10 @@ build_ls_stateful_rec_pre_lb(const struct ls_stateful_record *ls_stateful_rec,
      * add a lflow to drop ct.inv packets.
      */
     if (ls_stateful_rec->has_lb_vip) {
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_LB,
                       100, "ip", REGBIT_CONNTRACK_NAT" = 1; next;",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_LB,
                       100, "ip", REGBIT_CONNTRACK_NAT" = 1; next;",
                       lflow_ref);
     }
@@ -6494,35 +6496,35 @@ build_pre_stateful(struct ovn_datapath *od,
 {
     /* Ingress and Egress pre-stateful Table (Priority 0): Packets are
      * allowed by default. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_STATEFUL, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_STATEFUL, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_STATEFUL, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_STATEFUL, 0, "1", "next;",
                   lflow_ref);
 
     /* Note: priority-120 flows are added in build_lb_rules_pre_stateful(). */
 
     /* If the packet is fragmented, set the REGBIT_IP_FRAG reg bit to 1
      * as ip.is_frag will not be preserved after conntrack recirculation. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_STATEFUL, 115,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_STATEFUL, 115,
                   REGBIT_CONNTRACK_NAT" == 1 && ip.is_frag",
                   REGBIT_IP_FRAG" = 1; ct_lb_mark;",
                   lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_STATEFUL, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_STATEFUL, 110,
                   REGBIT_CONNTRACK_NAT" == 1", "ct_lb_mark;",
                   lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_STATEFUL, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_STATEFUL, 110,
                   REGBIT_CONNTRACK_NAT" == 1", "ct_lb_mark;",
                   lflow_ref);
 
     /* If REGBIT_CONNTRACK_DEFRAG is set as 1, then the packets should be
      * sent to conntrack for tracking and defragmentation. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_STATEFUL, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_STATEFUL, 100,
                   REGBIT_CONNTRACK_DEFRAG" == 1", "ct_next;",
                   lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_STATEFUL, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_STATEFUL, 100,
                   REGBIT_CONNTRACK_DEFRAG" == 1", "ct_next;",
                   lflow_ref);
 
@@ -6557,10 +6559,10 @@ build_acl_hints(const struct ls_stateful_record *ls_stateful_rec,
 
         /* In any case, advance to the next stage. */
         if (!ls_stateful_rec->has_acls && !ls_stateful_rec->has_lb_vip) {
-            ovn_lflow_add(lflows, od, stage, UINT16_MAX, "1", "next;",
+            ovn_lflow_add(lflows, od->sdp, stage, UINT16_MAX, "1", "next;",
                           lflow_ref);
         } else {
-            ovn_lflow_add(lflows, od, stage, 0, "1", "next;", lflow_ref);
+            ovn_lflow_add(lflows, od->sdp, stage, 0, "1", "next;", lflow_ref);
         }
 
         if (!ls_stateful_rec->has_stateful_acl
@@ -6577,7 +6579,7 @@ build_acl_hints(const struct ls_stateful_record *ls_stateful_rec,
          * ensure that the traffic is committed to conntrack in the STATEFUL
          * stage.
          */
-        ovn_lflow_add(lflows, od, stage, 7, "ct.new && !ct.est",
+        ovn_lflow_add(lflows, od->sdp, stage, 7, "ct.new && !ct.est",
                       REGBIT_ACL_HINT_ALLOW_NEW " = 1; "
                       REGBIT_ACL_HINT_DROP " = 1; "
                       REGBIT_CONNTRACK_COMMIT " = 1; "
@@ -6592,7 +6594,7 @@ build_acl_hints(const struct ls_stateful_record *ls_stateful_rec,
          *   in this case, we also set REGBIT_CONNTRACK_COMMIT.
          * - drop ACLs.
          */
-        ovn_lflow_add(lflows, od, stage, 6,
+        ovn_lflow_add(lflows, od->sdp, stage, 6,
                       "!ct.new && ct.est && !ct.rpl && ct_mark.blocked == 1",
                       REGBIT_ACL_HINT_ALLOW_NEW " = 1; "
                       REGBIT_ACL_HINT_DROP " = 1; "
@@ -6600,7 +6602,7 @@ build_acl_hints(const struct ls_stateful_record *ls_stateful_rec,
                       "next;", lflow_ref);
 
         /* Not tracked traffic can either be allowed or dropped. */
-        ovn_lflow_add(lflows, od, stage, 5, "!ct.trk",
+        ovn_lflow_add(lflows, od->sdp, stage, 5, "!ct.trk",
                       REGBIT_ACL_HINT_ALLOW " = 1; "
                       REGBIT_ACL_HINT_DROP " = 1; "
                       "next;", lflow_ref);
@@ -6613,7 +6615,7 @@ build_acl_hints(const struct ls_stateful_record *ls_stateful_rec,
          *   connection must be committed with ct_mark.blocked set so we set
          *   REGBIT_ACL_HINT_BLOCK.
          */
-        ovn_lflow_add(lflows, od, stage, 4,
+        ovn_lflow_add(lflows, od->sdp, stage, 4,
                       "!ct.new && ct.est && !ct.rpl && ct_mark.blocked == 0",
                       REGBIT_ACL_HINT_ALLOW " = 1; "
                       REGBIT_ACL_HINT_BLOCK " = 1; "
@@ -6622,10 +6624,10 @@ build_acl_hints(const struct ls_stateful_record *ls_stateful_rec,
         /* Not established or established and already blocked connections may
          * hit drop ACLs.
          */
-        ovn_lflow_add(lflows, od, stage, 3, "!ct.est",
+        ovn_lflow_add(lflows, od->sdp, stage, 3, "!ct.est",
                       REGBIT_ACL_HINT_DROP " = 1; "
                       "next;", lflow_ref);
-        ovn_lflow_add(lflows, od, stage, 2,
+        ovn_lflow_add(lflows, od->sdp, stage, 2,
                       "ct.est && ct_mark.blocked == 1",
                       REGBIT_ACL_HINT_DROP " = 1; "
                       "next;", lflow_ref);
@@ -6634,7 +6636,7 @@ build_acl_hints(const struct ls_stateful_record *ls_stateful_rec,
          * drop ACLs in which case the connection must be committed with
          * ct_mark.blocked set.
          */
-        ovn_lflow_add(lflows, od, stage, 1,
+        ovn_lflow_add(lflows, od->sdp, stage, 1,
                       "ct.est && ct_mark.blocked == 0",
                       REGBIT_ACL_HINT_BLOCK " = 1; "
                       "next;", lflow_ref);
@@ -6866,7 +6868,7 @@ build_acl_sample_new_flows(const struct ovn_datapath *od,
 
     build_acl_sample_action(actions, acl, acl->sample_new, sample_domain_id);
 
-    ovn_lflow_add(lflows, od, stage, 1100, ds_cstr(match),
+    ovn_lflow_add(lflows, od->sdp, stage, 1100, ds_cstr(match),
                   ds_cstr(actions), lflow_ref);
 }
 
@@ -6894,7 +6896,7 @@ build_acl_sample_est_orig_stateful_flows(const struct ovn_datapath *od,
 
     build_acl_sample_action(actions, acl, acl->sample_est, sample_domain_id);
 
-    ovn_lflow_add(lflows, od, stage, 1200, ds_cstr(match),
+    ovn_lflow_add(lflows, od->sdp, stage, 1200, ds_cstr(match),
                   ds_cstr(actions), lflow_ref);
 }
 
@@ -6928,7 +6930,7 @@ build_acl_sample_est_rpl_stateful_flows(const struct ovn_datapath *od,
 
     build_acl_sample_action(actions, acl, acl->sample_est, sample_domain_id);
 
-    ovn_lflow_add(lflows, od, rpl_stage, 1200, ds_cstr(match),
+    ovn_lflow_add(lflows, od->sdp, rpl_stage, 1200, ds_cstr(match),
                   ds_cstr(actions), lflow_ref);
 }
 
@@ -7008,8 +7010,8 @@ build_acl_sample_generic_new_flows(const struct ovn_datapath *od,
                            (uint32_t) coll->set_id,
                            sample_domain_id);
 
-    ovn_lflow_add(lflows, od, stage, stateful ? 1000 : 900, ds_cstr(match),
-                  ds_cstr(actions), lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, stage, stateful ? 1000 : 900,
+                  ds_cstr(match), ds_cstr(actions), lflow_ref);
 }
 
 /* This builds a generic logical flow that samples established traffic
@@ -7049,7 +7051,7 @@ build_acl_sample_generic_est_flows(const struct ovn_datapath *od,
                            (uint32_t) coll->set_id,
                            sample_domain_id);
 
-    ovn_lflow_add(lflows, od, stage, 1000, ds_cstr(match),
+    ovn_lflow_add(lflows, od->sdp, stage, 1000, ds_cstr(match),
                   ds_cstr(actions), lflow_ref);
 
     const struct ovn_stage *rpl_stage = (stage == S_SWITCH_OUT_ACL_SAMPLE
@@ -7060,7 +7062,7 @@ build_acl_sample_generic_est_flows(const struct ovn_datapath *od,
     ds_put_format(match, "ct.rpl && ct_mark.obs_collector_id == %"PRIu8,
                   (uint8_t) coll->id);
 
-    ovn_lflow_add(lflows, od, rpl_stage, 1000, ds_cstr(match),
+    ovn_lflow_add(lflows, od->sdp, rpl_stage, 1000, ds_cstr(match),
                   ds_cstr(actions), lflow_ref);
 }
 
@@ -7162,11 +7164,11 @@ build_acl_sample_default_flows(const struct ovn_datapath *od,
 {
     /* Rules at priority 1 is added below to pass the packet into next table
      * if there isn't any match. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_SAMPLE, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_SAMPLE, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_SAMPLE, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_ACL_SAMPLE, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_AFTER_LB_SAMPLE, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_AFTER_LB_SAMPLE, 0, "1",
                   "next;", lflow_ref);
 }
 
@@ -7237,7 +7239,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
 
         ds_put_cstr(actions, "next;");
         ds_put_format(match, "(%s)", acl->match);
-        ovn_lflow_add_with_hint(lflows, od, stage, priority,
+        ovn_lflow_add_with_hint(lflows, od->sdp, stage, priority,
                                 ds_cstr(match), ds_cstr(actions),
                                 &acl->header_, lflow_ref);
         return;
@@ -7306,7 +7308,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
                           (uint8_t) acl->network_function_group->id);
         }
         ds_put_cstr(actions, "next;");
-        ovn_lflow_add_with_hint(lflows, od, stage, priority,
+        ovn_lflow_add_with_hint(lflows, od->sdp, stage, priority,
                                 ds_cstr(match), ds_cstr(actions),
                                 &acl->header_, lflow_ref);
 
@@ -7337,7 +7339,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
                           (uint8_t) acl->network_function_group->id);
         }
         ds_put_cstr(actions, "next;");
-        ovn_lflow_add_with_hint(lflows, od, stage, priority,
+        ovn_lflow_add_with_hint(lflows, od->sdp, stage, priority,
                                 ds_cstr(match), ds_cstr(actions),
                                 &acl->header_, lflow_ref);
     } else if (!strcmp(acl->action, "drop")
@@ -7364,7 +7366,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
         build_acl_sample_label_action(actions, acl, acl->sample_new, NULL,
                                       obs_stage);
         ds_put_cstr(actions, "next;");
-        ovn_lflow_add_with_hint(lflows, od, stage, priority,
+        ovn_lflow_add_with_hint(lflows, od->sdp, stage, priority,
                                 ds_cstr(match), ds_cstr(actions),
                                 &acl->header_, lflow_ref);
         /* For an existing connection without ct_mark.blocked set, we've
@@ -7391,7 +7393,7 @@ consider_acl(struct lflow_table *lflows, const struct ovn_datapath *od,
         ds_put_format(actions,
                       "ct_commit { ct_mark.blocked = 1; "
                       "ct_label.obs_point_id = %"PRIu32"; }; next;", obs_pid);
-        ovn_lflow_add_with_hint(lflows, od, stage, priority,
+        ovn_lflow_add_with_hint(lflows, od->sdp, stage, priority,
                                 ds_cstr(match), ds_cstr(actions),
                                 &acl->header_, lflow_ref);
     }
@@ -7525,17 +7527,17 @@ build_acl_action_lflows(const struct ls_stateful_record *ls_stateful_rec,
         }
         size_t verdict_tier_len = actions->length;
         if (!ls_stateful_rec->has_acls) {
-            ovn_lflow_add(lflows, od, stage, 0, "1", "next;", lflow_ref);
+            ovn_lflow_add(lflows, od->sdp, stage, 0, "1", "next;", lflow_ref);
             continue;
         }
         ds_truncate(actions, verdict_tier_len);
         ds_put_cstr(actions, "next;");
-        ovn_lflow_add(lflows, od, stage, 1000,
+        ovn_lflow_add(lflows, od->sdp, stage, 1000,
                       REGBIT_ACL_VERDICT_ALLOW " == 1", ds_cstr(actions),
                       lflow_ref);
         ds_truncate(actions, verdict_tier_len);
         ds_put_cstr(actions, debug_implicit_drop_action());
-        ovn_lflow_add(lflows, od, stage, 1000,
+        ovn_lflow_add(lflows, od->sdp, stage, 1000,
                       REGBIT_ACL_VERDICT_DROP " == 1",
                       ds_cstr(actions),
                       lflow_ref);
@@ -7544,14 +7546,15 @@ build_acl_action_lflows(const struct ls_stateful_record *ls_stateful_rec,
         ds_truncate(actions, verdict_tier_len);
         build_acl_reject_action(actions, ingress);
 
-        ovn_lflow_metered(lflows, od, stage, 1000,
+        ovn_lflow_metered(lflows, od->sdp, stage, 1000,
                           REGBIT_ACL_VERDICT_REJECT " == 1", ds_cstr(actions),
                           copp_meter_get(COPP_REJECT, od->nbs->copp,
                           meter_groups), lflow_ref);
 
         ds_truncate(actions, verdict_tier_len);
         ds_put_cstr(actions, default_acl_action);
-        ovn_lflow_add(lflows, od, stage, 0, "1", ds_cstr(actions), lflow_ref);
+        ovn_lflow_add(lflows, od->sdp, stage, 0, "1", ds_cstr(actions),
+                      lflow_ref);
 
         struct ds tier_actions = DS_EMPTY_INITIALIZER;
         for (size_t j = 0; j < max_acl_tiers[i]; j++) {
@@ -7562,7 +7565,7 @@ build_acl_action_lflows(const struct ls_stateful_record *ls_stateful_rec,
                           "next(pipeline=%s,table=%d);",
                           j + 1, ingress ? "ingress" : "egress",
                           ovn_stage_get_table(eval_stages[i]));
-            ovn_lflow_add(lflows, od, stage, 500, ds_cstr(match),
+            ovn_lflow_add(lflows, od->sdp, stage, 500, ds_cstr(match),
                          ds_cstr(&tier_actions), lflow_ref);
         }
         ds_destroy(&tier_actions);
@@ -7618,7 +7621,7 @@ build_acl_log_related_flows(const struct ovn_datapath *od,
                          "ct_mark.blocked == 0 && "
                          "ct_label.label == %" PRId64,
                   acl->label);
-    ovn_lflow_add_with_hint(lflows, od, log_related_stage,
+    ovn_lflow_add_with_hint(lflows, od->sdp, log_related_stage,
                             UINT16_MAX - 2,
                             ds_cstr(match), ds_cstr(actions),
                             &acl->header_, lflow_ref);
@@ -7628,7 +7631,7 @@ build_acl_log_related_flows(const struct ovn_datapath *od,
                          "ct_mark.blocked == 0 && "
                          "ct_label.label == %" PRId64,
                   acl->label);
-    ovn_lflow_add_with_hint(lflows, od, log_related_stage,
+    ovn_lflow_add_with_hint(lflows, od->sdp, log_related_stage,
                             UINT16_MAX - 2,
                             ds_cstr(match), ds_cstr(actions),
                             &acl->header_, lflow_ref);
@@ -7677,24 +7680,24 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
      * are any stateful ACLs in this datapath. */
     if (!ls_stateful_rec->has_acls) {
         if (!ls_stateful_rec->has_lb_vip) {
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, UINT16_MAX, "1",
-                          "next;", lflow_ref);
-            ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX, "1",
-                          "next;", lflow_ref);
+            ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_EVAL, UINT16_MAX,
+                          "1", "next;", lflow_ref);
+            ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX,
+                          "1", "next;", lflow_ref);
         } else {
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, 0, "1", "next;",
-                          lflow_ref);
-            ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_EVAL, 0, "1", "next;",
-                          lflow_ref);
+            ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_EVAL, 0, "1",
+                          "next;", lflow_ref);
+            ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_ACL_EVAL, 0, "1",
+                          "next;", lflow_ref);
         }
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_AFTER_LB_EVAL, 0, "1",
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_AFTER_LB_EVAL, 0, "1",
                       "next;", lflow_ref);
     } else {
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, 0, "1", "next;",
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_EVAL, 0, "1", "next;",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_EVAL, 0, "1", "next;",
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_ACL_EVAL, 0, "1", "next;",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_AFTER_LB_EVAL, 0, "1",
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_AFTER_LB_EVAL, 0, "1",
                       "next;", lflow_ref);
     }
 
@@ -7724,19 +7727,19 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
          * uses "next;". */
         ds_clear(&match);
         ds_put_format(&match, "ip && ct.est && ct_mark.blocked == 1");
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, 1,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_EVAL, 1,
                       ds_cstr(&match),
                       REGBIT_ACL_VERDICT_ALLOW" = 1; next;",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_EVAL, 1,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_ACL_EVAL, 1,
                       ds_cstr(&match),
                       REGBIT_ACL_VERDICT_ALLOW" = 1; next;",
                       lflow_ref);
 
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, 1, "ip && !ct.est",
-                      "next;" , lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_EVAL, 1, "ip && !ct.est",
-                      "next;", lflow_ref);
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_EVAL, 1,
+                      "ip && !ct.est", "next;" , lflow_ref);
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_ACL_EVAL, 1,
+                      "ip && !ct.est", "next;", lflow_ref);
 
         /* Ingress and Egress ACL Table (Priority 65532).
          *
@@ -7754,10 +7757,10 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
             ds_put_cstr(&match, "(ct.est && ct.rpl && ct_mark.blocked == 1)");
         }
 
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, UINT16_MAX - 3,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_EVAL, UINT16_MAX - 3,
                       ds_cstr(&match), REGBIT_ACL_VERDICT_DROP " = 1; next;",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX - 3,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX - 3,
                       ds_cstr(&match), REGBIT_ACL_VERDICT_DROP " = 1; next;",
                       lflow_ref);
 
@@ -7773,14 +7776,14 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
         ds_clear(&match);
         ds_put_cstr(&match, "ct.est && !ct.rel && ct.rpl && "
                             "ct_mark.blocked == 0");
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, UINT16_MAX - 3,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_EVAL, UINT16_MAX - 3,
                       ds_cstr(&match), REGBIT_ACL_HINT_DROP" = 0; "
                       REGBIT_ACL_HINT_BLOCK" = 0; "
                       REGBIT_ACL_HINT_ALLOW_REL" = 1; "
                       REGBIT_NF_ENABLED" = ct_label.nf_group; "
                       REGBIT_ACL_VERDICT_ALLOW" = 1; next;",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX - 3,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX - 3,
                       ds_cstr(&match),
                       REGBIT_NF_ENABLED" = ct_label.nf_group; "
                       REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
@@ -7808,13 +7811,13 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
         ds_clear(&match);
         ds_put_cstr(&match, "!ct.est && ct.rel && !ct.new && "
                             "ct_mark.blocked == 0");
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, UINT16_MAX - 3,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_EVAL, UINT16_MAX - 3,
                       ds_cstr(&match), ct_in_acl_action, lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX - 3,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX - 3,
                       ds_cstr(&match), ct_out_acl_action, lflow_ref);
         /* Reply and related traffic matched by an "allow-related" ACL
          * should be allowed in the ls_in_acl_after_lb stage too. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_AFTER_LB_EVAL,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_AFTER_LB_EVAL,
                       UINT16_MAX - 3,
                       REGBIT_ACL_HINT_ALLOW_REL" == 1",
                       REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
@@ -7836,15 +7839,15 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
             REGBIT_NF_ENABLED" = ct_label.nf_group; "
             REGBIT_ACL_VERDICT_ALLOW" = 1; next;";
         ds_put_format(&match, "ct.est && ct_mark.allow_established == 1");
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, UINT16_MAX - 3,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_EVAL, UINT16_MAX - 3,
                       ds_cstr(&match),
                       pre_lb_persisted_acl_action,
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX - 3,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX - 3,
                       ds_cstr(&match),
                       persisted_acl_action,
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_AFTER_LB_EVAL,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_AFTER_LB_EVAL,
                       UINT16_MAX - 3,
                       REGBIT_ACL_HINT_ALLOW_PERSISTED" == 1",
                       post_lb_persisted_acl_action,
@@ -7858,16 +7861,16 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
      * Also, don't send them to conntrack because session tracking
      * for these protocols is not working properly:
      * https://bugzilla.kernel.org/show_bug.cgi?id=11797. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, UINT16_MAX - 3,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_EVAL, UINT16_MAX - 3,
                   IPV6_CT_OMIT_MATCH,
                   REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX - 3,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_ACL_EVAL, UINT16_MAX - 3,
                   IPV6_CT_OMIT_MATCH,
                   REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_AFTER_LB_EVAL, UINT16_MAX - 3,
-                  IPV6_CT_OMIT_MATCH,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_AFTER_LB_EVAL,
+                  UINT16_MAX - 3, IPV6_CT_OMIT_MATCH,
                   REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
                   lflow_ref);
 
@@ -7929,7 +7932,7 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
                            "ct_commit; next;"
                          : REGBIT_ACL_VERDICT_ALLOW" = 1; next;";
         ovn_lflow_add(
-            lflows, od, S_SWITCH_OUT_ACL_EVAL, 34000,
+            lflows, od->sdp, S_SWITCH_OUT_ACL_EVAL, 34000,
             "flags.from_ctrl && udp.src == 53",
             dns_actions, lflow_ref);
     }
@@ -7937,14 +7940,14 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
     if (ls_stateful_rec->has_acls || ls_stateful_rec->has_lb_vip) {
         /* Add a 34000 priority flow to advance the service monitor reply
         * packets to skip applying ingress ACLs. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL_EVAL, 34000,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ACL_EVAL, 34000,
                     "eth.dst == $svc_monitor_mac",
                     REGBIT_ACL_VERDICT_ALLOW" = 1; next;",
                     lflow_ref);
 
         /* Add a 34000 priority flow to advance the service monitor packets
         * generated by ovn-controller to skip applying egress ACLs. */
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL_EVAL, 34000,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_ACL_EVAL, 34000,
                     "eth.src == $svc_monitor_mac",
                     REGBIT_ACL_VERDICT_ALLOW" = 1; next;",
                     lflow_ref);
@@ -7964,9 +7967,9 @@ build_qos(struct ovn_datapath *od, struct lflow_table *lflows,
           struct lflow_ref *lflow_ref) {
     struct ds action = DS_EMPTY_INITIALIZER;
 
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_QOS, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_QOS, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_QOS, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_QOS, 0, "1", "next;",
                   lflow_ref);
 
     for (size_t i = 0; i < od->nbs->n_qos_rules; i++) {
@@ -8015,7 +8018,7 @@ build_qos(struct ovn_datapath *od, struct lflow_table *lflows,
             }
         }
         ds_put_cstr(&action, "next;");
-        ovn_lflow_add_with_hint(lflows, od, stage,
+        ovn_lflow_add_with_hint(lflows, od->sdp, stage,
                                 qos->priority,
                                 qos->match, ds_cstr(&action),
                                 &qos->header_, lflow_ref);
@@ -8092,7 +8095,7 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
 
             ds_put_cstr(action, "ct_lb_mark;");
 
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_STATEFUL, 150,
+            ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_STATEFUL, 150,
                           ds_cstr(match), ds_cstr(action), lflow_ref);
 
             if (lb->hairpin_snat_ip || lb_vip->port_str) {
@@ -8105,7 +8108,7 @@ build_lb_rules_pre_stateful(struct lflow_table *lflows,
                                      : lb_vip->vip_str);
                 ds_put_cstr(action, "ct_lb_mark;");
 
-                ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_STATEFUL, 105,
+                ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_STATEFUL, 105,
                               ds_cstr(match), ds_cstr(action), lflow_ref);
             }
         }
@@ -8461,9 +8464,9 @@ build_lswitch_lb_affinity_default_flows(struct ovn_datapath *od,
                                         struct lflow_ref *lflow_ref)
 {
     ovs_assert(od->nbs);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_LB_AFF_CHECK, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_LB_AFF_CHECK, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_LB_AFF_LEARN, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_LB_AFF_LEARN, 0, "1", "next;",
                   lflow_ref);
 }
 
@@ -8475,9 +8478,9 @@ build_lrouter_lb_affinity_default_flows(struct ovn_datapath *od,
                                         struct lflow_ref *lflow_ref)
 {
     ovs_assert(od->nbr);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_LB_AFF_CHECK, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_LB_AFF_CHECK, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_LB_AFF_LEARN, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_LB_AFF_LEARN, 0, "1", "next;",
                   lflow_ref);
 }
 
@@ -8495,10 +8498,10 @@ build_lb_rules_for_stateless_acl(struct lflow_table *lflows,
 
     HMAPX_FOR_EACH (hmapx_node, &lb_dps->ls_lb_with_stateless_mode) {
         od = hmapx_node->data;
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 115,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_LB, 115,
                       REGBIT_ACL_STATELESS" == 1",
                       REGBIT_CONNTRACK_NAT" = 1; next;", lb_dps->lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 110,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_STATEFUL, 110,
                       REGBIT_ACL_STATELESS " == 1 && ct.new",
                       "next;", lb_dps->lflow_ref);
     }
@@ -8559,7 +8562,7 @@ build_lb_rules(struct lflow_table *lflows, struct ovn_lb_datapaths *lb_dps,
                 }
                 bitmap_set0(dp_non_meter, index);
                 ovn_lflow_add_with_hint__(
-                        lflows, od, S_SWITCH_IN_LB, priority,
+                        lflows, od->sdp, S_SWITCH_IN_LB, priority,
                         ds_cstr(match), ds_cstr(action),
                         NULL, meter, &lb->nlb->header_,
                         lb_dps->lflow_ref);
@@ -8584,10 +8587,10 @@ build_stateful(struct ovn_datapath *od, struct lflow_table *lflows,
 
     /* Ingress LB, Ingress and Egress stateful Table (Priority 0): Packets are
      * allowed by default. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_LB, 0, "1", "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_LB, 0, "1", "next;", lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_STATEFUL, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_STATEFUL, 0, "1", "next;",
                   lflow_ref);
 
     /* If REGBIT_CONNTRACK_COMMIT is set as 1 and
@@ -8607,12 +8610,12 @@ build_stateful(struct ovn_datapath *od, struct lflow_table *lflows,
                     "ct_label.nf_group = 0; "
                     "ct_label.nf_group_id = 0; "
                   "}; next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_STATEFUL, 100,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 1",
                   ds_cstr(&actions),
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_STATEFUL, 100,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 1",
                   ds_cstr(&actions),
@@ -8631,12 +8634,12 @@ build_stateful(struct ovn_datapath *od, struct lflow_table *lflows,
                    "ct_label.nf_group = 0; "
                    "ct_label.nf_group_id = 0; "
                 "}; next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_STATEFUL, 100,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 0",
                   ds_cstr(&actions),
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_STATEFUL, 100,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 0",
                   ds_cstr(&actions),
@@ -8653,13 +8656,13 @@ build_stateful(struct ovn_datapath *od, struct lflow_table *lflows,
                     "ct_label.acl_id = " REG_ACL_ID "; "
                     "ct_label.nf_group = 1; "
                     "ct_label.nf_group_id = " REG_NF_GROUP_ID "; }; next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_STATEFUL, 110,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 0 && "
                   REGBIT_NF_ENABLED" == 1",
                   ds_cstr(&actions),
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_STATEFUL, 110,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 0 && "
                   REGBIT_NF_ENABLED" == 1",
@@ -8681,13 +8684,13 @@ build_stateful(struct ovn_datapath *od, struct lflow_table *lflows,
                     "ct_label.acl_id = " REG_ACL_ID "; "
                     "ct_label.nf_group = 1; "
                     "ct_label.nf_group_id = " REG_NF_GROUP_ID "; }; next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_STATEFUL, 110,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 1 && "
                   REGBIT_NF_ENABLED" == 1",
                   ds_cstr(&actions),
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 110,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_STATEFUL, 110,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 1 && "
                   REGBIT_NF_ENABLED" == 1",
@@ -8706,11 +8709,11 @@ build_lb_hairpin(const struct ls_stateful_record *ls_stateful_rec,
     /* Ingress Pre-Hairpin/Nat-Hairpin/Hairpin tabled (Priority 0).
      * Packets that don't need hairpinning should continue processing.
      */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_HAIRPIN, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_PRE_HAIRPIN, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NAT_HAIRPIN, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_NAT_HAIRPIN, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_HAIRPIN, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_HAIRPIN, 0, "1", "next;",
                   lflow_ref);
 
     if (ls_stateful_rec->has_lb_vip) {
@@ -8728,13 +8731,13 @@ build_lb_hairpin(const struct ls_stateful_record *ls_stateful_rec,
          * after conntrack.  It is the kernel datapath conntrack behavior.
          * We need to find a better way to handle the fragmented packets.
          * */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_LB, 110,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_LB, 110,
                       "ct.trk && ct.est && !ct.rpl && "REGBIT_IP_FRAG
                       " == 1 && ip4",
                       REG_LB_IPV4 " = ct_nw_dst(); "
                       REG_LB_PORT " = ct_tp_dst(); next;",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_LB, 110,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_LB, 110,
                       "ct.trk && ct.est && !ct.rpl && "REGBIT_IP_FRAG
                       " == 1 && ip6",
                       REG_LB_IPV6 " = ct_ip6_dst(); "
@@ -8745,7 +8748,7 @@ build_lb_hairpin(const struct ls_stateful_record *ls_stateful_rec,
          * REGBIT_HAIRPIN_REPLY in the reply direction.
          */
         ovn_lflow_add_with_hint(
-            lflows, od, S_SWITCH_IN_PRE_HAIRPIN, 100, "ip && ct.trk",
+            lflows, od->sdp, S_SWITCH_IN_PRE_HAIRPIN, 100, "ip && ct.trk",
             REGBIT_HAIRPIN " = chk_lb_hairpin(); "
             REGBIT_HAIRPIN_REPLY " = chk_lb_hairpin_reply(); "
             "next;",
@@ -8754,7 +8757,7 @@ build_lb_hairpin(const struct ls_stateful_record *ls_stateful_rec,
 
         /* If packet needs to be hairpinned, snat the src ip with the VIP
          * for new sessions. */
-        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_NAT_HAIRPIN, 100,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_SWITCH_IN_NAT_HAIRPIN, 100,
                                 "ip && ct.new && ct.trk"
                                 " && "REGBIT_HAIRPIN " == 1",
                                 "ct_snat_to_vip; next;",
@@ -8764,7 +8767,7 @@ build_lb_hairpin(const struct ls_stateful_record *ls_stateful_rec,
         /* If packet needs to be hairpinned, for established sessions there
          * should already be an SNAT conntrack entry.
          */
-        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_NAT_HAIRPIN, 100,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_SWITCH_IN_NAT_HAIRPIN, 100,
                                 "ip && ct.est && ct.trk"
                                 " && "REGBIT_HAIRPIN " == 1",
                                 "ct_snat;",
@@ -8772,7 +8775,7 @@ build_lb_hairpin(const struct ls_stateful_record *ls_stateful_rec,
                                 lflow_ref);
 
         /* For the reply of hairpinned traffic, snat the src ip to the VIP. */
-        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_NAT_HAIRPIN, 90,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_SWITCH_IN_NAT_HAIRPIN, 90,
                                 "ip && "REGBIT_HAIRPIN_REPLY " == 1",
                                 "ct_snat;",
                                 &od->nbs->header_,
@@ -8783,7 +8786,7 @@ build_lb_hairpin(const struct ls_stateful_record *ls_stateful_rec,
         *   looped back (i.e., swap ETH addresses and send back on inport).
         */
         ovn_lflow_add(
-            lflows, od, S_SWITCH_IN_HAIRPIN, 1,
+            lflows, od->sdp, S_SWITCH_IN_HAIRPIN, 1,
             "("REGBIT_HAIRPIN " == 1 || " REGBIT_HAIRPIN_REPLY " == 1)",
             "eth.dst <-> eth.src; outport = inport; flags.loopback = 1; "
             "output;", lflow_ref);
@@ -8804,7 +8807,7 @@ build_vtep_hairpin(struct ovn_datapath *od, struct lflow_table *lflows,
      */
     char *action = xasprintf("next(pipeline=ingress, table=%d);",
                              ovn_stage_get_table(S_SWITCH_IN_L2_LKUP));
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_HAIRPIN, 1000,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_HAIRPIN, 1000,
                   REGBIT_FROM_RAMP" == 1", action, lflow_ref);
     free(action);
 
@@ -8822,7 +8825,7 @@ build_vtep_hairpin(struct ovn_datapath *od, struct lflow_table *lflows,
             ds_put_format(&match,
                           REGBIT_FROM_RAMP" == 1 && is_chassis_resident(%s)",
                           op->cr_port->json_key);
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_HAIRPIN, 2000,
+            ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_HAIRPIN, 2000,
                           ds_cstr(&match), "next;", lflow_ref);
         }
     }
@@ -8832,7 +8835,7 @@ build_vtep_hairpin(struct ovn_datapath *od, struct lflow_table *lflows,
      * Neighbor resolution for router ports is done in logical router ingress
      * pipeline.  ARP resolution for vif lports is done directly by vif ports.
      */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_ARP_ND_RSP, 65535,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ARP_ND_RSP, 65535,
                   REGBIT_FROM_RAMP" == 1 && (arp || nd_ns)",
                   "flags.loopback = 1; next;", lflow_ref);
 
@@ -8878,7 +8881,7 @@ build_fwd_group_lflows(struct ovn_datapath *od, struct lflow_table *lflows,
             "output;",
             fwd_group->vmac, fwd_group->vmac, fwd_group->vip);
 
-        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_ARP_ND_RSP, 50,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_SWITCH_IN_ARP_ND_RSP, 50,
                                 ds_cstr(&match), ds_cstr(&actions),
                                 &fwd_group->header_, lflow_ref);
 
@@ -8901,7 +8904,7 @@ build_fwd_group_lflows(struct ovn_datapath *od, struct lflow_table *lflows,
 
         ds_clear(&actions);
         ds_put_format(&actions, "fwd_group(%s);", ds_cstr(&group_ports));
-        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_L2_LKUP, 50,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_SWITCH_IN_L2_LKUP, 50,
                                 ds_cstr(&match), ds_cstr(&actions),
                                 &fwd_group->header_, lflow_ref);
     }
@@ -9054,8 +9057,9 @@ build_lswitch_rport_arp_req_self_orig_flow(struct ovn_port *op,
                   "eth.src == %s && eth.dst == ff:ff:ff:ff:ff:ff && "
                   "(arp.op == 1 || rarp.op == 3 || nd_ns)",
                   ds_cstr(&eth_src));
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, priority, ds_cstr(&match),
-                  "outport = \""MC_FLOOD_L2"\"; output;", lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_LKUP, priority,
+                  ds_cstr(&match), "outport = \""MC_FLOOD_L2"\"; output;",
+                  lflow_ref);
 
     ds_destroy(&eth_src);
     ds_destroy(&match);
@@ -9156,13 +9160,13 @@ build_lswitch_rport_arp_req_flow(
         ds_put_format(&actions, "clone {outport = %s; output; }; "
                                 "outport = \""MC_FLOOD_L2"\"; output;",
                       patch_op->json_key);
-        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_L2_LKUP,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_SWITCH_IN_L2_LKUP,
                                 priority, ds_cstr(&match),
                                 ds_cstr(&actions), stage_hint,
                                 lflow_ref);
     } else {
         ds_put_format(&actions, "outport = %s; output;", patch_op->json_key);
-        ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_L2_LKUP,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_SWITCH_IN_L2_LKUP,
                                 priority, ds_cstr(&match),
                                 ds_cstr(&actions),
                                 stage_hint,
@@ -9178,14 +9182,14 @@ build_lswitch_rport_arp_req_flow(
             ds_put_format(&actions, "clone {outport = %s; output; }; "
                                     "outport = \""MC_FLOOD_L2"\"; output;",
                           patch_op->cr_port->json_key);
-            ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_L2_LKUP,
+            ovn_lflow_add_with_hint(lflows, od->sdp, S_SWITCH_IN_L2_LKUP,
                                     priority, ds_cstr(&match),
                                     ds_cstr(&actions), stage_hint,
                                     lflow_ref);
         } else {
             ds_put_format(&actions, "outport = %s; output;",
                           patch_op->cr_port->json_key);
-            ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_L2_LKUP,
+            ovn_lflow_add_with_hint(lflows, od->sdp, S_SWITCH_IN_L2_LKUP,
                                     priority, ds_cstr(&match),
                                     ds_cstr(&actions),
                                     stage_hint,
@@ -9419,7 +9423,7 @@ build_dhcpv4_options_flows(struct ovn_port *op,
                               op->json_key);
             }
 
-            ovn_lflow_add_with_hint__(lflows, op->od,
+            ovn_lflow_add_with_hint__(lflows, op->od->sdp,
                                       S_SWITCH_IN_DHCP_OPTIONS, 100,
                                       ds_cstr(&match),
                                       ds_cstr(&options_action),
@@ -9445,7 +9449,7 @@ build_dhcpv4_options_flows(struct ovn_port *op,
             }
 
             ovn_lflow_add_with_lport_and_hint(
-                lflows, op->od, S_SWITCH_IN_DHCP_RESPONSE, 100,
+                lflows, op->od->sdp, S_SWITCH_IN_DHCP_RESPONSE, 100,
                 ds_cstr(&match), ds_cstr(&response_action), inport->key,
                 &op->nbsp->dhcpv4_options->header_,
                 lflow_ref);
@@ -9473,7 +9477,7 @@ build_dhcpv4_options_flows(struct ovn_port *op,
                               "&& udp.dst == 68",op->json_key,
                               server_mac, server_id);
                 ovn_lflow_add_with_lport_and_hint(
-                    lflows, op->od, S_SWITCH_OUT_ACL_EVAL, 34000,
+                    lflows, op->od->sdp, S_SWITCH_OUT_ACL_EVAL, 34000,
                     ds_cstr(&match),dhcp_actions, op->key,
                     &op->nbsp->dhcpv4_options->header_,
                     lflow_ref);
@@ -9512,7 +9516,7 @@ build_dhcpv6_options_flows(struct ovn_port *op,
                               op->json_key);
             }
 
-            ovn_lflow_add_with_hint__(lflows, op->od,
+            ovn_lflow_add_with_hint__(lflows, op->od->sdp,
                                       S_SWITCH_IN_DHCP_OPTIONS, 100,
                                       ds_cstr(&match),
                                       ds_cstr(&options_action),
@@ -9527,7 +9531,7 @@ build_dhcpv6_options_flows(struct ovn_port *op,
              * put_dhcpv6_opts action is successful */
             ds_put_cstr(&match, " && "REGBIT_DHCP_OPTS_RESULT);
             ovn_lflow_add_with_lport_and_hint(
-                lflows, op->od, S_SWITCH_IN_DHCP_RESPONSE, 100,
+                lflows, op->od->sdp, S_SWITCH_IN_DHCP_RESPONSE, 100,
                 ds_cstr(&match), ds_cstr(&response_action), inport->key,
                 &op->nbsp->dhcpv6_options->header_, lflow_ref);
             ds_destroy(&options_action);
@@ -9559,7 +9563,7 @@ build_dhcpv6_options_flows(struct ovn_port *op,
                               "&& udp.dst == 546", op->json_key,
                               server_mac, server_ip);
                 ovn_lflow_add_with_lport_and_hint(
-                    lflows, op->od, S_SWITCH_OUT_ACL_EVAL, 34000,
+                    lflows, op->od->sdp, S_SWITCH_OUT_ACL_EVAL, 34000,
                     ds_cstr(&match),dhcp6_actions, op->key,
                     &op->nbsp->dhcpv6_options->header_,
                     lflow_ref);
@@ -9640,7 +9644,7 @@ build_lswitch_dhcp_relay_flows(struct ovn_port *op,
     ds_put_format(actions,
                   "eth.dst = %s; outport = %s; next; /* DHCP_RELAY_REQ */",
                   rp->lrp_networks.ea_s,sp->json_key);
-    ovn_lflow_add_with_hint__(lflows, op->od,
+    ovn_lflow_add_with_hint__(lflows, op->od->sdp,
                               S_SWITCH_IN_L2_LKUP, 100,
                               ds_cstr(match),
                               ds_cstr(actions),
@@ -9675,7 +9679,7 @@ build_drop_arp_nd_flows_for_unbound_router_ports(struct ovn_port *op,
                         op->lsp_addrs[i].ea_s, op->json_key,
                         rp->lsp_addrs[k].ipv4_addrs[l].addr_s);
                     ovn_lflow_add_drop_with_lport_hint_and_desc(
-                        lflows, op->od, S_SWITCH_IN_EXTERNAL_PORT, 100,
+                        lflows, op->od->sdp, S_SWITCH_IN_EXTERNAL_PORT, 100,
                         ds_cstr(&match), port->key,
                         &op->nbsp->header_,
                         "Drop ARP for unknown router ports", lflow_ref);
@@ -9692,7 +9696,7 @@ build_drop_arp_nd_flows_for_unbound_router_ports(struct ovn_port *op,
                         rp->lsp_addrs[k].ipv6_addrs[l].sn_addr_s,
                         rp->lsp_addrs[k].ipv6_addrs[l].addr_s);
                     ovn_lflow_add_drop_with_lport_hint_and_desc(
-                        lflows, op->od, S_SWITCH_IN_EXTERNAL_PORT, 100,
+                        lflows, op->od->sdp, S_SWITCH_IN_EXTERNAL_PORT, 100,
                         ds_cstr(&match), port->key,
                         &op->nbsp->header_, "Drop ND for unbound router ports",
                         lflow_ref);
@@ -9707,7 +9711,7 @@ build_drop_arp_nd_flows_for_unbound_router_ports(struct ovn_port *op,
                     op->lsp_addrs[i].ea_s, rp->lsp_addrs[k].ea_s,
                     op->json_key);
                 ovn_lflow_add_drop_with_lport_hint_and_desc(
-                    lflows, op->od,
+                    lflows, op->od->sdp,
                     S_SWITCH_IN_EXTERNAL_PORT,
                     100, ds_cstr(&match),
                     port->key,
@@ -9773,7 +9777,7 @@ build_lswitch_arp_chassis_resident(const struct ovn_datapath *od,
             ds_clear(&match);
             ds_put_format(&match, "arp.op == 1 && inport == %s",
                           port_name);
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_CHECK_PORT_SEC, 75,
+            ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_CHECK_PORT_SEC, 75,
                           ds_cstr(&match), REGBIT_EXT_ARP " = 1; next;",
                           ar->lflow_ref);
         }
@@ -9783,7 +9787,7 @@ build_lswitch_arp_chassis_resident(const struct ovn_datapath *od,
             ds_put_format(&match, REGBIT_EXT_ARP" == 1 "
                                   "&& is_chassis_resident(%s)",
                           port_name);
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 75,
+            ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_APPLY_PORT_SEC, 75,
                           ds_cstr(&match), "next;", ar->lflow_ref);
         }
 
@@ -9792,11 +9796,11 @@ build_lswitch_arp_chassis_resident(const struct ovn_datapath *od,
             ds_put_format(&match, REGBIT_EXT_ARP " == 1 "
                                   "&& is_chassis_resident(\"%s\")",
                           port_name);
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 75,
+            ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_APPLY_PORT_SEC, 75,
                           ds_cstr(&match), "next;", ar->lflow_ref);
         }
 
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 70,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_APPLY_PORT_SEC, 70,
                       REGBIT_EXT_ARP" == 1", "drop;", ar->lflow_ref);
     }
 
@@ -9818,26 +9822,26 @@ build_lswitch_lflows_evpn_l2_unknown(struct ovn_datapath *od,
                                      struct lflow_ref *lflow_ref)
 {
     if (od->has_unknown) {
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 50,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_UNKNOWN, 50,
                       "outport == \"none\" && remote_outport == \"none\"",
                       "outport = \""MC_UNKNOWN "\"; output;", lflow_ref);
     } else {
         ovn_lflow_add_drop_with_desc(
-            lflows, od, S_SWITCH_IN_L2_UNKNOWN, 50, "outport == \"none\" && "
-            "remote_outport == \"none\"", "No L2 destination", lflow_ref);
+            lflows, od->sdp, S_SWITCH_IN_L2_UNKNOWN, 50, "outport == \"none\" \
+            && remote_outport == \"none\"", "No L2 destination", lflow_ref);
     }
 
     if (smap_get_bool(&od->nbs->other_config,
                   "dynamic-routing-fdb-prefer-local", false)) {
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 25,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_UNKNOWN, 25,
                       "outport == \"none\"",
                       "outport = remote_outport; output;", lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 0, "1",
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_UNKNOWN, 0, "1",
                       "output;", lflow_ref);
     } else {
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 25,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_UNKNOWN, 25,
                       "remote_outport == \"none\"", "output;", lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 0, "1",
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_UNKNOWN, 0, "1",
                       "outport = remote_outport; output;", lflow_ref);
     }
 }
@@ -9849,16 +9853,16 @@ build_lswitch_lflows_l2_unknown(struct ovn_datapath *od,
 {
     /* Ingress table 31: Destination lookup for unknown MACs. */
     if (od->has_unknown) {
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 50,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_UNKNOWN, 50,
                       "outport == \"none\"",
                       "outport = \""MC_UNKNOWN "\"; output;",
                       lflow_ref);
     } else {
         ovn_lflow_add_drop_with_desc(
-            lflows, od, S_SWITCH_IN_L2_UNKNOWN, 50, "outport == \"none\"",
+            lflows, od->sdp, S_SWITCH_IN_L2_UNKNOWN, 50, "outport == \"none\"",
             "No L2 destination", lflow_ref);
     }
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_UNKNOWN, 0, "1",
                   "output;", lflow_ref);
 }
 
@@ -9893,7 +9897,7 @@ build_lswitch_lflows_admission_control(struct ovn_datapath *od,
 
     /* Default action for recirculated ICMP error 'packet too big'. */
     ovn_lflow_add_drop_with_desc(
-        lflows, od, S_SWITCH_IN_CHECK_PORT_SEC, 105,
+        lflows, od->sdp, S_SWITCH_IN_CHECK_PORT_SEC, 105,
         "((ip4 && icmp4.type == 3 && icmp4.code == 4) ||"
         " (ip6 && icmp6.type == 2 && icmp6.code == 0)) &&"
         " flags.tunnel_rx == 1", "ICMP: packet too big", lflow_ref);
@@ -9902,7 +9906,7 @@ build_lswitch_lflows_admission_control(struct ovn_datapath *od,
     if (!is_vlan_transparent(od)) {
         /* Block logical VLANs. */
         ovn_lflow_add_drop_with_desc(
-            lflows, od, S_SWITCH_IN_CHECK_PORT_SEC,
+            lflows, od->sdp, S_SWITCH_IN_CHECK_PORT_SEC,
             100, "vlan.present",
             "VLANs blocked due to vlan-passthru option",
             lflow_ref);
@@ -9910,20 +9914,20 @@ build_lswitch_lflows_admission_control(struct ovn_datapath *od,
 
     /* Broadcast/multicast source address is invalid. */
     ovn_lflow_add_drop_with_desc(
-        lflows, od, S_SWITCH_IN_CHECK_PORT_SEC, 100,
+        lflows, od->sdp, S_SWITCH_IN_CHECK_PORT_SEC, 100,
         "eth.src[40]", "Incoming Broadcast/multicast source"
         " address is invalid", lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_CHECK_PORT_SEC, 50, "1",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_CHECK_PORT_SEC, 50, "1",
                   REGBIT_PORT_SEC_DROP" = check_in_port_sec(); next;",
                   lflow_ref);
 
     ovn_lflow_add_drop_with_desc(
-        lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 50,
+        lflows, od->sdp, S_SWITCH_IN_APPLY_PORT_SEC, 50,
         REGBIT_PORT_SEC_DROP" == 1",
         "Broadcast/multicast port security invalid", lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_APPLY_PORT_SEC, 0, "1", "next;",
                   lflow_ref);
 }
 
@@ -9983,7 +9987,7 @@ build_lswitch_arp_nd_responder_skip_local(struct ovn_port *op,
     }
     ds_clear(match);
     ds_put_format(match, "inport == %s", op->json_key);
-    ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+    ovn_lflow_add_with_lport_and_hint(lflows, op->od->sdp,
                                       S_SWITCH_IN_ARP_ND_RSP, 100,
                                       ds_cstr(match), "next;", op->key,
                                       &op->nbsp->header_, op->lflow_ref);
@@ -10074,7 +10078,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                 "bind_vport(%s, inport); "
                 "next;",
                 op->json_key);
-            ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+            ovn_lflow_add_with_lport_and_hint(lflows, op->od->sdp,
                                               S_SWITCH_IN_ARP_ND_RSP, 100,
                                               ds_cstr(match),
                                               ds_cstr(actions), vparent,
@@ -10126,7 +10130,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                     size_t match_len = match->length;
                     ds_put_format(match, " && eth.dst == %s",
                                   op->lsp_addrs[i].ea_s);
-                    ovn_lflow_add_with_hint(lflows, op->od,
+                    ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                             S_SWITCH_IN_ARP_ND_RSP, 50,
                                             ds_cstr(match),
                                             "next;", &op->nbsp->header_,
@@ -10149,7 +10153,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                     "output;",
                     op->lsp_addrs[i].ea_s, op->lsp_addrs[i].ea_s,
                     op->lsp_addrs[i].ipv4_addrs[j].addr_s);
-                ovn_lflow_add_with_hint(lflows, op->od,
+                ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                         S_SWITCH_IN_ARP_ND_RSP, 50,
                                         ds_cstr(match),
                                         ds_cstr(actions),
@@ -10169,7 +10173,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                  * network is not working as configured, so dropping the
                  * request would frustrate that intent.) */
                 ds_put_format(match, " && inport == %s", op->json_key);
-                ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+                ovn_lflow_add_with_lport_and_hint(lflows, op->od->sdp,
                                                   S_SWITCH_IN_ARP_ND_RSP,
                                                   100, ds_cstr(match),
                                                   "next;", op->key,
@@ -10195,7 +10199,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                                   "nd_ns && ip6.dst == %s && nd.target == %s",
                                   op->lsp_addrs[i].ipv6_addrs[j].addr_s,
                                   op->lsp_addrs[i].ipv6_addrs[j].addr_s);
-                    ovn_lflow_add_with_hint__(lflows, op->od,
+                    ovn_lflow_add_with_hint__(lflows, op->od->sdp,
                                               S_SWITCH_IN_ARP_ND_RSP, 50,
                                               ds_cstr(match), "next;", NULL,
                                               copp_meter_get(COPP_ND_NA,
@@ -10227,7 +10231,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                         op->lsp_addrs[i].ipv6_addrs[j].addr_s,
                         op->lsp_addrs[i].ipv6_addrs[j].addr_s,
                         op->lsp_addrs[i].ea_s);
-                ovn_lflow_add_with_hint__(lflows, op->od,
+                ovn_lflow_add_with_hint__(lflows, op->od->sdp,
                                           S_SWITCH_IN_ARP_ND_RSP, 50,
                                           ds_cstr(match),
                                           ds_cstr(actions),
@@ -10241,7 +10245,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                 /* Do not reply to a solicitation from the port that owns
                  * the address (otherwise DAD detection will fail). */
                 ds_put_format(match, " && inport == %s", op->json_key);
-                ovn_lflow_add_with_lport_and_hint(lflows, op->od,
+                ovn_lflow_add_with_lport_and_hint(lflows, op->od->sdp,
                                                   S_SWITCH_IN_ARP_ND_RSP,
                                                   100, ds_cstr(match),
                                                   "next;", op->key,
@@ -10294,7 +10298,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                 ea_s,
                 ea_s);
 
-            ovn_lflow_add_with_hint(lflows, op->od,
+            ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                     S_SWITCH_IN_ARP_ND_RSP,
                                     30, ds_cstr(match),
                                     ds_cstr(actions),
@@ -10343,7 +10347,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                     lsp_is_router(op->nbsp) ? "nd_na_router" : "nd_na",
                     ea_s,
                     ea_s);
-            ovn_lflow_add_with_hint__(lflows, op->od,
+            ovn_lflow_add_with_hint__(lflows, op->od->sdp,
                                       S_SWITCH_IN_ARP_ND_RSP, 30,
                                       ds_cstr(match),
                                       ds_cstr(actions),
@@ -10367,7 +10371,7 @@ build_lswitch_arp_nd_responder_default(struct ovn_datapath *od,
                                        struct lflow_ref *lflow_ref)
 {
     ovs_assert(od->nbs);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_ARP_ND_RSP, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_ARP_ND_RSP, 0, "1", "next;",
                   lflow_ref);
 }
 
@@ -10411,7 +10415,7 @@ build_lswitch_arp_nd_local_svc_mon(const struct ovn_lb_datapaths *lb_dps,
                 IN6_IS_ADDR_V4MAPPED(&lb_vip->vip) ? true : false);
 
             ovn_lflow_add_with_hint(lflows,
-                                    op->od,
+                                    op->od->sdp,
                                     S_SWITCH_IN_ARP_ND_RSP, 110,
                                     ds_cstr(match), ds_cstr(actions),
                                     &lb->nlb->header_,
@@ -10446,7 +10450,7 @@ build_lswitch_arp_nd_ic_learned_svc_mon(
                                            mon_info->sbrec_mon->src_ip,
                                            &action, &match, is_ipv4);
 
-        ovn_lflow_add(lflows, op->od, S_SWITCH_IN_ARP_ND_RSP,
+        ovn_lflow_add(lflows, op->od->sdp, S_SWITCH_IN_ARP_ND_RSP,
                       110, ds_cstr(&match), ds_cstr(&action),
                       svc_mons_data->lflow_ref);
 
@@ -10526,15 +10530,15 @@ build_lswitch_dhcp_and_dns_defaults(struct ovn_datapath *od,
                                     struct lflow_ref *lflow_ref)
 {
     ovs_assert(od->nbs);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_DHCP_OPTIONS, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_DHCP_OPTIONS, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_DHCP_RESPONSE, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_DHCP_RESPONSE, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_LOOKUP, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_DNS_LOOKUP, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_DNS_RESPONSE, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_EXTERNAL_PORT, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_EXTERNAL_PORT, 0, "1", "next;",
                   lflow_ref);
 }
 
@@ -10551,7 +10555,7 @@ build_lswitch_dns_lookup_and_response(struct ovn_datapath *od,
     if (!ls_has_dns_records(od->nbs)) {
         return;
     }
-    ovn_lflow_metered(lflows, od, S_SWITCH_IN_DNS_LOOKUP, 100,
+    ovn_lflow_metered(lflows, od->sdp, S_SWITCH_IN_DNS_LOOKUP, 100,
                       "udp.dst == 53",
                       REGBIT_DNS_LOOKUP_RESULT" = dns_lookup(); next;",
                       copp_meter_get(COPP_DNS, od->nbs->copp,
@@ -10560,12 +10564,12 @@ build_lswitch_dns_lookup_and_response(struct ovn_datapath *od,
                   "udp.dst = udp.src; udp.src = 53; outport = inport; "
                   "flags.loopback = 1; output;";
     const char *dns_match = "udp.dst == 53 && "REGBIT_DNS_LOOKUP_RESULT;
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_DNS_RESPONSE, 100,
                   dns_match, dns_action, lflow_ref);
     dns_action = "eth.dst <-> eth.src; ip6.src <-> ip6.dst; "
                   "udp.dst = udp.src; udp.src = 53; outport = inport; "
                   "flags.loopback = 1; output;";
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_DNS_RESPONSE, 100,
                   dns_match, dns_action, lflow_ref);
 }
 
@@ -10599,7 +10603,7 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
 {
     ovs_assert(od->nbs);
 
-    ovn_lflow_metered(lflows, od, S_SWITCH_IN_L2_LKUP, 110,
+    ovn_lflow_metered(lflows, od->sdp, S_SWITCH_IN_L2_LKUP, 110,
                       "eth.dst == $svc_monitor_mac && (tcp || icmp || icmp6)",
                       "handle_svc_check(inport);",
                       copp_meter_get(COPP_SVC_MONITOR, od->nbs->copp,
@@ -10611,14 +10615,14 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
         ds_clear(actions);
         ds_put_cstr(actions, "igmp;");
         /* Punt IGMP traffic to controller. */
-        ovn_lflow_metered(lflows, od, S_SWITCH_IN_L2_LKUP, 100,
+        ovn_lflow_metered(lflows, od->sdp, S_SWITCH_IN_L2_LKUP, 100,
                           "flags.igmp_loopback == 0 && igmp", ds_cstr(actions),
                           copp_meter_get(COPP_IGMP, od->nbs->copp,
                                          meter_groups),
                           lflow_ref);
 
         /* Punt MLD traffic to controller. */
-        ovn_lflow_metered(lflows, od, S_SWITCH_IN_L2_LKUP, 100,
+        ovn_lflow_metered(lflows, od->sdp, S_SWITCH_IN_L2_LKUP, 100,
                           "flags.igmp_loopback == 0 && (mldv1 || mldv2)",
                           ds_cstr(actions),
                           copp_meter_get(COPP_IGMP, od->nbs->copp,
@@ -10628,7 +10632,7 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
         /* Flood all IP multicast traffic destined to 224.0.0.X to all
          * ports - RFC 4541, section 2.1.2, item 2.
          */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 85,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_LKUP, 85,
                       "ip4.mcast && ip4.dst == 224.0.0.0/24",
                       "outport = \""MC_FLOOD_L2"\"; output;",
                       lflow_ref);
@@ -10636,7 +10640,7 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
         /* Flood all IPv6 multicast traffic destined to reserved
          * multicast IPs (RFC 4291, 2.7.1).
          */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 85,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_LKUP, 85,
                       "ip6.mcast_flood",
                       "outport = \""MC_FLOOD"\"; output;",
                       lflow_ref);
@@ -10644,13 +10648,13 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
 
     if (!smap_get_bool(&od->nbs->other_config,
                        "broadcast-arps-to-all-routers", true)) {
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 72,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_LKUP, 72,
                       "eth.mcast && (arp.op == 1 || nd_ns)",
                       "outport = \""MC_FLOOD_L2"\"; output;",
                       lflow_ref);
     }
 
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 70, "eth.mcast",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_LKUP, 70, "eth.mcast",
                   "outport = \""MC_FLOOD"\"; output;", lflow_ref);
 }
 
@@ -10692,7 +10696,7 @@ build_mcast_flood_lswitch(struct ovn_datapath *od, struct lflow_table *lflows,
         ds_put_cstr(actions, debug_drop_action());
     }
 
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 80,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_LKUP, 80,
                   "ip4.mcast || ip6.mcast", ds_cstr(actions), lflow_ref);
 }
 
@@ -10771,7 +10775,7 @@ build_lswitch_ip_mcast_igmp_mld(struct ovn_igmp_group *igmp_group,
     ds_put_format(actions, "outport = \"%s\"; output; ",
                   igmp_group->mcgroup.name);
 
-    ovn_lflow_add(lflows, igmp_group->datapath, S_SWITCH_IN_L2_LKUP,
+    ovn_lflow_add(lflows, igmp_group->datapath->sdp, S_SWITCH_IN_L2_LKUP,
                   90, ds_cstr(match), ds_cstr(actions), lflow_ref);
 }
 
@@ -10869,7 +10873,7 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
                           op->peer->lrp_networks.ea_s,
                           op->cr_port->json_key);
 
-            ovn_lflow_add_with_hint(lflows, op->od,
+            ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                     S_SWITCH_IN_L2_LKUP, 50,
                                     ds_cstr(&m), ds_cstr(actions),
                                     &op->nbsp->header_,
@@ -10881,7 +10885,7 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
 
         ds_clear(actions);
         ds_put_format(actions, action, op->json_key);
-        ovn_lflow_add_with_hint(lflows, op->od,
+        ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                 S_SWITCH_IN_L2_LKUP, 50,
                                 ds_cstr(match), ds_cstr(actions),
                                 &op->nbsp->header_,
@@ -10893,7 +10897,7 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
             ds_clear(match);
             ds_put_format(match, "eth.dst == %s", op->lsp_addrs[i].ea_s);
 
-            ovn_lflow_add_with_hint(lflows, op->od,
+            ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                     S_SWITCH_IN_L2_LKUP, 50,
                                     ds_cstr(match), ds_cstr(actions),
                                     &op->nbsp->header_,
@@ -10943,7 +10947,7 @@ build_lswitch_ip_unicast_lookup_for_nats(
 
             ds_clear(actions);
             ds_put_format(actions, action, op->json_key);
-            ovn_lflow_add_with_hint(lflows, op->od,
+            ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                     S_SWITCH_IN_L2_LKUP, 50,
                                     ds_cstr(match),
                                     ds_cstr(actions),
@@ -11453,9 +11457,9 @@ build_routing_policy_flow(struct lflow_table *lflows, struct ovn_datapath *od,
                       rp->chain_id, rule->match);
     }
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_POLICY, rule->priority,
-                            ds_cstr(&match), ds_cstr(&actions), stage_hint,
-                            lflow_ref);
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_POLICY,
+                            rule->priority, ds_cstr(&match), ds_cstr(&actions),
+                            stage_hint, lflow_ref);
     ds_destroy(&match);
     ds_destroy(&actions);
 }
@@ -11530,7 +11534,7 @@ build_ecmp_routing_policy_flows(struct lflow_table *lflows,
         ds_put_format(&match, REG_ECMP_GROUP_ID" == %"PRIu16" && "
                       REG_ECMP_MEMBER_ID" == %"PRIuSIZE,
                       ecmp_group_id, i + 1);
-        ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_POLICY_ECMP,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_POLICY_ECMP,
                                 100, ds_cstr(&match),
                                 ds_cstr(&actions), &rule->header_,
                                 lflow_ref);
@@ -11555,7 +11559,7 @@ build_ecmp_routing_policy_flows(struct lflow_table *lflows,
                       "; %s = 1; next;", REG_ECMP_GROUP_ID,
                       ecmp_group_id, REG_ECMP_MEMBER_ID);
     }
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_POLICY,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_POLICY,
                             rule->priority, rule->match,
                             ds_cstr(&actions), &rule->header_,
                             lflow_ref);
@@ -11618,7 +11622,7 @@ build_route_table_lflow(struct ovn_datapath *od, struct lflow_table *lflows,
     ds_put_format(&actions, "%s = %d; next;",
                   REG_ROUTE_TABLE_ID, rtb_id);
 
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING_PRE, 100,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING_PRE, 100,
                   ds_cstr(&match), ds_cstr(&actions), lflow_ref);
 
     ds_destroy(&match);
@@ -12211,12 +12215,12 @@ add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
                   route->is_src_route ? "dst" : "src",
                   cidr);
     free(cidr);
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DEFRAG, 100,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_DEFRAG, 100,
                              ds_cstr(&match), "ct_next;",
                              route->source_hint, lflow_ref);
 
     /* And packets that go out over an ECMP route need conntrack */
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DEFRAG, 100,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_DEFRAG, 100,
                              ds_cstr(route_match), "ct_next;",
                              route->source_hint, lflow_ref);
 
@@ -12232,7 +12236,7 @@ add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
             "ct_mark.ecmp_reply_port = %" PRId64 ";}; "
             "next;",
             out_port->sb->tunnel_key);
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_ECMP_STATEFUL, 100,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_ECMP_STATEFUL, 100,
                             ds_cstr(&match), ds_cstr(&actions),
                             route->source_hint,
                             lflow_ref);
@@ -12253,13 +12257,13 @@ add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
                   IN6_IS_ADDR_V4MAPPED(&route->prefix) ?
                       REG_SRC_IPV4 : REG_SRC_IPV6,
                   port_ip, out_port->json_key);
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_IP_ROUTING, 10300,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING, 10300,
                            ds_cstr(&match), ds_cstr(&actions),
                            route->source_hint,
                            lflow_ref);
 
     /* Egress reply traffic for symmetric ECMP routes skips router policies. */
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_POLICY, 65535,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_POLICY, 65535,
                             ds_cstr(&ecmp_reply), "next;",
                             route->source_hint,
                             lflow_ref);
@@ -12276,7 +12280,7 @@ add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
                          REG_ECMP_ETH_FULL " = ct_label;"
                          " eth.dst = " REG_ECMP_ETH_FIELD ";"
                          " pop(" REG_ECMP_ETH_FULL "); next;";
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_ARP_RESOLVE,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_ARP_RESOLVE,
                             200, ds_cstr(&ecmp_reply),
                             action, route->source_hint,
                             lflow_ref);
@@ -12355,7 +12359,7 @@ build_ecmp_route_flow(struct lflow_table *lflows,
         ds_put_format(&actions, "%"PRIu16"; next;", er->id);
     }
 
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, priority,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING, priority,
                   ds_cstr(&route_match), ds_cstr(&actions),
                   lflow_ref);
 
@@ -12395,8 +12399,8 @@ build_ecmp_route_flow(struct lflow_table *lflows,
                       route->out_port->lrp_networks.ea_s,
                       route->out_port->json_key,
                       is_ipv4_nexthop);
-        ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_IP_ROUTING_ECMP, 100,
-                                ds_cstr(&match), ds_cstr(&actions),
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING_ECMP,
+                                100, ds_cstr(&match), ds_cstr(&actions),
                                 route->source_hint, lflow_ref);
     }
     sset_destroy(&visited_ports);
@@ -12462,13 +12466,13 @@ add_route(struct lflow_table *lflows, const struct ovn_datapath *od,
         ds_put_format(&actions, "ip.ttl--; %s", ds_cstr(&common_actions));
     }
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_IP_ROUTING,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING,
                             priority, ds_cstr(&match),
                             ds_cstr(&actions), stage_hint,
                             lflow_ref);
     if (op && bfd_is_port_running(bfd_ports, op->key)) {
         ds_put_format(&match, " && udp.dst == 3784");
-        ovn_lflow_add_with_hint(lflows, op->od,
+        ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                 S_ROUTER_IN_IP_ROUTING,
                                 priority + 1, ds_cstr(&match),
                                 ds_cstr(&common_actions),\
@@ -12623,10 +12627,10 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
                       dgp->cr_port->json_key);
     }
 
-    ovn_lflow_add_with_hint__(ctx->lflows, od, S_ROUTER_IN_DNAT, ctx->prio,
-                              ds_cstr(ctx->new_match), ds_cstr(&dnat_action),
-                              NULL, meter, &ctx->lb->nlb->header_,
-                              lflow_ref);
+    ovn_lflow_add_with_hint__(ctx->lflows, od->sdp, S_ROUTER_IN_DNAT,
+                              ctx->prio, ds_cstr(ctx->new_match),
+                              ds_cstr(&dnat_action), NULL, meter,
+                              &ctx->lb->nlb->header_, lflow_ref);
 
     ds_truncate(ctx->new_match, new_match_len);
 
@@ -12668,7 +12672,7 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
     ds_put_format(ctx->gw_redir_action, "outport = %s; next;",
                   dgp->cr_port->json_key);
 
-    ovn_lflow_add_with_hint(ctx->lflows, od, S_ROUTER_IN_GW_REDIRECT,
+    ovn_lflow_add_with_hint(ctx->lflows, od->sdp, S_ROUTER_IN_GW_REDIRECT,
                             200, ds_cstr(ctx->undnat_match),
                             ds_cstr(ctx->gw_redir_action),
                             &ctx->lb->nlb->header_,
@@ -12683,7 +12687,7 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
     if (stateless_nat) {
         ds_put_format(ctx->undnat_match, " && %s", ctx->lb->proto);
     }
-    ovn_lflow_add_with_hint(ctx->lflows, od, S_ROUTER_OUT_UNDNAT, 120,
+    ovn_lflow_add_with_hint(ctx->lflows, od->sdp, S_ROUTER_OUT_UNDNAT, 120,
                             ds_cstr(ctx->undnat_match),
                             ds_cstr(&undnat_action), &ctx->lb->nlb->header_,
                             lflow_ref);
@@ -12714,7 +12718,7 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
                           "ip6" : "ip4",
                           ctx->lb_vip->vip_str);
         }
-        ovn_lflow_add_with_hint(ctx->lflows, od, S_ROUTER_OUT_SNAT, 160,
+        ovn_lflow_add_with_hint(ctx->lflows, od->sdp, S_ROUTER_OUT_SNAT, 160,
                                 ds_cstr(ctx->undnat_match),
                                 ds_cstr(&snat_action), &ctx->lb->nlb->header_,
                                 lflow_ref);
@@ -12755,7 +12759,7 @@ build_gw_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
                 continue;
             }
             bitmap_set0(dp_non_meter, index);
-            ovn_lflow_add_with_hint__(ctx->lflows, od, S_ROUTER_IN_DNAT,
+            ovn_lflow_add_with_hint__(ctx->lflows, od->sdp, S_ROUTER_IN_DNAT,
                     ctx->prio, ds_cstr(ctx->new_match), ctx->new_action[type],
                     NULL, meter, &ctx->lb->nlb->header_, lflow_ref);
         }
@@ -12931,7 +12935,7 @@ build_lrouter_nat_flows_for_lb(
              * unsnat stage, the conntrack flags are not set properly, and
              * it doesn't hit the established state flows in
              * S_ROUTER_IN_DNAT stage. */
-            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_UNSNAT, 120,
+            ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_UNSNAT, 120,
                                     ds_cstr(&unsnat_match), "next;",
                                     &lb->nlb->header_, lb_dps->lflow_ref);
         }
@@ -12984,7 +12988,7 @@ build_lswitch_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
             struct ovn_datapath *od = sparse_array_get(&ls_datapaths->dps,
                                                        index);
 
-            ovn_lflow_add_with_hint__(lflows, od,
+            ovn_lflow_add_with_hint__(lflows, od->sdp,
                                       S_SWITCH_IN_PRE_LB, 130, ds_cstr(match),
                                       ds_cstr(action),
                                       NULL,
@@ -13067,7 +13071,7 @@ build_lrouter_allow_vip_traffic_template(struct lflow_table *lflows,
         ds_put_format(&match, "ip%d.dst == %s",
                       lb_vip->address_family == AF_INET ? 4 : 6,
                       lb_vip->vip_str);
-        ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_IP_INPUT, 100,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, 100,
                                 ds_cstr(&match), "next;",
                                 &lb->nlb->header_, lb_dps->lflow_ref);
     }
@@ -13109,7 +13113,7 @@ build_lrouter_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
         DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_lr_map) {
             struct ovn_datapath *od = sparse_array_get(&lr_datapaths->dps,
                                                        index);
-            ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_DNAT,
+            ovn_lflow_add_with_hint__(lflows, od->sdp, S_ROUTER_IN_DNAT,
                                       130, ds_cstr(match), ds_cstr(action),
                                       NULL,
                                       copp_meter_get(COPP_EVENT_ELB,
@@ -13123,7 +13127,7 @@ build_lrouter_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
         DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_lr_map) {
             struct ovn_datapath *od = sparse_array_get(&lr_datapaths->dps,
                                                        index);
-            ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 120,
+            ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_SNAT, 120,
                           "flags.skip_snat_for_lb == 1 && ip", "next;",
                           lb_dps->lflow_ref);
         }
@@ -13309,7 +13313,7 @@ lrouter_nat_add_ext_ip_match(const struct ovn_datapath *od,
                       is_src ? "src" : "dst",
                       exempted_ext_ips->name);
 
-        ovn_lflow_add_with_hint(lflows, od, stage, priority,
+        ovn_lflow_add_with_hint(lflows, od->sdp, stage, priority,
                                 ds_cstr(&match_exempt), "next;",
                                 &nat->header_, lflow_ref);
         ds_destroy(&match_exempt);
@@ -13357,7 +13361,7 @@ build_lrouter_arp_flow(const struct ovn_datapath *od, struct ovn_port *op,
                       eth_addr);
     }
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_IP_INPUT, priority,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, priority,
                             ds_cstr(&match), ds_cstr(&actions), hint,
                             lflow_ref);
 
@@ -13401,9 +13405,9 @@ build_lrouter_nd_flow(const struct ovn_datapath *od, struct ovn_port *op,
 
     if (drop) {
         ds_put_cstr(&actions, debug_drop_action());
-        ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_IP_INPUT, priority,
-                                ds_cstr(&match), ds_cstr(&actions), hint,
-                                lflow_ref);
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_IP_INPUT,
+                                priority, ds_cstr(&match), ds_cstr(&actions),
+                                hint, lflow_ref);
     } else {
         ds_put_format(&actions,
                       "%s { "
@@ -13417,10 +13421,11 @@ build_lrouter_nd_flow(const struct ovn_datapath *od, struct ovn_port *op,
                       action,
                       eth_addr,
                       eth_addr);
-        ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_IP_INPUT, priority,
-                                  ds_cstr(&match), ds_cstr(&actions), NULL,
-                                  copp_meter_get(COPP_ND_NA, od->nbr->copp,
-                                                 meter_groups),
+        ovn_lflow_add_with_hint__(lflows, od->sdp, S_ROUTER_IN_IP_INPUT,
+                                  priority, ds_cstr(&match), ds_cstr(&actions),
+                                  NULL, copp_meter_get(COPP_ND_NA,
+                                                       od->nbr->copp,
+                                                       meter_groups),
                                   hint, lflow_ref);
     }
 
@@ -13570,7 +13575,7 @@ build_lrouter_drop_own_dest(struct ovn_port *op,
             ds_chomp(&match_ips, ',');
 
             char *match = xasprintf("ip4.dst == {%s}", ds_cstr(&match_ips));
-            ovn_lflow_add_with_hint(lflows, op->od, stage, priority,
+            ovn_lflow_add_with_hint(lflows, op->od->sdp, stage, priority,
                                     match, debug_drop_action(),
                                     &op->nbrp->header_,
                                     lflow_ref);
@@ -13601,7 +13606,7 @@ build_lrouter_drop_own_dest(struct ovn_port *op,
             ds_chomp(&match_ips, ',');
 
             char *match = xasprintf("ip6.dst == {%s}", ds_cstr(&match_ips));
-            ovn_lflow_add_with_hint(lflows, op->od, stage, priority,
+            ovn_lflow_add_with_hint(lflows, op->od->sdp, stage, priority,
                                     match, debug_drop_action(),
                                     &op->nbrp->header_,
                                     lflow_ref);
@@ -13622,7 +13627,7 @@ build_lrouter_force_snat_flows(struct lflow_table *lflows,
     struct ds actions = DS_EMPTY_INITIALIZER;
     ds_put_format(&match, "ip%s && ip%s.dst == %s",
                   ip_version, ip_version, ip_addr);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_UNSNAT, 110,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_UNSNAT, 110,
                   ds_cstr(&match), "ct_snat;", lflow_ref);
 
     /* Higher priority rules to force SNAT with the IP addresses
@@ -13632,7 +13637,7 @@ build_lrouter_force_snat_flows(struct lflow_table *lflows,
     ds_put_format(&match, "flags.force_snat_for_%s == 1 && ip%s",
                   context, ip_version);
     ds_put_format(&actions, "ct_snat(%s);", ip_addr);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 100,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_SNAT, 100,
                   ds_cstr(&match), ds_cstr(&actions),
                   lflow_ref);
 
@@ -13665,7 +13670,7 @@ build_lrouter_icmp_packet_toobig_admin_flows(
     ds_clear(actions);
     ds_put_format(actions, "outport <-> inport; inport = %s; next;",
                   op->json_key);
-    ovn_lflow_add(lflows, op->od, S_ROUTER_IN_ADMISSION, 120,
+    ovn_lflow_add(lflows, op->od->sdp, S_ROUTER_IN_ADMISSION, 120,
                   ds_cstr(match), ds_cstr(actions), lflow_ref);
 }
 
@@ -13686,7 +13691,7 @@ build_lswitch_icmp_packet_toobig_admin_flows(
                           " !is_chassis_resident(%s) && flags.tunnel_rx == 1",
                           op->lsp_addrs[i].ea_s, op->json_key,
                           op->json_key);
-            ovn_lflow_add(lflows, op->od, S_SWITCH_IN_CHECK_PORT_SEC, 110,
+            ovn_lflow_add(lflows, op->od->sdp, S_SWITCH_IN_CHECK_PORT_SEC, 110,
                           ds_cstr(match), "outport <-> inport; next;",
                           op->lflow_ref);
         }
@@ -13705,7 +13710,7 @@ build_lswitch_icmp_packet_toobig_admin_flows(
                       " (ip6 && icmp6.type == 2 && icmp6.code == 0)) && "
                       "eth.src == %s && outport == %s && flags.tunnel_rx == 1",
                       peer->nbrp->mac, op->json_key);
-        ovn_lflow_add(lflows, op->od, S_SWITCH_IN_CHECK_PORT_SEC, 120,
+        ovn_lflow_add(lflows, op->od->sdp, S_SWITCH_IN_CHECK_PORT_SEC, 120,
                       ds_cstr(match), "outport <-> inport; next;",
                       op->lflow_ref);
     } else {
@@ -13718,7 +13723,7 @@ build_lswitch_icmp_packet_toobig_admin_flows(
         ds_put_format(actions,
                       "outport <-> inport; next(pipeline=ingress,table=%d);",
                       ovn_stage_get_table(S_SWITCH_IN_L2_LKUP));
-        ovn_lflow_add(lflows, op->od, S_SWITCH_IN_CHECK_PORT_SEC, 120,
+        ovn_lflow_add(lflows, op->od->sdp, S_SWITCH_IN_CHECK_PORT_SEC, 120,
                       ds_cstr(match), ds_cstr(actions), op->lflow_ref);
     }
 }
@@ -13743,7 +13748,7 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
 
         ds_put_format(match, "inport == %s && ip4.dst == %s",
                       op->json_key, op->lrp_networks.ipv4_addrs[i].addr_s);
-        ovn_lflow_add(lflows, op->od, S_ROUTER_IN_UNSNAT, 110,
+        ovn_lflow_add(lflows, op->od->sdp, S_ROUTER_IN_UNSNAT, 110,
                       ds_cstr(match), "ct_snat;", lflow_ref);
         ds_clear(match);
 
@@ -13770,7 +13775,7 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
                       "outport == %s", network_id, op->json_key);
         ds_put_format(actions, "ct_snat(%s);",
                       op->lrp_networks.ipv4_addrs[network_id].addr_s);
-        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 110,
+        ovn_lflow_add(lflows, op->od->sdp, S_ROUTER_OUT_SNAT, 110,
                       ds_cstr(match), ds_cstr(actions),
                       lflow_ref);
     }
@@ -13783,7 +13788,7 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
 
         ds_put_format(match, "inport == %s && ip6.dst == %s",
                       op->json_key, op->lrp_networks.ipv6_addrs[i].addr_s);
-        ovn_lflow_add(lflows, op->od, S_ROUTER_IN_UNSNAT, 110,
+        ovn_lflow_add(lflows, op->od->sdp, S_ROUTER_IN_UNSNAT, 110,
                       ds_cstr(match), "ct_snat;", lflow_ref);
         ds_clear(match);
 
@@ -13810,7 +13815,7 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
                       "outport == %s", network_id, op->json_key);
         ds_put_format(actions, "ct_snat(%s);",
                       op->lrp_networks.ipv6_addrs[network_id].addr_s);
-        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 110,
+        ovn_lflow_add(lflows, op->od->sdp, S_ROUTER_OUT_SNAT, 110,
                       ds_cstr(match), ds_cstr(actions),
                       lflow_ref);
     }
@@ -13824,7 +13829,7 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
                       "outport == %s", op->json_key);
         ds_put_format(actions, "ct_snat(%s);",
                       op->lrp_networks.ipv4_addrs[0].addr_s);
-        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 105,
+        ovn_lflow_add(lflows, op->od->sdp, S_ROUTER_OUT_SNAT, 105,
                       ds_cstr(match), ds_cstr(actions), lflow_ref);
     }
 
@@ -13837,7 +13842,7 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
                       "outport == %s", op->json_key);
         ds_put_format(actions, "ct_snat(%s);",
                       op->lrp_networks.ipv6_addrs[0].addr_s);
-        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 105,
+        ovn_lflow_add(lflows, op->od->sdp, S_ROUTER_OUT_SNAT, 105,
                       ds_cstr(match), ds_cstr(actions), lflow_ref);
     }
 }
@@ -13859,17 +13864,18 @@ build_lrouter_bfd_flows(struct lflow_table *lflows, struct ovn_port *op,
         op_put_v4_networks(&ip_list, op, false);
         ds_put_format(&match, "ip4.src == %s && udp.dst == 3784",
                       ds_cstr(&ip_list));
-        ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT, 110,
+        ovn_lflow_add_with_hint(lflows, op->od->sdp, S_ROUTER_IN_IP_INPUT, 110,
                                 ds_cstr(&match), "next; ",
                                 &op->nbrp->header_,
                                 lflow_ref);
         ds_clear(&match);
         ds_put_format(&match, "ip4.dst == %s && udp.dst == 3784",
                       ds_cstr(&ip_list));
-        ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT, 110,
-                                  ds_cstr(&match), "handle_bfd_msg(); ", NULL,
-                                  copp_meter_get(COPP_BFD, op->od->nbr->copp,
-                                                 meter_groups),
+        ovn_lflow_add_with_hint__(lflows, op->od->sdp, S_ROUTER_IN_IP_INPUT,
+                                  110, ds_cstr(&match), "handle_bfd_msg(); ",
+                                  NULL, copp_meter_get(COPP_BFD,
+                                                       op->od->nbr->copp,
+                                                       meter_groups),
                                   &op->nbrp->header_,
                                   lflow_ref);
     }
@@ -13880,17 +13886,18 @@ build_lrouter_bfd_flows(struct lflow_table *lflows, struct ovn_port *op,
         op_put_v6_networks(&ip_list, op);
         ds_put_format(&match, "ip6.src == %s && udp.dst == 3784",
                       ds_cstr(&ip_list));
-        ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT, 110,
+        ovn_lflow_add_with_hint(lflows, op->od->sdp, S_ROUTER_IN_IP_INPUT, 110,
                                 ds_cstr(&match), "next; ",
                                 &op->nbrp->header_,
                                 lflow_ref);
         ds_clear(&match);
         ds_put_format(&match, "ip6.dst == %s && udp.dst == 3784",
                       ds_cstr(&ip_list));
-        ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT, 110,
-                                  ds_cstr(&match), "handle_bfd_msg(); ", NULL,
-                                  copp_meter_get(COPP_BFD, op->od->nbr->copp,
-                                                 meter_groups),
+        ovn_lflow_add_with_hint__(lflows, op->od->sdp, S_ROUTER_IN_IP_INPUT,
+                                  110, ds_cstr(&match), "handle_bfd_msg(); ",
+                                  NULL, copp_meter_get(COPP_BFD,
+                                                       op->od->nbr->copp,
+                                                       meter_groups),
                                   &op->nbrp->header_,
                                   lflow_ref);
     }
@@ -13910,19 +13917,19 @@ build_adm_ctrl_flows_for_lrouter(
     ovs_assert(od->nbr);
 
     /* Default action for recirculated ICMP error 'packet too big'. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_ADMISSION, 110,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_ADMISSION, 110,
                   "((ip4 && icmp4.type == 3 && icmp4.code == 4) ||"
                   " (ip6 && icmp6.type == 2 && icmp6.code == 0)) &&"
                   " flags.tunnel_rx == 1", debug_drop_action(), lflow_ref);
 
     /* Logical VLANs not supported.
      * Broadcast/multicast source address is invalid. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_ADMISSION, 100,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_ADMISSION, 100,
                   "vlan.present || eth.src[40]", debug_drop_action(),
                   lflow_ref);
 
     /* Default action for L2 security is to drop. */
-    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_ADMISSION,
+    ovn_lflow_add_default_drop(lflows, od->sdp, S_ROUTER_IN_ADMISSION,
                                lflow_ref);
 }
 
@@ -13978,7 +13985,7 @@ build_gateway_mtu_flow(struct lflow_table *lflows, struct ovn_port *op,
     }
 
     ds_put_format_valist(actions, extra_actions_fmt, extra_actions_args);
-    ovn_lflow_add_with_hint(lflows, op->od, stage, prio_low,
+    ovn_lflow_add_with_hint(lflows, op->od->sdp, stage, prio_low,
                             ds_cstr(match), ds_cstr(actions),
                             hint, lflow_ref);
 
@@ -13996,7 +14003,7 @@ build_gateway_mtu_flow(struct lflow_table *lflows, struct ovn_port *op,
 
         ds_put_char(match, ')');
 
-        ovn_lflow_add_with_hint(lflows, op->od, stage, prio_high,
+        ovn_lflow_add_with_hint(lflows, op->od->sdp, stage, prio_high,
                                 ds_cstr(match), ds_cstr(actions),
                                 hint, lflow_ref);
     }
@@ -14132,7 +14139,7 @@ build_neigh_learning_flows_for_lrouter(
                   " = lookup_arp(inport, arp.spa, arp.sha); %s%snext;",
                   learn_from_arp_request ? "" :
                   REGBIT_LOOKUP_NEIGHBOR_IP_RESULT" = 1; ", flood);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_LOOKUP_NEIGHBOR, 100,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_LOOKUP_NEIGHBOR, 100,
                   "arp.op == 2", ds_cstr(actions), lflow_ref);
 
     ds_clear(actions);
@@ -14140,7 +14147,7 @@ build_neigh_learning_flows_for_lrouter(
                   " = lookup_nd(inport, nd.target, nd.tll); %s%snext;",
                   learn_from_arp_request ? "" :
                   REGBIT_LOOKUP_NEIGHBOR_IP_RESULT" = 1; ", flood);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_LOOKUP_NEIGHBOR, 100, "nd_na",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_LOOKUP_NEIGHBOR, 100, "nd_na",
                   ds_cstr(actions), lflow_ref);
 
     if (!learn_from_arp_request) {
@@ -14157,7 +14164,7 @@ build_neigh_learning_flows_for_lrouter(
                                REGBIT_LOOKUP_NEIGHBOR_IP_RESULT
                                " = lookup_nd_ip(inport, nd.target); %snext;",
                                flood);
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_LOOKUP_NEIGHBOR, 110,
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_LOOKUP_NEIGHBOR, 110,
                       "nd_na && ip6.src == fe80::/10 && ip6.dst == ff00::/8",
                       ds_cstr(actions), lflow_ref);
     }
@@ -14168,12 +14175,12 @@ build_neigh_learning_flows_for_lrouter(
                   learn_from_arp_request ? "" :
                   REGBIT_LOOKUP_NEIGHBOR_IP_RESULT
                   " = lookup_nd_ip(inport, ip6.src); ");
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_LOOKUP_NEIGHBOR, 100, "nd_ns",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_LOOKUP_NEIGHBOR, 100, "nd_ns",
                   ds_cstr(actions), lflow_ref);
 
     /* For other packet types, we can skip neighbor learning.
      * So set REGBIT_LOOKUP_NEIGHBOR_RESULT to 1. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_LOOKUP_NEIGHBOR, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_LOOKUP_NEIGHBOR, 0, "1",
                   REGBIT_LOOKUP_NEIGHBOR_RESULT" = 1; next;",
                   lflow_ref);
 
@@ -14183,40 +14190,40 @@ build_neigh_learning_flows_for_lrouter(
     ds_put_format(match, REGBIT_LOOKUP_NEIGHBOR_RESULT" == 1%s",
                   learn_from_arp_request ? "" :
                   " || "REGBIT_LOOKUP_NEIGHBOR_IP_RESULT" == 0");
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR, 100,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_LEARN_NEIGHBOR, 100,
                   ds_cstr(match), "mac_cache_use; next;",
                   lflow_ref);
 
-    ovn_lflow_metered(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR, 90,
+    ovn_lflow_metered(lflows, od->sdp, S_ROUTER_IN_LEARN_NEIGHBOR, 90,
                       "arp", "put_arp(inport, arp.spa, arp.sha); next;",
                       copp_meter_get(COPP_ARP, od->nbr->copp,
                                      meter_groups),
                       lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR, 95,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_LEARN_NEIGHBOR, 95,
                   "nd_ns && (ip6.src == 0 || nd.sll == 0)", "next;",
                   lflow_ref);
 
-    ovn_lflow_metered(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR, 95,
+    ovn_lflow_metered(lflows, od->sdp, S_ROUTER_IN_LEARN_NEIGHBOR, 95,
                       "nd_na && nd.tll == 0",
                       "put_nd(inport, nd.target, eth.src); next;",
                       copp_meter_get(COPP_ND_NA, od->nbr->copp,
                                      meter_groups),
                       lflow_ref);
 
-    ovn_lflow_metered(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR, 90,
+    ovn_lflow_metered(lflows, od->sdp, S_ROUTER_IN_LEARN_NEIGHBOR, 90,
                       "nd_na", "put_nd(inport, nd.target, nd.tll); next;",
                       copp_meter_get(COPP_ND_NA, od->nbr->copp,
                                      meter_groups),
                       lflow_ref);
 
-    ovn_lflow_metered(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR, 90,
+    ovn_lflow_metered(lflows, od->sdp, S_ROUTER_IN_LEARN_NEIGHBOR, 90,
                       "nd_ns", "put_nd(inport, ip6.src, nd.sll); next;",
                       copp_meter_get(COPP_ND_NS, od->nbr->copp,
                                      meter_groups),
                       lflow_ref);
 
-    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR,
+    ovn_lflow_add_default_drop(lflows, od->sdp, S_ROUTER_IN_LEARN_NEIGHBOR,
                                lflow_ref);
 }
 
@@ -14251,7 +14258,7 @@ build_neigh_learning_flows_for_lrouter_port(
                               " = lookup_arp(inport, arp.spa, arp.sha); "
                               REGBIT_LOOKUP_NEIGHBOR_IP_RESULT" = 1;"
                               " next;";
-            ovn_lflow_add_with_hint(lflows, op->od,
+            ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                     S_ROUTER_IN_LOOKUP_NEIGHBOR, 110,
                                     ds_cstr(match), actions_s,
                                     &op->nbrp->header_,
@@ -14269,7 +14276,7 @@ build_neigh_learning_flows_for_lrouter_port(
                       learn_from_arp_request ? "" :
                       REGBIT_LOOKUP_NEIGHBOR_IP_RESULT
                       " = lookup_arp_ip(inport, arp.spa); ");
-        ovn_lflow_add_with_hint(lflows, op->od,
+        ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                 S_ROUTER_IN_LOOKUP_NEIGHBOR, 100,
                                 ds_cstr(match), ds_cstr(actions),
                                 &op->nbrp->header_,
@@ -14282,7 +14289,7 @@ build_neigh_learning_flows_for_lrouter_port(
                              "eth.mcast && "
                              "!is_chassis_resident(%s)", op->json_key,
                              op->cr_port->json_key);
-        ovn_lflow_add_with_hint(lflows, op->od,
+        ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                 S_ROUTER_IN_LOOKUP_NEIGHBOR, 120,
                                 ds_cstr(match),
                                 REGBIT_LOOKUP_NEIGHBOR_RESULT" = 1; next;",
@@ -14380,7 +14387,8 @@ build_ND_RA_flows_for_lrouter_port(
 
     if (add_rs_response_flow) {
         ds_put_cstr(actions, "); next;");
-        ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_ND_RA_OPTIONS,
+        ovn_lflow_add_with_hint__(lflows, op->od->sdp,
+                                  S_ROUTER_IN_ND_RA_OPTIONS,
                                   50, ds_cstr(match), ds_cstr(actions), NULL,
                                   copp_meter_get(COPP_ND_RA_OPTS,
                                                  op->od->nbr->copp,
@@ -14402,7 +14410,7 @@ build_ND_RA_flows_for_lrouter_port(
                       "outport = inport; flags.loopback = 1; "
                       "output;",
                       op->lrp_networks.ea_s, ip6_str);
-        ovn_lflow_add_with_hint(lflows, op->od,
+        ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                 S_ROUTER_IN_ND_RA_RESPONSE, 50,
                                 ds_cstr(match), ds_cstr(actions),
                                 &op->nbrp->header_,
@@ -14418,9 +14426,9 @@ build_ND_RA_flows_for_lrouter(struct ovn_datapath *od,
                               struct lflow_ref *lflow_ref)
 {
     ovs_assert(od->nbr);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_ND_RA_OPTIONS, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_ND_RA_OPTIONS, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_ND_RA_RESPONSE, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_ND_RA_RESPONSE, 0, "1", "next;",
                   lflow_ref);
 }
 
@@ -14432,7 +14440,7 @@ build_ip_routing_pre_flows_for_lrouter(struct ovn_datapath *od,
                                        struct lflow_ref *lflow_ref)
 {
     ovs_assert(od->nbr);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING_PRE, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING_PRE, 0, "1",
                   REG_ROUTE_TABLE_ID" = 0; next;", lflow_ref);
 }
 
@@ -14441,11 +14449,11 @@ build_default_route_flows_for_lrouter(
         struct ovn_datapath *od, struct lflow_table *lflows,
         struct simap *route_tables)
 {
-    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_IP_ROUTING_ECMP,
+    ovn_lflow_add_default_drop(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING_ECMP,
                                od->datapath_lflows);
-    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_IP_ROUTING,
+    ovn_lflow_add_default_drop(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING,
                                od->datapath_lflows);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING_ECMP, 150,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING_ECMP, 150,
                   REG_ECMP_GROUP_ID" == 0", "next;",
                   od->datapath_lflows);
 
@@ -14535,8 +14543,8 @@ build_lrouter_ip_mcast_igmp_mld(struct ovn_igmp_group *igmp_group,
     }
     ds_put_format(actions, "outport = \"%s\"; ip.ttl--; next;",
                   igmp_group->mcgroup.name);
-    ovn_lflow_add(lflows, igmp_group->datapath, S_ROUTER_IN_IP_ROUTING, 10500,
-                  ds_cstr(match), ds_cstr(actions),
+    ovn_lflow_add(lflows, igmp_group->datapath->sdp, S_ROUTER_IN_IP_ROUTING,
+                  10500, ds_cstr(match), ds_cstr(actions),
                   lflow_ref);
 }
 
@@ -14554,7 +14562,7 @@ build_mcast_lookup_flows_for_lrouter(struct ovn_datapath *od,
     /* Drop IPv6 multicast traffic that shouldn't be forwarded,
      * i.e., router solicitation and router advertisement.
      */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 10550,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING, 10550,
                   "nd_rs || nd_ra", debug_drop_action(),
                   lflow_ref);
     if (!od->mcast_info.rtr.relay) {
@@ -14576,33 +14584,33 @@ build_mcast_lookup_flows_for_lrouter(struct ovn_datapath *od,
             ds_clear(match);
             ds_put_format(match, "eth.src == %s && igmp",
                           op->lrp_networks.ea_s);
-            ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 10550,
+            ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING, 10550,
                           ds_cstr(match), debug_drop_action(),
                           lflow_ref);
 
             ds_clear(match);
             ds_put_format(match, "eth.src == %s && (mldv1 || mldv2)",
                           op->lrp_networks.ea_s);
-            ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 10550,
+            ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING, 10550,
                           ds_cstr(match), debug_drop_action(),
                           lflow_ref);
         }
 
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 10460,
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING, 10460,
                       "igmp",
                       "clone { "
                             "outport = \""MC_STATIC"\"; "
                             "next; "
                       "};",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 10460,
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING, 10460,
                       "mldv1 || mldv2",
                       "clone { "
                             "outport = \""MC_STATIC"\"; "
                             "next; "
                       "};",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 10450,
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING, 10450,
                       "ip4.mcast || ip6.mcast",
                       "clone { "
                             "outport = \""MC_STATIC"\"; "
@@ -14611,7 +14619,7 @@ build_mcast_lookup_flows_for_lrouter(struct ovn_datapath *od,
                       "};",
                       lflow_ref);
     } else {
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 10450,
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_ROUTING, 10450,
                       "ip4.mcast || ip6.mcast", debug_drop_action(),
                       lflow_ref);
     }
@@ -14839,13 +14847,13 @@ build_ingress_policy_flows_for_lrouter(
     ovs_assert(od->nbr);
     /* This is a catch-all rule. It has the lowest priority (0)
      * does a match-all("1") and pass-through (next) */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_POLICY, 0, "1",
                   REG_ECMP_GROUP_ID" = 0; next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY_ECMP, 150,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_POLICY_ECMP, 150,
                   REG_ECMP_GROUP_ID" == 0", "next;",
                   lflow_ref);
-    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_POLICY_ECMP,
+    ovn_lflow_add_default_drop(lflows, od->sdp, S_ROUTER_IN_POLICY_ECMP,
                                lflow_ref);
 
     /* Convert routing policies to flows. */
@@ -14877,21 +14885,21 @@ build_arp_resolve_flows_for_lrouter(
     ovs_assert(od->nbr);
     /* Multicast packets already have the outport set so just advance to
      * next table (priority 500). */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_ARP_RESOLVE, 500,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_ARP_RESOLVE, 500,
                   "ip4.mcast || ip6.mcast", "next;",
                   lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_ARP_RESOLVE, 1,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_ARP_RESOLVE, 1,
                   REGBIT_NEXTHOP_IS_IPV4 " == 1",
                   "get_arp(outport, " REG_NEXT_HOP_IPV4 "); next;",
                   lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_ARP_RESOLVE, 1,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_ARP_RESOLVE, 1,
                   REGBIT_NEXTHOP_IS_IPV4 " == 0",
                   "get_nd(outport, " REG_NEXT_HOP_IPV6 "); next;",
                   lflow_ref);
 
-    ovn_lflow_add_default_drop(lflows, od, S_ROUTER_IN_ARP_RESOLVE,
+    ovn_lflow_add_default_drop(lflows, od->sdp, S_ROUTER_IN_ARP_RESOLVE,
                                lflow_ref);
 }
 
@@ -14932,7 +14940,7 @@ build_arp_resolve_flows_for_lrp(struct ovn_port *op,
             ds_clear(actions);
             ds_put_format(actions, "eth.dst = %s; next;",
                           op->lrp_networks.ea_s);
-            ovn_lflow_add_with_hint(lflows, op->peer->od,
+            ovn_lflow_add_with_hint(lflows, op->peer->od->sdp,
                                     S_ROUTER_IN_ARP_RESOLVE, 100,
                                     ds_cstr(match), ds_cstr(actions),
                                     &op->nbrp->header_,
@@ -14949,7 +14957,7 @@ build_arp_resolve_flows_for_lrp(struct ovn_port *op,
             ds_clear(actions);
             ds_put_format(actions, "eth.dst = %s; next;",
                           op->lrp_networks.ea_s);
-            ovn_lflow_add_with_hint(lflows, op->peer->od,
+            ovn_lflow_add_with_hint(lflows, op->peer->od->sdp,
                                     S_ROUTER_IN_ARP_RESOLVE, 100,
                                     ds_cstr(match), ds_cstr(actions),
                                     &op->nbrp->header_,
@@ -14975,7 +14983,7 @@ build_arp_resolve_flows_for_lrp(struct ovn_port *op,
             ds_put_format(actions, "eth.dst = %s; next;",
                           op->lrp_networks.ea_s);
 
-            ovn_lflow_add_with_hint(lflows, op->od,
+            ovn_lflow_add_with_hint(lflows, op->od->sdp,
                                     S_ROUTER_IN_ARP_RESOLVE, 50,
                                     ds_cstr(match), ds_cstr(actions),
                                     &op->nbrp->header_,
@@ -15009,7 +15017,7 @@ build_routing_protocols_redirect_rule__(
     ds_clear(match);
     ds_put_format(match, "ip%d.dst == %s && %s.dst == %d", ip_ver, s_addr,
                   proto, protocol_port);
-    ovn_lflow_add(lflows, ls_peer->od, S_SWITCH_IN_L2_LKUP, 100,
+    ovn_lflow_add(lflows, ls_peer->od->sdp, S_SWITCH_IN_L2_LKUP, 100,
                   ds_cstr(match),
                   ds_cstr(actions),
                   lflow_ref);
@@ -15019,7 +15027,7 @@ build_routing_protocols_redirect_rule__(
     ds_clear(match);
     ds_put_format(match, "ip%d.dst == %s && %s.src == %d", ip_ver, s_addr,
                   proto, protocol_port);
-    ovn_lflow_add(lflows, ls_peer->od, S_SWITCH_IN_L2_LKUP, 100,
+    ovn_lflow_add(lflows, ls_peer->od->sdp, S_SWITCH_IN_L2_LKUP, 100,
                   ds_cstr(match),
                   ds_cstr(actions),
                   lflow_ref);
@@ -15058,7 +15066,7 @@ apply_routing_protocols_redirect__(
          * its IP.*/
         ds_clear(match);
         ds_put_format(match, "ip6.dst == %s && nd_na", s_addr);
-        ovn_lflow_add(lflows, ls_peer->od, S_SWITCH_IN_L2_LKUP, 100,
+        ovn_lflow_add(lflows, ls_peer->od->sdp, S_SWITCH_IN_L2_LKUP, 100,
                       ds_cstr(match),
                       ds_cstr(actions),
                       lflow_ref);
@@ -15067,7 +15075,7 @@ apply_routing_protocols_redirect__(
          * its IP */
         ds_clear(match);
         ds_put_format(match, "arp.op == 2 && arp.tpa == %s", s_addr);
-        ovn_lflow_add(lflows, ls_peer->od, S_SWITCH_IN_L2_LKUP, 100,
+        ovn_lflow_add(lflows, ls_peer->od->sdp, S_SWITCH_IN_L2_LKUP, 100,
                       ds_cstr(match),
                       ds_cstr(actions),
                       lflow_ref);
@@ -15196,7 +15204,7 @@ build_lrouter_routing_protocol_redirect(
     ds_clear(match);
     ds_put_format(match, "inport == \"%s\" && arp.op == 2",
                   redirect_port_name);
-    ovn_lflow_add(lflows, op->peer->od, S_SWITCH_IN_CHECK_PORT_SEC, 80,
+    ovn_lflow_add(lflows, op->peer->od->sdp, S_SWITCH_IN_CHECK_PORT_SEC, 80,
                   ds_cstr(match),
                   REGBIT_PORT_SEC_DROP " = 1; next;",
                   lflow_ref);
@@ -15204,7 +15212,7 @@ build_lrouter_routing_protocol_redirect(
     ds_clear(match);
     ds_put_format(match, "inport == \"%s\" && nd_na",
                   redirect_port_name);
-    ovn_lflow_add(lflows, op->peer->od, S_SWITCH_IN_CHECK_PORT_SEC, 80,
+    ovn_lflow_add(lflows, op->peer->od->sdp, S_SWITCH_IN_CHECK_PORT_SEC, 80,
                   ds_cstr(match),
                   REGBIT_PORT_SEC_DROP " = 1; next;",
                   lflow_ref);
@@ -15212,7 +15220,7 @@ build_lrouter_routing_protocol_redirect(
     ds_clear(match);
     ds_put_format(match, "inport == \"%s\" && nd_ra",
                   redirect_port_name);
-    ovn_lflow_add(lflows, op->peer->od, S_SWITCH_IN_CHECK_PORT_SEC, 80,
+    ovn_lflow_add(lflows, op->peer->od->sdp, S_SWITCH_IN_CHECK_PORT_SEC, 80,
                   ds_cstr(match),
                   REGBIT_PORT_SEC_DROP " = 1; next;",
                   lflow_ref);
@@ -15272,7 +15280,7 @@ build_arp_resolve_flows_for_lsp(
 
                     ds_clear(actions);
                     ds_put_format(actions, "eth.dst = %s; next;", ea_s);
-                    ovn_lflow_add_with_hint(lflows, peer->od,
+                    ovn_lflow_add_with_hint(lflows, peer->od->sdp,
                                             S_ROUTER_IN_ARP_RESOLVE, 100,
                                             ds_cstr(match),
                                             ds_cstr(actions),
@@ -15303,7 +15311,7 @@ build_arp_resolve_flows_for_lsp(
 
                     ds_clear(actions);
                     ds_put_format(actions, "eth.dst = %s; next;", ea_s);
-                    ovn_lflow_add_with_hint(lflows, peer->od,
+                    ovn_lflow_add_with_hint(lflows, peer->od->sdp,
                                             S_ROUTER_IN_ARP_RESOLVE, 100,
                                             ds_cstr(match),
                                             ds_cstr(actions),
@@ -15350,7 +15358,7 @@ build_arp_resolve_flows_for_lsp(
                 ds_clear(actions);
                 ds_put_format(actions, "eth.dst = %s; next;",
                                           router_port->lrp_networks.ea_s);
-                ovn_lflow_add_with_hint(lflows, peer->od,
+                ovn_lflow_add_with_hint(lflows, peer->od->sdp,
                                         S_ROUTER_IN_ARP_RESOLVE, 100,
                                         ds_cstr(match), ds_cstr(actions),
                                         &op->nbsp->header_,
@@ -15367,7 +15375,7 @@ build_arp_resolve_flows_for_lsp(
                 ds_clear(actions);
                 ds_put_format(actions, "eth.dst = %s; next;",
                               router_port->lrp_networks.ea_s);
-                ovn_lflow_add_with_hint(lflows, peer->od,
+                ovn_lflow_add_with_hint(lflows, peer->od->sdp,
                                         S_ROUTER_IN_ARP_RESOLVE, 100,
                                         ds_cstr(match), ds_cstr(actions),
                                         &op->nbsp->header_,
@@ -15437,7 +15445,7 @@ create_icmp_need_frag_lflow(const struct ovn_port *op, int mtu,
                   extra_action, op->lrp_networks.ea_s, ip,
                   mtu, ovn_stage_get_table(S_ROUTER_IN_ADMISSION));
 
-    ovn_lflow_add_with_hint__(lflows, op->od, stage, priority,
+    ovn_lflow_add_with_hint__(lflows, op->od->sdp, stage, priority,
                               ds_cstr(match), ds_cstr(actions),
                               NULL, meter, &op->nbrp->header_, lflow_ref);
 
@@ -15532,8 +15540,8 @@ build_check_pkt_len_flows_for_lrp(struct ovn_port *op,
     free(ct_match);
 
     if (features->ct_commit_nat_v2) {
-        ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_OUT_POST_SNAT, 100,
-                                "icmp && flags.icmp_snat == 1",
+        ovn_lflow_add_with_hint(lflows, op->od->sdp, S_ROUTER_OUT_POST_SNAT,
+                                100, "icmp && flags.icmp_snat == 1",
                                 "ct_commit_nat(snat);", &op->nbrp->header_,
                                 lflow_ref);
     }
@@ -15564,9 +15572,9 @@ build_check_pkt_len_flows_for_lrouter(
     ovs_assert(od->nbr);
 
     /* Packets are allowed by default. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_CHK_PKT_LEN, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_CHK_PKT_LEN, 0, "1",
                   "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_LARGER_PKTS, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_LARGER_PKTS, 0, "1",
                   "next;", lflow_ref);
 
     for (size_t i = 0; i < od->nbr->n_ports; i++) {
@@ -15615,13 +15623,13 @@ build_gateway_redirect_flows_for_lrouter(
         ds_put_format(match, "outport == %s", dgp->json_key);
         ds_clear(actions);
         ds_put_format(actions, "outport = %s; next;", dgp->cr_port->json_key);
-        ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_GW_REDIRECT, 50,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_GW_REDIRECT, 50,
                                 ds_cstr(match), ds_cstr(actions),
                                 stage_hint, lflow_ref);
     }
 
     /* Packets are allowed by default. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_GW_REDIRECT, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_GW_REDIRECT, 0, "1", "next;",
                   lflow_ref);
 }
 
@@ -15670,7 +15678,8 @@ build_lr_gateway_redirect_flows_for_nats(
                           as->name);
 
             if (nat->nb->allowed_ext_ips) {
-                ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_GW_REDIRECT,
+                ovn_lflow_add_with_hint(lflows, od->sdp,
+                                        S_ROUTER_IN_GW_REDIRECT,
                                         75, ds_cstr(&match_ext),
                                         ds_cstr(actions), stage_hint,
                                         lflow_ref);
@@ -15679,13 +15688,14 @@ build_lr_gateway_redirect_flows_for_nats(
                     ds_put_format(&match_ext, "ip && ip%s.dst == %s",
                                   nat_entry_is_v6(nat) ? "6" : "4",
                                   nat->nb->external_ip);
-                    ovn_lflow_add(lflows, od, S_ROUTER_IN_GW_REDIRECT, 70,
+                    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_GW_REDIRECT, 70,
                                   ds_cstr(&match_ext), debug_drop_action(),
                                   lflow_ref);
                     add_def_flow = false;
                 }
             } else if (nat->nb->exempted_ext_ips) {
-                ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_GW_REDIRECT,
+                ovn_lflow_add_with_hint(lflows, od->sdp,
+                                        S_ROUTER_IN_GW_REDIRECT,
                                         75, ds_cstr(&match_ext),
                                         debug_drop_action(),
                                         stage_hint, lflow_ref);
@@ -15743,8 +15753,8 @@ build_arp_request_flows_for_lrouter(
                       "}; output;", ETH_ADDR_ARGS(eth_dst), sn_addr_s,
                       route->nexthop);
 
-        ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_ARP_REQUEST, 200,
-                                  ds_cstr(match), ds_cstr(actions), NULL,
+        ovn_lflow_add_with_hint__(lflows, od->sdp, S_ROUTER_IN_ARP_REQUEST,
+                                  200, ds_cstr(match), ds_cstr(actions), NULL,
                                   copp_meter_get(COPP_ND_NS_RESOLVE,
                                                  od->nbr->copp,
                                                  meter_groups),
@@ -15752,7 +15762,7 @@ build_arp_request_flows_for_lrouter(
                                   lflow_ref);
     }
 
-    ovn_lflow_metered(lflows, od, S_ROUTER_IN_ARP_REQUEST, 100,
+    ovn_lflow_metered(lflows, od->sdp, S_ROUTER_IN_ARP_REQUEST, 100,
                       "eth.dst == 00:00:00:00:00:00 && "
                       REGBIT_NEXTHOP_IS_IPV4" == 1",
                       "arp { "
@@ -15765,7 +15775,7 @@ build_arp_request_flows_for_lrouter(
                       copp_meter_get(COPP_ARP_RESOLVE, od->nbr->copp,
                                      meter_groups),
                       lflow_ref);
-    ovn_lflow_metered(lflows, od, S_ROUTER_IN_ARP_REQUEST, 100,
+    ovn_lflow_metered(lflows, od->sdp, S_ROUTER_IN_ARP_REQUEST, 100,
                       "eth.dst == 00:00:00:00:00:00 && "
                       REGBIT_NEXTHOP_IS_IPV4" == 0",
                       "nd_ns { "
@@ -15775,7 +15785,7 @@ build_arp_request_flows_for_lrouter(
                       copp_meter_get(COPP_ND_NS_RESOLVE, od->nbr->copp,
                                      meter_groups),
                       lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_ARP_REQUEST, 0, "1", "output;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_ARP_REQUEST, 0, "1", "output;",
                   lflow_ref);
 }
 
@@ -15814,7 +15824,7 @@ build_lrouter_network_id_flows(
             ds_put_format(actions, "flags.network_id = %"PRIuSIZE"; next;",
                           network_id);
 
-            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_NETWORK_ID, 110,
+            ovn_lflow_add(lflows, op->od->sdp, S_ROUTER_IN_NETWORK_ID, 110,
                           ds_cstr(match), ds_cstr(actions),
                           lflow_ref);
         }
@@ -15848,7 +15858,7 @@ build_lrouter_network_id_flows(
             ds_put_format(actions, "flags.network_id = %"PRIuSIZE"; next;",
                           network_id);
 
-            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_NETWORK_ID, 110,
+            ovn_lflow_add(lflows, op->od->sdp, S_ROUTER_IN_NETWORK_ID, 110,
                           ds_cstr(match), ds_cstr(actions), lflow_ref);
         }
     }
@@ -15856,12 +15866,12 @@ build_lrouter_network_id_flows(
     /* Lower-priority flow for the case the next-hop doesn't belong to
      * any of the port networks.  In this case, setting network id to zero
      * explicitly. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_NETWORK_ID, 105, "1",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_NETWORK_ID, 105, "1",
                   "flags.network_id = 0; next;", lflow_ref);
 
     /* This lower-priority flow is for the case where northd is upgraded before
      * controller and flags.network_id is not recognized. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_NETWORK_ID, 0,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_NETWORK_ID, 0,
                   "1", "next;", lflow_ref);
 }
 
@@ -15903,14 +15913,14 @@ build_egress_delivery_flows_for_lrouter_port(
                       op->json_key);
         ds_put_format(actions, "eth.src = %s; output;",
                       op->lrp_networks.ea_s);
-        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_DELIVERY, 110,
+        ovn_lflow_add(lflows, op->od->sdp, S_ROUTER_OUT_DELIVERY, 110,
                       ds_cstr(match), ds_cstr(actions),
                       lflow_ref);
     }
 
     ds_clear(match);
     ds_put_format(match, "outport == %s", op->json_key);
-    ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_DELIVERY, 100,
+    ovn_lflow_add(lflows, op->od->sdp, S_ROUTER_OUT_DELIVERY, 100,
                   ds_cstr(match), "output;", lflow_ref);
 }
 
@@ -15924,10 +15934,10 @@ build_misc_local_traffic_drop_flows_for_lrouter(
      * configured to flood them statically on some ports.
      */
     if (od->mcast_info.rtr.flood_static) {
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 120,
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, 120,
                       "igmp && ip.ttl == 1", "next;",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 120,
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, 120,
                       "(mldv1 || mldv2) && ip.ttl == 1", "next;",
                       lflow_ref);
     }
@@ -15935,7 +15945,7 @@ build_misc_local_traffic_drop_flows_for_lrouter(
     /* L3 admission control: drop multicast and broadcast source, localhost
      * source or destination, and zero network source or destination
      * (priority 100). */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 100,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, 100,
                   "ip4.src_mcast ||"
                   "ip4.src == 255.255.255.255 || "
                   "ip4.src == 127.0.0.0/8 || "
@@ -15950,23 +15960,23 @@ build_misc_local_traffic_drop_flows_for_lrouter(
      * Drop IPv6 ND packets (priority 85). ND NA packets for router's own
      * IPs are handled with priority-90 flows.
      */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 85,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, 85,
                   "arp || nd", debug_drop_action(),
                   lflow_ref);
 
     /* Allow IPv6 multicast traffic that's supposed to reach the
      * router pipeline (e.g., router solicitations).
      */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 84, "nd_rs || nd_ra",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, 84, "nd_rs || nd_ra",
                   "next;", lflow_ref);
 
     /* Drop other reserved multicast. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 83,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, 83,
                   "ip6.mcast_rsvd", debug_drop_action(),
                   lflow_ref);
 
     /* Allow other multicast if relay enabled (priority 82). */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 82,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, 82,
                   "ip4.mcast || ip6.mcast",
                   (od->mcast_info.rtr.relay ? "next;" :
                                               debug_drop_action()),
@@ -15974,7 +15984,7 @@ build_misc_local_traffic_drop_flows_for_lrouter(
 
     /* Drop Ethernet local broadcast.  By definition this traffic should
      * not be forwarded.*/
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 50,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, 50,
                   "eth.bcast", debug_drop_action(),
                   lflow_ref);
 
@@ -15991,19 +16001,19 @@ build_misc_local_traffic_drop_flows_for_lrouter(
      * performance and functionality point of view.
      *
      * (priority-31 flows will send ICMP time exceeded) */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 32,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, 32,
                   "ip.ttl == {0, 1} && !ip.later_frag && "
                   "(ip4.mcast || ip6.mcast)", debug_drop_action(),
                   lflow_ref);
 
     /* TTL discard */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 30,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, 30,
                   "ip.ttl == {0, 1}", debug_drop_action(),
                   lflow_ref);
 
     /* Pass other traffic not already handled to the next table for
      * routing. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_IP_INPUT, 0, "1", "next;",
                   lflow_ref);
 }
 
@@ -16022,7 +16032,7 @@ build_dhcpv6_reply_flows_for_lrouter_port(
         ds_put_format(match, "ip6.dst == %s && udp.src == 547 &&"
                       " udp.dst == 546",
                       op->lrp_networks.ipv6_addrs[i].addr_s);
-        ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 100,
+        ovn_lflow_add(lflows, op->od->sdp, S_ROUTER_IN_IP_INPUT, 100,
                       ds_cstr(match),
                       "reg0 = 0; handle_dhcpv6_reply;",
                       lflow_ref);
@@ -16083,7 +16093,7 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
                   "next; /* DHCP_RELAY_REQ */",
                   op->lrp_networks.ipv4_addrs[0].addr_s, server_ip_str);
 
-    ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT, 110,
+    ovn_lflow_add_with_hint__(lflows, op->od->sdp, S_ROUTER_IN_IP_INPUT, 110,
                               ds_cstr(match), ds_cstr(actions), NULL,
                               copp_meter_get(COPP_DHCPV4_RELAY,
                                              op->od->nbr->copp,
@@ -16104,8 +16114,8 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
                   "/* DHCP_RELAY_REQ */",
                   op->lrp_networks.ipv4_addrs[0].addr_s, server_ip_str);
 
-    ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_DHCP_RELAY_REQ, 100,
-                            ds_cstr(match), ds_cstr(actions),
+    ovn_lflow_add_with_hint(lflows, op->od->sdp, S_ROUTER_IN_DHCP_RELAY_REQ,
+                            100, ds_cstr(match), ds_cstr(actions),
                             &op->nbrp->header_, lflow_ref);
 
     ds_clear(match);
@@ -16119,7 +16129,7 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
         op->json_key);
     ds_put_format(actions, "drop; /* DHCP_RELAY_REQ */");
 
-    ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_DHCP_RELAY_REQ, 1,
+    ovn_lflow_add_with_hint(lflows, op->od->sdp, S_ROUTER_IN_DHCP_RELAY_REQ, 1,
                             ds_cstr(match), ds_cstr(actions),
                             &op->nbrp->header_, lflow_ref);
 
@@ -16131,7 +16141,7 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
         "ip.frag == 0 && udp.src == 67 && udp.dst == 67",
         server_ip_str, op->lrp_networks.ipv4_addrs[0].addr_s);
     ds_put_format(actions, "next; /* DHCP_RELAY_RESP */");
-    ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT, 110,
+    ovn_lflow_add_with_hint(lflows, op->od->sdp, S_ROUTER_IN_IP_INPUT, 110,
                             ds_cstr(match), ds_cstr(actions),
                             &op->nbrp->header_, lflow_ref);
 
@@ -16148,8 +16158,8 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
           " = dhcp_relay_resp_chk(%s, %s); next; /* DHCP_RELAY_RESP */",
           op->lrp_networks.ipv4_addrs[0].addr_s, server_ip_str);
 
-    ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_DHCP_RELAY_RESP_CHK,
-                              100,
+    ovn_lflow_add_with_hint__(lflows, op->od->sdp,
+                              S_ROUTER_IN_DHCP_RELAY_RESP_CHK, 100,
                               ds_cstr(match), ds_cstr(actions), NULL,
                               copp_meter_get(COPP_DHCPV4_RELAY,
                                              op->od->nbr->copp,
@@ -16170,7 +16180,7 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
                   "ip4.src = %s; udp.dst = 68; "
                   "outport = %s; output; /* DHCP_RELAY_RESP */",
                   op->lrp_networks.ipv4_addrs[0].addr_s, op->json_key);
-    ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_DHCP_RELAY_RESP,
+    ovn_lflow_add_with_hint(lflows, op->od->sdp, S_ROUTER_IN_DHCP_RELAY_RESP,
                             100, ds_cstr(match), ds_cstr(actions),
                             &op->nbrp->header_, lflow_ref);
 
@@ -16183,7 +16193,7 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
                   REGBIT_DHCP_RELAY_RESP_CHK" == 0",
                   server_ip_str, op->lrp_networks.ipv4_addrs[0].addr_s);
     ds_put_format(actions, "drop; /* DHCP_RELAY_RESP */");
-    ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_DHCP_RELAY_RESP,
+    ovn_lflow_add_with_hint(lflows, op->od->sdp, S_ROUTER_IN_DHCP_RELAY_RESP,
                             1, ds_cstr(match), ds_cstr(actions),
                             &op->nbrp->header_, lflow_ref);
     ds_clear(match);
@@ -16218,7 +16228,7 @@ build_ipv6_input_flows_for_lrouter_port(
                     "icmp6.type = 129; "
                     "flags.loopback = 1; "
                     "next; ";
-        ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
+        ovn_lflow_add_with_hint(lflows, op->od->sdp, S_ROUTER_IN_IP_INPUT, 90,
                                 ds_cstr(match), lrp_actions,
                                 &op->nbrp->header_, lflow_ref);
     }
@@ -16256,7 +16266,8 @@ build_ipv6_input_flows_for_lrouter_port(
                                  "eth.dst <-> eth.src; "
                                  "ip6.dst <-> ip6.src; "
                                  "next; };";
-            ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+            ovn_lflow_add_with_hint__(lflows, op->od->sdp,
+                                      S_ROUTER_IN_IP_INPUT,
                                       80, ds_cstr(match), action, NULL,
                                       copp_meter_get(
                                           COPP_TCP_RESET,
@@ -16273,7 +16284,8 @@ build_ipv6_input_flows_for_lrouter_port(
                      "eth.dst <-> eth.src; "
                      "ip6.dst <-> ip6.src; "
                      "next; };";
-            ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+            ovn_lflow_add_with_hint__(lflows, op->od->sdp,
+                                      S_ROUTER_IN_IP_INPUT,
                                       80, ds_cstr(match), action, NULL,
                                       copp_meter_get(
                                           COPP_TCP_RESET,
@@ -16293,7 +16305,8 @@ build_ipv6_input_flows_for_lrouter_port(
                      "icmp6.type = 1; "
                      "icmp6.code = 4; "
                      "next; };";
-            ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+            ovn_lflow_add_with_hint__(lflows, op->od->sdp,
+                                      S_ROUTER_IN_IP_INPUT,
                                       80, ds_cstr(match), action, NULL,
                                       copp_meter_get(
                                           COPP_ICMP6_ERR,
@@ -16313,7 +16326,8 @@ build_ipv6_input_flows_for_lrouter_port(
                      "icmp6.type = 1; "
                      "icmp6.code = 3; "
                      "next; };";
-            ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+            ovn_lflow_add_with_hint__(lflows, op->od->sdp,
+                                      S_ROUTER_IN_IP_INPUT,
                                       70, ds_cstr(match), action, NULL,
                                       copp_meter_get(
                                           COPP_ICMP6_ERR,
@@ -16356,7 +16370,7 @@ build_ipv6_input_flows_for_lrouter_port(
                       "icmp6.code = 0; /* TTL exceeded in transit */ "
                       "outport = %s; flags.loopback = 1; output; };",
                       ds_cstr(&ip_ds), op->json_key);
-        ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+        ovn_lflow_add_with_hint__(lflows, op->od->sdp, S_ROUTER_IN_IP_INPUT,
                 31, ds_cstr(match), ds_cstr(actions), NULL,
                 copp_meter_get(COPP_ICMP6_ERR, op->od->nbr->copp,
                                meter_groups),
@@ -16443,7 +16457,7 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
         ds_put_cstr(match, "ip4.src == ");
         op_put_v4_networks(match, op, true);
         ds_put_cstr(match, " && "REGBIT_EGRESS_LOOPBACK" == 0");
-        ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT, 100,
+        ovn_lflow_add_with_hint(lflows, op->od->sdp, S_ROUTER_IN_IP_INPUT, 100,
                                 ds_cstr(match), debug_drop_action(),
                                 &op->nbrp->header_, lflow_ref);
 
@@ -16462,7 +16476,7 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
                       "icmp4.type = 0; "
                       "flags.loopback = 1; "
                       "next; ";
-        ovn_lflow_add_with_hint(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
+        ovn_lflow_add_with_hint(lflows, op->od->sdp, S_ROUTER_IN_IP_INPUT, 90,
                                 ds_cstr(match), icmp_actions,
                                 &op->nbrp->header_, lflow_ref);
     }
@@ -16493,7 +16507,7 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
                       "%s ; ip.ttl = 254; "
                       "outport = %s; flags.loopback = 1; output; };",
                       ds_cstr(&ip_ds), op->json_key);
-        ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+        ovn_lflow_add_with_hint__(lflows, op->od->sdp, S_ROUTER_IN_IP_INPUT,
                 31, ds_cstr(match), ds_cstr(actions), NULL,
                 copp_meter_get(COPP_ICMP4_ERR, op->od->nbr->copp,
                                meter_groups),
@@ -16565,7 +16579,8 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
                                  "icmp4.type = 3; "
                                  "icmp4.code = 3; "
                                  "next; };";
-            ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+            ovn_lflow_add_with_hint__(lflows, op->od->sdp,
+                                      S_ROUTER_IN_IP_INPUT,
                                       80, ds_cstr(match), action, NULL,
                                       copp_meter_get(
                                           COPP_ICMP4_ERR,
@@ -16582,7 +16597,8 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
                      "eth.dst <-> eth.src; "
                      "ip4.dst <-> ip4.src; "
                      "next; };";
-            ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+            ovn_lflow_add_with_hint__(lflows, op->od->sdp,
+                                      S_ROUTER_IN_IP_INPUT,
                                       80, ds_cstr(match), action, NULL,
                                       copp_meter_get(
                                           COPP_TCP_RESET,
@@ -16599,7 +16615,8 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
                      "eth.dst <-> eth.src; "
                      "ip4.dst <-> ip4.src; "
                      "next; };";
-            ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+            ovn_lflow_add_with_hint__(lflows, op->od->sdp,
+                                      S_ROUTER_IN_IP_INPUT,
                                       80, ds_cstr(match), action, NULL,
                                       copp_meter_get(
                                           COPP_TCP_RESET,
@@ -16619,7 +16636,8 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
                      "icmp4.type = 3; "
                      "icmp4.code = 2; "
                      "next; };";
-            ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+            ovn_lflow_add_with_hint__(lflows, op->od->sdp,
+                                      S_ROUTER_IN_IP_INPUT,
                                       70, ds_cstr(match), action, NULL,
                                       copp_meter_get(
                                           COPP_ICMP4_ERR,
@@ -16773,7 +16791,7 @@ build_lrouter_in_unsnat_stateless_flow(struct lflow_table *lflows,
     build_lrouter_in_unsnat_match(od, nat, match, distributed_nat, is_v6,
                                   l3dgw_port);
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_UNSNAT,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_UNSNAT,
                             priority, ds_cstr(match), "next;",
                             &nat->header_, lflow_ref);
 }
@@ -16801,7 +16819,7 @@ build_lrouter_in_unsnat_in_czone_flow(struct lflow_table *lflows,
     size_t common_match_len = match->length;
 
     ds_put_cstr(match, " && flags.loopback == 0");
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_UNSNAT,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_UNSNAT,
                             100, ds_cstr(match), "ct_snat_in_czone;",
                             &nat->header_, lflow_ref);
 
@@ -16809,7 +16827,7 @@ build_lrouter_in_unsnat_in_czone_flow(struct lflow_table *lflows,
     /* Update common zone match for the hairpin traffic. */
     ds_put_cstr(match, " && flags.loopback == 1 && flags.use_snat_zone == 1");
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_UNSNAT,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_UNSNAT,
                             100, ds_cstr(match), "ct_snat;",
                             &nat->header_, lflow_ref);
 }
@@ -16832,7 +16850,7 @@ build_lrouter_in_unsnat_flow(struct lflow_table *lflows,
     build_lrouter_in_unsnat_match(od, nat, match, distributed_nat, is_v6,
                                   l3dgw_port);
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_UNSNAT,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_UNSNAT,
                             priority, ds_cstr(match), "ct_snat;",
                             &nat->header_, lflow_ref);
 }
@@ -16912,7 +16930,7 @@ build_lrouter_in_dnat_flow(struct lflow_table *lflows,
         ds_put_format(match, " && (%s)", nat->match);
     }
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, priority,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_DNAT, priority,
                             ds_cstr(match), ds_cstr(actions),
                             &nat->header_, lflow_ref);
 }
@@ -16924,7 +16942,7 @@ build_lrouter_in_ct_extract_flows(struct lflow_table *lflows,
 {
     /* Ingress CT_EXTRACT table: Extract connection tracking fields for new
      * connections. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_CT_EXTRACT, 100,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_CT_EXTRACT, 100,
                   "ct.new && ip",
                   REG_CT_PROTO " = ct_proto(); "
                   REG_CT_TP_DST " = ct_tp_dst(); next;",
@@ -16979,7 +16997,7 @@ build_lrouter_out_undnat_flow(struct lflow_table *lflows,
                     : "ct_dnat;");
     }
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_UNDNAT, 100,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_OUT_UNDNAT, 100,
                             ds_cstr(match), ds_cstr(actions),
                             &nat->header_, lflow_ref);
 }
@@ -17011,7 +17029,7 @@ build_lrouter_out_is_dnat_local(struct lflow_table *lflows,
     ds_clear(actions);
     ds_put_cstr(actions, REGBIT_DST_NAT_IP_LOCAL" = 1; next;");
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_CHECK_DNAT_LOCAL,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_OUT_CHECK_DNAT_LOCAL,
                             50, ds_cstr(match), ds_cstr(actions),
                             &nat->header_, lflow_ref);
 }
@@ -17088,7 +17106,7 @@ build_lrouter_out_snat_stateless_flow(struct lflow_table *lflows,
     ds_put_format(actions, "ip%c.src=%s; next;",
                   is_v6 ? '6' : '4', nat->external_ip);
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_SNAT,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_OUT_SNAT,
                             priority, ds_cstr(match),
                             ds_cstr(actions), &nat->header_,
                             lflow_ref);
@@ -17139,14 +17157,14 @@ build_lrouter_out_snat_in_czone_flow(struct lflow_table *lflows,
     ds_put_cstr(actions, ");");
     ds_put_cstr(&zone_actions, ");");
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_SNAT,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_OUT_SNAT,
                             priority, ds_cstr(match),
                             ds_cstr(actions), &nat->header_,
                             lflow_ref);
 
     ds_put_cstr(match, " && "REGBIT_DST_NAT_IP_LOCAL" == 1");
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_SNAT,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_OUT_SNAT,
                             priority + 1, ds_cstr(match),
                             ds_cstr(&zone_actions), &nat->header_,
                             lflow_ref);
@@ -17189,7 +17207,7 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
     }
     ds_put_format(actions, ");");
 
-    ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_SNAT,
+    ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_OUT_SNAT,
                             priority, ds_cstr(match),
                             ds_cstr(actions), &nat->header_,
                             lflow_ref);
@@ -17218,7 +17236,8 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
          * matching on various CT states.*/
         ds_clear(actions);
         ds_put_format(actions, "ct_next(%s);", zone);
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 70 + prio_offset,
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_POST_UNDNAT,
+                      70 + prio_offset,
                       ds_cstr(match), ds_cstr(actions),
                       lflow_ref);
 
@@ -17229,7 +17248,8 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
         ds_put_cstr(match, " && (!ct.trk || !ct.rpl)");
         ds_clear(actions);
         ds_put_format(actions, "ct_%s;", zone);
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, priority + prio_offset,
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_SNAT,
+                      priority + prio_offset,
                       ds_cstr(match), ds_cstr(actions),
                       lflow_ref);
 
@@ -17239,7 +17259,7 @@ build_lrouter_out_snat_flow(struct lflow_table *lflows,
         ds_put_cstr(match, " && ct.new");
         ds_clear(actions);
         ds_put_format(actions, "ct_commit_to_zone(%s);", zone);
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT,
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_POST_SNAT,
                       priority + prio_offset, ds_cstr(match), ds_cstr(actions),
                       lflow_ref);
     }
@@ -17280,8 +17300,8 @@ build_lrouter_ingress_nat_check_pkt_len(struct lflow_table *lflows,
                 nat->external_mac,
                 nat->external_ip,
                 mtu, l3dgw_port->json_key);
-            ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_IP_INPUT, 160,
-                                      ds_cstr(match), ds_cstr(actions),
+            ovn_lflow_add_with_hint__(lflows, od->sdp, S_ROUTER_IN_IP_INPUT,
+                                      160, ds_cstr(match), ds_cstr(actions),
                                       NULL,
                                       copp_meter_get(
                                             COPP_ICMP4_ERR,
@@ -17308,8 +17328,8 @@ build_lrouter_ingress_nat_check_pkt_len(struct lflow_table *lflows,
                 nat->external_mac,
                 nat->external_ip,
                 mtu, l3dgw_port->json_key);
-            ovn_lflow_add_with_hint__(lflows, od, S_ROUTER_IN_IP_INPUT, 160,
-                                      ds_cstr(match), ds_cstr(actions),
+            ovn_lflow_add_with_hint__(lflows, od->sdp, S_ROUTER_IN_IP_INPUT,
+                                      160, ds_cstr(match), ds_cstr(actions),
                                       NULL,
                                       copp_meter_get(
                                             COPP_ICMP6_ERR,
@@ -17337,7 +17357,7 @@ build_lrouter_ingress_flow(struct lflow_table *lflows,
             match, "inport == %s && %s == %s",
             l3dgw_port->json_key,
             is_v6 ? "ip6.src" : "ip4.src", nat->external_ip);
-        ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_IP_INPUT,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_IP_INPUT,
                                 120, ds_cstr(match), "next;",
                                 &nat->header_, lflow_ref);
     }
@@ -17383,37 +17403,42 @@ static void build_lr_nat_defrag_and_lb_default_flows(
     ovs_assert(od->nbr);
 
     /* Packets are allowed by default. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_DEFRAG, 0, "1", "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_UNSNAT, 0, "1", "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DEFRAG, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_CHECK_DNAT_LOCAL, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_UNSNAT, 0, "1", "next;",
+                  lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_POST_UNSNAT, 0, "1", "next;",
+                  lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_CHECK_DNAT_LOCAL, 0, "1",
                   REGBIT_DST_NAT_IP_LOCAL" = 0; next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 0, "1", "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_CT_EXTRACT, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_SNAT, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 0, "1", "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 0, "1", "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_CT_EXTRACT, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_SNAT, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DNAT, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_EGR_LOOP, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_UNDNAT, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_ECMP_STATEFUL, 0, "1", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_POST_UNDNAT, 0, "1", "next;",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_DHCP_RELAY_REQ, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_POST_SNAT, 0, "1", "next;",
+                  lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_EGR_LOOP, 0, "1", "next;",
+                  lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_ECMP_STATEFUL, 0, "1", "next;",
+                  lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DHCP_RELAY_REQ, 0, "1",
                   "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_DHCP_RELAY_RESP_CHK, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DHCP_RELAY_RESP_CHK, 0, "1",
                   "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_DHCP_RELAY_RESP, 0, "1",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DHCP_RELAY_RESP, 0, "1",
                   "next;", lflow_ref);
 
 
     /* Send the IPv6 NS packets to next table. When ovn-controller
      * generates IPv6 NS (for the action - nd_ns{}), the injected
      * packet would go through conntrack - which is not required. */
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 120, "nd_ns", "next;",
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_SNAT, 120, "nd_ns", "next;",
                   lflow_ref);
 }
 
@@ -17431,10 +17456,10 @@ build_gw_lrouter_commit_all(const struct ovn_datapath *od,
     /* Note: We can use match on "!ct.rpl" as optimization here, even if the
      * previous state is from different zone. The packet that is already reply
      * should be reply in both zones. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_DEFRAG, 10,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DEFRAG, 10,
                   "ip && (!ct.trk || !ct.rpl)",
                   "ct_next(dnat);", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 10,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DNAT, 10,
                   "ip && ct.new", "ct_commit_to_zone(dnat);", lflow_ref);
 
     /* We would lose the CT state especially the ct.new flag if we have
@@ -17442,26 +17467,26 @@ build_gw_lrouter_commit_all(const struct ovn_datapath *od,
      * can commit into SNAT zone keep the flag in register. The SNAT flows
      * in the egress pipeline can then check the flag and commit
      * based on that. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_POST_UNSNAT, 10,
                   "ip && ct.new", "flags.unsnat_new = 1; next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_POST_UNSNAT, 10,
                   "ip && !ct.trk", "flags.unsnat_not_tracked = 1; next;",
                   lflow_ref);
 
     /* Note: We can use match on "!ct.rpl" as optimization here, even if the
      * previous state is from different zone. The packet that is already reply
      * should be reply in both zones. */
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_POST_UNDNAT, 10,
                   "ip && (!ct.trk || !ct.rpl) && "
                   "flags.unsnat_not_tracked == 1", "ct_next(snat);",
                   lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_POST_UNDNAT, 10,
                   "ip && flags.unsnat_new == 1", "next;", lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 10,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_SNAT, 10,
                   "ip && (!ct.trk || !ct.rpl) && flags.unsnat_new == 1",
                   "ct_commit_to_zone(snat);", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 10,
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_SNAT, 10,
                   "ip && ct.new",
                   "ct_commit_to_zone(snat);", lflow_ref);
 }
@@ -17485,14 +17510,14 @@ build_dgp_lrouter_commit_all(const struct ovn_datapath *od,
     ds_put_format(match, "ip && (!ct.trk || !ct.rpl) && "
                   "inport == %s && is_chassis_resident(%s)",
                   l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_DEFRAG, 10, ds_cstr(match),
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DEFRAG, 10, ds_cstr(match),
                   "ct_next(dnat);", lflow_ref);
 
     ds_clear(match);
     ds_put_format(match, "ip && ct.new && inport == %s && "
                  "is_chassis_resident(%s)", l3dgw_port->json_key,
                  l3dgw_port->cr_port->json_key);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 10, ds_cstr(match),
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DNAT, 10, ds_cstr(match),
                   "ct_commit_to_zone(dnat);", lflow_ref);
 
     /* We would lose the CT state especially the ct.new flag if we have
@@ -17504,13 +17529,13 @@ build_dgp_lrouter_commit_all(const struct ovn_datapath *od,
     ds_put_format(match, "ip && ct.new && "
                   "inport == %s && is_chassis_resident(%s)",
                   l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10, ds_cstr(match),
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_POST_UNSNAT, 10, ds_cstr(match),
                   "flags.unsnat_new = 1; next;", lflow_ref);
     ds_clear(match);
     ds_put_format(match, "ip && !ct.trk && "
                   "inport == %s && is_chassis_resident(%s)",
                   l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10, ds_cstr(match),
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_POST_UNSNAT, 10, ds_cstr(match),
                   "flags.unsnat_not_tracked = 1; next;",
                   lflow_ref);
 
@@ -17522,27 +17547,27 @@ build_dgp_lrouter_commit_all(const struct ovn_datapath *od,
                   "flags.unsnat_not_tracked == 1 && outport == %s && "
                   "is_chassis_resident(%s)", l3dgw_port->json_key,
                   l3dgw_port->cr_port->json_key);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10, ds_cstr(match),
-                  "ct_next(snat);", lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_POST_UNDNAT, 10,
+                  ds_cstr(match), "ct_next(snat);", lflow_ref);
     ds_clear(match);
     ds_put_format(match, "ip && flags.unsnat_new == 1 && outport == %s && "
                   "is_chassis_resident(%s)", l3dgw_port->json_key,
                   l3dgw_port->cr_port->json_key);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10, ds_cstr(match),
-                  "next;", lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_POST_UNDNAT, 10,
+                  ds_cstr(match), "next;", lflow_ref);
 
     ds_clear(match);
     ds_put_format(match, "ip && (!ct.trk || !ct.rpl) && "
                   "flags.unsnat_new == 1 && outport == %s && "
                   "is_chassis_resident(%s)",
                   l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 10, ds_cstr(match),
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_SNAT, 10, ds_cstr(match),
                   "ct_commit_to_zone(snat);", lflow_ref);
     ds_clear(match);
     ds_put_format(match, "ip && ct.new && "
                   "outport == %s && is_chassis_resident(%s)",
                   l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 10, ds_cstr(match),
+    ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_SNAT, 10, ds_cstr(match),
                   "ct_commit_to_zone(snat);", lflow_ref);
 }
 
@@ -17573,18 +17598,18 @@ build_lrouter_nat_defrag_and_lb(
         size_t match_len = match->length;
 
         ds_put_cstr(match, " && ct_mark.skip_snat == 1");
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 70, ds_cstr(match),
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DNAT, 70, ds_cstr(match),
                       "flags.skip_snat_for_lb = 1; ct_commit_nat;",
                       lflow_ref);
 
         ds_truncate(match, match_len);
         ds_put_cstr(match, " && ct_mark.force_snat == 1");
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 70, ds_cstr(match),
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DNAT, 70, ds_cstr(match),
                       "flags.force_snat_for_lb = 1; ct_commit_nat;",
                       lflow_ref);
 
         ds_truncate(match, match_len);
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 50, ds_cstr(match),
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DNAT, 50, ds_cstr(match),
                       "ct_commit_nat;", lflow_ref);
 
         /* Ingress DNAT (Priority 50/70).
@@ -17599,18 +17624,18 @@ build_lrouter_nat_defrag_and_lb(
         match_len = match->length;
 
         ds_put_cstr(match, " && ct_mark.skip_snat == 1");
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 70, ds_cstr(match),
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DNAT, 70, ds_cstr(match),
                       "flags.skip_snat_for_lb = 1; next;",
                       lflow_ref);
 
         ds_truncate(match, match_len);
         ds_put_cstr(match, " && ct_mark.force_snat == 1");
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 70, ds_cstr(match),
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DNAT, 70, ds_cstr(match),
                       "flags.force_snat_for_lb = 1; next;",
                       lflow_ref);
 
         ds_truncate(match, match_len);
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 50, ds_cstr(match),
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_IN_DNAT, 50, ds_cstr(match),
                       "next;", lflow_ref);
 
         /* Add connection tracking field extraction flows for ct.new packets.
@@ -17701,7 +17726,7 @@ build_lrouter_nat_defrag_and_lb(
                     nat_entry->l3dgw_port->json_key,
                     nat_entry->l3dgw_port->json_key,
                     is_v6 ? "6" : "4", nat->external_ip);
-                ovn_lflow_add_with_hint(lflows, od,
+                ovn_lflow_add_with_hint(lflows, od->sdp,
                                         S_ROUTER_IN_ARP_RESOLVE,
                                         150, ds_cstr(match),
                                         debug_drop_action(),
@@ -17721,7 +17746,7 @@ build_lrouter_nat_defrag_and_lb(
                     actions, "eth.dst = %s; next;",
                     nat_entry->is_distributed ? nat->external_mac :
                     nat_entry->l3dgw_port->lrp_networks.ea_s);
-                ovn_lflow_add_with_hint(lflows, od,
+                ovn_lflow_add_with_hint(lflows, od->sdp,
                                         S_ROUTER_IN_ARP_RESOLVE,
                                         100, ds_cstr(match),
                                         ds_cstr(actions),
@@ -17745,7 +17770,7 @@ build_lrouter_nat_defrag_and_lb(
                         ds_put_cstr(actions,
                             "get_arp(outport, " REG_NEXT_HOP_IPV4 "); next;");
                     }
-                    ovn_lflow_add_with_hint(lflows, od,
+                    ovn_lflow_add_with_hint(lflows, od->sdp,
                                             S_ROUTER_IN_ARP_RESOLVE, 90,
                                             ds_cstr(match), ds_cstr(actions),
                                             &nat->header_,
@@ -17825,7 +17850,8 @@ build_lrouter_nat_defrag_and_lb(
             struct ovn_port *op = ovn_port_find(ls_ports,
                                                 nat->logical_port);
             if (op && op->nbsp && !strcmp(op->nbsp->type, "virtual")) {
-                ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_GW_REDIRECT,
+                ovn_lflow_add_with_hint(lflows, od->sdp,
+                                        S_ROUTER_IN_GW_REDIRECT,
                                         80, ds_cstr(match),
                                         debug_drop_action(), &nat->header_,
                                         lflow_ref);
@@ -17836,7 +17862,7 @@ build_lrouter_nat_defrag_and_lb(
                           nat->external_mac,
                           is_v6 ? REG_SRC_IPV6 : REG_SRC_IPV4,
                           nat->external_ip);
-            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_GW_REDIRECT,
+            ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_IN_GW_REDIRECT,
                                     100, ds_cstr(match),
                                     ds_cstr(actions), &nat->header_,
                                     lflow_ref);
@@ -17878,8 +17904,8 @@ build_lrouter_nat_defrag_and_lb(
             ds_put_format(actions, REGBIT_EGRESS_LOOPBACK" = 1; "
                           "next(pipeline=ingress, table=%d); };",
                           ovn_stage_get_table(S_ROUTER_IN_ADMISSION));
-            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_EGR_LOOP, 100,
-                                    ds_cstr(match), ds_cstr(actions),
+            ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_OUT_EGR_LOOP,
+                                    100, ds_cstr(match), ds_cstr(actions),
                                     &nat->header_, lflow_ref);
         }
     }
@@ -17895,14 +17921,14 @@ build_lrouter_nat_defrag_and_lb(
      */
     if (od->is_gw_router && (od->nbr->n_nat || lr_stateful_rec->has_lb_vip)) {
         /* Do not send ND or ICMP packets to connection tracking. */
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 100,
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_UNDNAT, 100,
                       "nd || nd_rs || nd_ra", "next;",
                       lflow_ref);
-        ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 50,
+        ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_UNDNAT, 50,
                       "ip", "flags.loopback = 1; ct_dnat;",
                       lflow_ref);
         if (!(commit_all && stateful)) {
-            ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 50,
+            ovn_lflow_add(lflows, od->sdp, S_ROUTER_OUT_POST_UNDNAT, 50,
                           "ip && ct.new", "ct_commit { } ; next; ",
                           lflow_ref);
         }
@@ -17931,7 +17957,7 @@ build_lrouter_nat_defrag_and_lb(
          */
         ds_clear(actions);
         ds_put_cstr(actions, REGBIT_DST_NAT_IP_LOCAL" = 1; next;");
-        ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_CHECK_DNAT_LOCAL,
+        ovn_lflow_add_with_hint(lflows, od->sdp, S_ROUTER_OUT_CHECK_DNAT_LOCAL,
                                 50, ds_cstr(match), ds_cstr(actions),
                                 &od->nbr->header_, lflow_ref);
 
@@ -18090,7 +18116,8 @@ build_routable_flows_for_router_port(
                 ds_clear(actions);
                 ds_put_format(actions, "eth.dst = %s; next;",
                               ra.laddrs[k].ea_s);
-                ovn_lflow_add(lflows, router_port->od, S_ROUTER_IN_ARP_RESOLVE,
+                ovn_lflow_add(lflows, router_port->od->sdp,
+                              S_ROUTER_IN_ARP_RESOLVE,
                               100, ds_cstr(match), ds_cstr(actions),
                               lrp->stateful_lflow_ref);
             }
@@ -18235,7 +18262,7 @@ build_ls_stateful_flows(const struct ls_stateful_record *ls_stateful_rec,
     /* Build CT extraction flows - only needed if this datapath has load
      * balancers. */
     if (ls_stateful_rec->has_lb_vip) {
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
+        ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_CT_EXTRACT, 100,
                       "ct.new && ip",
                       REG_CT_PROTO " = ct_proto(); "
                       REG_CT_TP_DST " = ct_tp_dst(); next;",
@@ -18267,7 +18294,7 @@ build_lswitch_stateful_nf(struct ovn_port *op,
                 "}; next;");
     ds_put_format(match, "outport == %s && " REGBIT_ACL_LABEL" == 0",
                   op->json_key);
-    ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_STATEFUL, 120,
+    ovn_lflow_add(lflows, op->od->sdp, S_SWITCH_OUT_STATEFUL, 120,
                   ds_cstr(match), ds_cstr(actions), lflow_ref);
 
     ds_clear(actions);
@@ -18284,7 +18311,7 @@ build_lswitch_stateful_nf(struct ovn_port *op,
                    "ct_label.obs_point_id = " REG_OBS_POINT_ID_EST "; "
                    "ct_label.tun_if_id = " REG_TUN_OFPORT "; "
                 "}; next;");
-    ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_STATEFUL, 120,
+    ovn_lflow_add(lflows, op->od->sdp, S_SWITCH_OUT_STATEFUL, 120,
                   ds_cstr(match), ds_cstr(actions), lflow_ref);
 }
 
@@ -18433,9 +18460,9 @@ network_function_configure_fail_open_flows(struct lflow_table *lflows,
                   REG_NF_GROUP_ID " == %"PRIu8" || "
                   "(ct.trk && ct_label.nf_group_id == %"PRIu8")",
                   (uint8_t) nfg_id, (uint8_t) nfg_id);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 10,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_NF, 10,
         ds_cstr(&match), "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 10,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_NF, 10,
         ds_cstr(&match), "next;", lflow_ref);
     ds_destroy(&match);
 }
@@ -18523,7 +18550,7 @@ consider_network_function(struct lflow_table *lflows,
                           REGBIT_NF_ORIG_DIR" == 1 && "
                           REG_NF_GROUP_ID " == %"PRIu8,
                   (uint8_t) nfg->id);
-    ovn_lflow_add(lflows, od, fwd_stage, 99, ds_cstr(&match),
+    ovn_lflow_add(lflows, od->sdp, fwd_stage, 99, ds_cstr(&match),
                   ds_cstr(&action), lflow_ref);
     ds_clear(&match);
     ds_clear(&action);
@@ -18557,8 +18584,8 @@ consider_network_function(struct lflow_table *lflows,
                           REGBIT_NF_ORIG_DIR" == 0 && "
                           "ct_label.nf_group_id == %"PRIu8,
                  (uint8_t) nfg->id);
-    ovn_lflow_add(lflows, od, rev_stage, 99, ds_cstr(&match), ds_cstr(&action),
-                  lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, rev_stage, 99, ds_cstr(&match),
+                  ds_cstr(&action), lflow_ref);
     ds_clear(&match);
     ds_clear(&action);
 
@@ -18569,12 +18596,12 @@ consider_network_function(struct lflow_table *lflows,
      */
     ds_put_format(&match, "inport == %s", input_port->json_key);
     ds_put_format(&action, REG_TUN_OFPORT" = ct_label.tun_if_id; next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_NF, 100,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
 
     ds_put_format(&match, "inport == %s", output_port->json_key);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_NF, 100,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
     ds_clear(&action);
@@ -18586,12 +18613,12 @@ consider_network_function(struct lflow_table *lflows,
      */
     ds_put_format(&match, "outport == %s", input_port->json_key);
     ds_put_format(&action, "next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_NF, 100,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
 
     ds_put_format(&match, "outport == %s", output_port->json_key);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_NF, 100,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
     ds_clear(&action);
@@ -18607,7 +18634,7 @@ consider_network_function(struct lflow_table *lflows,
     ds_put_format(&match, "inport == %s", input_port->json_key);
     ds_put_format(&action, "next(pipeline=egress, table=%d);",
                   (ovn_stage_get_table(S_SWITCH_OUT_NF) + 1));
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110, ds_cstr(&match),
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_PRE_ACL, 110, ds_cstr(&match),
                   ds_cstr(&action), lflow_ref);
 
     /* Priority 120 flows in out_stateful:
@@ -18634,33 +18661,34 @@ build_network_function(const struct ovn_datapath *od,
      * after it sets the outport - back to in_l2_lkup stage. This rule must be
      * higher priority than the flows that set outport based on destination mac
      */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_L2_LKUP, 100,
                   REGBIT_NF_EGRESS_LOOPBACK" == 1",
                   "output;", lflow_ref);
 
     /* Ingress and Egress NF Table (Priority 100): ACL stage determined these
      * packets should be redirected, but these are multicast/broadcast
      * packets which can cause L2 loop if redirected to NF. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_NF, 100,
                   REGBIT_NF_ENABLED" == 1 && eth.mcast",
                   "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 100,
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_NF, 100,
                   REGBIT_NF_ENABLED" == 1 && eth.mcast",
                   "next;", lflow_ref);
 
     /* Ingress and Egress NF Table (Priority 0): Packets are forwarded to
      * next table by default. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 0, "1", "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 0, "1", "next;", lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_NF, 0, "1", "next;", lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_NF, 0, "1", "next;",
+                  lflow_ref);
 
     /* Ingress and Egress NF Table (Priority 1): ACL stage determined these
      * packets should be redirected, but there are no NF ports found on this
      * LS. Drop such packets.
      */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 1, REGBIT_NF_ENABLED" == 1",
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_IN_NF, 1, REGBIT_NF_ENABLED" == 1",
                   debug_drop_action(), lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 1, REGBIT_NF_ENABLED" == 1",
-                  debug_drop_action(), lflow_ref);
+    ovn_lflow_add(lflows, od->sdp, S_SWITCH_OUT_NF, 1,
+                  REGBIT_NF_ENABLED" == 1", debug_drop_action(), lflow_ref);
 
     /* Rules for each NF is configured once even if it is referred from
      * multiple ACLs. */
@@ -18770,8 +18798,8 @@ build_lswitch_and_lrouter_iterate_by_ls(struct ovn_datapath *od,
     build_lswitch_output_port_sec_od(od, lsi->lflows, NULL);
     /* CT extraction flows are built with stateful flows, but default rule is
      * always needed */
-    ovn_lflow_add(lsi->lflows, od, S_SWITCH_IN_CT_EXTRACT, 0, "1", "next;",
-                  NULL);
+    ovn_lflow_add(lsi->lflows, od->sdp, S_SWITCH_IN_CT_EXTRACT, 0, "1",
+                  "next;", NULL);
     build_lswitch_lb_affinity_default_flows(od, lsi->lflows, NULL);
     if (od->has_evpn_vni) {
         build_lswitch_lflows_evpn_l2_unknown(od, lsi->lflows, NULL);
@@ -18831,7 +18859,7 @@ build_lswitch_and_lrouter_iterate_by_lr(struct ovn_datapath *od,
     /* Default drop rule in lr_out_delivery stage.  See
      * build_egress_delivery_flows_for_lrouter_port() which adds a rule
      * for each router port. */
-    ovn_lflow_add_default_drop(lsi->lflows, od, S_ROUTER_OUT_DELIVERY,
+    ovn_lflow_add_default_drop(lsi->lflows, od->sdp, S_ROUTER_OUT_DELIVERY,
                                od->datapath_lflows);
 }
 
