@@ -3178,13 +3178,87 @@ physical_eval_remote_chassis_flows(const struct physical_ctx *ctx,
     ofpbuf_uninit(&ingress_ofpacts);
 }
 
+#define DEFAULT_VNI     (1 << 24) /* VNI used for the default local IP. */
+struct vni_local_ip {
+    struct in6_addr ip;
+    uint32_t vni;
+};
+
+static struct in6_addr *
+evpn_local_ip_lookup_by_vni(const struct vector *map,
+                            uint32_t vni, bool ipv4)
+{
+    struct vni_local_ip *e, *def_e = NULL;
+    VECTOR_FOR_EACH_PTR (map, e) {
+        if (e->vni == vni && IN6_IS_ADDR_V4MAPPED(&e->ip) == ipv4) {
+            return &e->ip;
+        }
+        if (e->vni == DEFAULT_VNI) {
+            def_e = e;
+        }
+    }
+
+    return def_e ? &def_e->ip : NULL;
+}
+
+static void
+evpn_vni_local_ip_map_parse(struct vector *map, const char *local_ip_str)
+{
+    char *tokstr = xstrdup(local_ip_str);
+    char *token, *ptr0 = NULL;
+
+    for (token = strtok_r(tokstr, ",", &ptr0); token;
+         token = strtok_r(NULL, ",", &ptr0)) {
+        char *ptr1 = NULL, *vni_str = strtok_r(token, ":", &ptr1);
+        char *ip_str = strtok_r(NULL, "", &ptr1);
+        char *ip_address = NULL;
+        struct vni_local_ip e = {
+            .vni = DEFAULT_VNI,
+        };
+        int addr_family;
+        uint16_t port;
+
+        if (!ip_str) {
+            /* Default local IP. */
+            ip_str = vni_str;
+            vni_str = NULL;
+        }
+
+        if (!ip_address_and_port_from_lb_key(ip_str, &ip_address, &e.ip, &port,
+                                             &addr_family)) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_WARN_RL(&rl, "EVPN enabled, but required 'evpn-local-ip' is "
+                         "missing or invalid %s ", local_ip_str);
+            continue;
+        }
+        free(ip_address);
+
+        if (vni_str) {
+            if (!ovs_scan(vni_str, "%u", &e.vni) || !ovn_is_valid_vni(e.vni)) {
+                continue;
+            }
+        }
+        vector_push(map, &e);
+    }
+    free(tokstr);
+}
+
 static void
 physical_consider_evpn_binding(const struct evpn_binding *binding,
-                               const struct in6_addr *local_ip,
+                               const struct vector *vni_ip_map,
                                struct ofpbuf *ofpacts, struct match *match,
-                               struct ovn_desired_flow_table *flow_table,
-                               bool ipv4)
+                               struct ovn_desired_flow_table *flow_table)
 {
+    bool ipv4 = IN6_IS_ADDR_V4MAPPED(&binding->remote_ip);
+    const struct in6_addr *local_ip = evpn_local_ip_lookup_by_vni(vni_ip_map,
+                                                                  binding->vni,
+                                                                  ipv4);
+    if (!local_ip) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "failed to get local tunnel ip");
+        return;
+    }
+
     /* Ingress flows. */
     ofpbuf_clear(ofpacts);
     match_init_catchall(match);
@@ -3308,29 +3382,40 @@ physical_consider_evpn_binding(const struct evpn_binding *binding,
 
 static void
 physical_consider_evpn_multicast(const struct evpn_multicast_group *mc_group,
-                                 const struct in6_addr *local_ip,
+                                 const struct vector *vni_ip_map,
                                  struct ofpbuf *ofpacts, struct match *match,
-                                 struct ovn_desired_flow_table *flow_table,
-                                 bool ipv4)
+                                 struct ovn_desired_flow_table *flow_table)
 {
     const struct evpn_binding *binding = NULL;
+    const struct in6_addr *local_ip = NULL;
 
     ofpbuf_clear(ofpacts);
     uint32_t multicast_tunnel_keys[] = {OVN_MCAST_FLOOD_TUNNEL_KEY,
                                         OVN_MCAST_UNKNOWN_TUNNEL_KEY,
                                         OVN_MCAST_FLOOD_L2_TUNNEL_KEY};
-    if (ipv4) {
-        ovs_be32 ip4 = in6_addr_get_mapped_ipv4(local_ip);
-        put_load_bytes(&ip4, sizeof ip4, MFF_TUN_SRC, 0, 32, ofpacts);
-    } else {
-        put_load_bytes(local_ip, sizeof *local_ip, MFF_TUN_IPV6_SRC,
-                       0, 128, ofpacts);
-    }
-    put_load(mc_group->vni, MFF_TUN_ID, 0, 24, ofpacts);
-
     const struct hmapx_node *node;
     HMAPX_FOR_EACH (node, &mc_group->bindings) {
         binding = node->data;
+        bool ipv4 = IN6_IS_ADDR_V4MAPPED(&binding->remote_ip);
+        if (!local_ip) {
+            local_ip = evpn_local_ip_lookup_by_vni(vni_ip_map, binding->vni,
+                                                   ipv4);
+            if (!local_ip) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+                VLOG_WARN_RL(&rl, "failed to get local tunnel ip");
+                return;
+            }
+
+            if (ipv4) {
+                ovs_be32 ip4 = in6_addr_get_mapped_ipv4(local_ip);
+                put_load_bytes(&ip4, sizeof ip4, MFF_TUN_SRC, 0, 32, ofpacts);
+            } else {
+                put_load_bytes(local_ip, sizeof *local_ip, MFF_TUN_IPV6_SRC,
+                               0, 128, ofpacts);
+            }
+            put_load(mc_group->vni, MFF_TUN_ID, 0, 24, ofpacts);
+        }
+
         if (ipv4) {
             ovs_be32 ip4 = in6_addr_get_mapped_ipv4(&binding->remote_ip);
             put_load_bytes(&ip4, sizeof ip4, MFF_TUN_DST, 0, 32, ofpacts);
@@ -3420,28 +3505,24 @@ physical_eval_evpn_flows(const struct physical_ctx *ctx,
 
     const char *local_ip_str = smap_get_def(&ctx->chassis->other_config,
                                             "ovn-evpn-local-ip", "");
-    struct in6_addr local_ip;
-    if (!ip46_parse(local_ip_str, &local_ip)) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-        VLOG_WARN_RL(&rl, "EVPN enabled, but required 'evpn-local-ip' is "
-                          "missing or invalid %s ", local_ip_str);
-        return;
-    }
+    struct vector vni_ip_map =
+        VECTOR_EMPTY_INITIALIZER(const struct vni_local_ip);
+    evpn_vni_local_ip_map_parse(&vni_ip_map, local_ip_str);
 
     struct match match = MATCH_CATCHALL_INITIALIZER;
-    bool ipv4 = IN6_IS_ADDR_V4MAPPED(&local_ip);
-
     const struct evpn_binding *binding;
+
     HMAP_FOR_EACH (binding, hmap_node, ctx->evpn_bindings) {
-        physical_consider_evpn_binding(binding, &local_ip, ofpacts,
-                                       &match, flow_table, ipv4);
+        physical_consider_evpn_binding(binding, &vni_ip_map, ofpacts,
+                                       &match, flow_table);
     }
 
     const struct evpn_multicast_group *mc_group;
     HMAP_FOR_EACH (mc_group, hmap_node, ctx->evpn_multicast_groups) {
-        physical_consider_evpn_multicast(mc_group, &local_ip, ofpacts,
-                                         &match, flow_table, ipv4);
+        physical_consider_evpn_multicast(mc_group, &vni_ip_map, ofpacts,
+                                         &match, flow_table);
     }
+    vector_destroy(&vni_ip_map);
 
     const struct evpn_fdb *fdb;
     HMAP_FOR_EACH (fdb, hmap_node, ctx->evpn_fdbs) {
@@ -3571,32 +3652,30 @@ physical_handle_evpn_binding_changes(
 {
     const char *local_ip_str = smap_get_def(&ctx->chassis->other_config,
                                             "ovn-evpn-local-ip", "");
-    struct in6_addr local_ip;
-    if (!ip46_parse(local_ip_str, &local_ip)) {
-        return;
-    }
+    struct vector vni_ip_map =
+        VECTOR_EMPTY_INITIALIZER(const struct vni_local_ip);
+    evpn_vni_local_ip_map_parse(&vni_ip_map, local_ip_str);
 
     struct ofpbuf ofpacts;
     ofpbuf_init(&ofpacts, 0);
     struct match match = MATCH_CATCHALL_INITIALIZER;
-    bool ipv4 = IN6_IS_ADDR_V4MAPPED(&local_ip);
 
     const struct hmapx_node *node;
     HMAPX_FOR_EACH (node, updated_bindings) {
         const struct evpn_binding *binding = node->data;
-
         ofctrl_remove_flows(flow_table, &binding->flow_uuid);
-        physical_consider_evpn_binding(binding, &local_ip, &ofpacts,
-                                       &match, flow_table, ipv4);
+        physical_consider_evpn_binding(binding, &vni_ip_map, &ofpacts,
+                                       &match, flow_table);
     }
 
     HMAPX_FOR_EACH (node, updated_multicast_groups) {
         const struct evpn_multicast_group *mc_group = node->data;
 
         ofctrl_remove_flows(flow_table, &mc_group->flow_uuid);
-        physical_consider_evpn_multicast(mc_group, &local_ip, &ofpacts,
-                                         &match, flow_table, ipv4);
+        physical_consider_evpn_multicast(mc_group, &vni_ip_map, &ofpacts,
+                                         &match, flow_table);
     }
+    vector_destroy(&vni_ip_map);
 
     ofpbuf_uninit(&ofpacts);
 
