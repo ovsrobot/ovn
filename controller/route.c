@@ -17,7 +17,12 @@
 
 #include <config.h>
 
+#include <errno.h>
+#include <linux/ethtool.h>
+#include <linux/sockios.h>
 #include <net/if.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
 
 #include "vswitch-idl.h"
 #include "openvswitch/hmap.h"
@@ -37,6 +42,80 @@ VLOG_DEFINE_THIS_MODULE(exchange);
 
 #define PRIORITY_DEFAULT 1000
 #define PRIORITY_LOCAL_BOUND 100
+
+/* Discover the veth peer interface name for a given interface.
+ * Uses ethtool stats to get the peer_ifindex, then if_indextoname to
+ * get the peer interface name.
+ * Returns the peer interface name, or NULL if not found or on error.
+ * Caller must free the returned string. */
+static char *
+find_veth_peer(const char *ifname)
+{
+    struct ifreq ifr;
+    struct ethtool_drvinfo drvinfo;
+    int sock, peer_ifindex;
+    char *peer_name = NULL;
+
+    if (!ifname) {
+        return NULL;
+    }
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_DBG_RL(&rl, "veth peer auto-discovery: "
+            "Failed to create socket: %s", ovs_strerror(errno));
+        return NULL;
+    }
+
+    /* Verify device is a veth */
+    memset(&ifr, 0, sizeof ifr);
+    memset(&drvinfo, 0, sizeof drvinfo);
+    ovs_strzcpy(ifr.ifr_name, ifname, sizeof ifr.ifr_name);
+    drvinfo.cmd = ETHTOOL_GDRVINFO;
+    ifr.ifr_data = (void *)&drvinfo;
+
+    if (ioctl(sock, SIOCETHTOOL, &ifr) < 0) {
+        close(sock);
+        return NULL;
+    }
+    if (strcmp(drvinfo.driver, "veth") != 0) {
+        close(sock);
+        return NULL;
+    }
+
+    /* Get peer_ifindex from ethtool stats */
+    struct {
+        struct ethtool_stats stats;
+        uint64_t data[1];
+    } req;
+
+    memset(&req, 0, sizeof req);
+    req.stats.cmd = ETHTOOL_GSTATS;
+    req.stats.n_stats = 1;
+    ifr.ifr_data = (void *)&req.stats;
+
+    if (ioctl(sock, SIOCETHTOOL, &ifr) < 0) {
+        close(sock);
+        return NULL;
+    }
+
+    peer_ifindex = (int) req.data[0];
+    close(sock);
+
+    if (peer_ifindex <= 0) {
+        return NULL;
+    }
+
+    /* Convert peer ifindex to interface name */
+    char peer_ifname[IF_NAMESIZE];
+    if (!if_indextoname(peer_ifindex, peer_ifname)) {
+        return NULL;
+    }
+
+    peer_name = xstrdup(peer_ifname);
+    return peer_name;
+}
 
 static bool
 route_exchange_relevant_port(const struct sbrec_port_binding *pb)
@@ -276,9 +355,47 @@ route_run(struct route_ctx_in *r_ctx_in,
             }
 
             if (!port_name) {
-                /* No port-name set, so we learn routes from all ports. */
-                smap_add_nocopy(&ad->bound_ports,
-                                xstrdup(local_peer->logical_port), NULL);
+                /* No explicit port-name set. Check if routing-protocol-
+                 * redirect is configured and try to auto-discover the veth
+                 * peer interface. */
+                const char *redirect_port = smap_get(&repb->options,
+                                                "routing-protocol-redirect");
+                if (redirect_port) {
+                    const char *ifname = ifname_from_port_name(
+                        &port_mapping, r_ctx_in->local_bindings,
+                        r_ctx_in->chassis, redirect_port);
+                    if (ifname) {
+                        char *peer_iface = find_veth_peer(ifname);
+                        if (peer_iface) {
+                            static struct vlog_rate_limit rl =
+                                VLOG_RATE_LIMIT_INIT(5, 20);
+                            VLOG_INFO_RL(&rl, "Auto-discovered veth peer '%s' "
+                                         "for port '%s' (bound to '%s')",
+                                         peer_iface, redirect_port, ifname);
+                            smap_add(&ad->bound_ports,
+                                     local_peer->logical_port, peer_iface);
+                            free(peer_iface);
+                        } else {
+                            /* No veth peer found, fall back to learning from
+                             * all ports on this LRP. */
+                            static struct vlog_rate_limit rl =
+                                VLOG_RATE_LIMIT_INIT(5, 20);
+                            VLOG_INFO_RL(&rl, "Cannot auto-discover veth "
+                                         "peer for port '%s' (bound to "
+                                         "'%s'), falling back to learning "
+                                         "routes from all ports",
+                                         redirect_port, ifname);
+                            smap_add_nocopy(&ad->bound_ports,
+                                            xstrdup(local_peer->logical_port),
+                                            NULL);
+                        }
+                        sset_add(r_ctx_out->filtered_ports, redirect_port);
+                    }
+                } else {
+                    /* No port-name set, so we learn routes from all ports. */
+                    smap_add_nocopy(&ad->bound_ports,
+                                    xstrdup(local_peer->logical_port), NULL);
+                }
             } else {
                 /* If a port_name is set the we filter for the name as set in
                  * the port-mapping or the interface name of the local
