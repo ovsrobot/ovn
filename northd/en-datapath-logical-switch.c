@@ -58,6 +58,26 @@ get_requested_tunnel_key(const struct nbrec_logical_switch *nbs,
     return requested_tunnel_key;
 }
 
+static bool
+check_dynamic_device_name(const char *if_names)
+{
+    struct sset device_names;
+    sset_from_delimited_string(&device_names, if_names, ",");
+
+    bool ret = true;
+    const char *name;
+    SSET_FOR_EACH (name, &device_names) {
+        if (strlen(name) > IFNAMSIZ) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+            VLOG_WARN_RL(&rl, "dynamic-routing-ifname %s is too long", name);
+            ret = false;
+            break;
+        }
+    }
+    sset_destroy(&device_names);
+    return ret;
+}
+
 static void
 gather_external_ids(const struct nbrec_logical_switch *nbs,
                     struct smap *external_ids)
@@ -95,42 +115,23 @@ gather_external_ids(const struct nbrec_logical_switch *nbs,
 
     const char *bridge_ifname = smap_get(&nbs->other_config,
                                          "dynamic-routing-bridge-ifname");
-    if (bridge_ifname) {
-        if (strlen(bridge_ifname) > IFNAMSIZ) {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-            VLOG_WARN_RL(&rl, "dynamic-routing-bridge-ifname %s is too long",
-                         bridge_ifname);
-        } else {
-            smap_add(external_ids, "dynamic-routing-bridge-ifname",
-                     bridge_ifname);
-        }
+    if (bridge_ifname && check_dynamic_device_name(bridge_ifname)) {
+        smap_add(external_ids, "dynamic-routing-bridge-ifname",
+                 bridge_ifname);
     }
 
     const char *vxlan_ifname = smap_get(&nbs->other_config,
                                         "dynamic-routing-vxlan-ifname");
-    if (vxlan_ifname) {
-        if (strlen(vxlan_ifname) > IFNAMSIZ) {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-            VLOG_WARN_RL(&rl, "dynamic-routing-vxlan-ifname %s is too long",
-                         vxlan_ifname);
-        } else {
-            smap_add(external_ids, "dynamic-routing-vxlan-ifname",
-                     vxlan_ifname);
-        }
+    if (vxlan_ifname && check_dynamic_device_name(vxlan_ifname)) {
+        smap_add(external_ids, "dynamic-routing-vxlan-ifname",
+                 vxlan_ifname);
     }
 
     const char *adv_ifname = smap_get(&nbs->other_config,
                                       "dynamic-routing-advertise-ifname");
-    if (adv_ifname) {
-        if (strlen(adv_ifname) > IFNAMSIZ) {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-            VLOG_WARN_RL(&rl,
-                         "dynamic-routing-advertise-ifname %s is too long",
-                         adv_ifname);
-        } else {
-            smap_add(external_ids, "dynamic-routing-advertise-ifname",
-                     adv_ifname);
-        }
+    if (adv_ifname && check_dynamic_device_name(adv_ifname)) {
+        smap_add(external_ids, "dynamic-routing-advertise-ifname",
+                 adv_ifname);
     }
 
     const char *redistribute =
