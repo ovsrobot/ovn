@@ -19306,6 +19306,131 @@ as
 OVS_TRAFFIC_VSWITCHD_STOP(["/.*error receiving.*/d
 /failed to query port patch-.*/d
 /.*terminating with signal 15.*/d"])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([dynamic-routing - routing-protocol-redirect auto-discovery])
+
+vni=1337
+VRF_RESERVE([$vni])
+
+# This test validates that automatic veth peer discovery works with
+# routing-protocol-redirect option and that routes can be learned.
+#
+# Topology:
+#  +----------+
+#  |    lr    | (learns routes from VRF 1337)
+#  +----+-----+
+#       |
+#  +----+----+
+#  |   ls    |
+#  +----+----+
+#       |
+#  +----+------+     +----------+
+#  | bgp-lsp   |-----| bgp-peer | (veth pair - auto-discovered, in VRF 1337)
+#  +-----------+     +----------+
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+
+ADD_BR([br-int])
+check ovs-vsctl \
+    -- set Open_vSwitch . external-ids:system-id=hv1 \
+    -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+    -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+    -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+    -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+start_daemon ovn-controller
+
+# Create VRF for route learning
+OVS_WAIT_WHILE([ip link | grep -q ovnvrf$vni:.*UP])
+check ip link add vrf-$vni type vrf table $vni
+on_exit "ip link del vrf-$vni"
+check ip link set vrf-$vni up
+
+# Create logical router with routing-protocol-redirect
+check ovn-nbctl \
+    -- lr-add lr \
+      -- set Logical_Router lr \
+          options:chassis=hv1 \
+          options:dynamic-routing=true \
+          options:dynamic-routing-vrf-id=$vni \
+          options:dynamic-routing-maintain-vrf=false \
+    -- lrp-add lr lr-ext 00:00:00:01:00:10 1.1.1.1/24 \
+      -- lrp-set-options lr-ext dynamic-routing=true \
+                                routing-protocol-redirect=bgp-lsp \
+    -- ls-add ls \
+      -- lsp-add-router-port ls ls-lr-ext lr-ext \
+      -- lsp-add ls bgp-lsp \
+        -- lsp-set-options bgp-lsp dynamic-routing=true \
+        -- lsp-set-addresses bgp-lsp unknown
+
+# Create veth pair: one end bound to OVN (bgp-ovn), other end for BGP daemon (bgp-peer)
+# The auto-discovery will find bgp-peer from bgp-ovn
+check ip link add bgp-ovn type veth peer name bgp-peer
+check ip link set bgp-ovn up
+check ip link set bgp-peer master vrf-$vni
+check ip link set bgp-peer up
+check ip addr add 1.1.1.100/24 dev bgp-peer
+
+# Bind bgp-ovn to OVN
+check ovs-vsctl add-port br-int bgp-ovn \
+    -- set interface bgp-ovn external_ids:iface-id=bgp-lsp
+
+check ovn-nbctl --wait=hv sync
+wait_for_ports_up bgp-lsp
+
+# Give ovn-controller time to process and discover the veth peer
+sleep 3
+
+# Verify veth peer auto-discovery happened
+AT_CHECK([grep -q "Auto-discovered veth peer 'bgp-peer' for port 'bgp-lsp'" ovn-controller.log], [0])
+
+# Add a route to the VRF (simulating BGP learning a route via bgp-peer)
+AT_CHECK([ip route add 10.10.1.1 via 1.1.1.2 vrf vrf-$vni proto zebra])
+
+# Verify learned route appears in SB database
+OVS_WAIT_UNTIL([ovn-sbctl list Learned_Route | grep ip_prefix | grep -Fe 10.10.1.1])
+
+# Add a second route
+AT_CHECK([ip route add 10.10.2.1 via 1.1.1.2 vrf vrf-$vni proto zebra])
+
+# Verify both routes appear in SB database
+OVS_WAIT_FOR_OUTPUT([ovn-sbctl list Learned_Route | grep ip_prefix | sort], [0], [dnl
+ip_prefix           : "10.10.1.1"
+ip_prefix           : "10.10.2.1"
+])
+
+# Remove one route
+AT_CHECK([ip route del 10.10.2.1 via 1.1.1.2 vrf vrf-$vni])
+
+# Verify only one route remains
+OVS_WAIT_FOR_OUTPUT([ovn-sbctl list Learned_Route | grep ip_prefix | sort], [0], [dnl
+ip_prefix           : "10.10.1.1"
+])
+
+# Remove second route
+AT_CHECK([ip route del 10.10.1.1 via 1.1.1.2 vrf vrf-$vni])
+
+# Verify all routes removed
+OVS_WAIT_FOR_OUTPUT([ovn-sbctl list Learned_Route | grep ip_prefix | sort], [0], [dnl
+])
+
+# Cleanup
+check ip link delete bgp-ovn
+
+OVN_CLEANUP_CONTROLLER([hv1], [], [], [lr])
+
+OVN_CLEANUP_NORTHD
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/.*error receiving.*/d
+/failed to query port patch-.*/d
+/.*terminating with signal 15.*/d"])
+
 AT_CLEANUP
 ])
 
