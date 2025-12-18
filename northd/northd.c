@@ -311,14 +311,14 @@ static const char *reg_ct_state[] = {
  * | R0  | REGBIT_ND_RA_OPTS_RESULT  |   |                 |   |                                    |
  * |     |   (= IN_ND_RA_OPTIONS)    | X |                 |   |                                    |
  * |     |      NEXT_HOP_IPV4        | R |                 |   |                                    |
- * |     |   (>= IN_IP_ROUTING)      | E | INPORT_ETH_ADDR | X |                                    |
- * +-----+---------------------------+ G |   (< IP_INPUT)  | X |                                    |
- * | R1  |     REG_CT_TP_DST (0..15) | 0 |                 | R |                                    |
- * |     |     REG_CT_PROTO (16..23) |   |                 | E |  NEXT_HOP_IPV6 (>= IN_IP_ROUTING)  |
- * |     |   (>= IN_CT_EXTRACT &&    |   |                 | G |                                    |
- * |     |    <= IN_LB_AFF_LEARN)    |   |                 |   |                                    |
- * +-----+---------------------------+---+-----------------+---+------------------------------------+
- * | R2  |  REG_DHCP_RELAY_DIP_IPV4  |   |                 | 0 |                                    |
+ * |     |   (>= IN_IP_ROUTING)      | E | INPORT_ETH_ADDR |   |                                    |
+ * +-----+---------------------------+ G |   (< IP_INPUT)  |   |                                    |
+ * | R1  |     REG_CT_TP_DST (0..15) | 0 |                 |   |                                    |
+ * |     |     REG_CT_PROTO (16..23) |   |                 | X |                                    |
+ * |     |   (>= IN_CT_EXTRACT &&    |   |                 | X |                                    |
+ * |     |    <= IN_LB_AFF_LEARN)    |   |                 | R |  NEXT_HOP_IPV6 (>= IN_IP_ROUTING)  |
+ * +-----+---------------------------+---+-----------------+ E +                                    |
+ * | R2  |  REG_DHCP_RELAY_DIP_IPV4  |   |                 | G |                                    |
  * |     |       REG_LB_PORT         | X |                 | 0 |                                    |
  * |     | (>= IN_LB_AFF_CHECK       | R |                 |   |                                    |
  * |     |  <= IN_LB_AFF_LEARN)      | E |                 |   |                                    |
