@@ -291,6 +291,8 @@ bool ovn_str_to_ushort(const char *, int base, unsigned short *);
 bool ip_address_and_port_from_lb_key(const char *key, char **ip_address,
                                      struct in6_addr *ip, uint16_t *port,
                                      int *addr_family);
+bool ip_address_from_str(const char *ip_str, struct in6_addr *ip,
+                         int *addr_family);
 
 /* Returns the internal OVN version. The caller must free the returned
  * value. */
