@@ -926,6 +926,29 @@ ip_address_and_port_from_lb_key(const char *key, char **ip_address,
     return true;
 }
 
+bool
+ip_address_from_str(const char *ip_str, struct in6_addr *ip, int *addr_family)
+{
+    memset(ip, 0, sizeof(*ip));
+    *addr_family = 0;
+
+    struct sockaddr_storage ss;
+    if (!inet_parse_active(ip_str, 0, &ss, false, NULL)) {
+        return false;
+    }
+
+    if (ss_get_port(&ss)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_WARN_RL(&rl, "port must not be specified");
+        return false;
+    }
+
+    *ip = ss_get_address(&ss);
+    *addr_family = ss.ss_family;
+
+    return true;
+}
+
 /* Increment this for any logical flow changes, if an existing OVN action is
  * modified or a stage is added to a logical pipeline.
  *
