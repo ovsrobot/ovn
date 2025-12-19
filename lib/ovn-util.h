@@ -775,4 +775,6 @@ NEIGH_REDISTRIBUTE_MODES
 enum neigh_redistribute_mode
 parse_neigh_dynamic_redistribute(const struct smap *options);
 
+char *skip_mac_address_from_lsp_address(const char *address_with_mac);
+
 #endif /* OVN_UTIL_H */

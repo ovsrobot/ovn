@@ -66,6 +66,18 @@ string_ptr(char *ptr)
     return (ptr) ? ptr : s;
 }
 
+static char *OVS_WARN_UNUSED_RESULT
+parse_l4_port_range(const char *arg, int64_t *port_p)
+{
+    int64_t port;
+    if (!ovs_scan(arg, "%"SCNd64, &port)
+        || port < 0 || port > UINT16_MAX) {
+        return xasprintf("%s: port must in range 0...65535", arg);
+    }
+    *port_p = port;
+    return NULL;
+}
+
 static void
 nbctl_add_base_prerequisites(struct ovsdb_idl *idl,
                              enum nbctl_wait_type wait_type)
@@ -543,6 +555,12 @@ MAC_Binding commands:\n\
   static-mac-binding-del LOGICAL_PORT IP\n\
                                     Delete Static_MAC_Binding entry\n\
   static-mac-binding-list           List all Static_MAC_Binding entries\n\
+\n\
+Logical Switch Port Health Check:\n\
+  lsp-hc-add PORT PROTOCOL SOURCE_IP DST_PORT [ADDRESS]...\n\
+                            add health check monitoring for PORT\n\
+  lsp-hc-del PORT HC_UUID   delete health check monitoring for PORT\n\
+  lsp-hc-list PORT              print health check for PORT\n\
 \n\
 %s\
 %s\
@@ -8677,6 +8695,490 @@ nbctl_lsp_add_misc_port(struct ctl_context *ctx)
     shash_add(&nbctx->lsp_to_ls_map, lsp_name, ls);
 }
 
+/* Logical Switch Port Health Check Functions. */
+enum health_check_protocol {
+    LSP_ICMP_HEALTH_CHECK,
+    LSP_TCP_HEALTH_CHECK,
+    LSP_UDP_HEALTH_CHECK,
+};
+
+static bool
+parse_health_check_protocol(struct ctl_context *ctx, const char *type,
+                            enum health_check_protocol *protocol)
+{
+    if (!strcmp(type, "icmp")) {
+        *protocol = LSP_ICMP_HEALTH_CHECK;
+        return true;
+    } else if (!strcmp(type, "tcp")) {
+        *protocol = LSP_TCP_HEALTH_CHECK;
+        return true;
+    } else if (!strcmp(type, "udp")) {
+        *protocol = LSP_UDP_HEALTH_CHECK;
+        return true;
+    } else {
+        ctl_error(ctx, "%s: Type must be icmp, tcp or udp", type);
+        return false;
+    }
+}
+
+static void
+lsp_health_check_get_duplicate(
+    int proto, const char *src_ip,
+    int64_t port, struct sset *addresses,
+    const struct nbrec_logical_switch_port *lsp,
+    const struct nbrec_logical_switch_port_health_check **lsp_hc)
+{
+    *lsp_hc = NULL;
+
+    for (size_t i = 0; i < lsp->n_health_checks; i++) {
+        const struct nbrec_logical_switch_port_health_check *lsp_hc_p =
+            lsp->health_checks[i];
+
+        if (src_ip && strcmp(lsp_hc_p->src_ip, src_ip)) {
+            continue;
+        }
+
+        const char *target_proto =
+            (proto == LSP_ICMP_HEALTH_CHECK) ? "icmp" :
+            (proto == LSP_TCP_HEALTH_CHECK) ? "tcp" : "udp";
+        if (strcmp(lsp_hc_p->protocol, target_proto)) {
+            continue;
+        }
+
+        if (proto != LSP_ICMP_HEALTH_CHECK && lsp_hc_p->port != port) {
+            continue;
+        }
+
+        if (!addresses || sset_is_empty(addresses)) {
+            *lsp_hc = lsp_hc_p;
+            return;
+        }
+
+        bool addresses_found = true;
+        for (size_t j = 0; j < lsp_hc_p->n_addresses; j++) {
+            if (!sset_contains(addresses, lsp_hc_p->addresses[j])) {
+                addresses_found = false;
+                break;
+            }
+        }
+
+        if (addresses_found) {
+            *lsp_hc = lsp_hc_p;
+            return;
+        }
+    }
+}
+
+static char **
+_get_lsp_ip_addresses(char **lsp_addresses,
+                      int lsp_n_addresses,
+                      int *lsp_n_ip_addresses)
+{
+    char **lsp_ip_addresses_p = NULL;
+    *lsp_n_ip_addresses = 0;
+    size_t n_capacity = 0;
+    size_t count = 0;
+
+    for (size_t i = 0; i < lsp_n_addresses; i++) {
+        char *address_without_mac =
+            skip_mac_address_from_lsp_address(lsp_addresses[i]);
+
+        if (address_without_mac && address_without_mac[0]) {
+            if (count == n_capacity) {
+                lsp_ip_addresses_p = x2nrealloc(lsp_ip_addresses_p,
+                                                &n_capacity,
+                                                sizeof *lsp_ip_addresses_p);
+            }
+            lsp_ip_addresses_p[count] = xstrdup(address_without_mac);
+            count++;
+        }
+    }
+
+    *lsp_n_ip_addresses = count;
+    return lsp_ip_addresses_p;
+}
+
+static bool
+_lsp_contains_ip_address(char **lsp_ip_addresses,
+                         size_t lsp_n_ip_addresses,
+                         char *ip_address)
+{
+    for (size_t i = 0; i < lsp_n_ip_addresses; i++) {
+        if (!strcmp(lsp_ip_addresses[i], ip_address)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+find_logical_switch_port_health_check_by_uuid(
+    struct ctl_context *ctx,
+    const char *id,
+    const struct nbrec_logical_switch_port_health_check **lsp_hc_p)
+{
+    const struct nbrec_logical_switch_port_health_check *lsp_hc;
+    *lsp_hc_p = NULL;
+
+    struct uuid lsp_hc_uuid;
+    bool is_uuid = uuid_from_string(&lsp_hc_uuid, id);
+
+    if (!is_uuid) {
+        return xasprintf("%s: Invalid UUID format", id);
+    }
+
+    lsp_hc = nbrec_logical_switch_port_health_check_get_for_uuid(
+                    ctx->idl, &lsp_hc_uuid);
+
+    if (!lsp_hc) {
+        return xasprintf("%s: Logical Switch Port Health Check not found", id);
+    }
+
+    *lsp_hc_p = lsp_hc;
+
+    return NULL;
+}
+
+static void
+nbctl_pre_lsp_health_check_add(struct ctl_context *ctx)
+{
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_col_name);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_col_addresses);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_col_health_checks);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_health_check_col_port);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_health_check_col_protocol);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_health_check_col_src_ip);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_health_check_col_addresses);
+}
+
+static void
+nbctl_lsp_health_check_add(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch_port *lsp = NULL;
+    const struct nbrec_logical_switch_port_health_check *lsp_hc = NULL;
+
+    const char *port = ctx->argv[1];
+    const char *type = ctx->argv[2];
+    const char *src_ip = ctx->argv[3];
+    enum health_check_protocol protocol;
+    char **lsp_ip_addresses = NULL;
+    int lsp_n_ip_addresses = 0;
+    char *validated_src_ip = NULL;
+    struct sset target_ips;
+    sset_init(&target_ips);
+
+    char *error;
+    error = lsp_by_name_or_uuid(ctx, port, true, &lsp);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    if (lsp->type[0]) {
+        ctl_error(ctx, "%s: Health check monitoring supported only for"
+                  " port with vif type", lsp->type);
+        goto cleanup;
+    }
+
+    if (!parse_health_check_protocol(ctx, type, &protocol)) {
+       goto cleanup;
+    }
+
+    validated_src_ip = normalize_addr_str(src_ip);
+    if (!validated_src_ip) {
+        ctl_error(ctx, "%s: Not a valid IPv4 or IPv6 address",
+                  ctx->argv[3]);
+        goto cleanup;
+    }
+
+    int64_t destination_port = 0;
+    if (protocol == LSP_TCP_HEALTH_CHECK ||
+        protocol == LSP_UDP_HEALTH_CHECK) {
+        if (ctx->argc < 5) {
+            ctl_error(ctx, "Destination port required for %s health check",
+                      type);
+            goto cleanup;
+        }
+
+        error = parse_l4_port_range(ctx->argv[4], &destination_port);
+        if (error) {
+            ctx->error = error;
+            goto cleanup;
+        }
+    }
+
+    size_t target_ips_start_index;
+    if (protocol == LSP_ICMP_HEALTH_CHECK) {
+        target_ips_start_index = 4;
+    } else {
+        target_ips_start_index = 5;
+    }
+
+    if (ctx->argc > target_ips_start_index) {
+        lsp_ip_addresses = _get_lsp_ip_addresses(lsp->addresses,
+                                                 lsp->n_addresses,
+                                                 &lsp_n_ip_addresses);
+
+        for (int i = target_ips_start_index; i < ctx->argc; i++) {
+            char *ip_addr = ctx->argv[i];
+
+            char *validated_ip = normalize_addr_str(ip_addr);
+            if (!validated_ip) {
+                free(validated_ip);
+                ctl_error(ctx, "%s: Not a valid IPv4 or IPv6 address",
+                          ip_addr);
+                goto cleanup;
+            }
+
+            if (!_lsp_contains_ip_address(lsp_ip_addresses,
+                                          lsp_n_ip_addresses,
+                                          ip_addr)) {
+                free(validated_ip);
+                ctl_error(ctx, "%s: Address %s not configured on port",
+                          lsp->name, ip_addr);
+                goto cleanup;
+            }
+
+            sset_add(&target_ips, validated_ip);
+            free(validated_ip);
+        }
+    }
+
+    lsp_health_check_get_duplicate(protocol,
+                                   src_ip,
+                                   destination_port,
+                                   &target_ips,
+                                   lsp,
+                                   &lsp_hc);
+
+    if (lsp_hc) {
+        ctl_error(ctx, "Health check already exists");
+        goto cleanup;
+    }
+
+    lsp_hc = nbrec_logical_switch_port_health_check_insert(ctx->txn);
+    nbrec_logical_switch_port_health_check_set_protocol(lsp_hc, type);
+    nbrec_logical_switch_port_health_check_set_src_ip(lsp_hc, src_ip);
+    nbrec_logical_switch_port_health_check_set_port(lsp_hc, destination_port);
+
+    if (ctx->argc > target_ips_start_index) {
+        size_t num_target_ips = ctx->argc - target_ips_start_index;
+         nbrec_logical_switch_port_health_check_set_addresses(
+            lsp_hc, (const char **) ctx->argv + target_ips_start_index,
+            num_target_ips);
+    } else {
+        nbrec_logical_switch_port_health_check_set_addresses(lsp_hc, NULL, 0);
+    }
+
+    nbrec_logical_switch_port_update_health_checks_addvalue(lsp, lsp_hc);
+
+cleanup:
+    if (lsp_ip_addresses) {
+        for (size_t i = 0; i < lsp_n_ip_addresses; i++) {
+            free(lsp_ip_addresses[i]);
+        }
+        free(lsp_ip_addresses);
+    }
+    sset_destroy(&target_ips);
+    free(validated_src_ip);
+}
+
+static void
+nbctl_pre_lsp_health_check_del(struct ctl_context *ctx)
+{
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_col_name);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_col_health_checks);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_health_check_col_protocol);
+}
+
+static void
+nbctl_lsp_health_check_del(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch_port_health_check *lsp_hc = NULL;
+    const struct nbrec_logical_switch_port *lsp = NULL;
+    const char *port_id = ctx->argv[1];
+    const char *hc_uuid = ctx->argv[2];
+
+    char *error;
+    error = lsp_by_name_or_uuid(ctx, port_id, true, &lsp);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    if (!lsp) {
+        ctl_error(ctx, "Logical Switch Port with id %s not found",
+                  port_id);
+        return;
+    }
+
+    if (hc_uuid) {
+        error = find_logical_switch_port_health_check_by_uuid(ctx,
+                                                              hc_uuid,
+                                                              &lsp_hc);
+        if (error) {
+            ctx->error = error;
+            return;
+        }
+
+        nbrec_logical_switch_port_update_health_checks_delvalue(lsp, lsp_hc);
+        nbrec_logical_switch_port_health_check_delete(lsp_hc);
+        return;
+    }
+
+    for (size_t i = 0; i < lsp->n_health_checks; i++) {
+        nbrec_logical_switch_port_update_health_checks_delvalue(
+            lsp, lsp->health_checks[i]);
+        nbrec_logical_switch_port_health_check_delete(lsp->health_checks[i]);
+    }
+}
+
+static int
+cmp_lsp_hc(const void *lsp_hc_1_, const void *lsp_hc_2_)
+{
+    const struct nbrec_logical_switch_port_health_check *const *lsp_hc_1p =
+        lsp_hc_1_;
+    const struct nbrec_logical_switch_port_health_check *const *lsp_hc_2p =
+        lsp_hc_2_;
+    const struct nbrec_logical_switch_port_health_check *lsp_hc_1 =
+        *lsp_hc_1p;
+    const struct nbrec_logical_switch_port_health_check *lsp_hc_2 =
+        *lsp_hc_2p;
+
+    int src_ip_cmp = strcmp(lsp_hc_1->src_ip, lsp_hc_2->src_ip);
+    if (src_ip_cmp) {
+        return src_ip_cmp;
+    }
+
+    int protocol_cmp = strcmp(lsp_hc_1->protocol, lsp_hc_2->protocol);
+    if (protocol_cmp != 0) {
+        return protocol_cmp;
+    }
+
+    if (strcmp(lsp_hc_1->protocol, "icmp") != 0) {
+        if (lsp_hc_1->port != lsp_hc_2->port) {
+            return lsp_hc_1->port < lsp_hc_2->port ? -1 : 1;
+        }
+    }
+
+    if (lsp_hc_1->n_addresses != lsp_hc_2->n_addresses) {
+        return lsp_hc_1->n_addresses < lsp_hc_2->n_addresses ? -1 : 1;
+    }
+
+    size_t min_n_addresses = lsp_hc_1->n_addresses < lsp_hc_2->n_addresses ?
+                             lsp_hc_1->n_addresses : lsp_hc_2->n_addresses;
+
+    for (size_t i = 0; i < min_n_addresses; i++) {
+        int ip_cmp = strcmp(lsp_hc_1->addresses[i], lsp_hc_2->addresses[i]);
+        if (ip_cmp) {
+            return ip_cmp;
+        }
+    }
+
+    return 0;
+}
+
+static void
+nbctl_pre_lsp_health_check_list(struct ctl_context *ctx)
+{
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_col_name);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_col_health_checks);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_health_check_col_port);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_health_check_col_protocol);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_health_check_col_src_ip);
+    ovsdb_idl_add_column(ctx->idl,
+        &nbrec_logical_switch_port_health_check_col_addresses);
+}
+
+static void
+nbctl_lsp_health_check_list(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch_port_health_check **lsp_hcs;
+    const struct nbrec_logical_switch_port *lsp = NULL;
+    const char *port = ctx->argv[1];
+
+    char *error;
+    error = lsp_by_name_or_uuid(ctx, port, true, &lsp);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    if (!lsp->n_health_checks) {
+        return;
+    }
+
+    lsp_hcs = xmalloc(sizeof *lsp_hcs * lsp->n_health_checks);
+    for (size_t i = 0; i < lsp->n_health_checks; i++) {
+        lsp_hcs[i] = lsp->health_checks[i];
+    }
+
+    qsort(lsp_hcs, lsp->n_health_checks, sizeof *lsp_hcs, cmp_lsp_hc);
+
+    ds_put_format(&ctx->output, "Logical Switch Port %s:\n", port);
+    for (size_t i = 0; i < lsp->n_health_checks; i++) {
+        const struct nbrec_logical_switch_port_health_check *hc
+                                                        = lsp_hcs[i];
+        ds_put_format(&ctx->output, "  Protocol      :  %s\n",
+                      hc->protocol);
+        ds_put_format(&ctx->output, "  Source IP     :  %s\n",
+                      hc->src_ip);
+        if (strcmp(hc->protocol, "icmp")) {
+        ds_put_format(&ctx->output, "  Port          :  %"PRId64"\n",
+                      hc->port);
+        }
+        if (hc->n_addresses) {
+            ds_put_format(&ctx->output, "  Addresses     :  ");
+            for (size_t j = 0; j < hc->n_addresses; j++) {
+                if (j > 0) {
+                    ds_put_format(&ctx->output, ", ");
+                }
+                ds_put_format(&ctx->output, "%s", hc->addresses[j]);
+            }
+            ds_put_format(&ctx->output, "\n");
+        }
+        int interval = smap_get_int(&hc->options, "interval", 0);
+        int timeout = smap_get_int(&hc->options, "timeout", 0);
+        int success_count = smap_get_int(&hc->options, "success_count", 0);
+        int failure_count = smap_get_int(&hc->options, "failure_count", 0);
+        if (interval) {
+            ds_put_format(&ctx->output, "  Interval      :  %d\n",
+                          interval);
+        }
+        if (timeout) {
+            ds_put_format(&ctx->output, "  Timeout       :  %d\n",
+                          timeout);
+        }
+        if (success_count) {
+            ds_put_format(&ctx->output, "  Success count :  %d\n",
+                          success_count);
+        }
+        if (failure_count) {
+            ds_put_format(&ctx->output, "  Failure count :  %d\n",
+                          failure_count);
+        }
+        if (i < lsp->n_health_checks - 1) {
+            ds_put_format(&ctx->output, "\n");
+        }
+    }
+}
+
 static const struct ctl_table_class tables[NBREC_N_TABLES] = {
     [NBREC_TABLE_DHCP_OPTIONS].row_ids
     = {{&nbrec_logical_switch_port_col_name, NULL,
@@ -9063,6 +9565,16 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "static-mac-binding-list", 0, 0, "",
       nbctl_pre_static_mac_binding, nbctl_static_mac_binding_list, NULL,
       "", RO },
+
+    /* Health Check commands */
+    {"lsp-hc-add", 2, INT_MAX, "PORT TYPE SRC_IP [DST_PORT] [ADDRESS]",
+     nbctl_pre_lsp_health_check_add, nbctl_lsp_health_check_add,
+     NULL, "", RW },
+    {"lsp-hc-del", 1, INT_MAX, "PORT [HC_UUID]",
+     nbctl_pre_lsp_health_check_del, nbctl_lsp_health_check_del,
+     NULL, "", RW },
+    {"lsp-hc-list", 1, 1, "PORT", nbctl_pre_lsp_health_check_list,
+     nbctl_lsp_health_check_list, NULL, "", RW },
 
     {NULL, 0, 0, NULL, NULL, NULL, NULL, "", RO},
 };

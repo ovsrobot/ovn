@@ -1704,3 +1704,20 @@ is_partial_uuid_match(const struct uuid *uuid, const char *match)
     s2 = strip_leading_zero(s2);
     return !strncmp(s1, s2, strlen(s2));
 }
+
+char *
+skip_mac_address_from_lsp_address(const char *address_with_mac)
+{
+    if (!address_with_mac) {
+        return NULL;
+    }
+    const char *ptr = address_with_mac;
+    while (*ptr == ' ') {
+        ptr++;
+    }
+    ptr += (char) 17;
+    while (*ptr == ' ') {
+        ptr++;
+    }
+    return (char *) ptr;
+}
