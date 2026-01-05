@@ -16477,7 +16477,11 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
         }
         ds_put_format(match,
                       "inport == %s && ip4 && "
-                      "ip.ttl == {0, 1} && !ip.later_frag", op->json_key);
+                      "ip4.src == %s/%d && "
+                      "ip.ttl == {0, 1} && !ip.later_frag",
+                      op->json_key,
+                      op->lrp_networks.ipv4_addrs[i].network_s,
+                      op->lrp_networks.ipv4_addrs[i].plen);
         ds_put_format(actions,
                       "icmp4 {"
                       "eth.dst <-> eth.src; "
