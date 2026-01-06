@@ -368,7 +368,24 @@ route_run(struct route_ctx_in *r_ctx_in,
             }
         }
 
-        struct advertise_route_entry *ar = xmalloc(sizeof(*ar));
+        struct in6_addr nexthop = IN6_IS_ADDR_V4MAPPED(&prefix)
+                ? ad->ipv4_nexthop : ad->ipv6_nexthop;
+        uint32_t hash = advertise_route_hash(&prefix, &nexthop, plen);
+        bool is_advertised = false;
+        struct advertise_route_entry *ar;
+        HMAP_FOR_EACH_WITH_HASH (ar, node, hash, &ad->routes) {
+            if (ar->priority == priority &&
+                ipv6_addr_equals(&ar->addr, &prefix) && ar->plen == plen &&
+                ipv6_addr_equals(&ar->nexthop, &nexthop)) {
+                is_advertised = true;
+                break;
+            }
+        }
+        if (is_advertised) {
+            continue;
+        }
+
+        ar = xmalloc(sizeof(*ar));
         *ar = (struct advertise_route_entry) {
             .addr = prefix,
             .plen = plen,
@@ -376,8 +393,7 @@ route_run(struct route_ctx_in *r_ctx_in,
             .nexthop = IN6_IS_ADDR_V4MAPPED(&prefix)
                        ? ad->ipv4_nexthop : ad->ipv6_nexthop,
         };
-        hmap_insert(&ad->routes, &ar->node,
-                    advertise_route_hash(&ar->addr, &ar->nexthop, plen));
+        hmap_insert(&ad->routes, &ar->node, hash);
     }
 
     smap_destroy(&port_mapping);
