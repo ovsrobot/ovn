@@ -14779,9 +14779,7 @@ build_route_policies(struct ovn_datapath *od, const struct hmap *lr_ports,
         }
 
         if (!strcmp(rule->action, "reroute")) {
-            size_t n_nexthops = rule->n_nexthops ? rule->n_nexthops : 1;
-
-            if (rule->output_port && n_nexthops != 1) {
+            if (rule->output_port && rule->n_nexthops != 1) {
                 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
                 VLOG_WARN_RL(&rl,
                              "Logical router: %s, policy "
@@ -14794,11 +14792,9 @@ build_route_policies(struct ovn_datapath *od, const struct hmap *lr_ports,
                 continue;
             }
 
-            valid_nexthops = xcalloc(n_nexthops, sizeof *valid_nexthops);
-            for (size_t j = 0; j < n_nexthops; j++) {
-                char *nexthop = rule->n_nexthops
-                    ? rule->nexthops[j] : rule->nexthop;
-
+            valid_nexthops = xcalloc(rule->n_nexthops, sizeof *valid_nexthops);
+            for (size_t j = 0; j < rule->n_nexthops; j++) {
+                char *nexthop = rule->nexthops[j];
                 if (!nexthop || !nexthop[0]) {
                     continue;
                 }
