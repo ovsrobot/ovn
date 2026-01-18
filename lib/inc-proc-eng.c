@@ -196,6 +196,31 @@ engine_set_log_timeout_cmd(struct unixctl_conn *conn, int argc OVS_UNUSED,
 }
 
 static void
+engine_list_stopwatch_cmd(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                          const char *argv[], void *arg OVS_UNUSED)
+{
+    const char *node_name = argv[1];
+    struct engine_node *node;
+    struct ds output_str = DS_EMPTY_INITIALIZER;
+    VECTOR_FOR_EACH (&engine_nodes, node) {
+        if (strcmp(node->name, node_name)) {
+            continue;
+        }
+        ds_put_format(&output_str, "%s\n", node->recompute_stopwatch);
+        for (size_t i = 0; i < node->n_inputs; i++) {
+            struct engine_node_input *input = &node->inputs[i];
+            if (!input->change_handler) {
+                continue;
+            }
+            ds_put_format(&output_str, "%s\n", input->change_handler_name);
+        }
+    }
+
+    unixctl_command_reply(conn, ds_cstr(&output_str));
+    ds_destroy(&output_str);
+}
+
+static void
 engine_get_compute_failure_info(struct engine_node *node)
 {
     VLOG_DBG("Node \"%s\" is missing compute failure debug info.", node->name);
@@ -229,6 +254,8 @@ engine_init(struct engine_node *node, struct engine_arg *arg)
                              engine_trigger_recompute_cmd, NULL);
     unixctl_command_register("inc-engine/compute-log-timeout", "", 1, 1,
                              engine_set_log_timeout_cmd, NULL);
+    unixctl_command_register("inc-engine/list-stopwatches", "", 1, 1,
+                             engine_list_stopwatch_cmd, NULL);
 }
 
 void
