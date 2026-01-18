@@ -282,6 +282,8 @@ struct engine_node {
 
     /* Indication if the node writes to SB DB. */
     bool sb_write;
+
+    char *recompute_stopwatch;
 };
 
 /* Initialize the data for the engine nodes. It calls each node's
@@ -440,7 +442,8 @@ void engine_ovsdb_node_add_index(struct engine_node *, const char *name,
         .state = EN_STALE, \
         .init = en_##NAME##_init, \
         .run = en_##NAME##_run, \
-        .cleanup = en_##NAME##_cleanup,
+        .cleanup = en_##NAME##_cleanup, \
+        .recompute_stopwatch = #NAME"_run",
 
 #define ENGINE_NODE_DEF_END };
 

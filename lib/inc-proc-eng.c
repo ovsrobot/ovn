@@ -33,6 +33,7 @@
 #include "unixctl.h"
 #include "vec.h"
 #include "sset.h"
+#include "lib/stopwatch.h"
 
 VLOG_DEFINE_THIS_MODULE(inc_proc_eng);
 
@@ -217,6 +218,7 @@ engine_init(struct engine_node *node, struct engine_arg *arg)
             sorted_node->get_compute_failure_info =
                 engine_get_compute_failure_info;
         }
+        stopwatch_create(sorted_node->recompute_stopwatch, SW_MS);
     }
 
     unixctl_command_register("inc-engine/show-stats", "", 0, 2,
@@ -420,7 +422,11 @@ engine_init_run(void)
 static enum engine_node_state
 run_recompute_callback(struct engine_node *node)
 {
-    return node->run(node, node->data);
+    enum engine_node_state ret;
+    stopwatch_start(node->recompute_stopwatch, time_msec());
+    ret = node->run(node, node->data);
+    stopwatch_stop(node->recompute_stopwatch, time_msec());
+    return ret;
 }
 
 static enum engine_input_handler_result
