@@ -278,6 +278,9 @@ engine_add_input_impl(struct engine_node *node, struct engine_node *input,
     node->inputs[node->n_inputs].node = input;
     node->inputs[node->n_inputs].change_handler = change_handler;
     node->inputs[node->n_inputs].change_handler_name = change_handler_name;
+    if (change_handler) {
+        stopwatch_create(change_handler_name, SW_MS);
+    }
     node->n_inputs ++;
 }
 
@@ -432,7 +435,11 @@ run_recompute_callback(struct engine_node *node)
 static enum engine_input_handler_result
 run_change_handler(struct engine_node *node, struct engine_node_input *input)
 {
-    return input->change_handler(node, node->data);
+    enum engine_input_handler_result ret;
+    stopwatch_start(input->change_handler_name, time_msec());
+    ret = input->change_handler(node, node->data);
+    stopwatch_stop(input->change_handler_name, time_msec());
+    return ret;
 }
 
 /* Do a full recompute (or at least try). If we're not allowed then
