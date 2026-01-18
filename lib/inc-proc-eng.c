@@ -417,6 +417,18 @@ engine_init_run(void)
     }
 }
 
+static enum engine_node_state
+run_recompute_callback(struct engine_node *node)
+{
+    return node->run(node, node->data);
+}
+
+static enum engine_input_handler_result
+run_change_handler(struct engine_node *node, struct engine_node_input *input)
+{
+    return input->change_handler(node, node->data);
+}
+
 /* Do a full recompute (or at least try). If we're not allowed then
  * mark the node as "canceled".
  */
@@ -445,7 +457,7 @@ engine_recompute(struct engine_node *node, bool allowed,
 
     /* Run the node handler which might change state. */
     long long int now = time_msec();
-    engine_set_node_state(node, node->run(node, node->data),
+    engine_set_node_state(node, run_recompute_callback(node),
                           "recompute run() result");
     node->stats.recompute++;
     long long int delta_time = time_msec() - now;
@@ -475,7 +487,7 @@ engine_compute(struct engine_node *node, bool recompute_allowed)
              */
             long long int now = time_msec();
             enum engine_input_handler_result handled;
-            handled = node->inputs[i].change_handler(node, node->data);
+            handled = run_change_handler(node, &node->inputs[i]);
             long long int delta_time = time_msec() - now;
             if (delta_time > engine_compute_log_timeout_msec) {
                 static struct vlog_rate_limit rl =
@@ -512,7 +524,7 @@ engine_run_node(struct engine_node *node, bool recompute_allowed)
 {
     if (!node->n_inputs) {
         /* Run the node handler which might change state. */
-        engine_set_node_state(node, node->run(node, node->data),
+        engine_set_node_state(node, run_recompute_callback(node),
                               "run() result due to having no inputs");
         node->stats.recompute++;
         return;
@@ -597,7 +609,7 @@ engine_need_run(void)
             continue;
         }
 
-        engine_set_node_state(node, node->run(node, node->data),
+        engine_set_node_state(node, run_recompute_callback(node),
                               "checking if engine needs to be run");
         node->stats.recompute++;
         VLOG_DBG("input node: %s, state: %s", node->name,
