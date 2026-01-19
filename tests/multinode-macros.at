@@ -22,6 +22,20 @@ m4_define([M_NS_CHECK_EXEC],
     [ AT_CHECK([M_NS_EXEC([$1], [$2], [$3])], m4_shift(m4_shift(m4_shift($@)))) ]
 )
 
+# M_FAKE_NODE_EXEC([fake_node], [command])
+#
+# Execute 'command' in 'fake_node'
+m4_define([M_FAKE_NODE_EXEC],
+    [podman exec $1 $2])
+
+# M_FAKE_NODE_CHECK_EXEC([fake_node], [command], other_params...)
+#
+# Wrapper for AT_CHECK that executes 'command' inside 'fake_node'.
+# 'other_params' as passed as they are to AT_CHECK.
+m4_define([M_FAKE_NODE_CHECK_EXEC],
+    [ AT_CHECK([M_FAKE_NODE_EXEC([$1], [$2])], m4_shift(m4_shift($@))) ]
+)
+
 # M_DAEMONIZE([fake_node],[command],[pidfile])
 m4_define([M_DAEMONIZE],
     [podman exec $1 $2 & echo $! > $3
