@@ -8225,31 +8225,12 @@ check ovn-nbctl --wait=hv sync
 test_ping
 
 # The allow ACL should match on the request and reply traffic, resulting in 2 logs.
-check_acl_log_count 2
-
-check $PYTHON $srcdir/check_acl_log.py \
-    --entry-num=1 \
-    --name=allow_acl \
-    --verdict=allow \
-    --protocol=icmp \
-    --dl_src=00:00:00:00:00:01 \
-    --dl_dst=00:00:00:00:00:02 \
-    --nw_src=10.0.0.1 \
-    --nw_dst=10.0.0.2 \
-    --icmp_type=8 \
-    --icmp_code=0
-
-check $PYTHON $srcdir/check_acl_log.py \
-    --entry-num=2 \
-    --name=allow_acl \
-    --verdict=allow \
-    --protocol=icmp \
-    --dl_src=00:00:00:00:00:02 \
-    --dl_dst=00:00:00:00:00:01 \
-    --nw_src=10.0.0.2 \
-    --nw_dst=10.0.0.1 \
-    --icmp_type=0 \
-    --icmp_code=0
+# Request and reply traffic upcall might be handled by two different threads in OVS.
+# Hence order is not guaranteed in log.
+AT_CHECK([grep -r acl_log ovn-controller.log | sed 's/.*name=/name=/' | sort] , [0], [dnl
+name="allow_acl", verdict=allow, severity=info, direction=from-lport: icmp,vlan_tci=0x0000,dl_src=00:00:00:00:00:01,dl_dst=00:00:00:00:00:02,nw_src=10.0.0.1,nw_dst=10.0.0.2,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=8,icmp_code=0
+name="allow_acl", verdict=allow, severity=info, direction=from-lport: icmp,vlan_tci=0x0000,dl_src=00:00:00:00:00:02,dl_dst=00:00:00:00:00:01,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=0,icmp_code=0
+])
 
 # Now add a higher-priority stateful ACL that matches on the same
 # parameters. Don't enable reply logging.
@@ -8328,32 +8309,10 @@ clear_log
 test_ping
 
 # Now we should have the request and reply logged.
-check_acl_log_count 2
-
-check $PYTHON $srcdir/check_acl_log.py \
-    --entry-num=1 \
-    --name=allow_related_acl \
-    --verdict=allow \
-    --protocol=icmp \
-    --dl_src=00:00:00:00:00:01 \
-    --dl_dst=00:00:00:00:00:02 \
-    --nw_src=10.0.0.1 \
-    --nw_dst=10.0.0.2 \
-    --icmp_type=8 \
-    --icmp_code=0
-
-check $PYTHON $srcdir/check_acl_log.py \
-    --entry-num=2 \
-    --name=allow_related_acl \
-    --verdict=allow \
-    --protocol=icmp \
-    --dl_src=00:00:00:00:00:02 \
-    --dl_dst=00:00:00:00:00:01 \
-    --nw_src=10.0.0.2 \
-    --nw_dst=10.0.0.1 \
-    --icmp_type=0 \
-    --icmp_code=0
-
+AT_CHECK([grep -r acl_log ovn-controller.log | sed 's/.*name=/name=/' | sort] , [0], [dnl
+name="allow_related_acl", verdict=allow, severity=info, direction=from-lport: icmp,vlan_tci=0x0000,dl_src=00:00:00:00:00:01,dl_dst=00:00:00:00:00:02,nw_src=10.0.0.1,nw_dst=10.0.0.2,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=8,icmp_code=0
+name="allow_related_acl", verdict=allow, severity=info, direction=to-lport: icmp,vlan_tci=0x0000,dl_src=00:00:00:00:00:02,dl_dst=00:00:00:00:00:01,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=0,icmp_code=0
+])
 
 # And now, let's start from scratch but make sure everything works when
 # using egress ACLs.
@@ -8368,31 +8327,10 @@ clear_log
 test_ping
 
 # The allow ACL should match on the request and reply traffic, resulting in 2 logs.
-check_acl_log_count 2
-
-check $PYTHON $srcdir/check_acl_log.py \
-    --entry-num=1 \
-    --name=allow_acl \
-    --verdict=allow \
-    --protocol=icmp \
-    --dl_src=00:00:00:00:00:01 \
-    --dl_dst=00:00:00:00:00:02 \
-    --nw_src=10.0.0.1 \
-    --nw_dst=10.0.0.2 \
-    --icmp_type=8 \
-    --icmp_code=0
-
-check $PYTHON $srcdir/check_acl_log.py \
-    --entry-num=2 \
-    --name=allow_acl \
-    --verdict=allow \
-    --protocol=icmp \
-    --dl_src=00:00:00:00:00:02 \
-    --dl_dst=00:00:00:00:00:01 \
-    --nw_src=10.0.0.2 \
-    --nw_dst=10.0.0.1 \
-    --icmp_type=0 \
-    --icmp_code=0
+AT_CHECK([grep -r acl_log ovn-controller.log | sed 's/.*name=/name=/' | sort] , [0], [dnl
+name="allow_acl", verdict=allow, severity=info, direction=to-lport: icmp,vlan_tci=0x0000,dl_src=00:00:00:00:00:01,dl_dst=00:00:00:00:00:02,nw_src=10.0.0.1,nw_dst=10.0.0.2,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=8,icmp_code=0
+name="allow_acl", verdict=allow, severity=info, direction=to-lport: icmp,vlan_tci=0x0000,dl_src=00:00:00:00:00:02,dl_dst=00:00:00:00:00:01,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=0,icmp_code=0
+])
 
 # Now add a higher-priority stateful ACL that matches on the same
 # parameters. Don't enable reply logging.
@@ -8471,32 +8409,10 @@ clear_log
 test_ping
 
 # Now we should have the request and reply logged.
-check_acl_log_count 2
-
-check $PYTHON $srcdir/check_acl_log.py \
-    --entry-num=1 \
-    --name=allow_related_acl \
-    --verdict=allow \
-    --protocol=icmp \
-    --dl_src=00:00:00:00:00:01 \
-    --dl_dst=00:00:00:00:00:02 \
-    --nw_src=10.0.0.1 \
-    --nw_dst=10.0.0.2 \
-    --icmp_type=8 \
-    --icmp_code=0
-
-check $PYTHON $srcdir/check_acl_log.py \
-    --entry-num=2 \
-    --name=allow_related_acl \
-    --verdict=allow \
-    --protocol=icmp \
-    --dl_src=00:00:00:00:00:02 \
-    --dl_dst=00:00:00:00:00:01 \
-    --nw_src=10.0.0.2 \
-    --nw_dst=10.0.0.1 \
-    --icmp_type=0 \
-    --icmp_code=0
-
+AT_CHECK([grep -r acl_log ovn-controller.log | sed 's/.*name=/name=/' | sort] , [0], [dnl
+name="allow_related_acl", verdict=allow, severity=info, direction=from-lport: icmp,vlan_tci=0x0000,dl_src=00:00:00:00:00:02,dl_dst=00:00:00:00:00:01,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=0,icmp_code=0
+name="allow_related_acl", verdict=allow, severity=info, direction=to-lport: icmp,vlan_tci=0x0000,dl_src=00:00:00:00:00:01,dl_dst=00:00:00:00:00:02,nw_src=10.0.0.1,nw_dst=10.0.0.2,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=8,icmp_code=0
+])
 
 OVN_CLEANUP_CONTROLLER([hv1])
 
