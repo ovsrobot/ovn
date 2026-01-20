@@ -6292,14 +6292,13 @@ or
    title="network function group">
     <p>
       Each row contains a list of <ref table="Network_Function"/>. Traffic
-      redirection is achieved by referencing a
+      redirection/mirroring is achieved by referencing a
       <code>Network_Function_Group</code> from an <ref table="ACL"/>. Health
       monitoring of each <code>Network_Function</code> is performed based on
       parameters defined in <ref table="Network_Function_Health_Check"/>.
       Traffic matching the ACL is redirected to one of the active
-      <code>Network_Functions</code>. If all are detected as down, traffic is
-      redirected to one of the <code>Network_Functions</code> regardless of
-      status.
+      <code>Network_Functions</code>. If all are detected as down, fallback
+      method is applied.
     </p>
 
     <column name="name">
@@ -6348,9 +6347,28 @@ or
     </column>
 
     <column name="mode">
-      Traffic forwarding mode, with default and only value as "inline". The
-      "inline" mode means that the network function is directly in the path
-      of traffic, with traffic being redirected through it.
+      Network Function insertion mode.
+      <p>
+        Supports following modes.
+      </p>
+
+      <dl>
+        <dt><code>inline</code></dt>
+        <dd>
+          <p>
+            In this mode, traffic redirection happens inline through active
+            Network Function ports.
+          </p>
+        </dd>
+
+        <dt><code>vtap</code></dt>
+        <dd>
+          <p>
+            In this mode, traffic is mirrored to active Network Function
+            port.
+          </p>
+        </dd>
+      </dl>
     </column>
 
     <group title="Common Columns">
@@ -6362,8 +6380,11 @@ or
 
   <table name="Network_Function" title="network function">
     <p>
-      Each row represents one network function entity. This contains a pair
-      of logical_switch_ports. Traffic that matches the ACL is redirected to
+      Each row represents one network function entity. This contains a single
+      logical switch port when deployed in vtap mode and pair of logical switch
+      ports when deployed in inline mode.
+
+      In inline mode, traffic that matches the ACL is redirected to
       <code>inport</code> for from-lport ACLs and to <code>outport</code>
       for to-lport ACLs. Once the traffic is received on the other port, it
       continues through the standard OVN pipeline.
@@ -6376,6 +6397,9 @@ or
         1. The Network Function MUST NOT modify the packet headers.
         2. The Network Function is not supported when used in conjunction with
            Load Balancer.
+
+      In vtap mode, traffic that matches the ACL is mirrored to
+      <code>inport</code> in all cases.
     </p>
 
     <column name="name">
@@ -6384,12 +6408,16 @@ or
 
     <column name="inport">
       <ref table="Logical_Switch_Port"/>  where request traffic for from-lport
-      ACL and response traffic for to-lport ACL is redirected.
+      ACL and response traffic for to-lport ACL is redirected when
+      network function is deployed in inline mode. In vtap mode, traffic
+      matching both to-lport and from-lport ACLs is mirrored to the inport.
     </column>
 
     <column name="outport">
       <ref table="Logical_Switch_Port"/> where request traffic for to-lport ACL
-      and response traffic for from-lport ACL is redirected.
+      and response traffic for from-lport ACL is redirected when
+      network function is deployed in inline mode.
+      This is not applicable when network function is deployed in vtap mode.
     </column>
 
     <column name="health_check">
