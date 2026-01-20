@@ -3338,6 +3338,22 @@ AT_CHECK([ovn-nbctl nf-list | uuidfilt], [0], [dnl
 ])
 AT_CHECK([ovn-nbctl nf-del nf2])
 AT_CHECK([ovn-nbctl nf-list | uuidfilt], [0], [])
+
+
+# Create network-function with only inport.
+AT_CHECK([ovn-nbctl nf-add nf0 svc-port0])
+AT_CHECK([ovn-nbctl nf-list | uuidfilt], [0], [dnl
+<0> (nf0) in:svc-port0 out:<not_set>
+])
+
+# Create a network-function-group in vtap mode.
+AT_CHECK([ovn-nbctl nfg-add nfg0 1 vtap nf0])
+AT_CHECK([ovn-nbctl nfg-list | uuidfilt], [0], [dnl
+<0> (nfg0)
+])
+AT_CHECK([ovn-nbctl nfg-del nfg0])
+AT_CHECK([ovn-nbctl nf-del nf0])
+
 ])
 
 AT_SETUP([ovn-nbctl - TLS server name indication (SNI) with --ssl-server-name])
