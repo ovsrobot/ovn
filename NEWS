@@ -78,6 +78,10 @@ Post v25.09.0
      ports instead of per-chassis ports, reducing port count for large scale
      environments. Default is disabled.
    - Add fallback support for Network Function.
+   - Add vtap mode support for Network Function. In vtap mode, traffic matching
+     ACLs is mirrored to the network function while continuing to flow to the
+     original destination. This enables passive monitoring use cases where
+     network functions can observe traffic without being inline in the data path.
    - Introduce the capability to specify EVPN device names using Logical_Switch
      other_config column.
    - Introduce the capability to specify multiple ips for ovn-evpn-local-ip
