@@ -22,6 +22,20 @@ m4_define([M_NS_CHECK_EXEC],
     [ AT_CHECK([M_NS_EXEC([$1], [$2], [$3])], m4_shift(m4_shift(m4_shift($@)))) ]
 )
 
+# M_FAKE_NODE_EXEC([fake_node], [command])
+#
+# Execute 'command' in 'fake_node'
+m4_define([M_FAKE_NODE_EXEC],
+    [podman exec $1 $2])
+
+# M_FAKE_NODE_CHECK_EXEC([fake_node], [command], other_params...)
+#
+# Wrapper for AT_CHECK that executes 'command' inside 'fake_node'.
+# 'other_params' as passed as they are to AT_CHECK.
+m4_define([M_FAKE_NODE_CHECK_EXEC],
+    [ AT_CHECK([M_FAKE_NODE_EXEC([$1], [$2])], m4_shift(m4_shift($@))) ]
+)
+
 # M_DAEMONIZE([fake_node],[command],[pidfile])
 m4_define([M_DAEMONIZE],
     [podman exec $1 $2 & echo $! > $3
@@ -469,5 +483,18 @@ m_kill() {
 m_is_fedora() {
     m_central_as grep -qi fedora /etc/os-release
 }
+
+# M_START_L4_SERVER([fake_node], [namespace], [ip_addr], [port], [reply_string], [pidfile])
+#
+# Helper to properly start l4 server in inside 'fake_node''s namespace'.
+m4_define([M_START_L4_SERVER],
+    [podman cp $srcdir/server.py $1:/data/metadata_server.py || exit 1
+     M_NS_DAEMONIZE([$1], [$2],
+                    [$PYTHON /data/metadata_server.py --bind-host $3 \
+                                                       --bind-port $4 \
+                                                       --reply-string $5],
+                     [$6])
+    ]
+)
 
 OVS_END_SHELL_HELPERS

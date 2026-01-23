@@ -35,10 +35,9 @@ def get_socket_family(host):
             raise
 
 
-def start_server(host='127.0.0.1', port=10000):
+def start_server(host='127.0.0.1', port=10000, reply_string=None):
     # Determine socket family based on host address
     family = get_socket_family(host)
-
     # Create a TCP socket with appropriate family
     with socket.socket(family, socket.SOCK_STREAM) as server_socket:
         if family == socket.AF_INET6:
@@ -86,10 +85,13 @@ def start_server(host='127.0.0.1', port=10000):
                 # Receive the data from the client in chunks and write
                 # to a file
                 data = client_socket.recv(1024)
-                while data:
-                    with open("output.txt", "a") as f:
-                        f.write(data.decode())
-                    data = client_socket.recv(1024)
+                if reply_string:
+                    client_socket.sendall(reply_string.encode())
+                else:
+                    while data:
+                        with open("output.txt", "a") as f:
+                            f.write(data.decode())
+                        data = client_socket.recv(1024)
 
 
 if __name__ == "__main__":
@@ -97,6 +99,7 @@ if __name__ == "__main__":
     group = parser.add_argument_group()
     group.add_argument("-i", "--bind-host")
     group.add_argument("-p", "--bind-port", type=int)
+    group.add_argument("-s", "--reply-string")
     args = parser.parse_args()
 
-    start_server(args.bind_host, args.bind_port)
+    start_server(args.bind_host, args.bind_port, args.reply_string)
