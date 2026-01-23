@@ -3594,6 +3594,8 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
         case OVNACT_CT_STATE_SAVE:
             execute_ct_save_state(ovnact_get_CT_STATE_SAVE(a), uflow, super);
             break;
+        case OVNACT_CT_LB_MARK_LOCAL:
+            break;
         }
     }
     ofpbuf_uninit(&stack);
