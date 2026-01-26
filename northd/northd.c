@@ -3262,9 +3262,9 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
 
             /* If the service monitor is backed by a real port, use its MAC
              * address instead of the default service check MAC. */
-            const char *source_mac = svc_monitor_mac;
             const struct eth_addr *source_mac_ea = svc_monitor_mac_ea;
-            if (op) {
+            const char *source_mac = svc_monitor_mac;
+            if (op && !backend_nb->remote_backend) {
                 struct ovn_port *svc_mon_op;
                 VECTOR_FOR_EACH (&op->od->router_ports, svc_mon_op) {
                     if (!svc_mon_op->peer) {
@@ -3277,6 +3277,9 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                                           backend_nb->svc_mon_src_ip)) {
                         source_mac = svc_mon_op->peer->lrp_networks.ea_s;
                         source_mac_ea = &svc_mon_op->peer->lrp_networks.ea;
+                        /* Store LRP that's used as the source of service
+                         * monitor traffic, to avoid later lookups. */
+                        backend_nb->svc_mon_lrp = svc_mon_op->peer;
                         break;
                     }
                 }
@@ -8542,7 +8545,7 @@ build_lb_health_check_response_lflows(
         struct ovn_northd_lb_backend *backend_nb =
             &lb_vip_nb->backends_nb[j++];
 
-        if (!backend_nb->health_check) {
+        if (!backend_nb->health_check || !backend_nb->svc_mon_lrp) {
             continue;
         }
 
@@ -8555,24 +8558,21 @@ build_lb_health_check_response_lflows(
         DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_lr_map) {
             struct ovn_datapath *od = sparse_array_get(&lr_datapaths->dps,
                                                         index);
-            /* Only install the rule if the datapath has a port with
-             * monitor source IP. */
-            struct ovn_datapath *peer_switch_od = NULL;
-            struct ovn_port *svc_mon_op;
-
-            HMAP_FOR_EACH (svc_mon_op, dp_node, &od->ports) {
-                if (!svc_mon_op->peer) {
-                    continue;
-                }
-                const char *lrp_ip = lrp_find_member_ip(
-                    svc_mon_op,
-                    backend_nb->svc_mon_src_ip);
-                if (lrp_ip &&
-                        !strcmp(lrp_ip, backend_nb->svc_mon_src_ip)) {
-                    peer_switch_od = svc_mon_op->peer->od;
-                    break;
-                }
+            if (!od) {
+                continue;
             }
+
+            /* Check if the "service monitor source" LRP belongs to this
+             * router. */
+            if (backend_nb->svc_mon_lrp->od != od) {
+                continue;
+            }
+
+            /* Get the peer switch datapath where the backend is located. */
+            struct ovn_datapath *peer_switch_od =
+                backend_nb->svc_mon_lrp->peer
+                ? backend_nb->svc_mon_lrp->peer->od
+                : NULL;
             if (!peer_switch_od) {
                 continue;
             }
@@ -8580,7 +8580,7 @@ build_lb_health_check_response_lflows(
             ds_clear(match);
             ds_clear(action);
 
-            /* icmp6 type 1 and icmp4 type 3 are included as well, because
+            /* icmp6 type 1 and icmp4 type 3 are included in the match, because
              * the controller is using them to detect unreachable ports. */
             if (addr_is_ipv6(backend_nb->svc_mon_src_ip)) {
                 ds_put_format(match,
@@ -10464,23 +10464,9 @@ build_lswitch_arp_nd_local_svc_mon(const struct ovn_lb_datapaths *lb_dps,
                 continue;
             }
 
-            /* ARP responder is necessary only if the service check is not
-             * backed by a real port and an IP. */
-            struct ovn_port *svc_mon_op;
-            bool port_found = false;
-            VECTOR_FOR_EACH (&op->od->router_ports, svc_mon_op) {
-                if (!svc_mon_op->peer) {
-                    continue;
-                }
-                const char *lrp_ip = lrp_find_member_ip(
-                        svc_mon_op->peer,
-                        backend_nb->svc_mon_src_ip);
-                if (lrp_ip && !strcmp(lrp_ip, backend_nb->svc_mon_src_ip)) {
-                    port_found = true;
-                    break;
-                }
-            }
-            if (port_found) {
+            /* ARP responder is only needed if the service check is NOT
+             * backed by a real LRP (i.e., using a reserved IP). */
+            if (backend_nb->svc_mon_lrp) {
                 continue;
             }
 
