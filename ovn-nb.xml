@@ -1674,6 +1674,17 @@
             <ref table="Interface" db="vswitch"/> table.  This in turn will
             make OVS vswitchd update the MTU of the linked interface.
           </column>
+
+          <column name="options" key="port-security-allow-vrrpv3-arp-nd"
+                  type='{"type": "string"}'>
+            Allows the inner ARP SHA or ND TLL/SLL to be within the range of
+            MAC addresses specified by RFC 5798. The option accepts a list of
+            MACs or literal value "any", in that case the full range
+            is allowed.
+
+            This option is only applicable if <ref column="port_security"/>
+            is populated.
+          </column>
         </group>
       </group>
 

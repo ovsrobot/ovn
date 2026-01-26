@@ -2539,10 +2539,96 @@ build_in_port_sec_ip4_flows(const struct sbrec_port_binding *pb,
                     &pb->header_.uuid);
 }
 
+struct masked_eth_addr {
+    struct eth_addr addr;
+    struct eth_addr mask;
+};
+
+static void
+extract_port_sec_arp_nd_inner_macs(const char *vrrp_option,
+                                   struct vector *arp_inner,
+                                   struct vector *nd_inner)
+{
+    static const struct masked_eth_addr maddr_zero = {
+        .addr = eth_addr_zero,
+        .mask = eth_addr_exact
+    };
+    static const struct masked_eth_addr maddr_any_vrrp4 = {
+        .addr = ETH_ADDR_C(00,00,5e,00,01,00),
+        .mask = ETH_ADDR_C(ff,ff,ff,ff,ff,00)
+    };
+    static const struct masked_eth_addr maddr_any_vrrp6 = {
+        .addr = ETH_ADDR_C(00,00,5e,00,02,00),
+        .mask = ETH_ADDR_C(ff,ff,ff,ff,ff,00)
+    };
+
+    /* Placeholder for the port security MAC. */
+    vector_push(arp_inner, &maddr_zero);
+    vector_push(nd_inner, &maddr_zero);
+    /* The all zero SLL/TLL. */
+    vector_push(nd_inner, &maddr_zero);
+
+    if (!vrrp_option) {
+        return;
+    }
+
+    if (!strcmp(vrrp_option, "any")) {
+        vector_push(arp_inner, &maddr_any_vrrp4);
+        vector_push(nd_inner, &maddr_any_vrrp6);
+        return;
+    }
+
+    char *tokstr = xstrdup(vrrp_option);
+    char *save_ptr = NULL;
+    for (char *token = strtok_r(tokstr, ",", &save_ptr);
+         token != NULL;
+         token = strtok_r(NULL, ",", &save_ptr)) {
+
+        struct masked_eth_addr maddr = {
+            .addr = eth_addr_zero,
+            .mask = eth_addr_exact
+        };
+        eth_addr_from_string(token, &maddr.addr);
+
+        if (!eth_addr_equals(maddr.addr, maddr_any_vrrp4.addr) &&
+            eth_addr_equal_except(maddr.addr, maddr_any_vrrp4.addr,
+                                  maddr_any_vrrp4.mask)) {
+
+            vector_push(arp_inner, &maddr);
+        } else if (!eth_addr_equals(maddr.addr, maddr_any_vrrp6.addr) &&
+                   eth_addr_equal_except(maddr.addr, maddr_any_vrrp6.addr,
+                                         maddr_any_vrrp6.mask)) {
+            vector_push(nd_inner, &maddr);
+        } else {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl, "Invalid VRRPv3 MAC address specified: %s",
+                         token);
+        }
+    }
+
+    free(tokstr);
+}
+
+static void
+port_sec_inner_mac_replace(struct vector *arp_inner, struct vector *nd_inner,
+                           struct eth_addr mac)
+{
+    struct masked_eth_addr *maddr;
+    ovs_assert(vector_len(arp_inner));
+    ovs_assert(vector_len(nd_inner));
+
+    maddr = vector_get_ptr(arp_inner, 0);
+    maddr->addr = mac;
+
+    maddr = vector_get_ptr(nd_inner, 0);
+    maddr->addr = mac;
+}
+
 /* Adds the OF rules to allow ARP packets in 'in_port_sec_nd' table. */
 static void
 build_in_port_sec_arp_flows(const struct sbrec_port_binding *pb,
-                           struct lport_addresses *ps_addr,
+                           const struct lport_addresses *ps_addr,
+                           const struct vector *arp_inner,
                            struct match *m, struct ofpbuf *ofpacts,
                            struct ovn_desired_flow_table *flow_table)
 {
@@ -2550,7 +2636,6 @@ build_in_port_sec_arp_flows(const struct sbrec_port_binding *pb,
         /* No ARP is allowed as only IPv6 addresses are configured. */
         return;
     }
-
     build_port_sec_allow_action(ofpacts);
 
     if (!ps_addr->n_ipv4_addrs) {
@@ -2559,23 +2644,28 @@ build_in_port_sec_arp_flows(const struct sbrec_port_binding *pb,
          * table.
          * priority: 90
          * match - "inport == pb->port && eth.src == ps_addr.ea &&
-         *          arp && arp.sha == ps_addr.ea"
+         *          arp && arp.sha == {arp_inner[0], ..., arp_inner[n]}"
          * action - "port_sec_failed = 0;"
          */
         reset_match_for_port_sec_flows(pb, MFF_LOG_INPORT, m);
         match_set_dl_src(m, ps_addr->ea);
         match_set_dl_type(m, htons(ETH_TYPE_ARP));
-        match_set_arp_sha(m, ps_addr->ea);
-        ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
-                        pb->header_.uuid.parts[0], m, ofpacts,
-                        &pb->header_.uuid);
+
+        struct masked_eth_addr *maddr;
+        VECTOR_FOR_EACH_PTR (arp_inner, maddr) {
+            match_set_arp_sha_masked(m, maddr->addr, maddr->mask);
+            ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
+                            pb->header_.uuid.parts[0], m, ofpacts,
+                            &pb->header_.uuid);
+        }
     }
 
     /* Add the below logical flow equivalent OF rules in 'in_port_sec_nd'
      * table.
      * priority: 90
      * match - "inport == pb->port && eth.src == ps_addr.ea &&
-     *         arp && arp.sha == ps_addr.ea && arp.spa == {ps_addr.ipv4_addrs}"
+     *         arp && arp.sha == ps_addr.ea &&
+     *         arp.sha == {arp_inner[0], ..., arp_inner[n]}"
      * action - "port_sec_failed = 0;"
      */
     for (size_t j = 0; j < ps_addr->n_ipv4_addrs; j++) {
@@ -2591,9 +2681,14 @@ build_in_port_sec_arp_flows(const struct sbrec_port_binding *pb,
         } else {
             match_set_nw_src_masked(m, ps_addr->ipv4_addrs[j].addr, mask);
         }
-        ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
-                        pb->header_.uuid.parts[0], m, ofpacts,
-                        &pb->header_.uuid);
+
+        struct masked_eth_addr *maddr;
+        VECTOR_FOR_EACH_PTR (arp_inner, maddr) {
+            match_set_arp_sha_masked(m, maddr->addr, maddr->mask);
+            ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
+                            pb->header_.uuid.parts[0], m, ofpacts,
+                            &pb->header_.uuid);
+        }
     }
 }
 
@@ -2697,7 +2792,8 @@ build_in_port_sec_ip6_flows(const struct sbrec_port_binding *pb,
  * 'in_port_sec_nd' table. */
 static void
 build_in_port_sec_nd_flows(const struct sbrec_port_binding *pb,
-                           struct lport_addresses *ps_addr,
+                           const struct lport_addresses *ps_addr,
+                           const struct vector *nd_inner,
                            struct match *m, struct ofpbuf *ofpacts,
                            struct ovn_desired_flow_table *flow_table)
 {
@@ -2708,7 +2804,7 @@ build_in_port_sec_nd_flows(const struct sbrec_port_binding *pb,
      * priority: 90
      * match - "inport == pb->port && eth.src == ps_addr.ea &&
      *          icmp6 && icmp6.code == 135 && icmp6.type == 0 &&
-     *          ip6.tll == 255 && nd.sll == {00:00:00:00:00:00, ps_addr.ea}"
+     *          ip6.tll == 255 && nd.sll == {nd_inner[0], ..., nd_inner[n]}"
      * action - "port_sec_failed = 0;"
      */
     reset_match_for_port_sec_flows(pb, MFF_LOG_INPORT, m);
@@ -2718,15 +2814,13 @@ build_in_port_sec_nd_flows(const struct sbrec_port_binding *pb,
     match_set_icmp_type(m, 135);
     match_set_icmp_code(m, 0);
 
-    match_set_arp_sha(m, eth_addr_zero);
-    ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
-                    pb->header_.uuid.parts[0], m, ofpacts,
-                    &pb->header_.uuid);
-
-    match_set_arp_sha(m, ps_addr->ea);
-    ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
-                    pb->header_.uuid.parts[0], m, ofpacts,
-                    &pb->header_.uuid);
+    struct masked_eth_addr *maddr;
+    VECTOR_FOR_EACH_PTR (nd_inner, maddr) {
+        match_set_arp_sha_masked(m, maddr->addr, maddr->mask);
+        ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
+                        pb->header_.uuid.parts[0], m, ofpacts,
+                        &pb->header_.uuid);
+    }
 
     match_set_icmp_type(m, 136);
     match_set_icmp_code(m, 0);
@@ -2736,23 +2830,20 @@ build_in_port_sec_nd_flows(const struct sbrec_port_binding *pb,
          * priority: 90
          * match - "inport == pb->port && eth.src == ps_addr.ea && icmp6 &&
          *          icmp6.code == 136 && icmp6.type == 0 && ip6.tll == 255 &&
-         *          nd.tll == {00:00:00:00:00:00, ps_addr.ea} &&
+         *          nd.tll == {nd_inner[0], ..., nd_inner[n]} &&
          *          nd.target == {ps_addr.ipv6_addrs, lla}"
          * action - "port_sec_failed = 0;"
          */
         struct in6_addr lla;
         in6_generate_lla(ps_addr->ea, &lla);
-        match_set_arp_tha(m, eth_addr_zero);
+        match_set_nd_target(m, &lla);
 
-        match_set_nd_target(m, &lla);
-        ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
-                        pb->header_.uuid.parts[0], m, ofpacts,
-                        &pb->header_.uuid);
-        match_set_arp_tha(m, ps_addr->ea);
-        match_set_nd_target(m, &lla);
-        ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
-                        pb->header_.uuid.parts[0], m, ofpacts,
-                        &pb->header_.uuid);
+        VECTOR_FOR_EACH_PTR (nd_inner, maddr) {
+            match_set_arp_tha_masked(m, maddr->addr, maddr->mask);
+            ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
+                            pb->header_.uuid.parts[0], m, ofpacts,
+                            &pb->header_.uuid);
+        }
 
         for (size_t j = 0; j < ps_addr->n_ipv6_addrs; j++) {
             reset_match_for_port_sec_flows(pb, MFF_LOG_INPORT, m);
@@ -2762,7 +2853,6 @@ build_in_port_sec_nd_flows(const struct sbrec_port_binding *pb,
             match_set_nw_ttl(m, 255);
             match_set_icmp_type(m, 136);
             match_set_icmp_code(m, 0);
-            match_set_arp_tha(m, eth_addr_zero);
 
             if (ps_addr->ipv6_addrs[j].plen == 128
                 || !ipv6_addr_is_host_zero(&ps_addr->ipv6_addrs[j].addr,
@@ -2773,14 +2863,12 @@ build_in_port_sec_nd_flows(const struct sbrec_port_binding *pb,
                                            &ps_addr->ipv6_addrs[j].mask);
             }
 
-            ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
-                            pb->header_.uuid.parts[0], m, ofpacts,
-                            &pb->header_.uuid);
-
-            match_set_arp_tha(m, ps_addr->ea);
-            ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
-                            pb->header_.uuid.parts[0], m, ofpacts,
-                            &pb->header_.uuid);
+            VECTOR_FOR_EACH_PTR (nd_inner, maddr) {
+                match_set_arp_tha_masked(m, maddr->addr, maddr->mask);
+                ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
+                                pb->header_.uuid.parts[0], m, ofpacts,
+                                &pb->header_.uuid);
+            }
         }
     } else {
         /* Add the below logical flow equivalent OF rules in 'in_port_sec_nd'
@@ -2788,18 +2876,15 @@ build_in_port_sec_nd_flows(const struct sbrec_port_binding *pb,
          * priority: 90
          * match - "inport == pb->port && eth.src == ps_addr.ea && icmp6 &&
          *          icmp6.code == 136 && icmp6.type == 0 && ip6.tll == 255 &&
-         *          nd.tll == {00:00:00:00:00:00, ps_addr.ea}"
+         *          nd.tll == {nd_inner[0], ..., nd_inner[n]}"
          * action - "port_sec_failed = 0;"
          */
-        match_set_arp_tha(m, eth_addr_zero);
-        ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
-                        pb->header_.uuid.parts[0], m, ofpacts,
-                        &pb->header_.uuid);
-
-        match_set_arp_tha(m, ps_addr->ea);
-        ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
-                        pb->header_.uuid.parts[0], m, ofpacts,
-                        &pb->header_.uuid);
+        VECTOR_FOR_EACH_PTR (nd_inner, maddr) {
+            match_set_arp_tha_masked(m, maddr->addr, maddr->mask);
+            ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC_ND, 90,
+                            pb->header_.uuid.parts[0], m, ofpacts,
+                            &pb->header_.uuid);
+        }
     }
 }
 
@@ -3032,6 +3117,13 @@ consider_port_sec_flows(const struct sbrec_port_binding *pb,
         return;
     }
 
+    struct vector arp_inner = VECTOR_EMPTY_INITIALIZER(struct masked_eth_addr);
+    struct vector nd_inner = VECTOR_EMPTY_INITIALIZER(struct masked_eth_addr);
+
+    const char *vrrp3_opt = smap_get(&pb->options,
+                                     "port-security-allow-vrrpv3-arp-nd");
+    extract_port_sec_arp_nd_inner_macs(vrrp3_opt, &arp_inner, &nd_inner);
+
     struct match match = MATCH_CATCHALL_INITIALIZER;
     uint64_t stub[1024 / 8];
     struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(stub);
@@ -3039,17 +3131,21 @@ consider_port_sec_flows(const struct sbrec_port_binding *pb,
     build_in_port_sec_default_flows(pb, &match, &ofpacts, flow_table);
 
     for (size_t i = 0; i < n_ps_addrs; i++) {
+        port_sec_inner_mac_replace(&arp_inner, &nd_inner, ps_addrs[i].ea);
         build_in_port_sec_no_ip_flows(pb, &ps_addrs[i], &match, &ofpacts,
                                       flow_table);
         build_in_port_sec_ip4_flows(pb, &ps_addrs[i], &match, &ofpacts,
                                     flow_table);
-        build_in_port_sec_arp_flows(pb, &ps_addrs[i], &match, &ofpacts,
-                                    flow_table);
+        build_in_port_sec_arp_flows(pb, &ps_addrs[i], &arp_inner, &match,
+                                    &ofpacts, flow_table);
         build_in_port_sec_ip6_flows(pb, &ps_addrs[i], &match, &ofpacts,
                                     flow_table);
-        build_in_port_sec_nd_flows(pb, &ps_addrs[i], &match, &ofpacts,
-                                   flow_table);
+        build_in_port_sec_nd_flows(pb, &ps_addrs[i], &nd_inner, &match,
+                                   &ofpacts, flow_table);
     }
+
+    vector_destroy(&arp_inner);
+    vector_destroy(&nd_inner);
 
     /* Out port security. */
 

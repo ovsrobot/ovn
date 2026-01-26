@@ -93,6 +93,10 @@ Post v25.09.0
      other_config column.
    - Introduce the capability to specify multiple ips for ovn-evpn-local-ip
      option.
+   - Add an LSP option called "port-security-allow-vrrpv3-arp-nd", this
+     allows VRRP v3 (RFC 5798) to work with port security enabled. The option
+     accepts list of MACs within the range specified by the RFC 5798 or
+     value "any" to allow the full range.
 
 OVN v25.09.0 - xxx xx xxxx
 --------------------------

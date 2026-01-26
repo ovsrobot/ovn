@@ -44187,3 +44187,230 @@ check ovn-nbctl --wait=hv lsp-set-type down_ext localnet
 OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([Port security - VRRPv3 ARP/ND])
+AT_SKIP_IF([test $HAVE_SCAPY = no])
+ovn_start
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+check ovn-nbctl ls-add ls
+
+check ovn-nbctl lsp-add ls lsp1
+check ovn-nbctl lsp-set-addresses lsp1 "00:00:00:00:10:01 192.168.10.1 fd10::1"
+
+check ovn-nbctl lsp-add ls lsp2
+check ovn-nbctl lsp-set-addresses lsp2 "00:00:00:00:10:02 192.168.10.2 fd10::2"
+
+check ovs-vsctl -- add-port br-int vif1 -- \
+      set interface vif1 external-ids:iface-id=lsp1 \
+      options:tx_pcap=hv1/vif1-tx.pcap \
+      options:rxq_pcap=hv1/vif1-rx.pcap
+
+check ovs-vsctl -- add-port br-int vif2 -- \
+      set interface vif2 external-ids:iface-id=lsp2 \
+      options:tx_pcap=hv1/vif2-tx.pcap \
+      options:rxq_pcap=hv1/vif2-rx.pcap
+
+wait_for_ports_up
+
+test_arp() {
+    local dropped=$1
+
+    packet=$(fmt_pkt "
+        Ether(dst='ff:ff:ff:ff:ff:ff', src='00:00:00:00:10:01') /
+        ARP(op=1, hwsrc='00:00:5e:00:01:05', hwdst='ff:ff:ff:ff:ff:ff', psrc='192.168.10.1', pdst='192.168.10.2')
+    ")
+    check as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
+
+    packet=$(fmt_pkt "
+            Ether(dst='ff:ff:ff:ff:ff:ff', src='00:00:00:00:10:01') /
+            ARP(op=2, hwsrc='00:00:5e:00:01:05', hwdst='ff:ff:ff:ff:ff:ff', psrc='192.168.10.1', pdst='192.168.10.1')
+    ")
+    check as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
+
+    if [[ "$dropped" != "yes" ]]; then
+        echo $packet >> vif2.expected
+        packet=$(fmt_pkt "
+            Ether(dst='00:00:00:00:10:01', src='00:00:00:00:10:02') /
+            ARP(op=2, hwsrc='00:00:00:00:10:02', hwdst='00:00:5e:00:01:05', psrc='192.168.10.2', pdst='192.168.10.1')
+        ")
+        echo $packet >> vif1.expected
+    fi
+}
+test_nd() {
+    local dropped=$1
+
+    packet=$(fmt_pkt "
+        Ether(dst='33:33:ff:00:00:01', src='00:00:00:00:10:01') /
+        IPv6(src='fd10::1', dst='ff02::1:ff00:2') /
+        ICMPv6ND_NS(tgt='fd10::2') /
+        ICMPv6NDOptSrcLLAddr(lladdr='00:00:5e:00:02:05')
+    ")
+    check as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
+
+    packet=$(fmt_pkt "
+        Ether(dst='33:33:ff:00:00:01', src='00:00:00:00:10:01') /
+        IPv6(src='fd10::1', dst='ff02::1:ff00:1') /
+        ICMPv6ND_NA(tgt='fd10::1') /
+        ICMPv6NDOptDstLLAddr(lladdr='00:00:5e:00:02:05')
+    ")
+    check as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
+
+    if [[ "$dropped" != "yes" ]]; then
+        echo $packet >> vif2.expected
+
+        packet=$(fmt_pkt "
+                Ether(dst='00:00:00:00:10:01', src='00:00:00:00:10:02') /
+                IPv6(src='fd10::2', dst='fd10::1') /
+                ICMPv6ND_NA(tgt='fd10::2', R=0, S=1, O=1) /
+                ICMPv6NDOptDstLLAddr(lladdr='00:00:00:00:10:02')
+        ")
+        echo $packet >> vif1.expected
+    fi
+}
+
+reset_pcap_and_expected() {
+    reset_pcap_file vif1 hv1/vif1
+    reset_pcap_file vif2 hv1/vif2
+
+    : > vif1.expected
+    : > vif2.expected
+}
+
+AS_BOX([Without port security])
+reset_pcap_and_expected
+
+test_arp no
+test_nd no
+
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+AS_BOX([With MAC only port security])
+reset_pcap_and_expected
+check ovn-nbctl --wait=hv lsp-set-port-security lsp1 "00:00:00:00:10:01"
+
+test_arp yes
+test_nd yes
+
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+AS_BOX([With MAC + IP port security])
+reset_pcap_and_expected
+check ovn-nbctl --wait=hv lsp-set-port-security lsp1 "00:00:00:00:10:01 192.168.10.1 fd10::1"
+
+test_arp yes
+test_nd yes
+
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+AS_BOX([With MAC only port security, VRRPv3=any])
+reset_pcap_and_expected
+check ovn-nbctl lsp-set-options lsp1 port-security-allow-vrrpv3-arp-nd=any
+check ovn-nbctl --wait=hv lsp-set-port-security lsp1 "00:00:00:00:10:01"
+
+test_arp no
+test_nd no
+
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+AS_BOX([With MAC + IP port security, VRRPv3=any])
+reset_pcap_and_expected
+check ovn-nbctl --wait=hv lsp-set-port-security lsp1 "00:00:00:00:10:01 192.168.10.1 fd10::1"
+
+test_arp no
+test_nd no
+
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+AS_BOX([With MAC only port security, VRRPv3 valid IPv4])
+reset_pcap_and_expected
+check ovn-nbctl lsp-set-options lsp1 port-security-allow-vrrpv3-arp-nd="00:00:5e:00:01:05,00:00:5e:00:02:00"
+check ovn-nbctl --wait=hv lsp-set-port-security lsp1 "00:00:00:00:10:01"
+
+test_arp no
+test_nd yes
+
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+AS_BOX([With MAC + IP only port security, VRRPv3 valid IPv4])
+reset_pcap_and_expected
+check ovn-nbctl lsp-set-options lsp1 port-security-allow-vrrpv3-arp-nd="00:00:5e:00:01:05,00:00:5e:00:02:00"
+check ovn-nbctl --wait=hv lsp-set-port-security lsp1 "00:00:00:00:10:01 192.168.10.1 fd10::1"
+
+test_arp no
+test_nd yes
+
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+AS_BOX([With MAC only port security, VRRPv3 valid IPv6])
+reset_pcap_and_expected
+check ovn-nbctl lsp-set-options lsp1 port-security-allow-vrrpv3-arp-nd="00:00:5e:00:01:00,00:00:5e:00:02:05"
+check ovn-nbctl --wait=hv lsp-set-port-security lsp1 "00:00:00:00:10:01"
+
+test_arp yes
+test_nd no
+
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+AS_BOX([With MAC + IP only port security, VRRPv3 valid IPv6])
+reset_pcap_and_expected
+check ovn-nbctl lsp-set-options lsp1 port-security-allow-vrrpv3-arp-nd="00:00:5e:00:01:00,00:00:5e:00:02:05"
+check ovn-nbctl --wait=hv lsp-set-port-security lsp1 "00:00:00:00:10:01 192.168.10.1 fd10::1"
+
+test_arp yes
+test_nd no
+
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+AS_BOX([With MAC only port security, VRRPv3 valid IPv4 + IPv6])
+reset_pcap_and_expected
+check ovn-nbctl lsp-set-options lsp1 port-security-allow-vrrpv3-arp-nd="00:00:5e:00:01:05,00:00:5e:00:02:05"
+check ovn-nbctl --wait=hv lsp-set-port-security lsp1 "00:00:00:00:10:01"
+
+test_arp no
+test_nd no
+
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+AS_BOX([With MAC + IP only port security, VRRPv3 valid IPv4 + IPv6])
+reset_pcap_and_expected
+check ovn-nbctl lsp-set-options lsp1 port-security-allow-vrrpv3-arp-nd="00:00:5e:00:01:05,00:00:5e:00:02:05"
+check ovn-nbctl --wait=hv lsp-set-port-security lsp1 "00:00:00:00:10:01 192.168.10.1 fd10::1"
+
+test_arp no
+test_nd no
+
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+AS_BOX([With MAC + IP only port security, VRRPv3 valid but different IPv4 + IPv6])
+reset_pcap_and_expected
+check ovn-nbctl lsp-set-options lsp1 port-security-allow-vrrpv3-arp-nd="00:00:5e:00:01:01,00:00:5e:00:02:01"
+check ovn-nbctl --wait=hv lsp-set-port-security lsp1 "00:00:00:00:10:01 192.168.10.1 fd10::1"
+
+test_arp yes
+test_nd yes
+
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [vif2.expected])
+
+OVN_CLEANUP([hv1
+/Invalid VRRPv3 MAC address specified/d])
+
+AT_CLEANUP
+])
