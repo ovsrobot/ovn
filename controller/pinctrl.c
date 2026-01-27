@@ -407,6 +407,33 @@ COVERAGE_DEFINE(dns_error_parse_failure);
 COVERAGE_DEFINE(dns_unsupported_ovn_owned);
 COVERAGE_DEFINE(dns_response_sent);
 
+/* DHCP statistics - thread-safe coverage counters */
+COVERAGE_DEFINE(dhcp_query_total);
+COVERAGE_DEFINE(dhcp_v4_discover);
+COVERAGE_DEFINE(dhcp_v4_request);
+COVERAGE_DEFINE(dhcp_v4_decline);
+COVERAGE_DEFINE(dhcp_v4_release);
+COVERAGE_DEFINE(dhcp_v4_inform);
+COVERAGE_DEFINE(dhcp_v4_offer_sent);
+COVERAGE_DEFINE(dhcp_v4_ack_sent);
+COVERAGE_DEFINE(dhcp_v4_nak_sent);
+COVERAGE_DEFINE(dhcp_v6_solicit);
+COVERAGE_DEFINE(dhcp_v6_request);
+COVERAGE_DEFINE(dhcp_v6_confirm);
+COVERAGE_DEFINE(dhcp_v6_decline);
+COVERAGE_DEFINE(dhcp_v6_release);
+COVERAGE_DEFINE(dhcp_v6_info_request);
+COVERAGE_DEFINE(dhcp_v6_advertise_sent);
+COVERAGE_DEFINE(dhcp_v6_reply_sent);
+COVERAGE_DEFINE(dhcp_error_truncated);
+COVERAGE_DEFINE(dhcp_error_invalid_opcode);
+COVERAGE_DEFINE(dhcp_error_missing_msg_type);
+COVERAGE_DEFINE(dhcp_error_invalid_msg_type);
+COVERAGE_DEFINE(dhcp_error_missing_client_id);
+COVERAGE_DEFINE(dhcp_error_missing_iaid);
+COVERAGE_DEFINE(dhcp_error_userdata);
+COVERAGE_DEFINE(dhcp_error_ip_mismatch);
+
 struct empty_lb_backends_event {
     struct hmap_node hmap_node;
     long long int timestamp;
@@ -2552,6 +2579,9 @@ pinctrl_handle_put_dhcp_opts(
     struct ofpbuf *dhcp_inform_reply_buf = NULL;
     uint32_t success = 0;
 
+    /* Track total DHCP queries received */
+    COVERAGE_INC(dhcp_query_total);
+
     /* Parse result field. */
     const struct mf_field *f;
     enum ofperr ofperr = nx_pull_header(userdata, NULL, &f, NULL);
@@ -2591,6 +2621,7 @@ pinctrl_handle_put_dhcp_opts(
         dhcp_get_hdr_from_pkt(pkt_in, &in_dhcp_ptr, end);
 
     if (!in_dhcp_data) {
+        COVERAGE_INC(dhcp_error_truncated);
         goto exit;
     }
     ovs_assert(in_dhcp_ptr);
@@ -2599,6 +2630,7 @@ pinctrl_handle_put_dhcp_opts(
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "Invalid opcode in the DHCP packet: %d",
                      in_dhcp_data->op);
+        COVERAGE_INC(dhcp_error_invalid_opcode);
         goto exit;
     }
 
@@ -2614,6 +2646,7 @@ pinctrl_handle_put_dhcp_opts(
     if (!dhcp_opts.dhcp_msg_type) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "Missing DHCP message type");
+        COVERAGE_INC(dhcp_error_missing_msg_type);
         goto exit;
     }
 
@@ -2622,9 +2655,11 @@ pinctrl_handle_put_dhcp_opts(
 
     switch (dhcp_opts.dhcp_msg_type) {
     case DHCP_MSG_DISCOVER:
+        COVERAGE_INC(dhcp_v4_discover);
         msg_type = DHCP_MSG_OFFER;
         break;
     case DHCP_MSG_REQUEST: {
+        COVERAGE_INC(dhcp_v4_request);
         msg_type = DHCP_MSG_ACK;
         if (dhcp_opts.request_ip != *offer_ip) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
@@ -2632,11 +2667,13 @@ pinctrl_handle_put_dhcp_opts(
                          "match offer "IP_FMT,
                          IP_ARGS(dhcp_opts.request_ip),
                          IP_ARGS(*offer_ip));
+            COVERAGE_INC(dhcp_error_ip_mismatch);
             msg_type = DHCP_MSG_NAK;
         }
         break;
     }
     case OVN_DHCP_MSG_RELEASE: {
+        COVERAGE_INC(dhcp_v4_release);
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(20, 40);
         const struct eth_header *l2 = dp_packet_eth(pkt_in);
         VLOG_INFO_RL(&rl, "DHCPRELEASE "ETH_ADDR_FMT " "IP_FMT"",
@@ -2645,6 +2682,7 @@ pinctrl_handle_put_dhcp_opts(
         break;
     }
     case OVN_DHCP_MSG_INFORM: {
+        COVERAGE_INC(dhcp_v4_inform);
         /* RFC 2131 section 3.4.
          * Remove all the offer ip related dhcp options and
          * all the time related dhcp options.
@@ -2695,6 +2733,7 @@ pinctrl_handle_put_dhcp_opts(
         break;
     }
     case OVN_DHCP_MSG_DECLINE:
+        COVERAGE_INC(dhcp_v4_decline);
         if (dhcp_opts.request_ip == *offer_ip) {
             VLOG_INFO("DHCPDECLINE from "ETH_ADDR_FMT ", "IP_FMT" duplicated",
                       ETH_ADDR_ARGS(in_flow->dl_src), IP_ARGS(*offer_ip));
@@ -2704,6 +2743,7 @@ pinctrl_handle_put_dhcp_opts(
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "Invalid DHCP message type: %d",
                      dhcp_opts.dhcp_msg_type);
+        COVERAGE_INC(dhcp_error_invalid_msg_type);
         goto exit;
     }
     }
@@ -2864,6 +2904,19 @@ pinctrl_handle_put_dhcp_opts(
                  msg_type == DHCP_MSG_OFFER ? "OFFER" :
                    (msg_type == DHCP_MSG_ACK ? "ACK": "NAK"),
                  ETH_ADDR_ARGS(l2->eth_src), IP_ARGS(*offer_ip));
+
+    /* Track DHCP responses sent */
+    switch (msg_type) {
+    case DHCP_MSG_OFFER:
+        COVERAGE_INC(dhcp_v4_offer_sent);
+        break;
+    case DHCP_MSG_ACK:
+        COVERAGE_INC(dhcp_v4_ack_sent);
+        break;
+    case DHCP_MSG_NAK:
+        COVERAGE_INC(dhcp_v4_nak_sent);
+        break;
+    }
 
     success = 1;
 exit:
@@ -3083,6 +3136,9 @@ pinctrl_handle_put_dhcpv6_opts(
     struct dp_packet *pkt_out_ptr = NULL;
     uint32_t success = 0;
 
+    /* Track total DHCP queries received */
+    COVERAGE_INC(dhcp_query_total);
+
     /* Parse result field. */
     const struct mf_field *f;
     enum ofperr ofperr = nx_pull_header(userdata, NULL, &f, NULL);
@@ -3115,6 +3171,7 @@ pinctrl_handle_put_dhcpv6_opts(
     const uint8_t *in_dhcpv6_data = dp_packet_get_udp_payload(pkt_in);
     if (!in_udp || !in_dhcpv6_data) {
         VLOG_WARN_RL(&rl, "truncated dhcpv6 packet");
+        COVERAGE_INC(dhcp_error_truncated);
         goto exit;
     }
 
@@ -3123,23 +3180,36 @@ pinctrl_handle_put_dhcpv6_opts(
     bool status_only = false;
     switch (in_dhcpv6_msg_type) {
     case DHCPV6_MSG_TYPE_SOLICIT:
+        COVERAGE_INC(dhcp_v6_solicit);
         out_dhcpv6_msg_type = DHCPV6_MSG_TYPE_ADVT;
         break;
 
     case DHCPV6_MSG_TYPE_REQUEST:
+        COVERAGE_INC(dhcp_v6_request);
+        out_dhcpv6_msg_type = DHCPV6_MSG_TYPE_REPLY;
+        break;
     case DHCPV6_MSG_TYPE_CONFIRM:
+        COVERAGE_INC(dhcp_v6_confirm);
+        out_dhcpv6_msg_type = DHCPV6_MSG_TYPE_REPLY;
+        break;
     case DHCPV6_MSG_TYPE_DECLINE:
+        COVERAGE_INC(dhcp_v6_decline);
+        out_dhcpv6_msg_type = DHCPV6_MSG_TYPE_REPLY;
+        break;
     case DHCPV6_MSG_TYPE_INFO_REQ:
+        COVERAGE_INC(dhcp_v6_info_request);
         out_dhcpv6_msg_type = DHCPV6_MSG_TYPE_REPLY;
         break;
 
     case DHCPV6_MSG_TYPE_RELEASE:
+        COVERAGE_INC(dhcp_v6_release);
         out_dhcpv6_msg_type = DHCPV6_MSG_TYPE_REPLY;
         status_only = true;
         break;
 
     default:
         /* Invalid or unsupported DHCPv6 message type */
+        COVERAGE_INC(dhcp_error_invalid_msg_type);
         goto exit;
     }
     /* Skip 4 bytes (message type (1 byte) + transaction ID (3 bytes). */
@@ -3194,12 +3264,14 @@ pinctrl_handle_put_dhcpv6_opts(
     if (!in_opt_client_id) {
         VLOG_WARN_RL(&rl, "DHCPv6 option - Client id not present in the "
                      "DHCPv6 packet");
+        COVERAGE_INC(dhcp_error_missing_client_id);
         goto exit;
     }
 
     if (!iaid && in_dhcpv6_msg_type != DHCPV6_MSG_TYPE_INFO_REQ) {
         VLOG_WARN_RL(&rl, "DHCPv6 option - IA NA not present in the "
                      "DHCPv6 packet");
+        COVERAGE_INC(dhcp_error_missing_iaid);
         goto exit;
     }
 
@@ -3217,6 +3289,7 @@ pinctrl_handle_put_dhcpv6_opts(
 
     if (!compose) {
         VLOG_WARN_RL(&rl, "Invalid userdata");
+        COVERAGE_INC(dhcp_error_userdata);
         goto exit;
     }
 
@@ -3274,6 +3347,17 @@ pinctrl_handle_put_dhcpv6_opts(
     pin->packet = dp_packet_data(&pkt_out);
     pin->packet_len = dp_packet_size(&pkt_out);
     ofpbuf_uninit(&out_dhcpv6_opts);
+
+    /* Track DHCPv6 responses sent */
+    switch (out_dhcpv6_msg_type) {
+    case DHCPV6_MSG_TYPE_ADVT:
+        COVERAGE_INC(dhcp_v6_advertise_sent);
+        break;
+    case DHCPV6_MSG_TYPE_REPLY:
+        COVERAGE_INC(dhcp_v6_reply_sent);
+        break;
+    }
+
     success = 1;
 exit:
     if (!ofperr) {

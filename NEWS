@@ -5,6 +5,14 @@ Post v25.09.0
      coverage/read-counter <counter_name>" or "coverage/show". Tracked metrics
      include total queries, query types (A, AAAA, PTR, ANY, Other), cache
      performance (hits/misses), responses sent, and error conditions.
+   - Added DHCP statistics tracking in ovn-controller using OVS coverage
+     counters. Statistics can be queried using "ovn-appctl -t ovn-controller
+     coverage/read-counter <counter_name>" or "coverage/show". Tracked metrics
+     include total queries, DHCPv4 message types (DISCOVER, REQUEST, DECLINE,
+     RELEASE, INFORM), DHCPv6 message types (SOLICIT, REQUEST, CONFIRM,
+     DECLINE, RELEASE, INFO-REQUEST), responses sent (OFFER, ACK, NAK for v4;
+     ADVERTISE, REPLY for v6), and error conditions (truncated packets,
+     invalid opcodes, missing message types, missing client IDs, etc.).
    - Added support for TLS Server Name Indication (SNI) with the new
      --ssl-server-name option in OVN utilities and daemons. This allows
      specifying the server name for SNI, which is useful when connecting
