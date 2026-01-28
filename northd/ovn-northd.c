@@ -905,7 +905,6 @@ main(int argc, char *argv[])
         &nbrec_load_balancer_col_external_ids,
         &nbrec_load_balancer_health_check_col_external_ids,
         &nbrec_logical_router_policy_col_external_ids,
-        &nbrec_logical_router_static_route_col_external_ids,
         &nbrec_meter_col_external_ids,
         &nbrec_meter_band_col_external_ids,
         &nbrec_mirror_col_external_ids,
