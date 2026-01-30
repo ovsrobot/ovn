@@ -3365,6 +3365,42 @@ dns_build_ptr_answer(
     free(encoded);
 }
 
+/* Shuffle IPv4 addresses using Fisher-Yates for DNS round-robin. */
+static void
+dns_shuffle_ipv4_addrs(struct ipv4_netaddr *addrs, size_t n)
+{
+    if (n <= 1) {
+        return;
+    }
+
+    for (size_t i = n - 1; i > 0; i--) {
+        size_t j = random_range(i + 1);
+        if (i != j) {
+            struct ipv4_netaddr tmp = addrs[i];
+            addrs[i] = addrs[j];
+            addrs[j] = tmp;
+        }
+    }
+}
+
+/* Shuffle IPv6 addresses using Fisher-Yates for DNS round-robin. */
+static void
+dns_shuffle_ipv6_addrs(struct ipv6_netaddr *addrs, size_t n)
+{
+    if (n <= 1) {
+        return;
+    }
+
+    for (size_t i = n - 1; i > 0; i--) {
+        size_t j = random_range(i + 1);
+        if (i != j) {
+            struct ipv6_netaddr tmp = addrs[i];
+            addrs[i] = addrs[j];
+            addrs[j] = tmp;
+        }
+    }
+}
+
 #define DNS_RCODE_SERVER_REFUSE 0x5
 #define DNS_QUERY_TYPE_CLASS_LEN (2 * sizeof(ovs_be16))
 
@@ -3529,6 +3565,10 @@ pinctrl_handle_dns_lookup(
         if (!extract_ip_addresses(answer_data, &ip_addrs)) {
             goto exit;
         }
+
+        /* Shuffle IPs for round-robin load balancing. */
+        dns_shuffle_ipv4_addrs(ip_addrs.ipv4_addrs, ip_addrs.n_ipv4_addrs);
+        dns_shuffle_ipv6_addrs(ip_addrs.ipv6_addrs, ip_addrs.n_ipv6_addrs);
 
         if (query_type == DNS_QUERY_TYPE_A ||
             query_type == DNS_QUERY_TYPE_ANY) {
