@@ -3375,6 +3375,13 @@ or
         </p>
 
         <p>
+          If <code>hub-spoke</code> is in the list then northd will synchronize
+          dynamic routes learned through OVN-IC from other routers into the
+          <ref table="Advertised_Route" db="OVN_Southbound"/> table, enabling
+          hub-and-spoke propagation.
+        </p>
+
+        <p>
           This value can be overwritten on a per LRP basis using
           <ref column="options" key="dynamic-routing-redistribute"
                table="Logical_Router_Port"/> on the Logical_Router_Port.
@@ -4462,6 +4469,13 @@ or
         </p>
 
         <p>
+          If <code>hub-spoke</code> is in the list then northd will synchronize
+          dynamic routes learned through OVN-IC from other routers into the
+          <ref table="Advertised_Route" db="OVN_Southbound"/> table, enabling
+          hub-and-spoke propagation.
+        </p>
+
+        <p>
           If not set the value from <ref column="options"
           key="dynamic-routing-redistribute" table="Logical_Router"/> on the
           Logical_Router will be used.
@@ -4821,6 +4835,13 @@ or
       will be set to the uuid of the row in <ref table="Route"
       db="OVN_IC_Southbound"/> table of the <ref db="OVN_IC_Southbound"/>
       database.
+    </column>
+
+    <column name="external_ids" key="ic-source-dynamic">
+      <code>ovn-ic</code> populates this key for routes learned from
+      <ref db="OVN_IC_Southbound"/>. The value is <code>true</code> if the
+      learned route originated from dynamic sources (e.g. learned routes)
+      in the advertising availability zone, otherwise <code>false</code>.
     </column>
 
     <group title="Common Columns">

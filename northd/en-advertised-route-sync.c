@@ -675,6 +675,8 @@ should_advertise_route(const struct uuidset *host_route_lrps,
         return drr_mode_NAT_is_set(drr);
     case ROUTE_SOURCE_LB:
         return drr_mode_LB_is_set(drr);
+    case ROUTE_SOURCE_IC_DYNAMIC:
+        return drr_mode_IC_DYNAMIC_is_set(drr);
     case ROUTE_SOURCE_LEARNED:
         OVS_NOT_REACHED();
     default:
@@ -745,6 +747,7 @@ advertise_route_track_od(struct advertised_route_sync_data *data,
                            &tracked_op->od->nbr->header_.uuid);
         }
         break;
+    case ROUTE_SOURCE_IC_DYNAMIC:
     case ROUTE_SOURCE_CONNECTED:
     case ROUTE_SOURCE_STATIC:
         break;
