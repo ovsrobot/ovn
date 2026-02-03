@@ -171,11 +171,13 @@ fi
 CONTAINER_ID="$($CONTAINER_CMD run --privileged -d \
     --pids-limit=-1 \
     --security-opt apparmor=unconfined \
+    --cgroupns=host \
+    --cgroups=no-conmon \
     --env ASAN_OPTIONS=$ASAN_OPTIONS \
-    -v /lib/modules/$(uname -r):/lib/modules/$(uname -r):ro \
+    -v /host/lib/modules/$(uname -r):/lib/modules/$(uname -r):ro \
     -v $OVN_PATH:$CONTAINER_WORKSPACE/ovn:Z \
     -v $OVS_PATH:$CONTAINER_WORKSPACE/ovs:Z \
-    $IMAGE_NAME)"
+    $IMAGE_NAME tail -f /dev/null)"
 trap remove_container EXIT
 
 copy_sources_to_workdir

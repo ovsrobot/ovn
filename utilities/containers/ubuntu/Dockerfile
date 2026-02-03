@@ -66,4 +66,4 @@ ENV TZ Etc/UTC
 
 RUN /tmp/prepare.sh
 
-CMD ["/sbin/init"]
+CMD ["/bin/sh"]

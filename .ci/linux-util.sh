@@ -36,16 +36,8 @@ function fix_etc_hosts()
     cp /etc/hosts ./hosts.bak
     sed -E -n \
       '/^[[:space:]]*(#.*|[0-9a-fA-F:.]+([[:space:]]+[a-zA-Z0-9.-]+)+|)$/p' \
-      ./hosts.bak | sudo tee /etc/hosts
+      ./hosts.bak | tee /etc/hosts
 
     diff -u ./hosts.bak /etc/hosts || true
 }
 
-# Workaround until https://github.com/actions/runner-images/issues/10015
-# is resolved in some way.
-function disable_apparmor()
-{
-    # https://bugs.launchpad.net/ubuntu/+source/apparmor/+bug/2093797
-    sudo aa-teardown || true
-    sudo systemctl disable --now apparmor.service
-}
