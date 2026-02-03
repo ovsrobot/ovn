@@ -93,6 +93,9 @@ Post v25.09.0
      other_config column.
    - Introduce the capability to specify multiple ips for ovn-evpn-local-ip
      option.
+   - Add support for special port_security prefix "VRRPv3". This prefix allows
+     CMS to specify one physical MAC and multiple VRRPv3 MAC addresses.
+     The VRRPv3 MAC also accepts masked format.
 
 OVN v25.09.0 - xxx xx xxxx
 --------------------------

@@ -2058,6 +2058,15 @@
         </p>
 
         <p>
+          There is also special prefix "VRRPv3" that allows specification of
+          single physical MAC and multiple VRRPv3 MAC addresses. The format
+          allows the same definition of multiple IP addresses associated with
+          the MACs specified. "VRRPv3" without single physical MAC translates
+          allowing traffic for the whole "VRRPv3" range of MACs. See more in
+          the examples.
+        </p>
+
+        <p>
           This column is provided as a convenience to cloud management systems,
           but all of the features that it implements can be implemented as ACLs
           using the <ref table="ACL"/> table.
@@ -2101,6 +2110,30 @@
             receive IPv4 packets to 192.168.1.255 (based on the subnet mask),
             255.255.255.255, and any address in 224.0.0.0/4.  The host may not
             send or receive any IPv6 (including IPv6 Neighbor Discovery) traffic.
+          </dd>
+
+          <dt><code>"VRRPv3 &lt;PHYSICAL_MAC&gt;"</code></dt>
+          <dd>
+            The host may send traffic from and receive traffic to the
+            specified physical MAC addresses, and to all VRRPv3 MAC addresses.
+            This also affects the permutations of inner MAC for ARP/ND. The
+            ARP/ND can be sent with physical MAC as a source and the inner
+            SHA/TLL/SLL can be the physical MAC or any VRRPv3 MAC.
+          </dd>
+
+          <dt><code>"VRRPv3 &lt;PHYSICAL_MAC&gt;
+                    &lt;VRRPV3_MACv4_1&gt;/[&lt;MASK1&gt;]
+                    &lt;VRRPV3_MACv4_N&gt;
+                    &lt;VRRPV3_MACv6_1&gt;/[&lt;MASK2&gt;]
+                    &lt;VRRPV3_MACv6_N&gt;"</code></dt>
+          <dd>
+            The host may send traffic from and receive traffic to the
+            specified physical MAC addresses, and to all VRRPv3 MAC addresses
+            specified in the option. Also note that the MAC addresses can
+            be provided with a mask between /40 and /48 prefix.
+            This also affects the permutations of inner MAC for ARP/ND. The
+            ARP/ND can be sent with physical MAC as a source and the inner
+            SHA/TLL/SLL can be the physical MAC or provided VRRPv3 MAC.
           </dd>
         </dl>
       </column>
