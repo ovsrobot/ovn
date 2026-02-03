@@ -3365,6 +3365,44 @@ dns_build_ptr_answer(
     free(encoded);
 }
 
+/* Shuffle an array in-place using Fisher-Yates algorithm. */
+static void
+array_shuffle(void *array, size_t elem_size, size_t n)
+{
+    if (n <= 1) {
+        return;
+    }
+
+    uint8_t *arr = array;
+    for (size_t i = n - 1; i > 0; i--) {
+        size_t j = random_range(i + 1);
+        uint8_t *a = arr + i * elem_size;
+        uint8_t *b = arr + j * elem_size;
+        for (size_t k = 0; k < elem_size; k++) {
+            uint8_t tmp = a[k];
+            a[k] = b[k];
+            b[k] = tmp;
+        }
+    }
+}
+
+/* Return an array of shuffled indices [0, n-1] for DNS round-robin.
+ * Caller must free the returned array. Returns NULL if n == 0. */
+static size_t *
+shuffle_indices(size_t n)
+{
+    if (!n) {
+        return NULL;
+    }
+
+    size_t *indices = xmalloc(n * sizeof *indices);
+    for (size_t i = 0; i < n; i++) {
+        indices[i] = i;
+    }
+    array_shuffle(indices, sizeof *indices, n);
+    return indices;
+}
+
 #define DNS_RCODE_SERVER_REFUSE 0x5
 #define DNS_QUERY_TYPE_CLASS_LEN (2 * sizeof(ovs_be16))
 
@@ -3530,11 +3568,15 @@ pinctrl_handle_dns_lookup(
             goto exit;
         }
 
+        /* Shuffle indices for round-robin load balancing. */
+        size_t *ipv4_order = shuffle_indices(ip_addrs.n_ipv4_addrs);
+        size_t *ipv6_order = shuffle_indices(ip_addrs.n_ipv6_addrs);
+
         if (query_type == DNS_QUERY_TYPE_A ||
             query_type == DNS_QUERY_TYPE_ANY) {
             for (size_t i = 0; i < ip_addrs.n_ipv4_addrs; i++) {
                 dns_build_a_answer(&dns_answer, in_queryname, idx,
-                                   ip_addrs.ipv4_addrs[i].addr);
+                                   ip_addrs.ipv4_addrs[ipv4_order[i]].addr);
                 ancount++;
             }
         }
@@ -3543,10 +3585,13 @@ pinctrl_handle_dns_lookup(
             query_type == DNS_QUERY_TYPE_ANY) {
             for (size_t i = 0; i < ip_addrs.n_ipv6_addrs; i++) {
                 dns_build_aaaa_answer(&dns_answer, in_queryname, idx,
-                                      &ip_addrs.ipv6_addrs[i].addr);
+                                      &ip_addrs.ipv6_addrs[ipv6_order[i]].addr);
                 ancount++;
             }
         }
+
+        free(ipv4_order);
+        free(ipv6_order);
 
         /* DNS is configured with a record for this domain with
          * an IPv4/IPV6 only, so instead of ignoring this A/AAAA query,
