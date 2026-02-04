@@ -5947,6 +5947,15 @@ build_lswitch_port_sec_op(struct ovn_port *op, struct lflow_table *lflows,
         return;
     }
 
+    if (lsp_is_router(op->nbsp)) {
+        ds_clear(match);
+        ds_put_format(match, "outport == %s && eth.type == 0x%04x",
+                      op->json_key, OFP_DL_TYPE_NOT_ETH_TYPE);
+        ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_APPLY_PORT_SEC, 150,
+                      ds_cstr(match), debug_drop_action(), op->lflow_ref,
+                      WITH_DESC("Packet with unknown ether type"));
+    }
+
     ds_clear(match);
     ds_clear(actions);
     ds_put_format(match, "inport == %s", op->json_key);

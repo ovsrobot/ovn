@@ -2817,6 +2817,11 @@ output;
 
     <ul>
       <li>
+        For router ports, a priority 150 flow to drop ethernet packets with
+        unknown ether type (0x05ff).
+      </li>
+
+      <li>
         A priority 100 flow which matches on the multicast traffic and applies
         the action <code>REGBIT_PORT_SEC_DROP" = 0; next;"</code> to skip
         the out port security checks.
