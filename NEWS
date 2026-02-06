@@ -98,6 +98,9 @@ Post v25.09.0
      reserving an unused IP from the backend's subnet. This change allows
      using LRP IPs directly, eliminating the need to reserve additional IPs
      per backend port.
+   - Add support for special port_security prefix "VRRPv3". This prefix allows
+     CMS to specify one physical MAC and multiple VRRPv3 MAC addresses.
+     The VRRPv3 MAC also accepts masked format.
 
 OVN v25.09.0 - xxx xx xxxx
 --------------------------
