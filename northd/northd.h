@@ -22,6 +22,7 @@
 #include "lib/sset.h"
 #include "lib/hmapx.h"
 #include "northd/en-port-group.h"
+#include "northd/en-sync-from-sb.h"
 #include "northd/ipam.h"
 #include "northd/lb.h"
 #include "openvswitch/hmap.h"
@@ -892,10 +893,8 @@ void ovnnb_db_run(struct northd_input *input_data,
                   struct northd_data *data,
                   struct ovsdb_idl_txn *ovnsb_txn);
 void ovnsb_db_run(struct ovsdb_idl_txn *ovnsb_txn,
-                  const struct sbrec_port_binding_table *,
-                  const struct sbrec_ha_chassis_group_table *,
-                  struct hmap *ls_ports,
-                  struct hmap *lr_ports);
+                  const struct en_sync_from_sb_data *sync_from_sb_data,
+                  const struct northd_data *northd_data);
 bool northd_handle_ls_changes(struct ovsdb_idl_txn *,
                               const struct northd_input *,
                               struct northd_data *);

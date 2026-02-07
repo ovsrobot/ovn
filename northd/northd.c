@@ -55,6 +55,7 @@
 #include "en-sampling-app.h"
 #include "en-datapath-logical-switch.h"
 #include "en-datapath-logical-router.h"
+#include "en-sync-from-sb.h"
 #include "lib/ovn-parallel-hmap.h"
 #include "ovn/actions.h"
 #include "ovn/features.h"
@@ -2439,7 +2440,7 @@ op_get_name(const struct ovn_port *op)
 }
 
 static void
-ovn_update_ipv6_prefix(struct hmap *lr_ports)
+ovn_update_ipv6_prefix(const struct hmap *lr_ports)
 {
     const struct ovn_port *op;
     HMAP_FOR_EACH (op, key_node, lr_ports) {
@@ -21011,10 +21012,11 @@ handle_cr_port_binding_changes(const struct sbrec_port_binding *sb,
  * this column is not empty, it means we need to set the corresponding logical
  * port as 'up' in the northbound DB. */
 static void
-handle_port_binding_changes(const struct sbrec_port_binding_table *sb_pb_table,
+handle_port_binding_changes(
+                const struct sbrec_port_binding_table *sb_pb_table,
                 const struct sbrec_ha_chassis_group_table *sb_ha_ch_grp_table,
-                struct hmap *ls_ports,
-                struct hmap *lr_ports,
+                const struct hmap *ls_ports,
+                const struct hmap *lr_ports,
                 struct shash *ha_ref_chassis_map)
 {
     struct hmapx lr_groups = HMAPX_INITIALIZER(&lr_groups);
@@ -21090,23 +21092,26 @@ handle_port_binding_changes(const struct sbrec_port_binding_table *sb_pb_table,
 /* Handle a fairly small set of changes in the southbound database. */
 void
 ovnsb_db_run(struct ovsdb_idl_txn *ovnsb_txn,
-             const struct sbrec_port_binding_table *sb_pb_table,
-             const struct sbrec_ha_chassis_group_table *sb_ha_ch_grp_table,
-             struct hmap *ls_ports,
-             struct hmap *lr_ports)
+             const struct en_sync_from_sb_data *sync_from_sb_data,
+             const struct northd_data *northd_data)
 {
     if (!ovsdb_idl_has_ever_connected(ovsdb_idl_txn_get_idl(ovnsb_txn))) {
         return;
     }
 
     struct shash ha_ref_chassis_map = SHASH_INITIALIZER(&ha_ref_chassis_map);
-    handle_port_binding_changes(sb_pb_table, sb_ha_ch_grp_table,
-                                ls_ports, lr_ports, &ha_ref_chassis_map);
-    update_sb_ha_group_ref_chassis(sb_ha_ch_grp_table, &ha_ref_chassis_map);
+    handle_port_binding_changes(sync_from_sb_data->sb_pb_table,
+                                sync_from_sb_data->sb_ha_ch_grp_table,
+                                &northd_data->ls_ports,
+                                &northd_data->lr_ports,
+                                &ha_ref_chassis_map);
+
+    update_sb_ha_group_ref_chassis(sync_from_sb_data->sb_ha_ch_grp_table,
+                                   &ha_ref_chassis_map);
 
     shash_destroy(&ha_ref_chassis_map);
 
-    ovn_update_ipv6_prefix(lr_ports);
+    ovn_update_ipv6_prefix(&northd_data->lr_ports);
 }
 
 const struct ovn_datapath *
