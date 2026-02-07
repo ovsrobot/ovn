@@ -7021,6 +7021,55 @@ pinctrl_find_svc_monitor(uint32_t dp_key, uint32_t port_key,
     return NULL;
 }
 
+static enum svc_monitor_type
+svc_monitor_type_from_sb(const struct sbrec_service_monitor *sb)
+{
+    if (sb->type &&
+        !strcmp(sb->type, "network-function")) {
+        return SVC_MON_TYPE_NF;
+    }
+
+    if (sb->type &&
+        !strcmp(sb->type, "logical-switch-port")) {
+        return SVC_MON_TYPE_LSP;
+    }
+
+    return SVC_MON_TYPE_LB;
+}
+
+static enum svc_monitor_protocol
+svc_monitor_proto_from_sb(const struct sbrec_service_monitor *sb)
+{
+    if (!strcmp(sb->protocol, "udp")) {
+        return SVC_MON_PROTO_UDP;
+    }
+
+    if (!strcmp(sb->protocol, "icmp")) {
+        return SVC_MON_PROTO_ICMP;
+    }
+
+    return SVC_MON_PROTO_TCP;
+}
+
+static bool
+svc_monitor_type_allows_proto(enum svc_monitor_type type,
+                              enum svc_monitor_protocol proto)
+{
+    switch (type) {
+    case SVC_MON_TYPE_NF:
+        return proto == SVC_MON_PROTO_ICMP;
+
+    case SVC_MON_TYPE_LB:
+        return proto == SVC_MON_PROTO_TCP ||
+               proto == SVC_MON_PROTO_UDP;
+
+    case SVC_MON_TYPE_LSP:
+        return true;
+    }
+
+    return false;
+}
+
 static void
 sync_svc_monitors(struct ovsdb_idl_txn *ovnsb_idl_txn,
                   const struct sbrec_service_monitor_table *svc_mon_table,
@@ -7037,26 +7086,6 @@ sync_svc_monitors(struct ovsdb_idl_txn *ovnsb_idl_txn,
 
     const struct sbrec_service_monitor *sb_svc_mon;
     SBREC_SERVICE_MONITOR_TABLE_FOR_EACH (sb_svc_mon, svc_mon_table) {
-        enum svc_monitor_type mon_type;
-        if (sb_svc_mon->type && !strcmp(sb_svc_mon->type,
-                                        "network-function")) {
-            mon_type = SVC_MON_TYPE_NF;
-        } else if (sb_svc_mon->type && !strcmp(sb_svc_mon->type,
-                                        "logical-switch-port")) {
-            mon_type = SVC_MON_TYPE_LSP;
-        } else {
-            mon_type = SVC_MON_TYPE_LB;
-        }
-
-        enum svc_monitor_protocol protocol;
-        if (!strcmp(sb_svc_mon->protocol, "udp")) {
-            protocol = SVC_MON_PROTO_UDP;
-        } else if (!strcmp(sb_svc_mon->protocol, "icmp")) {
-            protocol = SVC_MON_PROTO_ICMP;
-        } else {
-            protocol = SVC_MON_PROTO_TCP;
-        }
-
         const struct sbrec_port_binding *pb
             = lport_lookup_by_name(sbrec_port_binding_by_name,
                                    sb_svc_mon->logical_port);
@@ -7090,10 +7119,16 @@ sync_svc_monitors(struct ovsdb_idl_txn *ovnsb_idl_txn,
         struct eth_addr ea;
         bool mac_found = false;
 
+        enum svc_monitor_type mon_type =
+            svc_monitor_type_from_sb(sb_svc_mon);
+        enum svc_monitor_protocol protocol =
+            svc_monitor_proto_from_sb(sb_svc_mon);
+
+        if (!svc_monitor_type_allows_proto(mon_type, protocol)) {
+            continue;
+        }
+
         if (mon_type == SVC_MON_TYPE_NF) {
-            if (protocol != SVC_MON_PROTO_ICMP) {
-                continue;
-            }
             input_pb = lport_lookup_by_name(sbrec_port_binding_by_name,
                                             sb_svc_mon->logical_input_port);
             if (!input_pb) {
@@ -8432,10 +8467,7 @@ pinctrl_handle_svc_check(struct rconn *swconn, const struct flow *ip_flow,
                                  "request" : "reply");
                     return;
                 }
-                if (svc_mon->type == SVC_MON_TYPE_NF ||
-                    svc_mon->type == SVC_MON_TYPE_LSP) {
-                    pinctrl_handle_icmp_svc_check(pkt_in, svc_mon);
-                }
+                pinctrl_handle_icmp_svc_check(pkt_in, svc_mon);
                 return;
             }
         } else if (in_eth->eth_type == htons(ETH_TYPE_IPV6)) {
@@ -8461,10 +8493,7 @@ pinctrl_handle_svc_check(struct rconn *swconn, const struct flow *ip_flow,
                                  "request" : "reply");
                     return;
                 }
-                if (svc_mon->type == SVC_MON_TYPE_NF ||
-                    svc_mon->type == SVC_MON_TYPE_LSP) {
-                    pinctrl_handle_icmp_svc_check(pkt_in, svc_mon);
-                }
+                pinctrl_handle_icmp_svc_check(pkt_in, svc_mon);
                 return;
             }
         }
