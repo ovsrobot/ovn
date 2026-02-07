@@ -52,6 +52,10 @@ en_sync_from_sb_get_input_data(struct engine_node *node,
         EN_OVSDB_GET(engine_get_input("SB_port_binding", node));
     data->sb_ha_ch_grp_table =
         EN_OVSDB_GET(engine_get_input("SB_ha_chassis_group", node));
+    data->sbrec_service_monitor_by_service_type =
+        engine_ovsdb_node_get_index(
+            engine_get_input("SB_service_monitor", node),
+            "sbrec_service_monitor_by_service_type");
 }
 
 enum engine_node_state
