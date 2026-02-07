@@ -3165,28 +3165,28 @@ svc_mon_update_status_if_online(const struct sbrec_service_monitor *sbrec_mon,
 
 static void
 svc_mon_update_mac_ip_addresses(const struct sbrec_service_monitor *sbrec_mon,
-                                const struct eth_addr *svc_monitor_mac_ea,
-                                const char *source_mac,
-                                const char *target_mac,
-                                const char *source_ip,
-                                const char *target_ip)
+                                const struct eth_addr *mac_ea_src,
+                                const char *mac_src,
+                                const char *mac_dst,
+                                const char *ip_src,
+                                const char *ip_dst)
 {
     struct eth_addr ea;
     if (sbrec_mon->src_mac ||
         !eth_addr_from_string(sbrec_mon->src_mac, &ea) ||
-        !eth_addr_equals(ea, *svc_monitor_mac_ea)) {
-        sbrec_service_monitor_set_src_mac(sbrec_mon, source_mac);
+        !eth_addr_equals(ea, *mac_ea_src)) {
+        sbrec_service_monitor_set_src_mac(sbrec_mon, mac_src);
     }
 
-    if (target_mac) {
-        svc_mon_update_field_if_changed(sbrec_mon, sbrec_mon->mac, target_mac,
+    if (mac_dst) {
+        svc_mon_update_field_if_changed(sbrec_mon, sbrec_mon->mac, mac_dst,
                                         sbrec_service_monitor_set_mac);
     }
 
-    svc_mon_update_field_if_changed(sbrec_mon, sbrec_mon->src_ip, source_ip,
+    svc_mon_update_field_if_changed(sbrec_mon, sbrec_mon->src_ip, ip_src,
                                     sbrec_service_monitor_set_src_ip);
-    if (target_ip) {
-        svc_mon_update_field_if_changed(sbrec_mon, sbrec_mon->ip, target_ip,
+    if (ip_dst) {
+        svc_mon_update_field_if_changed(sbrec_mon, sbrec_mon->ip, ip_dst,
                                         sbrec_service_monitor_set_ip);
     }
 }
@@ -3194,15 +3194,11 @@ svc_mon_update_mac_ip_addresses(const struct sbrec_service_monitor *sbrec_mon,
 static void
 ovn_nf_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                   const struct nbrec_network_function *nbrec_nf,
+                  const struct svc_monitor_addresses *svc_global_addresses,
                   struct hmap *local_svc_monitors_map,
                   struct hmap *ic_learned_svc_monitors_map,
                   struct sset *svc_monitor_lsps,
-                  struct hmap *ls_ports,
-                  const char *global_svc_monitor_mac_src,
-                  const struct eth_addr *global_svc_monitor_mac_ea_src,
-                  const char *global_svc_monitor_mac_dst,
-                  const char *global_svc_monitor_ip_src,
-                  const char *global_svc_monitor_ip_dst)
+                  struct hmap *ls_ports)
 {
     if (!nbrec_nf->health_check) {
         return;
@@ -3241,22 +3237,18 @@ ovn_nf_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                                   local_svc_monitors_map,
                                   ic_learned_svc_monitors_map,
                                   "network-function",
-                                  global_svc_monitor_ip_dst,
+                                  svc_global_addresses->ip_dst,
                                   nbrec_nf->outport->name,
                                   nbrec_nf->inport->name,
-                                  0,
-                                  "icmp",
-                                  chassis_name,
-                                  false);
+                                  0, "icmp", chassis_name, false);
     set_service_mon_options(mon_info->sbrec_mon,
-                            &nbrec_nf->health_check->options,
-                            NULL);
+                            &nbrec_nf->health_check->options, NULL);
     svc_mon_update_mac_ip_addresses(mon_info->sbrec_mon,
-                                    global_svc_monitor_mac_ea_src,
-                                    global_svc_monitor_mac_src,
-                                    global_svc_monitor_mac_dst,
-                                    global_svc_monitor_ip_src,
-                                    global_svc_monitor_ip_dst);
+                                    &svc_global_addresses->mac_ea_src,
+                                    svc_global_addresses->mac_src,
+                                    svc_global_addresses->mac_dst,
+                                    svc_global_addresses->ip_src,
+                                    svc_global_addresses->ip_dst);
     svc_mon_update_status_if_online(mon_info->sbrec_mon,
                                     !port_up_condition);
 }
@@ -3264,8 +3256,7 @@ ovn_nf_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
 static void
 ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                   const struct ovn_northd_lb *lb,
-                  const char *global_svc_monitor_mac_src,
-                  const struct eth_addr *global_svc_monitor_mac_ea_src,
+                  const struct svc_monitor_addresses *svc_global_addresses,
                   struct hmap *ls_ports,
                   struct sset *svc_monitor_lsps,
                   struct hmap *local_svc_monitors_map,
@@ -3311,8 +3302,8 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                 source_mac_ea = &backend_nb->svc_mon_lrp->lrp_networks.ea;
                 source_mac = backend_nb->svc_mon_lrp->lrp_networks.ea_s;
             } else {
-                source_mac_ea = global_svc_monitor_mac_ea_src;
-                source_mac = global_svc_monitor_mac_src;
+                source_mac_ea = &svc_global_addresses->mac_ea_src;
+                source_mac = svc_global_addresses->mac_src;
             }
 
             const char *protocol = lb->nlb->protocol;
@@ -3554,8 +3545,7 @@ build_lb_datapaths(const struct hmap *lbs, const struct hmap *lb_groups,
 static void
 ovn_lsp_svc_monitors_process_port(
     struct ovsdb_idl_txn *ovnsb_txn, const struct ovn_port *op,
-    const char *global_svc_monitor_mac_src,
-    const struct eth_addr *global_svc_monitor_mac_ea_src,
+    const struct svc_monitor_addresses *svc_global_addresses,
     struct hmap *local_svc_monitors_map,
     struct sset *svc_monitor_lsps)
 {
@@ -3597,8 +3587,8 @@ ovn_lsp_svc_monitors_process_port(
         set_service_mon_options(mon_info->sbrec_mon,
                                 &lsp_hc->options, NULL);
         svc_mon_update_mac_ip_addresses(mon_info->sbrec_mon,
-                                        global_svc_monitor_mac_ea_src,
-                                        global_svc_monitor_mac_src,
+                                        &svc_global_addresses->mac_ea_src,
+                                        svc_global_addresses->mac_src,
                                         NULL, lsp_hc->src_ip, NULL);
         svc_mon_update_status_if_online(mon_info->sbrec_mon,
                                         port_up_condition);
@@ -3610,11 +3600,7 @@ build_svc_monitors_data(
     struct ovsdb_idl_txn *ovnsb_txn,
     struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type,
     const struct nbrec_network_function_table *nbrec_network_function_table,
-    const char *global_svc_monitor_mac_src,
-    const struct eth_addr *global_svc_monitor_mac_ea_src,
-    const char *global_svc_monitor_mac_dst,
-    const char *global_svc_monitor_ip_src,
-    const char *global_svc_monitor_ip_dst,
+    const struct svc_monitor_addresses *svc_global_addresses,
     struct hmap *ls_ports, struct hmap *lb_dps_map,
     struct sset *svc_monitor_lsps,
     struct hmap *local_svc_monitors_map,
@@ -3645,8 +3631,7 @@ build_svc_monitors_data(
     struct ovn_lb_datapaths *lb_dps;
     HMAP_FOR_EACH (lb_dps, hmap_node, lb_dps_map) {
         ovn_lb_svc_create(ovnsb_txn, lb_dps->lb,
-                          global_svc_monitor_mac_src,
-                          global_svc_monitor_mac_ea_src,
+                          svc_global_addresses,
                           ls_ports,
                           svc_monitor_lsps,
                           local_svc_monitors_map,
@@ -3658,15 +3643,11 @@ build_svc_monitors_data(
                             nbrec_network_function_table) {
         ovn_nf_svc_create(ovnsb_txn,
                           nbrec_nf,
+                          svc_global_addresses,
                           local_svc_monitors_map,
                           ic_learned_svc_monitors_map,
                           svc_monitor_lsps,
-                          ls_ports,
-                          global_svc_monitor_mac_src,
-                          global_svc_monitor_mac_ea_src,
-                          global_svc_monitor_mac_dst,
-                          global_svc_monitor_ip_src,
-                          global_svc_monitor_ip_dst);
+                          ls_ports);
     }
 
     struct hmapx_node *hmapx_node;
@@ -3675,8 +3656,7 @@ build_svc_monitors_data(
         op = hmapx_node->data;
         ovn_lsp_svc_monitors_process_port(ovnsb_txn,
                                           op,
-                                          global_svc_monitor_mac_src,
-                                          global_svc_monitor_mac_ea_src,
+                                          svc_global_addresses,
                                           local_svc_monitors_map,
                                           svc_monitor_lsps);
     }
@@ -20771,11 +20751,7 @@ ovnnb_db_run(struct northd_input *input_data,
     build_svc_monitors_data(ovnsb_txn,
         input_data->sbrec_service_monitor_by_learned_type,
         input_data->nbrec_network_function_table,
-        input_data->svc_monitor_mac,
-        &input_data->svc_monitor_mac_ea,
-        input_data->svc_monitor_mac_dst,
-        input_data->svc_monitor_ip,
-        input_data->svc_monitor_ip_dst,
+        input_data->svc_global_addresses,
         &data->ls_ports, &data->lb_datapaths_map,
         &data->svc_monitor_lsps, &data->local_svc_monitors_map,
         input_data->ic_learned_svc_monitors_map,
@@ -20785,7 +20761,7 @@ ovnnb_db_run(struct northd_input *input_data,
         input_data->nbrec_network_function_group_table,
         &data->local_svc_monitors_map,
         input_data->ic_learned_svc_monitors_map,
-        input_data->svc_monitor_ip_dst);
+        input_data->svc_global_addresses->ip_dst);
     build_ipam(&data->ls_datapaths.datapaths);
     build_lrouter_groups(&data->lr_ports, &data->lr_datapaths);
     build_ip_mcast(ovnsb_txn, input_data->sbrec_ip_multicast_table,

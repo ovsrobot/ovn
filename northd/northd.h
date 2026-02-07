@@ -23,6 +23,7 @@
 #include "lib/hmapx.h"
 #include "northd/en-port-group.h"
 #include "northd/en-sync-from-sb.h"
+#include "northd/en-global-config.h"
 #include "northd/ipam.h"
 #include "northd/lb.h"
 #include "openvswitch/hmap.h"
@@ -70,12 +71,7 @@ struct northd_input {
     /* Global config data node inputs. */
     const struct smap *nb_options;
     const struct smap *sb_options;
-    const char *svc_monitor_mac;
-    struct eth_addr svc_monitor_mac_ea;
-    const char *svc_monitor_mac_dst;
-    struct eth_addr svc_monitor_mac_ea_dst;
-    char *svc_monitor_ip;
-    char *svc_monitor_ip_dst;
+    const struct svc_monitor_addresses *svc_global_addresses;
     const struct chassis_features *features;
     bool vxlan_mode;
 
