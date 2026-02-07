@@ -521,6 +521,46 @@ find_lport_address(const struct lport_addresses *laddrs, const char *ip_s)
     return NULL;
 }
 
+bool
+lport_addresses_contains_ip(const struct lport_addresses *lsp_addrs,
+                            unsigned int n_lsp_addrs,
+                            const char *ip_s)
+{
+    bool is_ipv4 = strchr(ip_s, '.') != NULL;
+    struct in6_addr ip6;
+    ovs_be32 ip4;
+
+    if (is_ipv4) {
+        if (!ip_parse(ip_s, &ip4)) {
+            return false;
+        }
+    } else {
+        if (!ipv6_parse(ip_s, &ip6)) {
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < n_lsp_addrs; i++) {
+        const struct lport_addresses *laddrs = &lsp_addrs[i];
+
+        if (is_ipv4) {
+            for (size_t j = 0; j < laddrs->n_ipv4_addrs; j++) {
+                if (laddrs->ipv4_addrs[j].addr == ip4) {
+                    return true;
+                }
+            }
+        } else {
+            for (size_t j = 0; j < laddrs->n_ipv6_addrs; j++) {
+                if (IN6_ARE_ADDR_EQUAL(&laddrs->ipv6_addrs[j].addr, &ip6)) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
 /* Go through 'addresses' and add found IPv4 addresses to 'ipv4_addrs' and
  * IPv6 addresses to 'ipv6_addrs'. */
 void
