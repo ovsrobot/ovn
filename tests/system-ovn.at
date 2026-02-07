@@ -20993,3 +20993,102 @@ OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
 /connection dropped.*/d"])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Logical Switch Port Health Check])
+AT_SKIP_IF([test $HAVE_NC = no])
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+ADD_BR([br-int])
+
+# Set external-ids in br-int needed for ovn-controller
+ovs-vsctl \
+        -- set Open_vSwitch . external-ids:system-id=hv1 \
+        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+        -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+        -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+        -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+# Start ovn-controller
+start_daemon ovn-controller
+
+check ovn-nbctl ls-add ls1
+
+ADD_NAMESPACES(lport)
+ADD_VETH(lport, lport, br-int, "192.168.0.10", "f0:00:0f:01:02:04", \
+         "192.168.0.1")
+NS_EXEC([lport], [ip r del default via 192.168.0.1 dev lport])
+NS_EXEC([lport], [ip r add default dev lport])
+NS_EXEC([lport], [ip addr add 2001:db8::10/64 dev lport])
+NS_EXEC([lport], [ip -6 r add default dev lport])
+
+check ovn-nbctl lsp-add ls1 lport -- \
+    lsp-set-addresses lport "f0:00:0f:01:02:04 192.168.0.10 2001:db8::10"
+
+check ovn-nbctl --wait=hv sync
+
+check ovn-nbctl lsp-hc-add lport icmp 192.168.0.255 192.168.0.10
+check_row_count sb:Service_Monitor 1
+
+# Wait until the services are set to online.
+wait_row_count Service_Monitor 1 status=online
+
+check ovn-nbctl lsp-hc-add lport tcp 192.168.0.255 4041 192.168.0.10
+
+check_row_count sb:Service_Monitor 2
+
+# Create one more health check on logical switch port
+NETNS_DAEMONIZE([lport], [nc -l -k 192.168.0.10 4041], [lport_tcp.pid])
+
+# Wait until the services are set to online.
+wait_row_count Service_Monitor 2 status=online
+
+check ovn-nbctl lsp-hc-add lport udp 192.168.0.255 4042 192.168.0.10
+
+NETNS_DAEMONIZE([lport], [nc -ulp 4042], [lport_udp.pid])
+
+# Wait until the services are set to online.
+wait_row_count Service_Monitor 3 status=online
+
+check ovn-nbctl lsp-hc-del lport
+
+# IPv6 ICMP health check (ping6)
+check ovn-nbctl lsp-hc-add lport icmp 2001:db8::ff 2001:db8::10
+check_row_count sb:Service_Monitor 1
+
+# Wait until the services are set to online.
+wait_row_count Service_Monitor 1 status=online
+
+# IPv6 TCP health check
+check ovn-nbctl lsp-hc-add lport tcp 2001:db8::ff 4043 2001:db8::10
+
+check_row_count sb:Service_Monitor 2
+
+# Start IPv6 TCP server
+NETNS_DAEMONIZE([lport], [nc -6 -l -k 2001:db8::10 4043], [lport_ipv6_tcp.pid])
+
+# Wait until the services are set to online.
+wait_row_count Service_Monitor 2 status=online
+
+# IPv6 UDP health check
+check ovn-nbctl lsp-hc-add lport udp 2001:db8::ff 4044 2001:db8::10
+check_row_count sb:Service_Monitor 3
+
+# Start IPv6 UDP server
+NETNS_DAEMONIZE([lport], [nc -6 -u -l 2001:db8::10 4044], [lport_ipv6_udp.pid])
+
+# Wait until the services are set to online.
+wait_row_count Service_Monitor 3 status=online
+
+killall nc 2>/dev/null || true
+
+OVN_CLEANUP_CONTROLLER([hv1])
+
+OVN_CLEANUP_NORTHD
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+AT_CLEANUP
+])
