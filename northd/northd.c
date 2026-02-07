@@ -3110,6 +3110,7 @@ create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
          */
         sbrec_service_monitor_set_ic_learned(mon_info->sbrec_mon,
                                              false);
+        mon_info->required = true;
         return mon_info;
     }
 
@@ -3137,32 +3138,80 @@ create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
     mon_info = xzalloc(sizeof *mon_info);
     mon_info->sbrec_mon = sbrec_mon;
     hmap_insert(local_svc_monitors_map, &mon_info->hmap_node, hash);
+    mon_info->required = true;
     return mon_info;
+}
+
+static inline void
+svc_mon_update_field_if_changed(
+    const struct sbrec_service_monitor *sbrec_mon,
+    const char *old_value, const char *new_value,
+    void (*setter)(const struct sbrec_service_monitor *, const char *))
+{
+    if (old_value && new_value && strcmp(old_value, new_value)) {
+        setter(sbrec_mon, new_value);
+    }
+}
+
+static inline void
+svc_mon_update_status_if_online(const struct sbrec_service_monitor *sbrec_mon,
+                                bool condition)
+{
+    if (condition && sbrec_mon->status &&
+        !strcmp(sbrec_mon->status, "online")) {
+        sbrec_service_monitor_set_status(sbrec_mon, "offline");
+    }
+}
+
+static void
+svc_mon_update_mac_ip_addresses(const struct sbrec_service_monitor *sbrec_mon,
+                                const struct eth_addr *svc_monitor_mac_ea,
+                                const char *source_mac,
+                                const char *target_mac,
+                                const char *source_ip,
+                                const char *target_ip)
+{
+    struct eth_addr ea;
+    if (sbrec_mon->src_mac ||
+        !eth_addr_from_string(sbrec_mon->src_mac, &ea) ||
+        !eth_addr_equals(ea, *svc_monitor_mac_ea)) {
+        sbrec_service_monitor_set_src_mac(sbrec_mon, source_mac);
+    }
+
+    if (target_mac) {
+        svc_mon_update_field_if_changed(sbrec_mon, sbrec_mon->mac, target_mac,
+                                        sbrec_service_monitor_set_mac);
+    }
+
+    svc_mon_update_field_if_changed(sbrec_mon, sbrec_mon->src_ip, source_ip,
+                                    sbrec_service_monitor_set_src_ip);
+    if (target_ip) {
+        svc_mon_update_field_if_changed(sbrec_mon, sbrec_mon->ip, target_ip,
+                                        sbrec_service_monitor_set_ip);
+    }
 }
 
 static void
 ovn_nf_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
+                  const struct nbrec_network_function *nbrec_nf,
                   struct hmap *local_svc_monitors_map,
                   struct hmap *ic_learned_svc_monitors_map,
                   struct sset *svc_monitor_lsps,
                   struct hmap *ls_ports,
-                  const char *mac_src, const char *mac_dst,
-                  const char *ip_src, const char *ip_dst,
-                  const char *logical_port, const char *logical_input_port,
-                  const struct smap *health_check_options)
+                  const char *global_svc_monitor_mac_src,
+                  const struct eth_addr *global_svc_monitor_mac_ea_src,
+                  const char *global_svc_monitor_mac_dst,
+                  const char *global_svc_monitor_ip_src,
+                  const char *global_svc_monitor_ip_dst)
 {
-    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
-
-    if (!ip_src || !ip_dst || !mac_src || !mac_dst) {
-        VLOG_ERR_RL(&rl, "NetworkFunction: invalid service monitor "
-                         "src_mac: %s dst_mac:%s src_ip:%s dst_ip:%s",
-                          mac_src, mac_dst, ip_src, ip_dst);
+    if (!nbrec_nf->health_check) {
         return;
     }
 
-    const char *ports[] = {logical_port, logical_input_port};
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+    const char *ports[] = {nbrec_nf->outport->name, nbrec_nf->inport->name};
     const char *chassis_name = NULL;
-    bool port_up = true;
+    bool port_up_condition = true;
 
     for (size_t i = 0; i < ARRAY_SIZE(ports); i++) {
         const char *port = ports[i];
@@ -3183,58 +3232,40 @@ ovn_nf_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                              op->sb->chassis->name, port);
             }
         }
-        port_up = port_up && (op->sb->n_up && op->sb->up[0]);
+        port_up_condition = port_up_condition &&
+                            (op->sb->n_up && op->sb->up[0]);
     }
 
     struct service_monitor_info *mon_info =
         create_or_get_service_mon(ovnsb_txn,
                                   local_svc_monitors_map,
                                   ic_learned_svc_monitors_map,
-                                  "network-function", ip_dst,
-                                  logical_port,
-                                  logical_input_port,
+                                  "network-function",
+                                  global_svc_monitor_ip_dst,
+                                  nbrec_nf->outport->name,
+                                  nbrec_nf->inport->name,
                                   0,
                                   "icmp",
                                   chassis_name,
                                   false);
-    ovs_assert(mon_info);
-    sbrec_service_monitor_set_options(
-        mon_info->sbrec_mon, health_check_options);
-
-    if (!mon_info->sbrec_mon->src_mac ||
-        strcmp(mon_info->sbrec_mon->src_mac, mac_src)) {
-        sbrec_service_monitor_set_src_mac(mon_info->sbrec_mon,
-                                          mac_src);
-    }
-
-    if (!mon_info->sbrec_mon->mac ||
-        strcmp(mon_info->sbrec_mon->mac, mac_dst)) {
-        sbrec_service_monitor_set_mac(mon_info->sbrec_mon,
-                                      mac_dst);
-    }
-
-    if (!mon_info->sbrec_mon->src_ip ||
-        strcmp(mon_info->sbrec_mon->src_ip, ip_src)) {
-        sbrec_service_monitor_set_src_ip(mon_info->sbrec_mon, ip_src);
-    }
-
-    if (!mon_info->sbrec_mon->ip ||
-        strcmp(mon_info->sbrec_mon->ip, ip_dst)) {
-        sbrec_service_monitor_set_ip(mon_info->sbrec_mon, ip_dst);
-    }
-
-    if (!port_up && mon_info->sbrec_mon->status
-        && !strcmp(mon_info->sbrec_mon->status, "online")) {
-        sbrec_service_monitor_set_status(mon_info->sbrec_mon, "offline");
-    }
-    mon_info->required = true;
+    set_service_mon_options(mon_info->sbrec_mon,
+                            &nbrec_nf->health_check->options,
+                            NULL);
+    svc_mon_update_mac_ip_addresses(mon_info->sbrec_mon,
+                                    global_svc_monitor_mac_ea_src,
+                                    global_svc_monitor_mac_src,
+                                    global_svc_monitor_mac_dst,
+                                    global_svc_monitor_ip_src,
+                                    global_svc_monitor_ip_dst);
+    svc_mon_update_status_if_online(mon_info->sbrec_mon,
+                                    !port_up_condition);
 }
 
 static void
 ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                   const struct ovn_northd_lb *lb,
-                  const char *svc_monitor_mac,
-                  const struct eth_addr *svc_monitor_mac_ea,
+                  const char *global_svc_monitor_mac_src,
+                  const struct eth_addr *global_svc_monitor_mac_ea_src,
                   struct hmap *ls_ports,
                   struct sset *svc_monitor_lsps,
                   struct hmap *local_svc_monitors_map,
@@ -3267,6 +3298,9 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                 continue;
             }
 
+            bool port_up_condition = !backend_nb->remote_backend &&
+                                     (!op->sb->n_up || !op->sb->up[0]);
+
             ovn_northd_lb_backend_set_mon_port(op, backend_nb);
 
             /* If the service monitor is backed by a real port, use its MAC
@@ -3277,8 +3311,8 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                 source_mac_ea = &backend_nb->svc_mon_lrp->lrp_networks.ea;
                 source_mac = backend_nb->svc_mon_lrp->lrp_networks.ea_s;
             } else {
-                source_mac_ea = svc_monitor_mac_ea;
-                source_mac = svc_monitor_mac;
+                source_mac_ea = global_svc_monitor_mac_ea_src;
+                source_mac = global_svc_monitor_mac_src;
             }
 
             const char *protocol = lb->nlb->protocol;
@@ -3286,52 +3320,26 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                 protocol = "tcp";
             }
 
-            const char *chassis_name = NULL;
-            if (!backend_nb->remote_backend && op->sb->chassis) {
-                chassis_name = op->sb->chassis->name;
-            }
-
             struct service_monitor_info *mon_info =
                 create_or_get_service_mon(ovnsb_txn,
                                           local_svc_monitors_map,
                                           ic_learned_svc_monitors_map,
-                                          "load-balancer",
-                                          backend->ip_str,
+                                          "load-balancer", backend->ip_str,
                                           backend_nb->logical_port,
-                                          NULL,
-                                          backend->port,
-                                          protocol,
-                                          chassis_name,
+                                          NULL, backend->port, protocol,
+                                          (!backend_nb->remote_backend &&
+                                          op->sb->chassis) ?
+                                          op->sb->chassis->name : NULL,
                                           backend_nb->remote_backend);
-            ovs_assert(mon_info);
+
             set_service_mon_options(mon_info->sbrec_mon,
                                     &lb_vip_nb->lb_health_check->options,
                                     backend_nb->az_name);
-            struct eth_addr ea;
-            if (!mon_info->sbrec_mon->src_mac ||
-                !eth_addr_from_string(mon_info->sbrec_mon->src_mac, &ea) ||
-                !eth_addr_equals(ea, *source_mac_ea)) {
-                sbrec_service_monitor_set_src_mac(mon_info->sbrec_mon,
-                                                  source_mac);
-            }
-
-            if (!mon_info->sbrec_mon->src_ip ||
-                strcmp(mon_info->sbrec_mon->src_ip,
-                       backend_nb->svc_mon_src_ip)) {
-                sbrec_service_monitor_set_src_ip(
-                    mon_info->sbrec_mon,
-                    backend_nb->svc_mon_src_ip);
-            }
-
-            if (!backend_nb->remote_backend &&
-                (!op->sb->n_up || !op->sb->up[0])
-                && mon_info->sbrec_mon->status
-                && !strcmp(mon_info->sbrec_mon->status, "online")) {
-                sbrec_service_monitor_set_status(mon_info->sbrec_mon,
-                                                 "offline");
-            }
-
-            mon_info->required = true;
+            svc_mon_update_mac_ip_addresses(mon_info->sbrec_mon,
+                                            source_mac_ea, source_mac, NULL,
+                                            backend_nb->svc_mon_src_ip, NULL);
+            svc_mon_update_status_if_online(mon_info->sbrec_mon,
+                                            port_up_condition);
         }
     }
 }
@@ -3544,13 +3552,14 @@ build_lb_datapaths(const struct hmap *lbs, const struct hmap *lb_groups,
 }
 
 static void
-ovn_lsp_svc_monitors_process_port(struct ovsdb_idl_txn *ovnsb_txn,
-                                  const struct ovn_port *op,
-                                  const char *svc_monitor_mac,
-                                  const struct eth_addr *svc_monitor_mac_ea,
-                                  struct hmap *local_svc_monitors_map,
-                                  struct sset *svc_monitor_lsps)
+ovn_lsp_svc_monitors_process_port(
+    struct ovsdb_idl_txn *ovnsb_txn, const struct ovn_port *op,
+    const char *global_svc_monitor_mac_src,
+    const struct eth_addr *global_svc_monitor_mac_ea_src,
+    struct hmap *local_svc_monitors_map,
+    struct sset *svc_monitor_lsps)
 {
+    bool port_up_condition = !op->sb->n_up || !op->sb->up[0];
     sset_add(svc_monitor_lsps, op->key);
 
     for (size_t i = 0; i < op->nbsp->n_health_checks; i++) {
@@ -3585,31 +3594,14 @@ ovn_lsp_svc_monitors_process_port(struct ovsdb_idl_txn *ovnsb_txn,
                                              (op->sb && op->sb->chassis) ?
                                               op->sb->chassis->name : NULL,
                                              false);
-
-        mon_info->required = true;
         set_service_mon_options(mon_info->sbrec_mon,
                                 &lsp_hc->options, NULL);
-
-        struct eth_addr ea;
-        if (!mon_info->sbrec_mon->src_mac ||
-            !eth_addr_from_string(mon_info->sbrec_mon->src_mac, &ea) ||
-            !eth_addr_equals(ea, *svc_monitor_mac_ea)) {
-            sbrec_service_monitor_set_src_mac(mon_info->sbrec_mon,
-                                                svc_monitor_mac);
-        }
-
-        if (!mon_info->sbrec_mon->src_ip ||
-            strcmp(mon_info->sbrec_mon->src_ip, lsp_hc->src_ip)) {
-            sbrec_service_monitor_set_src_ip(mon_info->sbrec_mon,
-                                                lsp_hc->src_ip);
-        }
-
-        if ((!op->sb->n_up || !op->sb->up[0]) &&
-            mon_info->sbrec_mon->status &&
-            !strcmp(mon_info->sbrec_mon->status, "online")) {
-            sbrec_service_monitor_set_status(mon_info->sbrec_mon,
-                                                "offline");
-        }
+        svc_mon_update_mac_ip_addresses(mon_info->sbrec_mon,
+                                        global_svc_monitor_mac_ea_src,
+                                        global_svc_monitor_mac_src,
+                                        NULL, lsp_hc->src_ip, NULL);
+        svc_mon_update_status_if_online(mon_info->sbrec_mon,
+                                        port_up_condition);
     }
 }
 
@@ -3617,13 +3609,13 @@ static void
 build_svc_monitors_data(
     struct ovsdb_idl_txn *ovnsb_txn,
     struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type,
-    const char *svc_monitor_mac,
-    const struct eth_addr *svc_monitor_mac_ea,
-    const char *svc_monitor_mac_dst,
-    const char *svc_monitor_ip,
-    const char *svc_monitor_ip_dst,
-    struct hmap *ls_ports, struct hmap *lb_dps_map,
     const struct nbrec_network_function_table *nbrec_network_function_table,
+    const char *global_svc_monitor_mac_src,
+    const struct eth_addr *global_svc_monitor_mac_ea_src,
+    const char *global_svc_monitor_mac_dst,
+    const char *global_svc_monitor_ip_src,
+    const char *global_svc_monitor_ip_dst,
+    struct hmap *ls_ports, struct hmap *lb_dps_map,
     struct sset *svc_monitor_lsps,
     struct hmap *local_svc_monitors_map,
     struct hmap *ic_learned_svc_monitors_map,
@@ -3653,8 +3645,8 @@ build_svc_monitors_data(
     struct ovn_lb_datapaths *lb_dps;
     HMAP_FOR_EACH (lb_dps, hmap_node, lb_dps_map) {
         ovn_lb_svc_create(ovnsb_txn, lb_dps->lb,
-                          svc_monitor_mac,
-                          svc_monitor_mac_ea,
+                          global_svc_monitor_mac_src,
+                          global_svc_monitor_mac_ea_src,
                           ls_ports,
                           svc_monitor_lsps,
                           local_svc_monitors_map,
@@ -3664,17 +3656,17 @@ build_svc_monitors_data(
     const struct nbrec_network_function *nbrec_nf;
     NBREC_NETWORK_FUNCTION_TABLE_FOR_EACH (nbrec_nf,
                             nbrec_network_function_table) {
-        if (nbrec_nf->health_check) {
-            ovn_nf_svc_create(ovnsb_txn,
-                              local_svc_monitors_map,
-                              ic_learned_svc_monitors_map,
-                              svc_monitor_lsps,
-                              ls_ports,
-                              svc_monitor_mac, svc_monitor_mac_dst,
-                              svc_monitor_ip, svc_monitor_ip_dst,
-                              nbrec_nf->outport->name, nbrec_nf->inport->name,
-                              &nbrec_nf->health_check->options);
-        }
+        ovn_nf_svc_create(ovnsb_txn,
+                          nbrec_nf,
+                          local_svc_monitors_map,
+                          ic_learned_svc_monitors_map,
+                          svc_monitor_lsps,
+                          ls_ports,
+                          global_svc_monitor_mac_src,
+                          global_svc_monitor_mac_ea_src,
+                          global_svc_monitor_mac_dst,
+                          global_svc_monitor_ip_src,
+                          global_svc_monitor_ip_dst);
     }
 
     struct hmapx_node *hmapx_node;
@@ -3683,8 +3675,8 @@ build_svc_monitors_data(
         op = hmapx_node->data;
         ovn_lsp_svc_monitors_process_port(ovnsb_txn,
                                           op,
-                                          svc_monitor_mac,
-                                          svc_monitor_mac_ea,
+                                          global_svc_monitor_mac_src,
+                                          global_svc_monitor_mac_ea_src,
                                           local_svc_monitors_map,
                                           svc_monitor_lsps);
     }
@@ -20778,13 +20770,13 @@ ovnnb_db_run(struct northd_input *input_data,
                                &data->lb_group_datapaths_map);
     build_svc_monitors_data(ovnsb_txn,
         input_data->sbrec_service_monitor_by_learned_type,
+        input_data->nbrec_network_function_table,
         input_data->svc_monitor_mac,
         &input_data->svc_monitor_mac_ea,
         input_data->svc_monitor_mac_dst,
         input_data->svc_monitor_ip,
         input_data->svc_monitor_ip_dst,
         &data->ls_ports, &data->lb_datapaths_map,
-        input_data->nbrec_network_function_table,
         &data->svc_monitor_lsps, &data->local_svc_monitors_map,
         input_data->ic_learned_svc_monitors_map,
         &data->monitored_ports_map);
