@@ -209,7 +209,7 @@ struct route_msg_handle_data {
 };
 
 static void
-handle_route_msg(const struct route_table_msg *msg, void *data)
+handle_route_msg(const struct route_table_msg *msg, void *data, uint32_t table_id)
 {
     struct route_msg_handle_data *handle_data = data;
     const struct route_data *rd = &msg->rd;
