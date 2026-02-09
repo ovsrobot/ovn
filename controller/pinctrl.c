@@ -6368,23 +6368,15 @@ static void
 reload_metadata(struct ofpbuf *ofpacts, const struct match *md)
 {
     enum mf_field_id md_fields[] = {
-#if FLOW_N_REGS == 16
-        MFF_REG0,
-        MFF_REG1,
-        MFF_REG2,
-        MFF_REG3,
-        MFF_REG4,
-        MFF_REG5,
-        MFF_REG6,
-        MFF_REG7,
-        MFF_REG8,
-        MFF_REG9,
-        MFF_REG10,
-        MFF_REG11,
-        MFF_REG12,
-        MFF_REG13,
-        MFF_REG14,
-        MFF_REG15,
+#if FLOW_N_REGS == 32
+        MFF_REG0, MFF_REG1, MFF_REG2, MFF_REG3, \
+        MFF_REG4, MFF_REG5, MFF_REG6, MFF_REG7, \
+        MFF_REG8, MFF_REG9, MFF_REG10, MFF_REG11, \
+        MFF_REG12, MFF_REG13, MFF_REG14, MFF_REG15, \
+        MFF_REG16, MFF_REG17, MFF_REG18, MFF_REG19, \
+        MFF_REG20, MFF_REG21, MFF_REG22, MFF_REG23, \
+        MFF_REG24, MFF_REG25, MFF_REG26, MFF_REG27, \
+        MFF_REG28, MFF_REG29, MFF_REG30, MFF_REG31, \
 #else
 #error
 #endif
