@@ -1487,9 +1487,9 @@ encode_ct_lb(const struct ovnact_ct_lb *cl,
     }
 
     BUILD_ASSERT(MFF_LOG_CT_ZONE >= MFF_REG0);
-    BUILD_ASSERT(MFF_LOG_CT_ZONE < MFF_REG0 + FLOW_N_REGS);
+    BUILD_ASSERT(MFF_LOG_CT_ZONE < MFF_REG0 + OVN_FLOW_N_REGS_SUPPORTED);
     BUILD_ASSERT(MFF_LOG_DNAT_ZONE >= MFF_REG0);
-    BUILD_ASSERT(MFF_LOG_DNAT_ZONE < MFF_REG0 + FLOW_N_REGS);
+    BUILD_ASSERT(MFF_LOG_DNAT_ZONE < MFF_REG0 + OVN_FLOW_N_REGS_SUPPORTED);
 
     size_t n_active_backends = 0;
     for (size_t bucket_id = 0; bucket_id < cl->n_dsts; bucket_id++) {
