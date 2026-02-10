@@ -2418,6 +2418,37 @@ build_in_port_sec_default_flows(const struct sbrec_port_binding *pb,
                     pb->header_.uuid.parts[0], m, ofpacts,
                     &pb->header_.uuid);
 
+    /* ND checking is done in the next table. So just advance
+     * the arp packets to the next table.
+     *
+     * Add the below logical flow equivalent OF rules in 'in_port_sec_nd' table
+     * priority: 95
+     * match - "inport == pb->logical_port && icmp6 && icmp6.code == 135"
+     * action - "resubmit(,PORT_SEC_ND_TABLE);"
+     */
+    match_set_dl_type(m, htons(ETH_TYPE_IPV6));
+    match_set_nw_proto(m, IPPROTO_ICMPV6);
+    match_set_nw_ttl(m, 255);
+    match_set_icmp_type(m, 135);
+    build_port_sec_adv_nd_check(ofpacts);
+    ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC, 95,
+                    pb->header_.uuid.parts[0], m, ofpacts,
+                    &pb->header_.uuid);
+
+    /* Add the below logical flow equivalent OF rules in 'in_port_sec_nd' table
+     * priority: 95
+     * match - "inport == pb->logical_port && icmp6 && icmp6.code == 136"
+     * action - "resubmit(,PORT_SEC_ND_TABLE);"
+     */
+    match_set_dl_type(m, htons(ETH_TYPE_IPV6));
+    match_set_nw_proto(m, IPPROTO_ICMPV6);
+    match_set_nw_ttl(m, 255);
+    match_set_icmp_type(m, 136);
+    build_port_sec_adv_nd_check(ofpacts);
+    ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC, 95,
+                    pb->header_.uuid.parts[0], m, ofpacts,
+                    &pb->header_.uuid);
+
     /* Add the below logical flow equivalent OF rules in 'in_port_sec_nd' table
      * priority: 80
      * match - "inport == pb->logical_port && arp"
@@ -2690,21 +2721,6 @@ build_in_port_sec_ip6_flows(const struct sbrec_port_binding *pb,
                     &pb->header_.uuid);
 
     match_set_icmp_type(m, 143);
-    ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC, 90,
-                    pb->header_.uuid.parts[0], m, ofpacts,
-                    &pb->header_.uuid);
-
-    /* Add the below logical flow equivalent OF rules in 'in_port_sec_nd'
-     * table.
-     * priority: 90
-     * match - "inport == pb->port && eth.src == ps_addr.ea &&
-     *          ip6.src == :: && ip6.dst == ff02::/16 && icmp6 &&
-     *          icmp6.code == 0 && icmp6.type == 135"
-     * action - "next;"
-     * description: "Advance the packet for Neighbor solicit check"
-     */
-    build_port_sec_adv_nd_check(ofpacts);
-    match_set_icmp_type(m, 135);
     ofctrl_add_flow(flow_table, OFTABLE_CHK_IN_PORT_SEC, 90,
                     pb->header_.uuid.parts[0], m, ofpacts,
                     &pb->header_.uuid);

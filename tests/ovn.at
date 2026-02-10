@@ -36005,7 +36005,9 @@ check ovn-nbctl --wait=hv lsp-set-port-security sw0p1 "00:00:00:00:00:03"
 
 echo " table=OFTABLE_CHK_IN_PORT_SEC, priority=80,reg14=0x$sw0p1_key,metadata=0x$sw0_dp_key actions=load:0x1->NXM_NX_REG10[[12]]
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,reg14=0x$sw0p1_key,metadata=0x$sw0_dp_key,dl_src=00:00:00:00:00:03 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
- table=OFTABLE_CHK_IN_PORT_SEC, priority=95,arp,reg14=0x$sw0p1_key,metadata=0x$sw0_dp_key actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)" > hv1_t${in_port_sec}_flows.expected
+ table=OFTABLE_CHK_IN_PORT_SEC, priority=95,arp,reg14=0x$sw0p1_key,metadata=0x$sw0_dp_key actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
+ table=OFTABLE_CHK_IN_PORT_SEC, priority=95,icmp6,reg14=0x$sw0p1_key,metadata=0x$sw0_dp_key,nw_ttl=255,icmp_type=135 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
+ table=OFTABLE_CHK_IN_PORT_SEC, priority=95,icmp6,reg14=0x$sw0p1_key,metadata=0x$sw0_dp_key,nw_ttl=255,icmp_type=136 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)" > hv1_t${in_port_sec}_flows.expected
 
 check_port_sec_offlows hv1 OFTABLE_CHK_IN_PORT_SEC
 
@@ -36041,7 +36043,9 @@ echo " table=OFTABLE_CHK_IN_PORT_SEC, priority=80,reg14=0x$sw0p1_key,metadata=0x
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,ip,reg14=0x$sw0p1_key,metadata=0x1,dl_src=00:00:00:00:00:13,nw_src=10.0.0.13 actions=load:0->NXM_NX_REG10[[12]]
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,udp,reg14=0x$sw0p1_key,metadata=0x1,dl_src=00:00:00:00:00:03,nw_src=0.0.0.0,nw_dst=255.255.255.255,tp_src=68,tp_dst=67 actions=load:0->NXM_NX_REG10[[12]]
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,udp,reg14=0x$sw0p1_key,metadata=0x1,dl_src=00:00:00:00:00:13,nw_src=0.0.0.0,nw_dst=255.255.255.255,tp_src=68,tp_dst=67 actions=load:0->NXM_NX_REG10[[12]]
- table=OFTABLE_CHK_IN_PORT_SEC, priority=95,arp,reg14=0x$sw0p1_key,metadata=0x1 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)" > hv1_t${in_port_sec}_flows.expected
+ table=OFTABLE_CHK_IN_PORT_SEC, priority=95,arp,reg14=0x$sw0p1_key,metadata=0x1 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
+ table=OFTABLE_CHK_IN_PORT_SEC, priority=95,icmp6,reg14=0x$sw0p1_key,metadata=0x$sw0_dp_key,nw_ttl=255,icmp_type=135 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
+ table=OFTABLE_CHK_IN_PORT_SEC, priority=95,icmp6,reg14=0x$sw0p1_key,metadata=0x$sw0_dp_key,nw_ttl=255,icmp_type=136 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)" > hv1_t${in_port_sec}_flows.expected
 
 check_port_sec_offlows hv1 OFTABLE_CHK_IN_PORT_SEC
 
@@ -36106,10 +36110,8 @@ check_port_sec_offlows hv1 OFTABLE_CHK_OUT_PORT_SEC
 #hv2 ovn-controller should program flows.
 echo " table=OFTABLE_CHK_IN_PORT_SEC, priority=80,reg14=0x$sw0p2_key,metadata=0x1 actions=load:0x1->NXM_NX_REG10[[12]]
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,icmp6,reg14=0x$sw0p2_key,metadata=0x1,dl_src=00:00:00:00:00:04,ipv6_src=::,ipv6_dst=ff02::/16,icmp_type=131,icmp_code=0 actions=load:0->NXM_NX_REG10[[12]]
- table=OFTABLE_CHK_IN_PORT_SEC, priority=90,icmp6,reg14=0x$sw0p2_key,metadata=0x1,dl_src=00:00:00:00:00:04,ipv6_src=::,ipv6_dst=ff02::/16,icmp_type=135,icmp_code=0 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,icmp6,reg14=0x$sw0p2_key,metadata=0x1,dl_src=00:00:00:00:00:04,ipv6_src=::,ipv6_dst=ff02::/16,icmp_type=143,icmp_code=0 actions=load:0->NXM_NX_REG10[[12]]
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,icmp6,reg14=0x$sw0p2_key,metadata=0x1,dl_src=00:00:00:00:00:13,ipv6_src=::,ipv6_dst=ff02::/16,icmp_type=131,icmp_code=0 actions=load:0->NXM_NX_REG10[[12]]
- table=OFTABLE_CHK_IN_PORT_SEC, priority=90,icmp6,reg14=0x$sw0p2_key,metadata=0x1,dl_src=00:00:00:00:00:13,ipv6_src=::,ipv6_dst=ff02::/16,icmp_type=135,icmp_code=0 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,icmp6,reg14=0x$sw0p2_key,metadata=0x1,dl_src=00:00:00:00:00:13,ipv6_src=::,ipv6_dst=ff02::/16,icmp_type=143,icmp_code=0 actions=load:0->NXM_NX_REG10[[12]]
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,ip,reg14=0x$sw0p2_key,metadata=0x1,dl_src=00:00:00:00:00:04,nw_src=10.0.0.4 actions=load:0->NXM_NX_REG10[[12]]
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,ip,reg14=0x$sw0p2_key,metadata=0x1,dl_src=00:00:00:00:00:04,nw_src=20.0.0.4 actions=load:0->NXM_NX_REG10[[12]]
@@ -36120,7 +36122,9 @@ echo " table=OFTABLE_CHK_IN_PORT_SEC, priority=80,reg14=0x$sw0p2_key,metadata=0x
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,ipv6,reg14=0x$sw0p2_key,metadata=0x1,dl_src=00:00:00:00:00:13,ipv6_src=aef0::4 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,ipv6,reg14=0x$sw0p2_key,metadata=0x1,dl_src=00:00:00:00:00:13,ipv6_src=fe80::200:ff:fe00:13 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,udp,reg14=0x$sw0p2_key,metadata=0x1,dl_src=00:00:00:00:00:04,nw_src=0.0.0.0,nw_dst=255.255.255.255,tp_src=68,tp_dst=67 actions=load:0->NXM_NX_REG10[[12]]
- table=OFTABLE_CHK_IN_PORT_SEC, priority=95,arp,reg14=0x$sw0p2_key,metadata=0x1 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)" > hv2_t${in_port_sec}_flows.expected
+ table=OFTABLE_CHK_IN_PORT_SEC, priority=95,arp,reg14=0x$sw0p2_key,metadata=0x1 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
+ table=OFTABLE_CHK_IN_PORT_SEC, priority=95,icmp6,reg14=0x$sw0p2_key,metadata=0x$sw0_dp_key,nw_ttl=255,icmp_type=135 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
+ table=OFTABLE_CHK_IN_PORT_SEC, priority=95,icmp6,reg14=0x$sw0p2_key,metadata=0x$sw0_dp_key,nw_ttl=255,icmp_type=136 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)" > hv2_t${in_port_sec}_flows.expected
 
 check_port_sec_offlows hv2 OFTABLE_CHK_IN_PORT_SEC
 
@@ -36192,7 +36196,9 @@ check_port_sec_offlows hv1 OFTABLE_CHK_OUT_PORT_SEC
 
 echo " table=OFTABLE_CHK_IN_PORT_SEC, priority=80,reg14=0x$sw0p2_key,metadata=0x1 actions=load:0x1->NXM_NX_REG10[[12]]
  table=OFTABLE_CHK_IN_PORT_SEC, priority=90,reg14=0x$sw0p2_key,metadata=0x1,dl_src=00:00:00:00:00:04 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
- table=OFTABLE_CHK_IN_PORT_SEC, priority=95,arp,reg14=0x$sw0p2_key,metadata=0x1 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)" >  hv2_t${in_port_sec}_flows.expected
+ table=OFTABLE_CHK_IN_PORT_SEC, priority=95,arp,reg14=0x$sw0p2_key,metadata=0x1 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
+ table=OFTABLE_CHK_IN_PORT_SEC, priority=95,icmp6,reg14=0x$sw0p2_key,metadata=0x$sw0_dp_key,nw_ttl=255,icmp_type=135 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)
+ table=OFTABLE_CHK_IN_PORT_SEC, priority=95,icmp6,reg14=0x$sw0p2_key,metadata=0x$sw0_dp_key,nw_ttl=255,icmp_type=136 actions=resubmit(,OFTABLE_CHK_IN_PORT_SEC_ND)" >  hv2_t${in_port_sec}_flows.expected
 
 check_port_sec_offlows hv2 OFTABLE_CHK_IN_PORT_SEC
 
