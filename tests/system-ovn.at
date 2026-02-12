@@ -20997,3 +20997,70 @@ OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
 /connection dropped.*/d"])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([Drop unknown eth type on router ports])
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+AT_SKIP_IF([test $HAVE_SCAPY = no])
+AT_SKIP_IF([test $HAVE_TCPDUMP = no])
+
+ADD_BR([br-int])
+ADD_BR([br-ext])
+
+ovs-ofctl add-flow br-ext action=normal
+# Set external-ids in br-int needed for ovn-controller
+ovs-vsctl \
+        -- set Open_vSwitch . external-ids:system-id=hv1 \
+        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+        -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+        -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+        -- set Open_vSwitch . external-ids:ovn-bridge-mappings=phynet:br-ext
+        -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+# Start ovn-controller
+start_daemon ovn-controller
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl ls-add sw0
+
+check ovn-nbctl lrp-add lr1 rp-sw0 00:00:01:01:02:03 192.168.1.1/24
+check ovn-nbctl lsp-add-router-port sw0 sw0-rp rp-sw0
+
+ADD_NAMESPACES(sw01)
+ADD_VETH(sw01, sw01, br-int, "192.168.1.2/24", "f0:00:00:01:02:03", \
+         "192.168.1.1")
+check ovn-nbctl lsp-add sw0 sw01 \
+    -- lsp-set-addresses sw01 "f0:00:00:01:02:03 192.168.1.2"
+ADD_NAMESPACES(sw02)
+ADD_VETH(sw02, sw02, br-int, "192.168.1.3/24", "f0:00:00:01:02:04", \
+         "192.168.1.1")
+check ovn-nbctl lsp-add sw0 sw02 \
+    -- lsp-set-addresses sw02 "f0:00:00:01:02:04 192.168.1.3"
+
+# create an ACL to log traffic on the router port.
+check ovn-nbctl --log --name='eth-unknown' acl-add sw0 to-lport 1000 'outport == "sw0-rp" && eth.type == 0x5ff' allow
+check ovn-nbctl --wait=hv sync
+
+NETNS_START_TCPDUMP([sw02], [-c 1 -neei sw02 ether proto 0x5ff], [sw02])
+
+ip netns exec sw01 scapy -H <<-EOF
+p = Ether(dst="ff:ff:ff:ff:ff:ff", src="f0:00:00:01:02:03", type=0x5ff)
+sendp (p, iface='sw01', loop = 0, verbose = 0, count = 1)
+EOF
+
+OVS_WAIT_UNTIL([
+    total_pkts=$(cat sw02.tcpdump | wc -l)
+    test "${total_pkts}" = "1"
+])
+
+AT_CHECK([grep -q 'name="eth-unknown"' ovn-controller.log],[1])
+
+OVN_CLEANUP_CONTROLLER([hv1])
+OVN_CLEANUP_NORTHD
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+AT_CLEANUP
+])
