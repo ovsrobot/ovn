@@ -56,7 +56,8 @@ static struct ovn_lflow *do_ovn_lflow_add(
     const char *actions, const char *io_port,
     const char *ctrl_meter,
     const struct ovsdb_idl_row *stage_hint,
-    const char *where, const char *flow_desc);
+    const char *where, const char *flow_desc,
+    bool acl_ct_translation);
 
 
 static struct ovs_mutex *lflow_hash_lock(const struct hmap *lflow_table,
@@ -184,6 +185,7 @@ struct ovn_lflow {
     struct ovn_dp_group *dpg;    /* Link to unique Sb datapath group. */
     const char *where;
     const char *flow_desc;
+    bool acl_ct_translation;     /* Use CT-based L4 field translation. */
 
     struct uuid sb_uuid;         /* SB DB row uuid, specified by northd. */
     struct ovs_list referenced_by;  /* List of struct lflow_ref_node. */
@@ -725,16 +727,17 @@ lflow_ref_sync_lflows(struct lflow_ref *lflow_ref,
  * then it may corrupt the hmap.  Caller should ensure thread safety
  * for such scenarios.
  */
-static void
+static struct ovn_lflow *
 lflow_table_add_lflow__(struct lflow_table *lflow_table,
-                       const struct ovn_synced_datapath *sdp,
-                       const unsigned long *dp_bitmap, size_t dp_bitmap_len,
-                       const struct ovn_stage *stage, uint16_t priority,
-                       const char *match, const char *actions,
-                       const char *io_port, const char *ctrl_meter,
-                       const struct ovsdb_idl_row *stage_hint,
-                       const char *where, const char *flow_desc,
-                       struct lflow_ref *lflow_ref)
+                        const struct ovn_synced_datapath *sdp,
+                        const unsigned long *dp_bitmap, size_t dp_bitmap_len,
+                        const struct ovn_stage *stage, uint16_t priority,
+                        const char *match, const char *actions,
+                        const char *io_port, const char *ctrl_meter,
+                        const struct ovsdb_idl_row *stage_hint,
+                        const char *where, const char *flow_desc,
+                        bool acl_ct_translation,
+                        struct lflow_ref *lflow_ref)
     OVS_EXCLUDED(fake_hash_mutex)
 {
     struct ovs_mutex *hash_lock;
@@ -755,7 +758,8 @@ lflow_table_add_lflow__(struct lflow_table *lflow_table,
                          sdp ? sparse_array_len(&sdp->dps->dps_array)
                              : dp_bitmap_len,
                          hash, stage, priority, match, actions,
-                         io_port, ctrl_meter, stage_hint, where, flow_desc);
+                         io_port, ctrl_meter, stage_hint, where, flow_desc,
+                         acl_ct_translation);
 
     if (lflow_ref) {
         struct lflow_ref_node *lrn =
@@ -798,6 +802,7 @@ lflow_table_add_lflow__(struct lflow_table *lflow_table,
     ovn_dp_group_add_with_reference(lflow, sdp, dp_bitmap, dp_bitmap_len);
 
     lflow_hash_unlock(hash_lock);
+    return lflow;
 }
 
 void
@@ -815,7 +820,8 @@ lflow_table_add_lflow(struct lflow_table_add_args *args)
                             args->dp_bitmap_len, args->stage, args->priority,
                             args->match, args->actions, args->io_port,
                             args->ctrl_meter, args->stage_hint, args->where,
-                            args->flow_desc, args->lflow_ref);
+                            args->flow_desc, args->acl_ct_translation,
+                            args->lflow_ref);
 }
 
 struct ovn_dp_group *
@@ -945,6 +951,7 @@ ovn_lflow_init(struct ovn_lflow *lflow,
     lflow->stage_hint = stage_hint;
     lflow->ctrl_meter = ctrl_meter;
     lflow->flow_desc = flow_desc;
+    lflow->acl_ct_translation = false;
     lflow->dpg = NULL;
     lflow->where = where;
     lflow->sb_uuid = sbuuid;
@@ -1039,7 +1046,8 @@ do_ovn_lflow_add(struct lflow_table *lflow_table, size_t dp_bitmap_len,
                  uint16_t priority, const char *match, const char *actions,
                  const char *io_port, const char *ctrl_meter,
                  const struct ovsdb_idl_row *stage_hint,
-                 const char *where, const char *flow_desc)
+                 const char *where, const char *flow_desc,
+                 bool acl_ct_translation)
     OVS_REQUIRES(fake_hash_mutex)
 {
     struct ovn_lflow *old_lflow;
@@ -1053,6 +1061,7 @@ do_ovn_lflow_add(struct lflow_table *lflow_table, size_t dp_bitmap_len,
     if (old_lflow) {
         dynamic_bitmap_realloc(&old_lflow->dpg_bitmap, dp_bitmap_len);
         if (old_lflow->sync_state != LFLOW_STALE) {
+            old_lflow->acl_ct_translation = acl_ct_translation;
             return old_lflow;
         }
         sbuuid = old_lflow->sb_uuid;
@@ -1069,6 +1078,7 @@ do_ovn_lflow_add(struct lflow_table *lflow_table, size_t dp_bitmap_len,
                    nullable_xstrdup(ctrl_meter),
                    ovn_lflow_hint(stage_hint), where,
                    flow_desc, sbuuid);
+    lflow->acl_ct_translation = acl_ct_translation;
 
     if (parallelization_state != STATE_USE_PARALLELIZATION) {
         hmap_insert(&lflow_table->entries, &lflow->hmap_node, hash);
@@ -1122,12 +1132,20 @@ sync_lflow_to_sb(struct ovn_lflow *lflow,
         sbrec_logical_flow_set_match(sbflow, lflow->match);
         sbrec_logical_flow_set_actions(sbflow, lflow->actions);
         sbrec_logical_flow_set_flow_desc(sbflow, lflow->flow_desc);
-        if (lflow->io_port) {
+
+        /* Set tags for io_port and/or acl_ct_translation if needed. */
+        if (lflow->io_port || lflow->acl_ct_translation) {
             struct smap tags = SMAP_INITIALIZER(&tags);
-            smap_add(&tags, "in_out_port", lflow->io_port);
+            if (lflow->io_port) {
+                smap_add(&tags, "in_out_port", lflow->io_port);
+            }
+            if (lflow->acl_ct_translation) {
+                smap_add(&tags, "acl_ct_translation", "true");
+            }
             sbrec_logical_flow_set_tags(sbflow, &tags);
             smap_destroy(&tags);
         }
+
         sbrec_logical_flow_set_controller_meter(sbflow, lflow->ctrl_meter);
 
         /* Trim the source locator lflow->where, which looks something like
@@ -1191,6 +1209,21 @@ sync_lflow_to_sb(struct ovn_lflow *lflow,
                     sbrec_logical_flow_update_external_ids_setkey(
                         sbflow, "source", where);
                 }
+            }
+        }
+
+        /* Update acl_ct_translation marker in tags if needed.
+         * This must be outside ovn_internal_version_changed check because
+         * the option can be enabled/disabled at runtime. */
+        bool cur_has_ct_trans = smap_get_bool(&sbflow->tags,
+                                              "acl_ct_translation", false);
+        if (lflow->acl_ct_translation != cur_has_ct_trans) {
+            if (lflow->acl_ct_translation) {
+                sbrec_logical_flow_update_tags_setkey(
+                    sbflow, "acl_ct_translation", "true");
+            } else {
+                sbrec_logical_flow_update_tags_delkey(
+                    sbflow, "acl_ct_translation");
             }
         }
     }
