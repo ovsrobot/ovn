@@ -74,7 +74,7 @@ jobs:
 
       - name: Cache image
         id: image_cache
-        uses: actions/cache@v4
+        uses: actions/cache/save@v4
         with:
           path: /tmp/image.tar
           key: ${{ github.sha }}/${{ github.event_name }}
