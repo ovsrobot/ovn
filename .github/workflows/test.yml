@@ -24,9 +24,12 @@ jobs:
     # +-------+-------------------+-------------------+
     env:
       DEPENDENCIES: podman
-    name: Prepare container
+    name: Prepare container ${{ matrix.runner }}
     if: github.repository_owner == 'ovn-org' || github.event_name != 'schedule'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
 
     steps:
       - uses: actions/checkout@v4
@@ -77,7 +80,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: /tmp/image.tar
-          key: ${{ github.sha }}/${{ github.event_name }}
+          key: ${{ github.sha }}/${{ github.event_name }}/${{ matrix.runner }}
 
   build-linux:
     needs: [prepare-container]
@@ -93,37 +96,46 @@ jobs:
       UNSTABLE:    ${{ matrix.cfg.unstable }}
 
     name: linux ${{ join(matrix.cfg.*, ' ') }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.cfg.runner }}
 
     strategy:
       fail-fast: false
       matrix:
         cfg:
-        - { compiler: gcc, opts: --disable-ssl }
-        - { compiler: clang, opts: --disable-ssl }
-        - { compiler: gcc, testsuite: dist-test }
-        - { compiler: gcc, testsuite: test, test_range: "-300" }
-        - { compiler: gcc, testsuite: test, test_range: "301-600" }
-        - { compiler: gcc, testsuite: test, test_range: "601-", unstable: unstable }
-        - { compiler: clang, testsuite: test, sanitizers: sanitizers, test_range: "-300" }
-        - { compiler: clang, testsuite: test, sanitizers: sanitizers, test_range: "301-600" }
-        - { compiler: clang, testsuite: test, sanitizers: sanitizers, test_range: "601-", unstable: unstable }
-        - { compiler: gcc, testsuite: test, libs: -ljemalloc, test_range: "-300" }
-        - { compiler: gcc, testsuite: test, libs: -ljemalloc, test_range: "301-600" }
-        - { compiler: gcc, testsuite: test, libs: -ljemalloc, test_range: "601-", unstable: unstable }
-        - { compiler: gcc, testsuite: system-test-dpdk, dpdk: dpdk, test_range: "-100" }
-        - { compiler: gcc, testsuite: system-test-dpdk, dpdk: dpdk, test_range: "101-200" }
-        - { compiler: gcc, testsuite: system-test-dpdk, dpdk: dpdk, test_range: "201-", unstable: unstable }
-        - { compiler: gcc, testsuite: system-test-userspace, test_range: "-100" }
-        - { compiler: gcc, testsuite: system-test-userspace, test_range: "101-200" }
-        - { compiler: gcc, testsuite: system-test-userspace, test_range: "201-", unstable: unstable }
-        - { compiler: gcc, testsuite: system-test, test_range: "-100" }
-        - { compiler: gcc, testsuite: system-test, test_range: "101-200" }
-        - { compiler: gcc, testsuite: system-test, test_range: "201-", unstable: unstable }
-        - { compiler: clang, testsuite: system-test, sanitizers: sanitizers, test_range: "-100" }
-        - { compiler: clang, testsuite: system-test, sanitizers: sanitizers, test_range: "101-200" }
-        - { compiler: clang, testsuite: system-test, sanitizers: sanitizers, test_range: "201-", unstable: unstable }
-        - { arch: x86, compiler: gcc, opts: --disable-ssl }
+        # x86_64 builds
+        - { runner: ubuntu-24.04, compiler: gcc, opts: --disable-ssl }
+        - { runner: ubuntu-24.04, compiler: clang, opts: --disable-ssl }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: dist-test }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: test, test_range: "-300" }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: test, test_range: "301-600" }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: test, test_range: "601-", unstable: unstable }
+        - { runner: ubuntu-24.04, compiler: clang, testsuite: test, sanitizers: sanitizers, test_range: "-300" }
+        - { runner: ubuntu-24.04, compiler: clang, testsuite: test, sanitizers: sanitizers, test_range: "301-600" }
+        - { runner: ubuntu-24.04, compiler: clang, testsuite: test, sanitizers: sanitizers, test_range: "601-", unstable: unstable }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: test, libs: -ljemalloc, test_range: "-300" }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: test, libs: -ljemalloc, test_range: "301-600" }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: test, libs: -ljemalloc, test_range: "601-", unstable: unstable }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: system-test-dpdk, dpdk: dpdk, test_range: "-100" }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: system-test-dpdk, dpdk: dpdk, test_range: "101-200" }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: system-test-dpdk, dpdk: dpdk, test_range: "201-", unstable: unstable }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: system-test-userspace, test_range: "-100" }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: system-test-userspace, test_range: "101-200" }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: system-test-userspace, test_range: "201-", unstable: unstable }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: system-test, test_range: "-100" }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: system-test, test_range: "101-200" }
+        - { runner: ubuntu-24.04, compiler: gcc, testsuite: system-test, test_range: "201-", unstable: unstable }
+        - { runner: ubuntu-24.04, compiler: clang, testsuite: system-test, sanitizers: sanitizers, test_range: "-100" }
+        - { runner: ubuntu-24.04, compiler: clang, testsuite: system-test, sanitizers: sanitizers, test_range: "101-200" }
+        - { runner: ubuntu-24.04, compiler: clang, testsuite: system-test, sanitizers: sanitizers, test_range: "201-", unstable: unstable }
+        - { runner: ubuntu-24.04, arch: x86, compiler: gcc, opts: --disable-ssl }
+        # ARM builds
+        - { runner: ubuntu-24.04-arm, compiler: gcc, opts: --disable-ssl }
+        - { runner: ubuntu-24.04-arm, compiler: gcc, testsuite: test, test_range: "-300" }
+        - { runner: ubuntu-24.04-arm, compiler: gcc, testsuite: test, test_range: "301-600" }
+        - { runner: ubuntu-24.04-arm, compiler: gcc, testsuite: test, test_range: "601-", unstable: unstable }
+        - { runner: ubuntu-24.04-arm, compiler: gcc, testsuite: system-test, test_range: "-100" }
+        - { runner: ubuntu-24.04-arm, compiler: gcc, testsuite: system-test, test_range: "101-200" }
+        - { runner: ubuntu-24.04-arm, compiler: gcc, testsuite: system-test, test_range: "201-", unstable: unstable }
 
     steps:
     - name: system-level-dependencies
@@ -176,7 +188,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: /tmp/image.tar
-        key: ${{ github.sha }}/${{ github.event_name }}
+        key: ${{ github.sha }}/${{ github.event_name }}/${{ matrix.cfg.runner }}
 
     - name: load image
       run: |
