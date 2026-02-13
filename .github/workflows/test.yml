@@ -271,14 +271,16 @@ jobs:
         path: config.log
 
   build-linux-rpm:
-    name: linux rpm fedora
+    name: linux rpm fedora ${{ matrix.runner }}
     if: github.repository_owner == 'ovn-org' || github.event_name != 'schedule'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     container: fedora:42
     timeout-minutes: 30
 
     strategy:
       fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
 
     steps:
       - name: install dependencies
@@ -320,16 +322,16 @@ jobs:
       - name: upload rpm packages
         uses: actions/upload-artifact@v4
         with:
-          name: rpm-packages
+          name: rpm-packages-${{ matrix.runner }}
           path: |
             rpm/rpmbuild/SRPMS/*.rpm
             rpm/rpmbuild/RPMS/*/*.rpm
           retention-days: 14
 
   build-linux-deb:
-    name: linux deb debian
+    name: linux deb debian ${{ matrix.runner }}
     if: github.repository_owner == 'ovn-org' || github.event_name != 'schedule'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     container:
       image: debian:trixie
       options: --init  # Use tini for proper process management
@@ -337,6 +339,8 @@ jobs:
 
     strategy:
       fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
 
     steps:
       - name: install dependencies
