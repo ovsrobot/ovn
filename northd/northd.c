@@ -10767,16 +10767,26 @@ build_lswitch_destination_lookup_bmcast(struct ovn_datapath *od,
                       lflow_ref);
     }
 
-    if (!smap_get_bool(&od->nbs->other_config,
-                       "broadcast-arps-to-all-routers", true)) {
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 72,
-                      "eth.mcast && (arp.op == 1 || nd_ns)",
-                      "outport = \""MC_FLOOD_L2"\"; output;",
-                      lflow_ref);
-    }
+    ds_clear(actions);
+    bool broadcast_arps_to_all_routers = smap_get_bool(
+            &od->nbs->other_config,
+            "broadcast-arps-to-all-routers",
+            true);
+    ds_put_format(actions, "outport = \"%s\"; output;",
+                  broadcast_arps_to_all_routers ?  MC_FLOOD : MC_FLOOD_L2);
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 72,
+                  "eth.mcast && (arp.op == 1 || nd_ns)",
+                  ds_cstr(actions), lflow_ref);
 
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 70, "eth.mcast",
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 71,
+                  "eth.mcast && (arp.op == 2 || ip)",
                   "outport = \""MC_FLOOD"\"; output;", lflow_ref);
+
+    /* non-{arp,ip} L2 multicast traffic should not be sent to router
+     * ports since these packets will be discarded in the router pipeline.
+     */
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 70, "eth.mcast",
+                  "outport = \""MC_FLOOD_L2"\"; output;", lflow_ref);
 }
 
 /* Ingress table 30: destination lookup, multicast handling (priority 80). */
