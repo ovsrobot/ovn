@@ -19,7 +19,16 @@ Build-Depends: graphviz,
                python3-twisted,
                python3-zope.interface,
                libunbound-dev,
-               libunwind-dev
+               libunwind-dev,
+               util-linux,
+               python3-scapy,
+               tcpdump,
+               netcat-openbsd,
+               xxd,
+               iproute2,
+               arping,
+               ethtool,
+               nftables
 Standards-Version: 3.9.3
 Homepage: http://www.ovn.org/
 
