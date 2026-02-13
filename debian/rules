@@ -30,7 +30,11 @@ override_dh_autoreconf:
 	dh_autoreconf $(DH_AS_NEEDED)
 
 override_dh_auto_configure:
-	dh_auto_configure -- --enable-ssl --enable-shared --with-ovs-source=${OVSDIR} $(EXTRA_CONFIGURE_OPTS)
+	cd ovs && ./boot.sh && ./configure \
+		CFLAGS="-fPIC $(shell dpkg-buildflags --get CFLAGS)" \
+		LDFLAGS="$(shell dpkg-buildflags --get LDFLAGS)" \
+		&& $(MAKE)
+	dh_auto_configure -- --enable-ssl --enable-shared --with-ovs-source=$(CURDIR)/ovs $(EXTRA_CONFIGURE_OPTS)
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
