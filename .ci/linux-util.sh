@@ -1,5 +1,3 @@
-#!/bin/bash
-
 free_up_disk_space_ubuntu()
 {
     local pkgs='azure-cli aspnetcore-* dotnet-* ghc-* firefox*
