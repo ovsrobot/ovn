@@ -51,10 +51,11 @@ jobs:
         repository: ${{ matrix.cfg.repo }}
         ref: ${{ matrix.cfg.branch }}
 
+    - name: Update APT cache
+      uses: ./.github/actions/prepare-apt
+
     - name: Install dependencies
-      run: |
-        sudo apt update || true
-        sudo apt-get install -y podman
+      run: sudo apt-get install -y podman
 
     - name: Fix /etc/hosts file
       run: |
@@ -116,9 +117,11 @@ jobs:
     - name: Check out ovn
       uses: actions/checkout@v4
 
+    - name: Update APT cache
+      uses: ./.github/actions/prepare-apt
+
     - name: install required dependencies
       run:  |
-        sudo apt update || true
         sudo apt install -y ${{ env.dependencies }}
         sudo apt install -y linux-modules-extra-$(uname -r)
 
@@ -131,6 +134,9 @@ jobs:
       run: |
         . .ci/linux-util.sh
         disable_apparmor
+
+    - name: Update APT cache
+      uses: ./.github/actions/prepare-apt
 
     - name: Free up disk space
       run: |

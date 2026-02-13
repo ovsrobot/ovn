@@ -1,0 +1,14 @@
+name: 'Prepare APT'
+description: 'Remove problematic repos and update APT cache'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Prepare APT
+      shell: bash
+      run: |
+        # Remove Microsoft repos that are pre-configured on GitHub runners.
+        # They can cause transient 403 errors and we don't need them.
+        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
+                   /etc/apt/sources.list.d/azure-cli.list || true
+        sudo apt update
