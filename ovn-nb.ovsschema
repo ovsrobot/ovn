@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
-    "version": "7.17.0",
-    "cksum": "2579043495 45129",
+    "version": "7.18.0",
+    "cksum": "3798579343 45342",
     "tables": {
         "NB_Global": {
             "columns": {
@@ -268,6 +268,10 @@
                 "address": {"type": {"key": "string",
                                      "min": 0,
                                      "max": 1}},
+                "status": {
+                    "type": {"key": {"type": "string",
+                             "enum": ["set", ["online", "offline", "error"]]},
+                             "min": 0, "max": 1}},
                 "options": {
                      "type": {"key": "string",
                               "value": "string",
