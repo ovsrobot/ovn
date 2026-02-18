@@ -650,6 +650,16 @@ dynamic_bitmap_clone_from_db(struct dynamic_bitmap *dst,
     dst->capacity = orig->capacity;
 }
 
+static inline void
+dynamic_bitmap_clone_from_bitmap(struct dynamic_bitmap *dst,
+                                 const unsigned long *src, size_t n)
+{
+    bitmap_free(dst->map);
+    dst->map = bitmap_clone(src, n);
+    dst->n_elems = dynamic_bitmap_count1(dst);
+    dst->capacity = n;
+}
+
 static inline size_t
 dynamic_bitmap_scan(struct dynamic_bitmap *dp, bool target, size_t start)
 {
