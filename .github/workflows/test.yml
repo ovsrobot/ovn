@@ -313,3 +313,55 @@ jobs:
             rpm/rpmbuild/SRPMS/*.rpm
             rpm/rpmbuild/RPMS/*/*.rpm
           retention-days: 14
+
+  build-linux-deb:
+    name: linux deb debian
+    if: github.repository_owner == 'ovn-org' || github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:trixie
+      options: --init  # Use tini for proper process management
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+
+    steps:
+      - name: install dependencies
+        run: |
+          apt-get update
+          apt-get install -y git build-essential fakeroot devscripts equivs
+
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: install build dependencies
+        run: |
+          mk-build-deps -i -r -t 'apt-get -y --no-install-recommends' debian/control
+
+      - name: install sudo for fix_etc_hosts
+        run: |
+          apt-get install -y sudo
+
+      - name: Fix /etc/hosts file
+        run: |
+          . .ci/linux-util.sh
+          fix_etc_hosts
+
+      - name: build Debian packages
+        run: |
+          dpkg-buildpackage -us -uc -b
+
+      - name: collect deb packages
+        run: |
+          mkdir -p deb-packages
+          cp ../*.deb deb-packages/
+
+      - name: upload deb packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-packages
+          path: deb-packages/
+          retention-days: 14
