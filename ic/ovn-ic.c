@@ -1300,6 +1300,7 @@ struct ic_route_info {
     const struct nbrec_logical_router_static_route *nb_route;
     const struct nbrec_logical_router_port *nb_lrp;
     const struct nbrec_load_balancer *nb_lb;
+    bool stale; /* True if the route is stale and should be removed. */
 };
 
 static uint32_t
@@ -1393,6 +1394,7 @@ add_to_routes_learned(struct hmap *routes_learned,
     ic_route->origin = origin;
     ic_route->route_table = nb_route->route_table;
     ic_route->nb_lr = nb_lr;
+    ic_route->stale = true;
     hmap_insert(routes_learned, &ic_route->node,
                 ic_route_hash(&prefix, plen, &nexthop, origin,
                               nb_route->route_table));
@@ -2168,8 +2170,7 @@ sync_learned_routes(struct ic_context *ctx,
                         route_learned->nb_route, "ic-learned-route", uuid_s);
                     free(uuid_s);
                 }
-                hmap_remove(&ic_lr->routes_learned, &route_learned->node);
-                free(route_learned);
+                route_learned->stale = false;
             } else {
                 /* Create the missing route in NB. */
                 const struct nbrec_logical_router_static_route *nb_route =
@@ -2197,11 +2198,13 @@ sync_learned_routes(struct ic_context *ctx,
     /* Delete extra learned routes. */
     struct ic_route_info *route_learned;
     HMAP_FOR_EACH_SAFE (route_learned, node, &ic_lr->routes_learned) {
-        VLOG_DBG("Delete route %s -> %s that is not in IC-SB from NB.",
-                 route_learned->nb_route->ip_prefix,
-                 route_learned->nb_route->nexthop);
-        nbrec_logical_router_update_static_routes_delvalue(
-            ic_lr->lr, route_learned->nb_route);
+        if (route_learned->stale) {
+            VLOG_DBG("Delete route %s -> %s that is not in IC-SB from NB.",
+                     route_learned->nb_route->ip_prefix,
+                     route_learned->nb_route->nexthop);
+            nbrec_logical_router_update_static_routes_delvalue(
+                ic_lr->lr, route_learned->nb_route);
+        }
         hmap_remove(&ic_lr->routes_learned, &route_learned->node);
         free(route_learned);
     }
