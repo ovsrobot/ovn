@@ -98,9 +98,9 @@ Post v25.09.0
      reserving an unused IP from the backend's subnet. This change allows
      using LRP IPs directly, eliminating the need to reserve additional IPs
      per backend port.
-  - Add "distributed" option for load balancer, that forces traffic to be
-    routed only to backend instances running locally on the same chassis
-    it arrives on.
+   - Add "distributed" option for load balancer, that forces traffic to be
+     routed only to backend instances running locally on the same chassis
+     it arrives on.
    - Add support for special port_security prefix "VRRPv3". This prefix allows
      CMS to allow all required traffic for a VRRPv3 virtual router behind LSP.
      See ovn-nb(5) man page for more details.
@@ -109,6 +109,9 @@ Post v25.09.0
      based L4 field translation for stateful ACLs. When enabled allows proper
      handling of IP fragmentation in userspace datapaths. This option may break
      hardware offloading and is disabled by default.
+   - Added support for health check monitoring for Logical Switch Ports using
+     tcp, udp, and icmp protocols. The check status from SBDB is synchronized
+     to NBDB to health check status field for CMS needs
 
 OVN v25.09.0 - xxx xx xxxx
 --------------------------
