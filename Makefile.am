@@ -95,6 +95,7 @@ EXTRA_DIST = \
 	.ci/osx-prepare.sh \
 	.ci/ovn-kubernetes/prepare.sh \
 	.ci/ovn-kubernetes/custom.patch \
+	.github/actions/prepare-apt/action.yaml \
 	.github/workflows/containers.yml \
 	.github/workflows/test.yml \
 	.github/workflows/ovn-kubernetes.yml \

@@ -38,15 +38,16 @@ jobs:
       TESTSUITE: "upgrade-test"
 
     steps:
-    - name: system-level-dependencies
-      run: |
-        sudo apt update
-        sudo apt -y install linux-modules-extra-$(uname -r)
-
     - name: checkout
       uses: actions/checkout@v4
       with:
         submodules: recursive
+
+    - name: Update APT cache
+      uses: ./.github/actions/prepare-apt
+
+    - name: system-level-dependencies
+      run: sudo apt -y install linux-modules-extra-$(uname -r)
 
     - name: Fix /etc/hosts file
       run: |
