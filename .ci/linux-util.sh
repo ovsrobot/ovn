@@ -1,6 +1,6 @@
 #!/bin/bash
 
-function free_up_disk_space_ubuntu()
+free_up_disk_space_ubuntu()
 {
     local pkgs='azure-cli aspnetcore-* dotnet-* ghc-* firefox*
                 google-chrome-stable google-cloud-cli libmono-* llvm-*
@@ -18,7 +18,7 @@ function free_up_disk_space_ubuntu()
     sudo rm -rf $paths
 }
 
-function set_containers_apparmor_profile()
+set_containers_apparmor_profile()
 {
     local profile=$1
 
@@ -31,7 +31,7 @@ function set_containers_apparmor_profile()
 #   https://github.com/actions/runner-images/issues/3353
 #   https://github.com/actions/runner-images/issues/12192
 # Just clearing those out, if any.
-function fix_etc_hosts()
+fix_etc_hosts()
 {
     cp /etc/hosts ./hosts.bak
     sed -E -n \
@@ -43,7 +43,7 @@ function fix_etc_hosts()
 
 # Workaround until https://github.com/actions/runner-images/issues/10015
 # is resolved in some way.
-function disable_apparmor()
+disable_apparmor()
 {
     # https://bugs.launchpad.net/ubuntu/+source/apparmor/+bug/2093797
     sudo aa-teardown || true
