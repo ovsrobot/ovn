@@ -2546,6 +2546,58 @@ ovn_port_update_sbrec_chassis(
     free(requested_chassis_sb);
 }
 
+static const struct sbrec_encap *
+encap_lookup_by_chassis_ip(struct ovsdb_idl_index *sbrec_encap_by_chassis_ip,
+                           const char *chassis_name, const char *ip)
+{
+    struct sbrec_encap *key =
+        sbrec_encap_index_init_row(sbrec_encap_by_chassis_ip);
+    sbrec_encap_index_set_chassis_name(key, chassis_name);
+    sbrec_encap_index_set_ip(key, ip);
+
+    const struct sbrec_encap *best = NULL;
+    const struct sbrec_encap *encap;
+    SBREC_ENCAP_FOR_EACH_EQUAL (encap, key, sbrec_encap_by_chassis_ip) {
+        enum chassis_tunnel_type tun_type = get_tunnel_type(encap->type);
+        if (tun_type == TUNNEL_TYPE_INVALID) {
+            continue;
+        }
+        /* Pick the highest-preference tunnel type (geneve > vxlan)
+         * when multiple encap types share the same chassis+IP. */
+        if (!best || get_tunnel_type(best->type) < tun_type) {
+            best = encap;
+        }
+    }
+    sbrec_encap_index_destroy_row(key);
+
+    return best;
+}
+
+static void
+ovn_port_update_requested_encap(
+    struct ovsdb_idl_index *sbrec_encap_by_chassis_ip,
+                                const struct ovn_port *op)
+{
+    if (is_cr_port(op)) {
+        return;
+    }
+
+    /* requested-chassis is resolved into SB first; reuse that binding. */
+    const struct smap *options = op->nbsp ? &op->nbsp->options
+                                          : &op->nbrp->options;
+    const char *requested_ip = smap_get(options, "requested-encap-ip");
+    const struct sbrec_encap *encap = NULL;
+    if (requested_ip && requested_ip[0] && op->sb->requested_chassis) {
+        encap = encap_lookup_by_chassis_ip(sbrec_encap_by_chassis_ip,
+                                           op->sb->requested_chassis->name,
+                                           requested_ip);
+    }
+
+    if (op->sb->encap != encap) {
+        sbrec_port_binding_set_encap(op->sb, encap);
+    }
+}
+
 static void
 check_and_do_sb_mirror_deletion(const struct ovn_port *op)
 {
@@ -2616,6 +2668,7 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
                       struct ovsdb_idl_index *sbrec_chassis_by_hostname,
                       struct ovsdb_idl_index *sbrec_ha_chassis_grp_by_name,
                       const struct sbrec_mirror_table *sbrec_mirror_table,
+                      struct ovsdb_idl_index *sbrec_encap_by_chassis_ip,
                       const struct ovn_port *op,
                       unsigned long *queue_id_bitmap,
                       struct sset *active_ha_chassis_grps)
@@ -2951,6 +3004,8 @@ common:
     if (op->tunnel_key != op->sb->tunnel_key) {
         sbrec_port_binding_set_tunnel_key(op->sb, op->tunnel_key);
     }
+
+    ovn_port_update_requested_encap(sbrec_encap_by_chassis_ip, op);
 
     /* ovn-controller will update 'Port_Binding.up' only if it was explicitly
      * set to 'false'.
@@ -4232,6 +4287,7 @@ build_ports(struct ovsdb_idl_txn *ovnsb_txn,
     const struct sbrec_ha_chassis_group_table *sbrec_ha_chassis_group_table,
     struct ovsdb_idl_index *sbrec_chassis_by_name,
     struct ovsdb_idl_index *sbrec_chassis_by_hostname,
+    struct ovsdb_idl_index *sbrec_encap_by_chassis_ip,
     struct ovsdb_idl_index *sbrec_ha_chassis_grp_by_name,
     struct hmap *ls_datapaths, struct hmap *lr_datapaths,
     struct hmap *ls_ports, struct hmap *lr_ports,
@@ -4307,6 +4363,7 @@ build_ports(struct ovsdb_idl_txn *ovnsb_txn,
                               sbrec_chassis_by_hostname,
                               sbrec_ha_chassis_grp_by_name,
                               sbrec_mirror_table,
+                              sbrec_encap_by_chassis_ip,
                               op, queue_id_bitmap,
                               &active_ha_chassis_grps);
         op->od->is_transit_router |= is_transit_router_port(op);
@@ -4321,6 +4378,7 @@ build_ports(struct ovsdb_idl_txn *ovnsb_txn,
                               sbrec_chassis_by_hostname,
                               sbrec_ha_chassis_grp_by_name,
                               sbrec_mirror_table,
+                              sbrec_encap_by_chassis_ip,
                               op, queue_id_bitmap,
                               &active_ha_chassis_grps);
         sbrec_port_binding_set_logical_port(op->sb, op->key);
@@ -4543,7 +4601,8 @@ ls_port_init(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
              const struct sbrec_port_binding *sb,
              const struct sbrec_mirror_table *sbrec_mirror_table,
              struct ovsdb_idl_index *sbrec_chassis_by_name,
-             struct ovsdb_idl_index *sbrec_chassis_by_hostname)
+             struct ovsdb_idl_index *sbrec_chassis_by_hostname,
+             struct ovsdb_idl_index *sbrec_encap_by_chassis_ip)
 {
     op->od = od;
     parse_lsp_addrs(op);
@@ -4573,6 +4632,7 @@ ls_port_init(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
     }
     ovn_port_update_sbrec(ovnsb_txn, sbrec_chassis_by_name,
                           sbrec_chassis_by_hostname, NULL, sbrec_mirror_table,
+                          sbrec_encap_by_chassis_ip,
                           op, NULL, NULL);
     return true;
 }
@@ -4583,13 +4643,15 @@ ls_port_create(struct ovsdb_idl_txn *ovnsb_txn, struct hmap *ls_ports,
                struct ovn_datapath *od,
                const struct sbrec_mirror_table *sbrec_mirror_table,
                struct ovsdb_idl_index *sbrec_chassis_by_name,
-               struct ovsdb_idl_index *sbrec_chassis_by_hostname)
+               struct ovsdb_idl_index *sbrec_chassis_by_hostname,
+               struct ovsdb_idl_index *sbrec_encap_by_chassis_ip)
 {
     struct ovn_port *op = ovn_port_create(ls_ports, key, nbsp, NULL,
                                           NULL);
     hmap_insert(&od->ports, &op->dp_node, hmap_node_hash(&op->key_node));
     if (!ls_port_init(op, ovnsb_txn, od, NULL, sbrec_mirror_table,
-                      sbrec_chassis_by_name, sbrec_chassis_by_hostname)) {
+                      sbrec_chassis_by_name, sbrec_chassis_by_hostname,
+                      sbrec_encap_by_chassis_ip)) {
         ovn_port_destroy(ls_ports, op);
         return NULL;
     }
@@ -4604,14 +4666,16 @@ ls_port_reinit(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
                 const struct sbrec_port_binding *sb,
                 const struct sbrec_mirror_table *sbrec_mirror_table,
                 struct ovsdb_idl_index *sbrec_chassis_by_name,
-                struct ovsdb_idl_index *sbrec_chassis_by_hostname)
+                struct ovsdb_idl_index *sbrec_chassis_by_hostname,
+                struct ovsdb_idl_index *sbrec_encap_by_chassis_ip)
 {
     ovn_port_cleanup(op);
     op->sb = sb;
     ovn_port_set_nb(op, nbsp, NULL);
     op->primary_port = op->cr_port = NULL;
     return ls_port_init(op, ovnsb_txn, od, sb, sbrec_mirror_table,
-                        sbrec_chassis_by_name, sbrec_chassis_by_hostname);
+                        sbrec_chassis_by_name, sbrec_chassis_by_hostname,
+                        sbrec_encap_by_chassis_ip);
 }
 
 /* Returns true if the logical switch has changes which can be
@@ -4810,7 +4874,8 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                                     new_nbsp->name, new_nbsp, od,
                                     ni->sbrec_mirror_table,
                                     ni->sbrec_chassis_by_name,
-                                    ni->sbrec_chassis_by_hostname);
+                                    ni->sbrec_chassis_by_hostname,
+                                    ni->sbrec_encap_by_chassis_ip);
                 if (!op) {
                     goto fail;
                 }
@@ -4853,7 +4918,8 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                                     new_nbsp,
                                     od, sb, ni->sbrec_mirror_table,
                                     ni->sbrec_chassis_by_name,
-                                    ni->sbrec_chassis_by_hostname)) {
+                                    ni->sbrec_chassis_by_hostname,
+                                    ni->sbrec_encap_by_chassis_ip)) {
                     if (sb) {
                         sbrec_port_binding_delete(sb);
                     }
@@ -20959,6 +21025,7 @@ ovnnb_db_run(struct northd_input *input_data,
                 input_data->sbrec_ha_chassis_group_table,
                 input_data->sbrec_chassis_by_name,
                 input_data->sbrec_chassis_by_hostname,
+                input_data->sbrec_encap_by_chassis_ip,
                 input_data->sbrec_ha_chassis_grp_by_name,
                 &data->ls_datapaths.datapaths, &data->lr_datapaths.datapaths,
                 &data->ls_ports, &data->lr_ports,
