@@ -97,6 +97,7 @@ static unixctl_cb_func chassis_features_list;
 #define SB_NODES \
     SB_NODE(sb_global) \
     SB_NODE(chassis) \
+    SB_NODE(encap) \
     SB_NODE(address_set) \
     SB_NODE(port_group) \
     SB_NODE(logical_flow) \
@@ -261,6 +262,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
                      NULL);
 
     engine_add_input(&en_northd, &en_sb_chassis, NULL);
+    engine_add_input(&en_northd, &en_sb_encap, NULL);
     engine_add_input(&en_northd, &en_sb_mirror, NULL);
     engine_add_input(&en_northd, &en_sb_meter, NULL);
     engine_add_input(&en_northd, &en_sb_dns, NULL);
@@ -514,6 +516,9 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
                          ip_mcast_index_create(sb->idl);
     struct ovsdb_idl_index *sbrec_chassis_by_hostname =
         chassis_hostname_index_create(sb->idl);
+    struct ovsdb_idl_index *sbrec_encap_by_chassis_ip =
+        ovsdb_idl_index_create2(sb->idl, &sbrec_encap_col_chassis_name,
+                                &sbrec_encap_col_ip);
     struct ovsdb_idl_index *sbrec_mac_binding_by_datapath
         = mac_binding_by_datapath_index_create(sb->idl);
     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip
@@ -529,6 +534,9 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_ovsdb_node_add_index(&en_sb_chassis,
                                 "sbrec_chassis_by_hostname",
                                 sbrec_chassis_by_hostname);
+    engine_ovsdb_node_add_index(&en_sb_encap,
+                                "sbrec_encap_by_chassis_ip",
+                                sbrec_encap_by_chassis_ip);
     engine_ovsdb_node_add_index(&en_sb_ha_chassis_group,
                                 "sbrec_ha_chassis_grp_by_name",
                                 sbrec_ha_chassis_grp_by_name);
