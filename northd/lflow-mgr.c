@@ -1068,6 +1068,16 @@ do_ovn_lflow_add(struct lflow_table *lflow_table, size_t dp_bitmap_len,
     if (old_lflow) {
         dynamic_bitmap_realloc(&old_lflow->dpg_bitmap, dp_bitmap_len);
         if (old_lflow->sync_state != LFLOW_STALE) {
+
+            if (old_lflow->dpg != NULL) {
+                struct hmap *dp_groups;
+                enum ovn_datapath_type dp_type =
+                    ovn_stage_to_datapath_type(old_lflow->stage);
+                dp_groups = &lflow_table->dp_groups[dp_type];
+                ovn_dp_group_release(dp_groups, old_lflow->dpg);
+                old_lflow->dpg = NULL;
+            }
+
             return old_lflow;
         }
         sbuuid = old_lflow->sb_uuid;
@@ -1268,7 +1278,6 @@ sync_lflow_to_sb(struct ovn_lflow *lflow,
 
     if (pre_sync_dpg != lflow->dpg) {
         ovn_dp_group_use(lflow->dpg);
-        ovn_dp_group_release(dp_groups, pre_sync_dpg);
     }
 
     lflow->sync_state = LFLOW_SYNCED;
