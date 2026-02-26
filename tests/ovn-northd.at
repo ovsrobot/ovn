@@ -18328,6 +18328,51 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([SB DNS incremental processing])
+ovn_start
+
+check ovn-nbctl --wait=sb ls-add sw0
+
+# Create NB DNS record and associate it with sw0.
+dns_uuid=$(ovn-nbctl create DNS records:vm1.ovn.org="10.0.0.4")
+check ovn-nbctl set Logical_Switch sw0 dns_records="$dns_uuid"
+check ovn-nbctl --wait=sb sync
+
+# Verify SB DNS entry was created with correct records.
+sb_dns_uuid=$(fetch_column sb:DNS _uuid)
+check test -n "$sb_dns_uuid"
+wait_column '{"vm1.ovn.org"="10.0.0.4"}' sb:DNS records
+
+# Verify DNS lookup and response flows exist.
+AT_CHECK([ovn-sbctl dump-flows sw0 | grep -c "dns_lookup\|dns_response" | grep -q '[1-9]'])
+
+# Directly modify the SB DNS records field.  The noop handler should
+# not trigger a recompute, so the stale value persists until a
+# recompute corrects it.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-sbctl set DNS $sb_dns_uuid records:vm2.ovn.org="10.0.0.5"
+check ovn-nbctl --wait=sb sync
+check_engine_stats northd norecompute compute
+check_engine_stats lflow norecompute nocompute
+
+# The stale record should still be present since northd did not recompute.
+AT_CHECK([ovn-sbctl get DNS $sb_dns_uuid records:vm2.ovn.org], [0], [dnl
+"10.0.0.5"
+])
+
+# Force a recompute and verify northd corrects the SB DNS records
+# back to what NB defines (only vm1.ovn.org).
+check as northd ovn-appctl -t ovn-northd inc-engine/recompute
+check ovn-nbctl --wait=sb sync
+wait_column '{"vm1.ovn.org"="10.0.0.4"}' sb:DNS records
+
+# Verify DNS flows are still correct after recompute.
+AT_CHECK([ovn-sbctl dump-flows sw0 | grep -c "dns_lookup\|dns_response" | grep -q '[1-9]'])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([ip_port_mappings validation: IPv4])
 ovn_start
 

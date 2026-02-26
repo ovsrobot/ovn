@@ -263,7 +263,12 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_northd, &en_sb_chassis, NULL);
     engine_add_input(&en_northd, &en_sb_mirror, NULL);
     engine_add_input(&en_northd, &en_sb_meter, NULL);
-    engine_add_input(&en_northd, &en_sb_dns, NULL);
+
+    /* en_northd is the only writer to the SB DNS table, so any
+     * changes detected here are from northd's own previous
+     * transaction and can be safely ignored. */
+    engine_add_input(&en_northd, &en_sb_dns, engine_noop_handler);
+    
     engine_add_input(&en_northd, &en_sb_ha_chassis_group, NULL);
     engine_add_input(&en_northd, &en_sb_service_monitor, NULL);
     engine_add_input(&en_northd, &en_sb_static_mac_binding, NULL);
