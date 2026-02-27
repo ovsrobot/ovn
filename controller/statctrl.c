@@ -66,6 +66,7 @@ struct stats_node {
      * This function runs in main thread locked behind mutex. */
     void (*run)(struct rconn *swconn,
                 struct ovsdb_idl_index *sbrec_port_binding_by_name,
+                const struct sbrec_chassis *chassis,
                 struct vector *stats,
                 uint64_t *req_delay, void *data);
     /* Name of the stats node. */
@@ -175,6 +176,7 @@ statctrl_init(void)
 void
 statctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
              struct ovsdb_idl_index *sbrec_port_binding_by_name,
+             const struct sbrec_chassis *chassis,
              struct mac_cache_data *mac_cache_data)
 {
     if (!ovnsb_idl_txn) {
@@ -197,9 +199,8 @@ statctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
         uint64_t prev_delay = node->request_delay;
 
         stopwatch_start(node->name, time_msec());
-        node->run(statctrl_ctx.swconn,
-                  sbrec_port_binding_by_name, &node->stats,
-                  &node->request_delay, node_data[i]);
+        node->run(statctrl_ctx.swconn, sbrec_port_binding_by_name, chassis,
+                  &node->stats, &node->request_delay, node_data[i]);
         vector_clear(&node->stats);
         if (vector_capacity(&node->stats) >= STATS_VEC_CAPACITY_THRESHOLD) {
             VLOG_DBG("The statistics vector for node '%s' capacity "

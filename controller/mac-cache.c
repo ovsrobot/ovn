@@ -402,6 +402,7 @@ void
 mac_binding_stats_run(
         struct rconn *swconn OVS_UNUSED,
         struct ovsdb_idl_index *sbrec_port_binding_by_name OVS_UNUSED,
+        const struct sbrec_chassis *chassis OVS_UNUSED,
         struct vector *stats_vec, uint64_t *req_delay, void *data)
 {
     struct mac_cache_data *cache_data = data;
@@ -445,7 +446,7 @@ mac_binding_stats_run(
 
     mac_cache_update_req_delay(&cache_data->thresholds, req_delay);
     if (*req_delay) {
-        VLOG_DBG("MAC binding statistics dalay: %"PRIu64, *req_delay);
+        VLOG_DBG("MAC binding statistics delay: %"PRIu64, *req_delay);
     }
 }
 
@@ -500,6 +501,7 @@ fdb_update_log(const char *action,
 void
 fdb_stats_run(struct rconn *swconn OVS_UNUSED,
               struct ovsdb_idl_index *sbrec_port_binding_by_name OVS_UNUSED,
+              const struct sbrec_chassis *chassis OVS_UNUSED,
               struct vector *stats_vec,
               uint64_t *req_delay, void *data)
 {
@@ -871,6 +873,7 @@ void
 mac_binding_probe_stats_run(
         struct rconn *swconn,
         struct ovsdb_idl_index *sbrec_port_binding_by_name,
+        const struct sbrec_chassis *chassis,
         struct vector *stats_vec,
         uint64_t *req_delay, void *data)
 {
@@ -891,6 +894,14 @@ mac_binding_probe_stats_run(
                 mac_cache_threshold_find(cache_data, mb->data.dp_key);
         uint64_t since_updated_ms = timewall_now - mb->sbrec->timestamp;
         const struct sbrec_mac_binding *sbrec = mb->sbrec;
+
+        if (!lport_is_local(sbrec_port_binding_by_name, chassis,
+                            sbrec->logical_port)) {
+            mac_binding_update_log("Not sending ARP/ND request for non-local",
+                                   &mb->data, true, threshold,
+                                   stats->idle_age_ms, since_updated_ms);
+            continue;
+        }
 
         if (stats->idle_age_ms > threshold->value) {
             mac_binding_update_log("Not sending ARP/ND request for non-active",
