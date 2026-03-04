@@ -399,10 +399,8 @@ mac_binding_update_log(const char *action,
 }
 
 void
-mac_binding_stats_run(
-        struct rconn *swconn OVS_UNUSED,
-        struct ovsdb_idl_index *sbrec_port_binding_by_name OVS_UNUSED,
-        struct vector *stats_vec, uint64_t *req_delay, void *data)
+mac_binding_stats_run(struct vector *stats_vec, uint64_t *req_delay,
+                      void *data)
 {
     struct mac_cache_data *cache_data = data;
     long long timewall_now = time_wall_msec();
@@ -445,7 +443,7 @@ mac_binding_stats_run(
 
     mac_cache_update_req_delay(&cache_data->thresholds, req_delay);
     if (*req_delay) {
-        VLOG_DBG("MAC binding statistics dalay: %"PRIu64, *req_delay);
+        VLOG_DBG("MAC binding statistics delay: %"PRIu64, *req_delay);
     }
 }
 
@@ -498,10 +496,7 @@ fdb_update_log(const char *action,
 }
 
 void
-fdb_stats_run(struct rconn *swconn OVS_UNUSED,
-              struct ovsdb_idl_index *sbrec_port_binding_by_name OVS_UNUSED,
-              struct vector *stats_vec,
-              uint64_t *req_delay, void *data)
+fdb_stats_run(struct vector *stats_vec, uint64_t *req_delay, void *data)
 {
     struct mac_cache_data *cache_data = data;
     long long timewall_now = time_wall_msec();
@@ -543,7 +538,7 @@ fdb_stats_run(struct rconn *swconn OVS_UNUSED,
 
     mac_cache_update_req_delay(&cache_data->thresholds, req_delay);
     if (*req_delay) {
-        VLOG_DBG("FDB entry statistics dalay: %"PRIu64, *req_delay);
+        VLOG_DBG("FDB entry statistics delay: %"PRIu64, *req_delay);
     }
 }
 
@@ -868,19 +863,17 @@ mac_binding_probe_stats_process_flow_stats(
 }
 
 void
-mac_binding_probe_stats_run(
-        struct rconn *swconn,
-        struct ovsdb_idl_index *sbrec_port_binding_by_name,
-        struct vector *stats_vec,
-        uint64_t *req_delay, void *data)
+mac_binding_probe_stats_run(struct vector *stats_vec, uint64_t *req_delay,
+                            void *data)
 {
     long long timewall_now = time_wall_msec();
-    struct mac_cache_data *cache_data = data;
+    struct mac_binding_probe_data *probe_data = data;
 
     struct mac_cache_stats *stats;
     VECTOR_FOR_EACH_PTR (stats_vec, stats) {
-        struct mac_binding *mb = mac_binding_find(&cache_data->mac_bindings,
-                                                  &stats->data.mb);
+        struct mac_binding *mb =
+                mac_binding_find(&probe_data->cache_data->mac_bindings,
+                                 &stats->data.mb);
         if (!mb) {
             mac_binding_update_log("Probe: not found in the cache:",
                                    &stats->data.mb, false, NULL, 0, 0);
@@ -888,7 +881,8 @@ mac_binding_probe_stats_run(
         }
 
         struct mac_cache_threshold *threshold =
-                mac_cache_threshold_find(cache_data, mb->data.dp_key);
+                mac_cache_threshold_find(probe_data->cache_data,
+                                         mb->data.dp_key);
         uint64_t since_updated_ms = timewall_now - mb->sbrec->timestamp;
         const struct sbrec_mac_binding *sbrec = mb->sbrec;
 
@@ -908,9 +902,18 @@ mac_binding_probe_stats_run(
         }
 
         const struct sbrec_port_binding *pb =
-            lport_lookup_by_name(sbrec_port_binding_by_name,
+            lport_lookup_by_name(probe_data->sbrec_port_binding_by_name,
                                  sbrec->logical_port);
+
         if (!pb) {
+            continue;
+        }
+
+        if (!lport_pb_is_local(probe_data->sbrec_port_binding_by_name,
+                               probe_data->chassis, pb)) {
+            mac_binding_update_log("Not sending ARP/ND request for non-local",
+                                   &mb->data, true, threshold,
+                                   stats->idle_age_ms, since_updated_ms);
             continue;
         }
 
@@ -930,7 +933,7 @@ mac_binding_probe_stats_run(
                                    &mb->data, true, threshold,
                                    stats->idle_age_ms, since_updated_ms);
 
-            send_self_originated_neigh_packet(swconn,
+            send_self_originated_neigh_packet(probe_data->swconn,
                                               sbrec->datapath->tunnel_key,
                                               pb->tunnel_key, laddr.ea,
                                               &local, &mb->data.ip,
@@ -940,7 +943,7 @@ mac_binding_probe_stats_run(
         destroy_lport_addresses(&laddr);
     }
 
-    mac_cache_update_req_delay(&cache_data->thresholds, req_delay);
+    mac_cache_update_req_delay(&probe_data->cache_data->thresholds, req_delay);
     if (*req_delay) {
         VLOG_DBG("MAC probe binding statistics delay: %"PRIu64, *req_delay);
     }
