@@ -76,7 +76,9 @@ static unixctl_cb_func chassis_features_list;
     NB_NODE(sampling_app) \
     NB_NODE(network_function) \
     NB_NODE(network_function_group) \
-    NB_NODE(logical_switch_port_health_check)
+    NB_NODE(logical_switch_port_health_check) \
+    NB_NODE(logical_router_static_route)
+
 
     enum nb_engine_node {
 #define NB_NODE(NAME) NB_##NAME,
@@ -178,7 +180,7 @@ static ENGINE_NODE(lr_stateful, CLEAR_TRACKED_DATA);
 static ENGINE_NODE(ls_stateful, CLEAR_TRACKED_DATA);
 static ENGINE_NODE(ls_arp, CLEAR_TRACKED_DATA);
 static ENGINE_NODE(route_policies);
-static ENGINE_NODE(routes);
+static ENGINE_NODE(routes, CLEAR_TRACKED_DATA);
 static ENGINE_NODE(bfd);
 static ENGINE_NODE(bfd_sync, SB_WRITE);
 static ENGINE_NODE(ecmp_nexthop, SB_WRITE);
@@ -335,6 +337,8 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_routes, &en_bfd, NULL);
     engine_add_input(&en_routes, &en_northd,
                      routes_northd_change_handler);
+    engine_add_input(&en_routes, &en_nb_logical_router_static_route,
+                     routes_static_route_change_handler);
 
     engine_add_input(&en_bfd_sync, &en_bfd, NULL);
     engine_add_input(&en_bfd_sync, &en_nb_bfd, NULL);
@@ -374,7 +378,8 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_learned_route_sync, &en_northd,
                      learned_route_sync_northd_change_handler);
 
-    engine_add_input(&en_group_ecmp_route, &en_routes, NULL);
+    engine_add_input(&en_group_ecmp_route, &en_routes,
+                     group_ecmp_static_route_change_handler);
     engine_add_input(&en_group_ecmp_route, &en_learned_route_sync,
                      group_ecmp_route_learned_route_change_handler);
 
@@ -393,7 +398,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_lflow, &en_sb_logical_dp_group, NULL);
     engine_add_input(&en_lflow, &en_bfd_sync, NULL);
     engine_add_input(&en_lflow, &en_route_policies, NULL);
-    engine_add_input(&en_lflow, &en_routes, NULL);
+    engine_add_input(&en_lflow, &en_routes, lflow_group_route_change_handler);
     /* XXX: The incremental processing only supports changes to learned routes.
      * All other changes trigger a full recompute. */
     engine_add_input(&en_lflow, &en_group_ecmp_route,
