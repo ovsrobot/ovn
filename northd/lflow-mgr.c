@@ -609,9 +609,7 @@ struct lflow_ref_node {
     /* Indicates whether the lflow was added with a dp_group using the
      * ovn_lflow_add_with_dp_group() macro. */
     bool dpgrp_lflow;
-    /* dpgrp bitmap and bitmap length.  Valid only of dpgrp_lflow is true. */
-    unsigned long *dpgrp_bitmap;
-    size_t dpgrp_bitmap_len;
+    struct dynamic_bitmap dpgrp_bitmap;
 
     /* Index id of the datapath this lflow_ref_node belongs to.
      * Valid only if dpgrp_lflow is false. */
@@ -664,8 +662,7 @@ lflow_ref_unlink_lflows(struct lflow_ref *lflow_ref)
     HMAP_FOR_EACH (lrn, ref_node, &lflow_ref->lflow_ref_nodes) {
         if (lrn->dpgrp_lflow) {
             size_t index;
-            BITMAP_FOR_EACH_1 (index, lrn->dpgrp_bitmap_len,
-                               lrn->dpgrp_bitmap) {
+            DYNAMIC_BITMAP_FOR_EACH_1 (index, &lrn->dpgrp_bitmap) {
                 if (dp_refcnt_release(&lrn->lflow->dp_refcnts_map, index)) {
                     dynamic_bitmap_set0(&lrn->lflow->dpg_bitmap, index);
                 }
@@ -774,8 +771,8 @@ lflow_table_add_lflow__(struct lflow_table *lflow_table,
             lrn->lflow_ref = lflow_ref;
             lrn->dpgrp_lflow = !sdp;
             if (lrn->dpgrp_lflow) {
-                lrn->dpgrp_bitmap = bitmap_clone(dp_bitmap, dp_bitmap_len);
-                lrn->dpgrp_bitmap_len = dp_bitmap_len;
+                dynamic_bitmap_clone_from_bitmap(&lrn->dpgrp_bitmap,
+                                                 dp_bitmap, dp_bitmap_len);
             } else {
                 lrn->dp_index = sdp->index;
             }
@@ -785,7 +782,7 @@ lflow_table_add_lflow__(struct lflow_table *lflow_table,
 
         if (!lrn->linked) {
             if (lrn->dpgrp_lflow) {
-                ovs_assert(lrn->dpgrp_bitmap_len == dp_bitmap_len);
+                ovs_assert(lrn->dpgrp_bitmap.capacity == dp_bitmap_len);
                 size_t index;
                 BITMAP_FOR_EACH_1 (index, dp_bitmap_len, dp_bitmap) {
                     /* Allocate a reference counter only if already used. */
@@ -1519,7 +1516,7 @@ lflow_ref_node_destroy(struct lflow_ref_node *lrn)
     hmap_remove(&lrn->lflow_ref->lflow_ref_nodes, &lrn->ref_node);
     ovs_list_remove(&lrn->ref_list_node);
     if (lrn->dpgrp_lflow) {
-        bitmap_free(lrn->dpgrp_bitmap);
+        dynamic_bitmap_free(&lrn->dpgrp_bitmap);
     }
     free(lrn);
 }
