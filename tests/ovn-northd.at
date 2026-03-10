@@ -4153,7 +4153,7 @@ check ovn-nbctl --bfd=$uuid lr-route-add r0 100.0.0.0/8 192.168.1.2
 wait_column down bfd status logical_port=r0-sw1
 AT_CHECK([ovn-nbctl lr-route-list r0 | grep 192.168.1.2 | grep -q bfd], [0], [], [ignore])
 
-check_engine_stats northd recompute nocompute
+check_engine_stats northd recompute incremental
 check_engine_stats bfd recompute nocompute
 check_engine_stats routes recompute nocompute
 check_engine_stats lflow recompute nocompute
@@ -4169,7 +4169,7 @@ check ovn-nbctl --bfd lr-route-add r0 240.0.0.0/8 192.168.5.2 r0-sw5
 wait_column down bfd status logical_port=r0-sw5
 AT_CHECK([ovn-nbctl lr-route-list r0 | grep 192.168.5.2 | grep -q bfd], [0], [], [ignore])
 
-check_engine_stats northd recompute nocompute
+check_engine_stats northd recompute incremental
 check_engine_stats bfd recompute nocompute
 check_engine_stats routes recompute nocompute
 check_engine_stats lflow recompute nocompute
@@ -4181,7 +4181,7 @@ check ovn-nbctl --bfd --policy=src-ip lr-route-add r0 192.168.6.1/32 192.168.10.
 wait_column down bfd status logical_port=r0-sw6
 AT_CHECK([ovn-nbctl lr-route-list r0 | grep 192.168.6.1 | grep -q bfd], [0], [], [ignore])
 
-check_engine_stats northd recompute nocompute
+check_engine_stats northd recompute incremental
 check_engine_stats bfd recompute nocompute
 check_engine_stats route_policies recompute nocompute
 check_engine_stats lflow recompute nocompute
@@ -4216,7 +4216,7 @@ wait_column down bfd status logical_port=r0-sw8
 bfd_route_policy_uuid=$(fetch_column nb:bfd _uuid logical_port=r0-sw8)
 AT_CHECK([ovn-nbctl list logical_router_policy | grep -q $bfd_route_policy_uuid])
 
-check_engine_stats northd recompute nocompute
+check_engine_stats northd recompute incremental
 check_engine_stats bfd recompute nocompute
 check_engine_stats routes recompute nocompute
 check_engine_stats lflow recompute nocompute
@@ -16150,12 +16150,12 @@ CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 check ovn-nbctl --wait=sb lr-route-add lr0 192.168.0.0/24 10.0.0.10
-check_engine_compute northd recompute
-check_engine_compute routes recompute
+check_engine_compute northd incremental
+check_engine_compute routes incremental
 check_engine_compute advertised_route_sync recompute
-check_engine_compute learned_route_sync recompute
-check_engine_compute group_ecmp_route recompute
-check_engine_compute lflow recompute
+check_engine_compute learned_route_sync incremental
+check_engine_compute group_ecmp_route incremental
+check_engine_compute lflow incremental
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
