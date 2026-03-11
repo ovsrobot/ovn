@@ -19939,3 +19939,49 @@ done
 
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Neutron external-ids])
+ovn_start
+
+# This test ensures that special Neutron external-ids on logical datapaths
+# are propagated to their southbound Datapath_Bindings.
+
+check ovn-nbctl ls-add sw
+check ovn-nbctl --wait=sb lr-add ro
+
+ls_dp_uuid=$(fetch_column Datapath_Binding _uuid type=logical-switch)
+lr_dp_uuid=$(fetch_column Datapath_Binding _uuid type=logical-router)
+
+# We can't use the check_column function since we need to check
+# an individual external-id value. check_column can only be
+# used to check the full contents of a column.
+#
+# If the external_ids:name2 is not present, then `ovn-sbctl get`
+# exits with a failure condition.
+AT_CHECK([ovn-sbctl get Datapath_Binding $ls_dp_uuid external_ids:name2],
+[1], [ignore], [ignore])
+AT_CHECK([ovn-sbctl get Datapath_Binding $lr_dp_uuid external_ids:name2],
+[1], [ignore], [ignore])
+
+check ovn-nbctl add Logical_Switch sw external_ids \"neutron:network_name\"=the_switch
+check ovn-nbctl --wait=sb add Logical_Router ro external_ids \"neutron:router_name\"=the_router
+
+AT_CHECK([ovn-sbctl get Datapath_Binding $ls_dp_uuid external_ids:name2],
+[0], [the_switch
+])
+AT_CHECK([ovn-sbctl get Datapath_Binding $lr_dp_uuid external_ids:name2],
+[0], [the_router
+])
+
+check ovn-nbctl remove Logical_Switch sw external_ids \"neutron:network_name\"
+check ovn-nbctl --wait=sb remove Logical_Router ro external_ids \"neutron:router_name\"
+
+AT_CHECK([ovn-sbctl get Datapath_Binding $ls_dp_uuid external_ids:name2],
+[1], [ignore], [ignore])
+AT_CHECK([ovn-sbctl get Datapath_Binding $lr_dp_uuid external_ids:name2],
+[1], [ignore], [ignore])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
