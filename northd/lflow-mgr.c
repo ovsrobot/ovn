@@ -780,6 +780,10 @@ lflow_table_add_lflow__(struct lflow_table *lflow_table,
             hmap_insert(&lflow_ref->lflow_ref_nodes, &lrn->ref_node, hash);
         }
 
+        if (lrn->dpgrp_lflow) {
+            dynamic_bitmap_realloc(&lrn->dpgrp_bitmap, dp_bitmap_len);
+        }
+
         if (!lrn->linked) {
             if (lrn->dpgrp_lflow) {
                 ovs_assert(lrn->dpgrp_bitmap.capacity == dp_bitmap_len);

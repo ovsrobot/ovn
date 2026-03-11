@@ -3148,11 +3148,12 @@ check_row_count sb:logical_dp_group 1
 echo "$sw2_sb_uuid" >> sw_sb_uuids
 
 AT_CHECK_UNQUOTED([ovn-sbctl --bare --columns _uuid,datapaths find Logical_DP_Group dnl
-                    | grep -A1 $ls_dpg_uuid | tail -1 | tr ' ' '\n' | sort], [0], [dnl
+                    | tail -1 | tr ' ' '\n' | sort], [0], [dnl
 $(cat sw_sb_uuids | sort)
 ])
 
 dnl Add two routers and check that they are in their new separate group.
+ls_dpg_uuid=$(ovn-sbctl --bare --columns _uuid list Logical_DP_Group .)
 check ovn-nbctl --wait=sb lr-add lr0 -- lr-add lr1
 lr0_sb_uuid=$(fetch_column datapath_binding _uuid external_ids:name=lr0)
 lr1_sb_uuid=$(fetch_column datapath_binding _uuid external_ids:name=lr1)
@@ -14958,7 +14959,7 @@ check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 check ovn-nbctl --wait=sb ls-add sw0
 check_engine_stats northd norecompute compute
 check_engine_stats ls_stateful norecompute compute
-check_engine_stats lflow recompute nocompute
+check_engine_stats lflow norecompute compute
 
 # For the below engine nodes, en_northd is input.  So check
 # their engine status.
@@ -14996,7 +14997,7 @@ check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 check ovn-nbctl --wait=sb ls-del sw0
 check_engine_stats northd norecompute compute
 check_engine_stats ls_stateful norecompute compute
-check_engine_stats lflow recompute nocompute
+check_engine_stats lflow norecompute compute
 
 # For the below engine nodes, en_northd is input.  So check
 # their engine status.

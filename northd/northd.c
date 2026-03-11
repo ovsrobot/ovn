@@ -5954,10 +5954,13 @@ enum mirror_filter {
 
 static void
 build_mirror_default_lflow(struct ovn_datapath *od,
-                           struct lflow_table *lflows)
+                           struct lflow_table *lflows,
+                           struct lflow_ref *lflow_ref)
 {
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_MIRROR, 0, "1", "next;", NULL);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_MIRROR, 0, "1", "next;", NULL);
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_MIRROR, 0, "1", "next;",
+                  lflow_ref);
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_MIRROR, 0, "1", "next;",
+                  lflow_ref);
 }
 
 static void
@@ -19237,29 +19240,36 @@ build_lswitch_and_lrouter_iterate_by_ls(struct ovn_datapath *od,
                                         struct lswitch_flow_build_info *lsi)
 {
     ovs_assert(od->nbs);
-    build_mirror_default_lflow(od, lsi->lflows);
+    build_mirror_default_lflow(od, lsi->lflows, od->datapath_lflows);
     build_lswitch_lflows_pre_acl_and_acl(od, lsi->lflows,
-                                         lsi->meter_groups, NULL);
-    build_network_function(od, lsi->lflows, lsi->ls_port_groups, NULL);
-    build_fwd_group_lflows(od, lsi->lflows, NULL);
-    build_lswitch_lflows_admission_control(od, lsi->lflows, NULL);
-    build_lswitch_learn_fdb_od(od, lsi->lflows, NULL);
-    build_lswitch_arp_nd_responder_default(od, lsi->lflows, NULL);
+                                         lsi->meter_groups,
+                                         od->datapath_lflows);
+    build_network_function(od, lsi->lflows, lsi->ls_port_groups,
+                           od->datapath_lflows);
+    build_fwd_group_lflows(od, lsi->lflows, od->datapath_lflows);
+    build_lswitch_lflows_admission_control(od, lsi->lflows,
+                                           od->datapath_lflows);
+    build_lswitch_learn_fdb_od(od, lsi->lflows, od->datapath_lflows);
+    build_lswitch_arp_nd_responder_default(od, lsi->lflows,
+                                           od->datapath_lflows);
     build_lswitch_dns_lookup_and_response(od, lsi->lflows, lsi->meter_groups,
-                                          NULL);
-    build_lswitch_dhcp_and_dns_defaults(od, lsi->lflows, NULL);
+                                          od->datapath_lflows);
+    build_lswitch_dhcp_and_dns_defaults(od, lsi->lflows, od->datapath_lflows);
     build_lswitch_destination_lookup_bmcast(od, lsi->lflows, &lsi->actions,
-                                            lsi->meter_groups, NULL);
-    build_lswitch_output_port_sec_od(od, lsi->lflows, NULL);
+                                            lsi->meter_groups,
+                                            od->datapath_lflows);
+    build_lswitch_output_port_sec_od(od, lsi->lflows, od->datapath_lflows);
     /* CT extraction flows are built with stateful flows, but default rule is
      * always needed */
     ovn_lflow_add(lsi->lflows, od, S_SWITCH_IN_CT_EXTRACT, 0, "1", "next;",
-                  NULL);
-    build_lswitch_lb_affinity_default_flows(od, lsi->lflows, NULL);
+                  od->datapath_lflows);
+    build_lswitch_lb_affinity_default_flows(od, lsi->lflows,
+                                            od->datapath_lflows);
     if (od->has_evpn_vni) {
-        build_lswitch_lflows_evpn_l2_unknown(od, lsi->lflows, NULL);
+        build_lswitch_lflows_evpn_l2_unknown(od, lsi->lflows,
+                                             od->datapath_lflows);
     } else {
-        build_lswitch_lflows_l2_unknown(od, lsi->lflows, NULL);
+        build_lswitch_lflows_l2_unknown(od, lsi->lflows, od->datapath_lflows);
     }
     build_mcast_flood_lswitch(od, lsi->lflows, &lsi->actions, NULL);
 }
@@ -20034,6 +20044,57 @@ lflow_handle_northd_lr_changes(struct ovsdb_idl_txn *ovnsb_txn,
     ds_destroy(&lsi.actions);
     ds_destroy(&lsi.match);
     return handled;
+}
+
+bool
+lflow_handle_northd_ls_changes(struct ovsdb_idl_txn *ovnsb_txn,
+                               struct tracked_dps *tracked_ls,
+                               struct lflow_input *lflow_input,
+                               struct lflow_table *lflows)
+{
+    struct hmapx_node *hmapx_node;
+    struct ovn_datapath *od;
+
+    HMAPX_FOR_EACH (hmapx_node, &tracked_ls->deleted) {
+        od = hmapx_node->data;
+        if (!lflow_ref_resync_flows(
+                    od->datapath_lflows, lflows, ovnsb_txn, lflow_input->dps,
+                    lflow_input->ovn_internal_version_changed,
+                    lflow_input->sbrec_logical_flow_table,
+                    lflow_input->sbrec_logical_dp_group_table)) {
+            return false;
+        }
+    }
+
+    struct lswitch_flow_build_info lsi = {
+        .meter_groups = lflow_input->meter_groups,
+        .ls_port_groups = lflow_input->ls_port_groups,
+        .lflows = lflows,
+        .match = DS_EMPTY_INITIALIZER,
+        .actions = DS_EMPTY_INITIALIZER,
+    };
+
+    HMAPX_FOR_EACH (hmapx_node, &tracked_ls->crupdated) {
+        od = hmapx_node->data;
+        lflow_ref_unlink_lflows(od->datapath_lflows);
+        build_lswitch_and_lrouter_iterate_by_ls(od, &lsi);
+    }
+
+    ds_destroy(&lsi.actions);
+    ds_destroy(&lsi.match);
+
+    HMAPX_FOR_EACH (hmapx_node, &tracked_ls->crupdated) {
+        od = hmapx_node->data;
+        if (!lflow_ref_sync_lflows(
+                    od->datapath_lflows, lflows, ovnsb_txn, lflow_input->dps,
+                    lflow_input->ovn_internal_version_changed,
+                    lflow_input->sbrec_logical_flow_table,
+                    lflow_input->sbrec_logical_dp_group_table)) {
+            return false;
+         }
+    }
+
+    return true;
 }
 
 bool
