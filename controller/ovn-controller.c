@@ -211,13 +211,6 @@ static char *get_file_system_id(void)
     free(filename);
     return ret;
 }
-/* Only set monitor conditions on tables that are available in the
- * server schema.
- */
-#define sb_table_set_opt_mon_condition(idl, table, cond) \
-    (sbrec_server_has_##table##_table(idl)               \
-     ? sbrec_##table##_set_condition(idl, cond)          \
-     : 0)
 
 /* Assume the table exists in the server schema and set its condition. */
 #define sb_table_set_req_mon_condition(idl, table, cond) \
@@ -430,11 +423,11 @@ out:;
         sb_table_set_req_mon_condition(ovnsb_idl, ip_multicast, &ip_mcast),
         sb_table_set_req_mon_condition(ovnsb_idl, igmp_group, &igmp),
         sb_table_set_req_mon_condition(ovnsb_idl, chassis_private, &chprv),
-        sb_table_set_opt_mon_condition(ovnsb_idl, chassis_template_var, &tv),
-        sb_table_set_opt_mon_condition(ovnsb_idl, ecmp_nexthop, &nh),
-        sb_table_set_opt_mon_condition(ovnsb_idl, advertised_route, &ar),
-        sb_table_set_opt_mon_condition(ovnsb_idl, learned_route, &lr),
-        sb_table_set_opt_mon_condition(ovnsb_idl, advertised_mac_binding,
+        sb_table_set_req_mon_condition(ovnsb_idl, chassis_template_var, &tv),
+        sb_table_set_req_mon_condition(ovnsb_idl, ecmp_nexthop, &nh),
+        sb_table_set_req_mon_condition(ovnsb_idl, advertised_route, &ar),
+        sb_table_set_req_mon_condition(ovnsb_idl, learned_route, &lr),
+        sb_table_set_req_mon_condition(ovnsb_idl, advertised_mac_binding,
                                        &amb),
     };
 
