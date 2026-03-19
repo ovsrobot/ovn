@@ -6489,6 +6489,28 @@ ip_mcast_querier_wait(long long int query_time)
     }
 }
 
+static bool
+garp_rarp_is_enabled(struct ovsdb_idl_index *sbrec_port_binding_by_name,
+                     const struct sbrec_port_binding *pb)
+{
+    if (smap_get_bool(&pb->options, "disable_garp_rarp", false)) {
+        return false;
+    }
+
+    /* Check if GARP probing is disabled on the peer logical router. */
+    const struct sbrec_port_binding *peer = lport_get_peer(
+            pb, sbrec_port_binding_by_name);
+    if (!peer) {
+        peer = lport_get_l3gw_peer(pb, sbrec_port_binding_by_name);
+    }
+    if (peer && smap_get_bool(&peer->datapath->external_ids,
+                              "disable_garp_rarp", false)) {
+        return false;
+    }
+
+    return true;
+}
+
 /* Get localnet vifs, local l3gw ports and ofport for localnet patch ports. */
 static void
 get_localnet_vifs_l3gwports(
@@ -6536,6 +6558,11 @@ get_localnet_vifs_l3gwports(
                     strcmp(iface_rec->link_state, "up")) {
                 continue;
             }
+
+            if (!garp_rarp_is_enabled(sbrec_port_binding_by_name, pb)) {
+                continue;
+            }
+
             struct local_datapath *ld
                 = get_local_datapath(local_datapaths,
                                      pb->datapath->tunnel_key);
@@ -6564,8 +6591,9 @@ get_localnet_vifs_l3gwports(
         sbrec_port_binding_index_set_datapath(target, ld->datapath);
         SBREC_PORT_BINDING_FOR_EACH_EQUAL (pb, target,
                                            sbrec_port_binding_by_datapath) {
-            if ((!strcmp(pb->type, "l3gateway") && pb->chassis == chassis)
-                || !strcmp(pb->type, "patch")) {
+            if (((!strcmp(pb->type, "l3gateway") && pb->chassis == chassis)
+                || !strcmp(pb->type, "patch")) &&
+                garp_rarp_is_enabled(sbrec_port_binding_by_name, pb)) {
                 sset_add(local_l3gw_ports, pb->logical_port);
             }
         }
@@ -6695,6 +6723,10 @@ get_nat_addresses_and_keys(struct ovsdb_idl_index *sbrec_port_binding_by_name,
 
         pb = lport_lookup_by_name(sbrec_port_binding_by_name, gw_port);
         if (!pb) {
+            continue;
+        }
+
+        if (!garp_rarp_is_enabled(sbrec_port_binding_by_name, pb)) {
             continue;
         }
 
