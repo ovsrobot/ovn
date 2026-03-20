@@ -65,6 +65,9 @@ struct local_datapath {
 
     struct shash external_ports;
     struct shash multichassis_ports;
+
+    /* the expected seqno from the sb to be fully udpated for this datapath */
+    unsigned int expected_cond_seqno;
 };
 
 struct local_datapath *local_datapath_alloc(

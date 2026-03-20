@@ -18,6 +18,7 @@
 #include "binding.h"
 #include "if-status.h"
 #include "lib/ofctrl-seqno.h"
+#include "local_data.h"
 #include "ovsport.h"
 #include "simap.h"
 
@@ -590,12 +591,18 @@ if_status_mgr_update(struct if_status_mgr *mgr,
         }
     }
 
+    bool update_seqno = false;
     /* Update pb->chassis in case it's not set (previous update still in fly
      * or pb->chassis was overwitten by another chassis.
      */
     if (!sb_readonly) {
         HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_INSTALL_FLOWS]) {
             struct ovs_iface *iface = node->data;
+            if (iface->is_vif) {
+                ovs_iface_set_state(mgr, iface, OIF_INSTALL_FLOWS);
+                iface->install_seqno = mgr->iface_seqno + 1;
+                update_seqno = true;
+            }
             if (!local_bindings_pb_chassis_is_set(bindings, iface->id,
                 chassis_rec)) {
                 long long int now = time_msec();
@@ -614,7 +621,6 @@ if_status_mgr_update(struct if_status_mgr *mgr,
 
     /* Move newly claimed interfaces from OIF_CLAIMED to OIF_INSTALL_FLOWS.
      */
-    bool new_ifaces = false;
     if (!sb_readonly) {
         HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_CLAIMED]) {
             struct ovs_iface *iface = node->data;
@@ -624,7 +630,7 @@ if_status_mgr_update(struct if_status_mgr *mgr,
             if (iface->is_vif) {
                 ovs_iface_set_state(mgr, iface, OIF_INSTALL_FLOWS);
                 iface->install_seqno = mgr->iface_seqno + 1;
-                new_ifaces = true;
+                update_seqno = true;
             } else {
                 ovs_iface_set_state(mgr, iface, OIF_MARK_UP);
             }
@@ -659,7 +665,7 @@ if_status_mgr_update(struct if_status_mgr *mgr,
      * Request a seqno update when the flows for new interfaces have been
      * installed in OVS.
      */
-    if (new_ifaces) {
+    if (update_seqno) {
         mgr->iface_seqno++;
         ofctrl_seqno_update_create(mgr->iface_seq_type_pb_cfg,
                                    mgr->iface_seqno);
@@ -694,6 +700,8 @@ if_status_mgr_run(struct if_status_mgr *mgr,
                   const struct sbrec_chassis *chassis_rec,
                   const struct ovsrec_interface_table *iface_table,
                   const struct sbrec_port_binding_table *pb_table,
+                  const struct hmap *local_datapaths,
+                  unsigned int ovnsb_cond_seqno,
                   bool sb_readonly, bool ovs_readonly)
 {
     struct ofctrl_acked_seqnos *acked_seqnos =
@@ -703,9 +711,33 @@ if_status_mgr_run(struct if_status_mgr *mgr,
     /* Move interfaces from state OIF_INSTALL_FLOWS to OIF_MARK_UP if a
      * notification has been received aabout their flows being installed
      * in OVS.
+     *
+     * In the ovn-monitor-all=false case it is possible that we have not
+     * received the update that the southbound database is monitoring a new
+     *  datapath. Check for the update before continuing.
      */
     HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_INSTALL_FLOWS]) {
         struct ovs_iface *iface = node->data;
+
+        bool sb_missing_update = false;
+        if (local_datapaths) {
+            const struct sbrec_port_binding *pb =
+                sbrec_port_binding_table_get_for_uuid(pb_table,
+                                                      &iface->pb_uuid);
+            const struct local_datapath *ld;
+            HMAP_FOR_EACH (ld, hmap_node, local_datapaths) {
+                if (uuid_equals(&ld->datapath->header_.uuid,
+                                &pb->datapath->header_.uuid) &&
+                    ld->expected_cond_seqno > ovnsb_cond_seqno) {
+
+                    sb_missing_update = true;
+                    break;
+                }
+            }
+        }
+        if (sb_missing_update) {
+            continue;
+        }
 
         if (!ofctrl_acked_seqnos_contains(acked_seqnos,
                                           iface->install_seqno)) {
