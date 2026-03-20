@@ -12567,6 +12567,7 @@ static void
 add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
                                const struct ovn_datapath *od,
                                const char *port_ip,
+                               bool is_ipv4_nexthop,
                                const struct ovn_port *out_port,
                                const struct parsed_route *route,
                                struct ds *route_match,
@@ -12621,8 +12622,7 @@ add_ecmp_symmetric_reply_flows(struct lflow_table *lflows,
     ds_put_format(&actions, "ip.ttl--; flags.loopback = 1; "
                   "eth.src = %s; %s = %s; outport = %s; next;",
                   out_port->lrp_networks.ea_s,
-                  IN6_IS_ADDR_V4MAPPED(&route->prefix) ?
-                      REG_SRC_IPV4 : REG_SRC_IPV6,
+                  is_ipv4_nexthop ? REG_SRC_IPV4 : REG_SRC_IPV6,
                   port_ip, out_port->json_key);
     ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_ROUTING, 10300, ds_cstr(&match),
                   ds_cstr(&actions), lflow_ref, WITH_HINT(route->source_hint));
@@ -12752,6 +12752,7 @@ build_ecmp_route_flow(struct lflow_table *lflows,
             route->ecmp_symmetric_reply && sset_add(&visited_ports,
                                                     route->out_port->key)) {
             add_ecmp_symmetric_reply_flows(lflows, od, route->lrp_addr_s,
+                                           is_ipv4_nexthop,
                                            route->out_port,
                                            route, &route_match,
                                            lflow_ref);
