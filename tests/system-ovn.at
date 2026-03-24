@@ -12746,7 +12746,7 @@ chmod 775 $DHCP_TEST_DIR
 chmod 664 $DHCP_TEST_DIR/dhcpd.leases
 
 
-NETNS_DAEMONIZE([server], [dhcpd -4 -f -cf $DHCP_TEST_DIR/dhcpd.conf s1 > dhcpd.log 2>&1], [dhcpd.pid])
+NETNS_DAEMONIZE([server], [dhcpd -4 -f -cf $DHCP_TEST_DIR/dhcpd.conf -lf $DHCP_TEST_DIR/dhcpd.leases s1 > dhcpd.log 2>&1], [dhcpd.pid])
 
 NS_CHECK_EXEC([server], [tcpdump -l -nvv -i s1  udp > pkt.pcap 2>tcpdump_err &])
 OVS_WAIT_UNTIL([grep "listening" tcpdump_err])
@@ -21370,7 +21370,7 @@ chmod 775 $DHCP_TEST_DIR
 chmod 664 $DHCP_TEST_DIR/dhcpd.leases
 
 # Start dhcpd as DHCP server in the server namespace.
-NETNS_DAEMONIZE([server], [dhcpd -4 -f -cf $DHCP_TEST_DIR/dhcpd.conf server > $DHCP_TEST_DIR/dhcpd.log 2>&1], [dhcpd.pid])
+NETNS_DAEMONIZE([server], [dhcpd -4 -f -cf $DHCP_TEST_DIR/dhcpd.conf -lf $DHCP_TEST_DIR/dhcpd.leases server > $DHCP_TEST_DIR/dhcpd.log 2>&1], [dhcpd.pid])
 
 # Give dhcpd time to start.
 sleep 1

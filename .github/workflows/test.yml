@@ -7,6 +7,9 @@ on:
     # Run Sunday at midnight
     - cron: '0 0 * * 0'
 
+env:
+  CI_IMAGE: &ci_image ghcr.io/${{ github.repository_owner }}/ovn-ci-tmp:${{ github.sha }}
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
@@ -22,30 +25,34 @@ jobs:
     # +-------+-------------------+-------------------+
     # | !main |  Builds - Ubuntu  | xxxxxxxxxxxxxxxxx |
     # +-------+-------------------+-------------------+
+    defaults:
+      run:
+        shell: bash
     env:
-      DEPENDENCIES: podman
+      DEPENDENCIES: podman make
     name: Prepare container
     if: github.repository_owner == 'ovn-org' || github.event_name != 'schedule'
     runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:24.04
+      options: --privileged
 
     steps:
       - uses: actions/checkout@v6
 
       - name: Update APT cache
-        run: sudo apt update
+        run: apt update
 
       - name: Install dependencies
-        run: sudo apt install -y ${{ env.DEPENDENCIES }}
+        run: apt install -y ${{ env.DEPENDENCIES }}
 
       - name: Fix /etc/hosts file
         run: |
           . .ci/linux-util.sh
           fix_etc_hosts
 
-      - name: Disable apparmor
-        run: |
-          . .ci/linux-util.sh
-          disable_apparmor
+      - name: Log in container registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Choose image distro
         if: github.event_name == 'push' || github.event_name == 'pull_request'
@@ -67,20 +74,16 @@ jobs:
         run: podman pull ghcr.io/ovn-org/ovn-tests:${{ env.IMAGE_DISTRO }}
 
       - name: Tag image
-        run: podman tag ovn-org/ovn-tests:${{ env.IMAGE_DISTRO }} ovn-org/ovn-tests
+        run: podman tag ovn-org/ovn-tests:${{ env.IMAGE_DISTRO }} ${{ env.CI_IMAGE }}
 
       - name: Export image
-        run: podman save -o /tmp/image.tar --format oci-archive ovn-org/ovn-tests
-
-      - name: Cache image
-        id: image_cache
-        uses: actions/cache@v5
-        with:
-          path: /tmp/image.tar
-          key: ${{ github.sha }}/${{ github.event_name }}
+        run: podman push ${{ env.CI_IMAGE }}
 
   build-linux:
     needs: [prepare-container]
+    defaults:
+      run:
+        shell: bash
     env:
       ARCH:        ${{ matrix.cfg.arch }}
       CC:          ${{ matrix.cfg.compiler }}
@@ -91,9 +94,13 @@ jobs:
       TEST_RANGE:  ${{ matrix.cfg.test_range }}
       SANITIZERS:  ${{ matrix.cfg.sanitizers }}
       UNSTABLE:    ${{ matrix.cfg.unstable }}
+      DEPENDENCIES: build-essential git podman
 
     name: linux ${{ join(matrix.cfg.*, ' ') }}
     runs-on: ubuntu-24.04
+    container:
+      image: *ci_image
+      options: --privileged --init
 
     strategy:
       fail-fast: false
@@ -126,11 +133,17 @@ jobs:
         - { arch: x86, compiler: gcc, opts: --disable-ssl }
 
     steps:
+    - name: Update APT cache
+      run: apt update
+
+    - name: Install dependencies
+      run: apt install -y ${{ env.DEPENDENCIES }}
+
     - name: system-level-dependencies
       if: ${{ startsWith(matrix.cfg.testsuite, 'system-test') }}
       run: |
-        sudo apt update
-        sudo apt -y install linux-modules-extra-$(uname -r)
+        apt update
+        apt -y install linux-modules-extra-$(uname -r)
 
     - name: checkout
       if: github.event_name == 'push' || github.event_name == 'pull_request'
@@ -166,38 +179,84 @@ jobs:
         . .ci/linux-util.sh
         fix_etc_hosts
 
-    - name: Disable apparmor
+    - name: Trust git repo
+      run: git config --global --add safe.directory $(pwd)
+
+    - name: Setup hugepages
+      if: matrix.cfg.dpdk == 'dpdk'
       run: |
-        . .ci/linux-util.sh
-        disable_apparmor
+        echo 2048 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+        mkdir /dev/hugepages
+        mount -t hugetlbfs none /dev/hugepages
 
-    - name: image cache
-      id: image_cache
-      uses: actions/cache@v5
-      with:
-        path: /tmp/image.tar
-        key: ${{ github.sha }}/${{ github.event_name }}
-
-    - name: load image
+    - name: build and test
       run: |
-        sudo podman load -i /tmp/image.tar
-        podman load -i /tmp/image.tar
-        rm -rf /tmp/image.tar
+        ARCH=$ARCH CC=$CC LIBS=$LIBS OPTS=$OPTS TESTSUITE=$TESTSUITE \
+           TEST_RANGE=$TEST_RANGE SANITIZERS=$SANITIZERS DPDK=$DPDK \
+           RECHECK=$RECHECK UNSTABLE=$UNSTABLE TIMEOUT=2h \
+           BASE_VERSION=$BASE_VERSION ./.ci/linux-build.sh
 
-    - name: build
-      if: ${{ startsWith(matrix.cfg.testsuite, 'system-test') }}
-      run: sudo -E ./.ci/ci.sh --archive-logs --timeout=2h
-
-    - name: build
-      if: ${{ !startsWith(matrix.cfg.testsuite, 'system-test') }}
-      run: ./.ci/ci.sh --archive-logs --timeout=2h
+    - name: collect logs on failure
+      if: failure() || cancelled()
+      run: |
+        mkdir -p /tmp/logcollector
+        cp config.log /tmp/logcollector
+        cp -r tests/testsuite.* /tmp/logcollector || true
+        cp -r tests/system-*-testsuite.* /tmp/logcollector || true
+        cp -r tests/upgrade-testsuite.* /tmp/logcollector || true
+        tar -czf /tmp/logs.tgz /tmp/logcollector
 
     - name: upload logs on failure
       if: failure() || cancelled()
       uses: actions/upload-artifact@v7
       with:
         name: logs-linux-${{ join(matrix.cfg.*, '-') }}
-        path: logs.tgz
+        path: /tmp/logs.tgz
+
+  cleanup:
+    needs: [build-linux]
+    name: Cleanup
+    if: always()
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:24.04
+    permissions:
+      packages: write
+
+    steps:
+      - name: Update APT cache
+        run: apt update
+
+      - name: Install dependencies
+        run: apt install -y curl jq
+
+      - name: delete temporary image
+        run: |
+          if [ "${{ github.event.repository.owner.type }}" = "Organization" ]; then
+            TYPE="orgs"
+          else
+            TYPE="users"
+          fi
+          PACKAGE_URL="https://api.github.com/${TYPE}/${{ github.repository_owner }}/packages/container/ovn-ci-tmp"
+          PACKAGE_VERSION_URL="${PACKAGE_URL}/versions"
+          VERSION_ID=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "$PACKAGE_VERSION_URL" | jq -r '.[] | select(.metadata.container.tags[] == "${{ github.sha }}") | .id')
+          if [ -n "$VERSION_ID" ]; then
+            if curl --fail-with-body -s -X DELETE \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github+json" \
+              "$PACKAGE_VERSION_URL/$VERSION_ID"; then
+                echo "Package version deleted successfully"
+            else
+                echo "Package version seems to be the last one. Attempting to delete the whole package"
+                curl --fail-with-body -s -X DELETE \
+                  -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "$PACKAGE_URL"
+            fi
+          fi
 
   build-osx:
     env:

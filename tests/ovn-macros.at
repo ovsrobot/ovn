@@ -1438,7 +1438,7 @@ stop_ovsdb_controller_updates() {
 restart_ovsdb_controller_updates() {
   TCP_PORT=$1
   echo Restarting updates from ovn-controller to ovsdb
-  AT_CHECK([nft list ruleset | grep $TCP_PORT], [0], [ignore])
+  AT_CHECK([nft list ruleset | grep $TCP_PORT], [0], [ignore], [ignore])
   AT_CHECK([nft delete table ip ovn-test])
 }
 

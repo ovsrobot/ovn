@@ -19,7 +19,7 @@ TIMEOUT=${TIMEOUT:-"0"}
 
 function install_dpdk()
 {
-    local DPDK_INSTALL_DIR="$(pwd)/dpdk-dir"
+    local DPDK_INSTALL_DIR="/workspace/dpdk-dir"
     local VERSION_FILE="${DPDK_INSTALL_DIR}/cached-version"
     local DPDK_PC=$(find $DPDK_INSTALL_DIR -type f -name libdpdk-libs.pc)
 
@@ -168,7 +168,7 @@ function execute_tests()
     fi
 
     if [ "$UNSTABLE" ]; then
-        if ! SKIP_UNSTABLE=no TEST_RANGE="-k unstable" RECHECK=yes \
+        if ! SKIP_UNSTABLE=no TEST_RANGE="-k unstable -v" RECHECK=yes \
                 run_tests; then
             unstable_rc=1
         fi
