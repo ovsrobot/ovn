@@ -443,6 +443,18 @@ out:;
         expected_cond_seqno = MAX(expected_cond_seqno, cond_seqnos[i]);
     }
 
+    if (local_datapaths) {
+        struct local_datapath *ld;
+        HMAP_FOR_EACH (ld, hmap_node, local_datapaths) {
+            if (monitor_all) {
+                ld->monitor_updated = true;
+            }
+            if (!ld->monitor_updated) {
+                ld->expected_cond_seqno = expected_cond_seqno;
+            }
+        }
+    }
+
     ovsdb_idl_condition_destroy(&pb);
     ovsdb_idl_condition_destroy(&lf);
     ovsdb_idl_condition_destroy(&ldpg);
@@ -7903,6 +7915,10 @@ main(int argc, char *argv[])
                                                   ovs_idl_loop.idl),
                                       sbrec_port_binding_table_get(
                                                  ovnsb_idl_loop.idl),
+                                      runtime_data ?
+                                            &runtime_data->local_datapaths
+                                            : NULL,
+                                      ovnsb_cond_seqno,
                                       !ovnsb_idl_txn, !ovs_idl_txn);
                     stopwatch_stop(IF_STATUS_MGR_RUN_STOPWATCH_NAME,
                                    time_msec());
