@@ -1,5 +1,7 @@
 Post v26.03.0
 -------------
+   - Deprecated load balancers on logical switches.  LBs on switches are
+     a broken abstraction.  Use load balancers on logical routers instead.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------

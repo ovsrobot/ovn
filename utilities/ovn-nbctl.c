@@ -4203,6 +4203,8 @@ nbctl_ls_lb_add(struct ctl_context *ctx)
     }
 
     /* Insert the load balancer into the logical switch. */
+    VLOG_WARN("LBs on switches are deprecated because supporting LBs on "
+              "switches is a bad thing and a broken abstraction.");
     nbrec_logical_switch_update_load_balancer_addvalue(ls, new_lb);
 }
 

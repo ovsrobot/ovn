@@ -3623,6 +3623,15 @@ build_lb_datapaths(const struct hmap *lbs, const struct hmap *lb_groups,
             continue;
         }
 
+        if (od->nbs->n_load_balancer || od->nbs->n_load_balancer_group) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl, "LBs on switches are deprecated because "
+                         "supporting LBs on switches is a bad thing and a "
+                         "broken abstraction.  Logical switch '%s' has "
+                         "load balancers configured.",
+                         od->nbs->name);
+        }
+
         for (size_t i = 0; i < od->nbs->n_load_balancer; i++) {
             const struct uuid *lb_uuid =
                 &od->nbs->load_balancer[i]->header_.uuid;
