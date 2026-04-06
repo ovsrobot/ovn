@@ -18,6 +18,7 @@
 #include "binding.h"
 #include "if-status.h"
 #include "lib/ofctrl-seqno.h"
+#include "local_data.h"
 #include "ovsport.h"
 #include "simap.h"
 
@@ -58,6 +59,9 @@ VLOG_DEFINE_THIS_MODULE(if_status);
 enum if_state {
     OIF_CLAIMED,          /* Newly claimed interface. pb->chassis update not
                              yet initiated. */
+    OIF_WAITING_SB_COND,  /*  Waiting for the SB updates for a given datapath
+                           *
+                           */
     OIF_INSTALL_FLOWS,    /* Claimed interface with pb->chassis update sent to
                            * SB (but update notification not confirmed, so the
                            * update may be resent in any of the following
@@ -87,6 +91,7 @@ enum if_state {
 
 static const char *if_state_names[] = {
     [OIF_CLAIMED]          = "CLAIMED",
+    [OIF_WAITING_SB_COND]  = "WAITING_SB_COND",
     [OIF_INSTALL_FLOWS]    = "INSTALL_FLOWS",
     [OIF_REM_OLD_OVN_INST] = "REM_OLD_OVN_INST",
     [OIF_MARK_UP]          = "MARK_UP",
@@ -103,19 +108,35 @@ static const char *if_state_names[] = {
  * | |   +----------------------+
  * | |     ^ release_iface   | claim_iface()
  * | |     |                 V - sbrec_update_chassis(if sb is rw)
- * | |   +----------------------+
- * | |   |                      | <------------------------------------------+
- * | |   |       CLAIMED        | <----------------------------------------+ |
- * | |   |                      | <--------------------------------------+ | |
+ * | | | +----------------------+
+ * | | | |                      | <------------------------------------------+
+ * | | | |       CLAIMED        | <----------------------------------------+ |
+ * | | | |                      | <--------------------------------------+ | |
+ * | | | +----------------------+                                        | | |
+ * | | |               |  V  ^                                           | | |
+ * | | |               |  |  | handle_claims()                           | | |
+ * | | |               |  |  | - sbrec_update_chassis(if sb is rw)       | | |
+ * | | |               |  +--+                                           | | |
+ * | | |               |                                                 | | |
+ * | | |               | mgr_update(when sb is rw i.e. pb->chassis)      | | |
+ * | | |               |            has been updated                     | | |
+ * | | | release_iface |                                                 | | |
+ * | | |               |                                                 | | |
+ * | | |               V                                                 | | |
+ * | | | +----------------------+                                        | | |
+ * | | +-|                      |                                        | | |
+ * | |   |    WAITING_SB_COND   |                                        | | |
+ * | |   |                      |                                        | | |
+ * | |   |                      |                                        | | |
  * | |   +----------------------+                                        | | |
- * | |                 |  V  ^                                           | | |
- * | |                 |  |  | handle_claims()                           | | |
- * | |                 |  |  | - sbrec_update_chassis(if sb is rw)       | | |
- * | |                 |  +--+                                           | | |
  * | |                 |                                                 | | |
- * | |                 | mgr_update(when sb is rw i.e. pb->chassis)      | | |
- * | |                 |            has been updated                     | | |
- * | | release_iface   | - request seqno                                 | | |
+ * | |                 |                                                 | | |
+ * | |                 |                                                 | | |
+ * | |                 |   mgr_update(when sb_cond_seqno == expected)    | | |
+ * | |                 |   - request seqno                               | | |
+ * | |                 |                                                 | | |
+ * | |                 |                                                 | | |
+ * | | release_iface   |                                                 | | |
  * | |                 |                                                 | | |
  * | |                 V                                                 | | |
  * | |   +----------------------+                                        | | |
@@ -335,6 +356,7 @@ if_status_mgr_claim_iface(struct if_status_mgr *mgr,
 
     switch (iface->state) {
     case OIF_CLAIMED:
+    case OIF_WAITING_SB_COND:
     case OIF_INSTALL_FLOWS:
     case OIF_REM_OLD_OVN_INST:
     case OIF_MARK_UP:
@@ -383,6 +405,7 @@ if_status_mgr_release_iface(struct if_status_mgr *mgr, const char *iface_id)
 
     switch (iface->state) {
     case OIF_CLAIMED:
+    case OIF_WAITING_SB_COND:
     case OIF_INSTALL_FLOWS:
         /* Not yet fully installed interfaces:
          * pb->chassis still need to be deleted.
@@ -424,6 +447,7 @@ if_status_mgr_delete_iface(struct if_status_mgr *mgr, const char *iface_id,
 
     switch (iface->state) {
     case OIF_CLAIMED:
+    case OIF_WAITING_SB_COND:
     case OIF_INSTALL_FLOWS:
         /* Not yet fully installed interfaces:
          * pb->chassis still need to be deleted.
@@ -500,6 +524,8 @@ if_status_mgr_update(struct if_status_mgr *mgr,
                      const struct sbrec_chassis *chassis_rec,
                      const struct ovsrec_interface_table *iface_table,
                      const struct sbrec_port_binding_table *pb_table,
+                     const struct hmap *local_datapaths,
+                     const unsigned int ovnsb_cond_seqno,
                      bool ovs_readonly,
                      bool sb_readonly)
 {
@@ -614,7 +640,6 @@ if_status_mgr_update(struct if_status_mgr *mgr,
 
     /* Move newly claimed interfaces from OIF_CLAIMED to OIF_INSTALL_FLOWS.
      */
-    bool new_ifaces = false;
     if (!sb_readonly) {
         HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_CLAIMED]) {
             struct ovs_iface *iface = node->data;
@@ -622,9 +647,7 @@ if_status_mgr_update(struct if_status_mgr *mgr,
              * in if_status_handle_claims or if_status_mgr_claim_iface
              */
             if (iface->is_vif) {
-                ovs_iface_set_state(mgr, iface, OIF_INSTALL_FLOWS);
-                iface->install_seqno = mgr->iface_seqno + 1;
-                new_ifaces = true;
+                ovs_iface_set_state(mgr, iface, OIF_WAITING_SB_COND);
             } else {
                 ovs_iface_set_state(mgr, iface, OIF_MARK_UP);
             }
@@ -654,12 +677,42 @@ if_status_mgr_update(struct if_status_mgr *mgr,
                          iface->id);
         }
     }
-    /* Register for a notification about flows being installed in OVS for all
-     * newly claimed interfaces for which pb->chassis has been updated.
-     * Request a seqno update when the flows for new interfaces have been
-     * installed in OVS.
+    /* Check the WAITING_SB_COND nodes after transitioning nodes from CLAIMED
+     * as condition could already be satisfied to move to INSTALL_FLOWS.
      */
-    if (new_ifaces) {
+    bool update_seqno = false;
+    if (!sb_readonly) {
+        HMAPX_FOR_EACH_SAFE (node,
+                             &mgr->ifaces_per_state[OIF_WAITING_SB_COND]) {
+            struct ovs_iface *iface = node->data;
+            if (local_datapaths) {
+                const struct sbrec_port_binding *pb =
+                    sbrec_port_binding_table_get_for_uuid(pb_table,
+                                                          &iface->pb_uuid);
+                ovs_assert(pb);
+                struct local_datapath *ld =
+                    get_local_datapath(local_datapaths,
+                                       pb->datapath->tunnel_key);
+                if (!ld) {
+                    continue;
+                }
+                if (ld->monitor_updated ||
+                    ld->expected_cond_seqno == ovnsb_cond_seqno) {
+
+                    ovs_iface_set_state(mgr, iface, OIF_INSTALL_FLOWS);
+                    iface->install_seqno = mgr->iface_seqno + 1;
+                    update_seqno = true;
+                }
+            }
+        }
+    }
+
+    /* Register for a notification about flows being installed in OVS for all
+     * newly claimed interfaces for which pb->chassis has been updated and all
+     * updates have been received from SB. Request a seqno update when the
+     * flows for new interfaces have been installed in OVS.
+     */
+    if (update_seqno) {
         mgr->iface_seqno++;
         ofctrl_seqno_update_create(mgr->iface_seq_type_pb_cfg,
                                    mgr->iface_seqno);
