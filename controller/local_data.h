@@ -65,6 +65,11 @@ struct local_datapath {
 
     struct shash external_ports;
     struct shash multichassis_ports;
+
+    /* The expected seqno from the sb to be fully updated for this datapath. */
+    unsigned int expected_cond_seqno;
+    /* If the monitor has been updated for this datapath. */
+    bool monitor_updated;
 };
 
 struct local_datapath *local_datapath_alloc(
