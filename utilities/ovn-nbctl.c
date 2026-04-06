@@ -405,7 +405,7 @@ Network function group commands:\n\
                             network-function-group\n\
 \n\
 Network function commands:\n\
-  nf-add NETWORK-FUNCTION ID PORT-IN PORT-OUT\n\
+  nf-add NETWORK-FUNCTION ID PORT-IN [PORT-OUT]\n\
                            create a network-function\n\
   nf-del NETWORK-FUNCTION  delete a network-function\n\
   nf-list                  print all network-functions\n\
@@ -2332,9 +2332,9 @@ nbctl_nf_group_add(struct ctl_context *ctx)
 
     /* Validate and set mode */
     const char *nfg_mode = ctx->argv[3];
-    if (strcmp(nfg_mode, "inline")) {
+    if (strcmp(nfg_mode, "inline") && strcmp(nfg_mode, "vtap")) {
         ctl_error(ctx, "Unsupported mode provided for "
-                  "network-function-group:%s, supported values: inline",
+                  "network-function-group:%s, supported values: inline, vtap",
                   nfg_name);
         return;
     }
@@ -2533,10 +2533,14 @@ nbctl_nf_add(struct ctl_context *ctx)
         ctx->error = error;
         return;
     }
-    error = lsp_by_name_or_uuid(ctx, ctx->argv[4], true, &lsp_out);
-    if (error) {
-        ctx->error = error;
-        return;
+    if (ctx->argc == 5) {
+        error = lsp_by_name_or_uuid(ctx, ctx->argv[4], true, &lsp_out);
+        if (error) {
+            ctx->error = error;
+            return;
+        }
+    } else {
+        lsp_out = NULL;
     }
 
     /* Validate and parse ID */
@@ -9362,7 +9366,7 @@ static const struct ctl_command_syntax nbctl_commands[] = {
       nbctl_nf_group_del_network_function, NULL, "--if-exists", RW },
 
     /* network-function commands. */
-    { "nf-add", 4, 4, "NETWORK-FUNCTION ID PORT-IN PORT-OUT",
+    { "nf-add", 3, 4, "NETWORK-FUNCTION ID PORT-IN [PORT-OUT]",
       nbctl_pre_nf_add,
       nbctl_nf_add,
       NULL, "--may-exist", RW },
