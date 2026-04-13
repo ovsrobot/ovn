@@ -52,6 +52,8 @@ OVN v26.03.0 - xxx xx xxxx
        learned routes. This option has priority over its router counterpart.
      * The EVPN support is now considered stable.  Its "experimental" tag has
        been removed.
+     * Add support for hub-and-spoke propagation via the "hub-spoke" option
+       in dynamic-routing-redistribute settings.
    - Add support for Network Function insertion in OVN with stateful traffic
      redirection capability in Logical Switch datapath. The feature introduces
      three new NB database tables:
