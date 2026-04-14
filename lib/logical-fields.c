@@ -72,6 +72,28 @@ ovn_init_symtab(struct shash *symtab)
     expr_symtab_add_string(symtab, "inport", MFF_LOG_INPORT, NULL);
     expr_symtab_add_string(symtab, "outport", MFF_LOG_OUTPORT, NULL);
 
+    /* Also register the inport/outport backing registers as numeric fields
+     * so that predicates can reference specific bits (e.g., the EVPN key
+     * indicator at bit 31). */
+    char inport_reg[8], outport_reg[8];
+    snprintf(inport_reg, sizeof inport_reg, "reg%d",
+             MFF_LOG_INPORT - MFF_REG0);
+    expr_symtab_add_field(symtab, inport_reg, MFF_LOG_INPORT, NULL, false);
+    snprintf(outport_reg, sizeof outport_reg, "reg%d",
+             MFF_LOG_OUTPORT - MFF_REG0);
+    expr_symtab_add_field(symtab, outport_reg, MFF_LOG_OUTPORT, NULL, false);
+
+    /* EVPN binding keys have bit 31 set (OVN_MIN_EVPN_KEY = 1 << 31).
+     * Define predicates to identify traffic from/to remote VTEPs so that
+     * northd can skip conntrack without hard-coding register indices. */
+    char vtep_pred[64];
+    snprintf(vtep_pred, sizeof vtep_pred,
+             "%s == 0x80000000/0x80000000", inport_reg);
+    expr_symtab_add_predicate(symtab, "from_evpn_vtep", vtep_pred);
+    snprintf(vtep_pred, sizeof vtep_pred,
+             "%s == 0x80000000/0x80000000", outport_reg);
+    expr_symtab_add_predicate(symtab, "to_evpn_vtep", vtep_pred);
+
     /* The port isn't reserved along the pipeline it's just defined as symbol
      * to support matching on string and moving between string registers. */
     expr_symtab_add_string(symtab, "remote_outport",

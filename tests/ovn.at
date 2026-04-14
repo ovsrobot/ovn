@@ -108,8 +108,11 @@ dnl
 dnl When we add or remove registers this test needs to be updated, of course.
 AT_SETUP([registers])
 AT_CHECK([ovstest test-ovn dump-symtab | grep reg | sort], [0],
-[[reg0 = xxreg0[96..127]
+[[from_evpn_vtep = reg14 == 0x80000000/0x80000000
+reg0 = xxreg0[96..127]
 reg1 = xxreg0[64..95]
+reg14 = NXM_NX_REG14
+reg15 = NXM_NX_REG15
 reg2 = xxreg0[32..63]
 reg3 = xxreg0[0..31]
 reg4 = xxreg1[96..127]
@@ -118,6 +121,7 @@ reg6 = xxreg1[32..63]
 reg7 = xxreg1[0..31]
 reg8 = xreg4[32..63]
 reg9 = xreg4[0..31]
+to_evpn_vtep = reg15 == 0x80000000/0x80000000
 xreg0 = xxreg0[64..127]
 xreg1 = xxreg0[0..63]
 xreg2 = xxreg1[64..127]
@@ -125,6 +129,14 @@ xreg3 = xxreg1[0..63]
 xreg4 = OXM_OF_PKT_REG4
 xxreg0 = NXM_NX_XXREG0
 xxreg1 = NXM_NX_XXREG1
+]])
+AT_CLEANUP
+
+dnl Check EVPN VTEP predicate definitions.
+AT_SETUP([EVPN VTEP fields])
+AT_CHECK([ovstest test-ovn dump-symtab | grep evpn_vtep | sort], [0],
+[[from_evpn_vtep = reg14 == 0x80000000/0x80000000
+to_evpn_vtep = reg15 == 0x80000000/0x80000000
 ]])
 AT_CLEANUP
 
@@ -2108,7 +2120,7 @@ reg0[[1..3]] = get_fdb(eth.src);
     Cannot use 3-bit field reg0[[1..3]] where 32-bit field is required.
 
 reg15 = get_fdb(eth.dst);
-    Syntax error at `reg15' expecting field name.
+    encodes as set_field:0->reg15,resubmit(,OFTABLE_GET_FDB)
 
 outport = get_fdb(ip4.dst);
     Cannot use 32-bit field ip4.dst[[0..31]] where 48-bit field is required.
