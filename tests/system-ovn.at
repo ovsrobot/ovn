@@ -12716,11 +12716,16 @@ OVN_POPULATE_ARP
 check ovn-nbctl --wait=hv sync
 
 DHCP_TEST_DIR="/tmp/dhcp-test"
+echo "KEYWORD: HERE"
 rm -rf $DHCP_TEST_DIR
+echo "KEYWORD: HERE 1"
 mkdir $DHCP_TEST_DIR
+echo "KEYWORD: HERE 2"
 cat > $DHCP_TEST_DIR/dhcpd.conf <<EOF
+echo "KEYWORD: HERE 3"
 subnet 172.16.1.0 netmask 255.255.255.0 {
 }
+echo "KEYWORD: HERE 4"
 subnet 192.168.1.0 netmask 255.255.255.0 {
   range 192.168.1.10 192.168.1.10;
   option routers 192.168.1.1;
