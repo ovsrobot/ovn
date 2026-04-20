@@ -351,29 +351,34 @@ put_flow_based_remote_port_redirect_overlay(
     }
 }
 
+/* Add handling for E/W ICMPv4/v6 packets when tunneled packets exceed
+ * path MTU.
+ * If packet needs to be tunneled to another node and the physical
+ * interface used for tunneling has a lower MTU than the packet size,
+ * or if there is a route exception with a smaller MTU, kernel
+ * generates an ICMP "Fragmentation Needed" message, but the package
+ * metadata didn't change. Such packets might have been dropped due
+ * to required metadata modifications for returned packet.
+ *
+ * Mark these packets with MLF_RX_FROM_TUNNEL_BIT for further
+ * processing. Packets received from a VTEP tunnel should be passed
+ * through, and errors handled via the normal processing path, since
+ * port metadata is not carried in VTEP packets in VNI.
+ */
 static void
-add_tunnel_ingress_flows(const struct chassis_tunnel *tun,
-                         enum mf_field_id mff_ovn_geneve,
-                         struct ovn_desired_flow_table *flow_table,
-                         struct ofpbuf *ofpacts)
+add_tunnel_ingress_pmtud_flows(const struct chassis_tunnel *tun,
+                               struct ofpbuf *ofpacts,
+                               struct ovn_desired_flow_table *flow_table)
 {
-    /* Main ingress flow (priority 100) */
+    if (tun->is_vtep_tunnel) {
+        return;
+    }
+
     struct match match = MATCH_CATCHALL_INITIALIZER;
-    match_set_in_port(&match, tun->ofport);
-
-    ofpbuf_clear(ofpacts);
-    put_decapsulation(mff_ovn_geneve, tun, ofpacts);
-    put_resubmit(OFTABLE_LOCAL_OUTPUT, ofpacts);
-
-    ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 100, 0, &match,
-                    ofpacts, hc_uuid);
 
     /* Set allow rx from tunnel bit */
     put_load(1, MFF_LOG_FLAGS, MLF_RX_FROM_TUNNEL_BIT, 1, ofpacts);
     put_resubmit(OFTABLE_CT_ZONE_LOOKUP, ofpacts);
-
-    /* Add specific flows for E/W ICMPv{4,6} packets if tunnelled packets
-     * do not fit path MTU. */
 
     /* IPv4 ICMP flow (priority 120) */
     match_init_catchall(&match);
@@ -396,6 +401,26 @@ add_tunnel_ingress_flows(const struct chassis_tunnel *tun,
 
     ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 120, 0, &match,
                     ofpacts, hc_uuid);
+}
+
+static void
+add_tunnel_ingress_flows(const struct chassis_tunnel *tun,
+                         enum mf_field_id mff_ovn_geneve,
+                         struct ovn_desired_flow_table *flow_table,
+                         struct ofpbuf *ofpacts)
+{
+    /* Main ingress flow (priority 100) */
+    struct match match = MATCH_CATCHALL_INITIALIZER;
+    match_set_in_port(&match, tun->ofport);
+
+    ofpbuf_clear(ofpacts);
+    put_decapsulation(mff_ovn_geneve, tun, ofpacts);
+    put_resubmit(OFTABLE_LOCAL_OUTPUT, ofpacts);
+
+    ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 100, 0, &match,
+                    ofpacts, hc_uuid);
+
+    add_tunnel_ingress_pmtud_flows(tun, ofpacts, flow_table);
 }
 
 static void
@@ -3943,7 +3968,7 @@ physical_run(struct physical_ctx *p_ctx,
     struct chassis_tunnel *tun;
     HMAP_FOR_EACH (tun, hmap_node, p_ctx->chassis_tunnels) {
         add_tunnel_ingress_flows(tun, p_ctx->mff_ovn_geneve, flow_table,
-                                &ofpacts);
+                                 &ofpacts);
     }
 
     /* Process packets that arrive from flow-based tunnels. */
