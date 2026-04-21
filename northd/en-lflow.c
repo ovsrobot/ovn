@@ -298,6 +298,21 @@ lflow_multicast_igmp_handler(struct engine_node *node, void *data)
 }
 
 enum engine_input_handler_result
+lflow_group_route_change_handler(struct engine_node *node,
+                                      void *data OVS_UNUSED)
+{
+    struct routes_data *route_data =
+        engine_get_input_data("routes", node);
+
+    /* If we do not have tracked data we need to recompute. */
+    if (!route_data->tracked) {
+        return EN_UNHANDLED;
+    }
+
+    return EN_HANDLED_UNCHANGED;
+}
+
+enum engine_input_handler_result
 lflow_group_ecmp_route_change_handler(struct engine_node *node,
                                       void *data OVS_UNUSED)
 {
@@ -345,6 +360,11 @@ lflow_group_ecmp_route_change_handler(struct engine_node *node,
         build_route_data_flows_for_lrouter(
             route_node->od, lflow_data->lflow_table,
             route_node, lflow_input.bfd_ports);
+
+        build_arp_request_flows_for_lrouter(route_node->od,
+                                            lflow_data->lflow_table,
+                                            lflow_input.meter_groups,
+                                            route_node->lflow_ref);
 
         bool handled = lflow_ref_sync_lflows(
             route_node->lflow_ref, lflow_data->lflow_table,
