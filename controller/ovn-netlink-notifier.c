@@ -217,6 +217,8 @@ ovn_netlink_deregister_notifier(enum ovn_netlink_notifier_type type)
         nln_destroy(nln_handle);
         nln_handle = NULL;
     }
+
+    ovn_netlink_notifier_flush(type);
 }
 
 void
@@ -287,7 +289,6 @@ void
 ovn_netlink_notifiers_destroy(void)
 {
     for (size_t i = 0; i < OVN_NL_NOTIFIER_MAX; i++) {
-        ovn_netlink_notifier_flush(i);
         ovn_netlink_deregister_notifier(i);
         vector_destroy(&notifiers[i].msgs);
     }
