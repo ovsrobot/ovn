@@ -193,13 +193,15 @@ ne_is_valid_remote_vtep(struct ne_nl_received_neigh *ne)
     return false;
 }
 
-/* OVN expects that the FDB entry has an IP address (that of the remote VTEP),
- * has MAC address and the entry is marked as "extern learned". */
+/* OVN expects that the FDB entry has a MAC address, the entry is marked as
+ * "extern learned", and either has an IP address (that of the remote VTEP)
+ * or a nexthop group ID (for ECMP/multi-homed entries). */
 bool
 ne_is_valid_static_fdb(struct ne_nl_received_neigh *ne)
 {
     return !eth_addr_is_zero(ne->lladdr) &&
-           ipv6_addr_is_set(&ne->addr) && ne->flags & NTF_EXT_LEARNED;
+           (ipv6_addr_is_set(&ne->addr) || ne->nh_id) &&
+           ne->flags & NTF_EXT_LEARNED;
 }
 
 /* OVN expects that the ARP entry has an IP address, a MAC address,

@@ -39,13 +39,13 @@ static struct evpn_remote_vtep *evpn_remote_vtep_find(
     uint16_t port, uint32_t vni);
 static void evpn_static_entry_add(struct hmap *static_entries,
                                   struct eth_addr mac, struct in6_addr ip,
-                                  uint32_t vni);
+                                  uint32_t vni, uint32_t nh_id);
 static struct evpn_static_entry *evpn_static_entry_find(
     const struct hmap *static_entries, struct eth_addr mac,
-    struct in6_addr ip, uint32_t vni);
+    struct in6_addr ip, uint32_t vni, uint32_t nh_id);
 static uint32_t evpn_static_entry_hash(const struct eth_addr *mac,
                                        const struct in6_addr *ip,
-                                       uint32_t vni);
+                                       uint32_t vni, uint32_t nh_id);
 
 /* Last neighbor_exchange netlink operation. */
 static int neighbor_exchange_nl_status;
@@ -100,10 +100,10 @@ neighbor_exchange_run(const struct neighbor_exchange_ctx_in *n_ctx_in,
                 if (ne_is_valid_static_arp(ne)) {
                     if (!evpn_static_entry_find(n_ctx_out->static_arps,
                                                 ne->lladdr, ne->addr,
-                                                nim->vni)) {
+                                                nim->vni, 0)) {
                         evpn_static_entry_add(n_ctx_out->static_arps,
                                               ne->lladdr, ne->addr,
-                                              nim->vni);
+                                              nim->vni, 0);
                     }
                 }
             }
@@ -122,10 +122,10 @@ neighbor_exchange_run(const struct neighbor_exchange_ctx_in *n_ctx_in,
                 if (ne_is_valid_static_fdb(ne)) {
                     if (!evpn_static_entry_find(n_ctx_out->static_fdbs,
                                                 ne->lladdr, ne->addr,
-                                                nim->vni)) {
+                                                nim->vni, ne->nh_id)) {
                         evpn_static_entry_add(n_ctx_out->static_fdbs,
                                               ne->lladdr, ne->addr,
-                                              nim->vni);
+                                              nim->vni, ne->nh_id);
                     }
                 }
             }
@@ -230,30 +230,32 @@ evpn_remote_vtep_hash(const struct in6_addr *ip, uint16_t port,
 
 static void
 evpn_static_entry_add(struct hmap *static_entries, struct eth_addr mac,
-                      struct in6_addr ip, uint32_t vni)
+                      struct in6_addr ip, uint32_t vni, uint32_t nh_id)
 {
     struct evpn_static_entry *e = xmalloc(sizeof *e);
     *e = (struct evpn_static_entry) {
         .mac = mac,
         .ip = ip,
         .vni = vni,
+        .nh_id = nh_id,
     };
 
     hmap_insert(static_entries, &e->hmap_node,
-                evpn_static_entry_hash(&mac, &ip, vni));
+                evpn_static_entry_hash(&mac, &ip, vni, nh_id));
 }
 
 static struct evpn_static_entry *
 evpn_static_entry_find(const struct hmap *static_entries, struct eth_addr mac,
-                       struct in6_addr ip, uint32_t vni)
+                       struct in6_addr ip, uint32_t vni, uint32_t nh_id)
 {
-    uint32_t hash = evpn_static_entry_hash(&mac, &ip, vni);
+    uint32_t hash = evpn_static_entry_hash(&mac, &ip, vni, nh_id);
 
     struct evpn_static_entry *e;
     HMAP_FOR_EACH_WITH_HASH (e, hmap_node, hash, static_entries) {
         if (eth_addr_equals(e->mac, mac) &&
             ipv6_addr_equals(&e->ip, &ip) &&
-            e->vni == vni) {
+            e->vni == vni &&
+            e->nh_id == nh_id) {
             return e;
         }
     }
@@ -263,12 +265,13 @@ evpn_static_entry_find(const struct hmap *static_entries, struct eth_addr mac,
 
 static uint32_t
 evpn_static_entry_hash(const struct eth_addr *mac, const struct in6_addr *ip,
-                       uint32_t vni)
+                       uint32_t vni, uint32_t nh_id)
 {
     uint32_t hash = 0;
     hash = hash_bytes(mac, sizeof *mac, hash);
     hash = hash_add_in6_addr(hash, ip);
     hash = hash_add(hash, vni);
+    hash = hash_add(hash, nh_id);
 
-    return hash_finish(hash, 26);
+    return hash_finish(hash, 30);
 }

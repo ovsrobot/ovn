@@ -56,10 +56,13 @@ struct evpn_static_entry {
     struct hmap_node hmap_node;
     /* MAC address of the remote workload. */
     struct eth_addr mac;
-    /* Destination ip of the remote tunnel or remote IP. */
+    /* Destination IP of the remote tunnel or remote IP.
+     * Zero if nh_id is set. */
     struct in6_addr ip;
     /* VNI of the VTEP. */
     uint32_t vni;
+    /* Nexthop group ID for ECMP/multi-homed entries, 0 if ip is set. */
+    uint32_t nh_id;
 };
 
 void neighbor_exchange_run(const struct neighbor_exchange_ctx_in *,
