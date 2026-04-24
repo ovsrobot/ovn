@@ -95,10 +95,11 @@ test_neighbor_sync(struct ovs_cmdl_context *ctx)
     VECTOR_FOR_EACH_PTR (&received_neighbors, ne) {
         char addr_s[INET6_ADDRSTRLEN + 1];
         printf("Neighbor ifindex=%"PRId32" vlan=%"PRIu16" "
-               "eth=" ETH_ADDR_FMT " dst=%s port=%"PRIu16"\n",
+               "eth=" ETH_ADDR_FMT " dst=%s port=%"PRIu16" "
+               "nh_id=%"PRIu32"\n",
                ne->if_index, ne->vlan, ETH_ADDR_ARGS(ne->lladdr),
                ipv6_string_mapped(addr_s, &ne->addr) ? addr_s : "(invalid)",
-               ne->port);
+               ne->port, ne->nh_id);
     }
 
 done:
@@ -142,13 +143,14 @@ test_neighbor_table_notify(struct ovs_cmdl_context *ctx)
     VECTOR_FOR_EACH_PTR (msgs, msg) {
         char addr_s[INET6_ADDRSTRLEN + 1];
         printf("%s neighbor ifindex=%"PRId32" vlan=%"PRIu16" "
-               "eth=" ETH_ADDR_FMT " dst=%s port=%"PRIu16"\n",
+               "eth=" ETH_ADDR_FMT " dst=%s port=%"PRIu16" "
+               "nh_id=%"PRIu32"\n",
                msg->nlmsg_type == RTM_NEWNEIGH ? "Add" : "Delete",
                msg->nd.if_index, msg->nd.vlan, ETH_ADDR_ARGS(msg->nd.lladdr),
                ipv6_string_mapped(addr_s, &msg->nd.addr)
                    ? addr_s
                    : "(invalid)",
-               msg->nd.port);
+               msg->nd.port, msg->nd.nh_id);
     }
 
     ovn_netlink_notifiers_destroy();

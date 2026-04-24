@@ -40,6 +40,7 @@ struct ne_nl_received_neigh {
                              * from linux/neighbour.h. */
     uint8_t  type;          /* A value out of 'rtm_type' from linux/rtnetlink.h
                              * e.g., RTN_UNICAST, RTN_MULTICAST. */
+    uint32_t nh_id;         /* ID of nexthop group if present, 0 otherwise. */
 };
 
 /* A digested version of a neigh message sent down by the kernel to indicate

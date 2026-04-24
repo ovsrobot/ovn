@@ -266,12 +266,18 @@ ne_table_parse__(struct ofpbuf *buf, size_t ofs, const struct nlmsghdr *nlmsg,
         [NDA_DST] = { .type = NL_A_U32, .optional = true },
         [NDA_LLADDR] = { .type = NL_A_LL_ADDR, .optional = true },
         [NDA_PORT] = { .type = NL_A_U16, .optional = true },
+        /* NDA_NH_ID is only used with AF_BRIDGE messages.
+         * This entry aligns the policy array sizes. */
+        [NDA_NH_ID] = { .type = NL_A_U32, .optional = true },
     };
 
     static const struct nl_policy policy6[] = {
         [NDA_DST] = { .type = NL_A_IPV6, .optional = true },
         [NDA_LLADDR] = { .type = NL_A_LL_ADDR, .optional = true },
         [NDA_PORT] = { .type = NL_A_U16, .optional = true },
+        /* NDA_NH_ID is only used with AF_BRIDGE messages.
+         * This entry aligns the policy array sizes. */
+        [NDA_NH_ID] = { .type = NL_A_U32, .optional = true },
     };
 
     static const struct nl_policy policy_bridge[] = {
@@ -281,6 +287,7 @@ ne_table_parse__(struct ofpbuf *buf, size_t ofs, const struct nlmsghdr *nlmsg,
         [NDA_LLADDR] = { .type = NL_A_LL_ADDR, .optional = true },
         [NDA_PORT] = { .type = NL_A_U16, .optional = true },
         [NDA_VLAN] = { .type = NL_A_U16, .optional = true },
+        [NDA_NH_ID] = { .type = NL_A_U32, .optional = true },
     };
 
     BUILD_ASSERT(ARRAY_SIZE(policy) == ARRAY_SIZE(policy6));
@@ -344,6 +351,12 @@ ne_table_parse__(struct ofpbuf *buf, size_t ofs, const struct nlmsghdr *nlmsg,
 
         if (attrs[NDA_VLAN]) {
             change->nd.vlan = nl_attr_get_u16(attrs[NDA_VLAN]);
+        }
+
+        /* NDA_NH_ID is only present in AF_BRIDGE messages in practice,
+         * but reading it unconditionally is harmless. */
+        if (attrs[NDA_NH_ID]) {
+            change->nd.nh_id = nl_attr_get_u32(attrs[NDA_NH_ID]);
         }
     } else {
         VLOG_DBG_RL(&rl, "received unparseable rtnetlink neigh message");
