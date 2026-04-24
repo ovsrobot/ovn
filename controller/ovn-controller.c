@@ -3874,8 +3874,8 @@ struct lflow_output_persistent_data {
 struct ed_type_lflow_output {
     /* Logical flow table */
     struct ovn_desired_flow_table flow_table;
-    /* group ids for load balancing */
-    struct ovn_extend_table group_table;
+    /* Group IDs for load balancing and ECMP, owned outside the engine. */
+    struct ovn_extend_table *group_table;
     /* meter ids for QoS */
     struct ovn_extend_table meter_table;
     /* lflow <-> resource cross reference */
@@ -4051,7 +4051,7 @@ init_lflow_ctx(struct engine_node *node,
     l_ctx_in->lbinding_lports = &rt_data->lbinding_data.bindings;
 
     l_ctx_out->flow_table = &fo->flow_table;
-    l_ctx_out->group_table = &fo->group_table;
+    l_ctx_out->group_table = fo->group_table;
     l_ctx_out->meter_table = &fo->meter_table;
     l_ctx_out->lflow_deps_mgr = &fo->lflow_deps_mgr;
     l_ctx_out->conj_ids = &fo->conj_ids;
@@ -4065,7 +4065,6 @@ en_lflow_output_init(struct engine_node *node OVS_UNUSED,
 {
     struct ed_type_lflow_output *data = xzalloc(sizeof *data);
     ovn_desired_flow_table_init(&data->flow_table);
-    ovn_extend_table_init(&data->group_table, "group-table", 0);
     ovn_extend_table_init(&data->meter_table, "meter-table", 0);
     objdep_mgr_init(&data->lflow_deps_mgr);
     lflow_conj_ids_init(&data->conj_ids);
@@ -4088,7 +4087,6 @@ en_lflow_output_cleanup(void *data)
 {
     struct ed_type_lflow_output *flow_output_data = data;
     ovn_desired_flow_table_destroy(&flow_output_data->flow_table);
-    ovn_extend_table_destroy(&flow_output_data->group_table);
     ovn_extend_table_destroy(&flow_output_data->meter_table);
     objdep_mgr_destroy(&flow_output_data->lflow_deps_mgr);
     lflow_conj_ids_destroy(&flow_output_data->conj_ids);
@@ -4136,7 +4134,7 @@ en_lflow_output_run(struct engine_node *node, void *data)
 
     struct ed_type_lflow_output *fo = data;
     struct ovn_desired_flow_table *lflow_table = &fo->flow_table;
-    struct ovn_extend_table *group_table = &fo->group_table;
+    struct ovn_extend_table *group_table = fo->group_table;
     struct ovn_extend_table *meter_table = &fo->meter_table;
     struct objdep_mgr *lflow_deps_mgr = &fo->lflow_deps_mgr;
 
@@ -7646,12 +7644,14 @@ main(int argc, char *argv[])
     struct ed_type_evpn_arp *earp_data =
         engine_get_internal_data(&en_evpn_arp);
 
-    ofctrl_init(&lflow_output_data->group_table,
-                &lflow_output_data->meter_table);
+    struct ovn_extend_table group_table;
+    ovn_extend_table_init(&group_table, "group-table", 0);
+    lflow_output_data->group_table = &group_table;
+
+    ofctrl_init(&group_table, &lflow_output_data->meter_table);
 
     unixctl_command_register("group-table-list", "", 0, 0,
-                             extend_table_list,
-                             &lflow_output_data->group_table);
+                             extend_table_list, &group_table);
 
     unixctl_command_register("meter-table-list", "", 0, 0,
                              extend_table_list,
@@ -7928,7 +7928,7 @@ main(int argc, char *argv[])
                 struct ed_type_lflow_output *lflow_out_data =
                     engine_get_internal_data(&en_lflow_output);
 
-                ovn_extend_table_reinit(&lflow_out_data->group_table,
+                ovn_extend_table_reinit(&group_table,
                                         ovs_feature_max_select_groups_get());
                 ovn_extend_table_reinit(&lflow_out_data->meter_table,
                                         ovs_feature_max_meters_get());
@@ -8439,6 +8439,7 @@ loop_done:
 
     engine_set_context(NULL);
     engine_cleanup();
+    ovn_extend_table_destroy(&group_table);
 
     free(ovn_version);
     lflow_destroy();
