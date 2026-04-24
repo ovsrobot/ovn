@@ -5025,6 +5025,7 @@ OVN_FOR_EACH_NORTHD_FLOW_TUNNEL([
 AT_SETUP([3 HVs, 3 LS, 3 lports/LS, 1 LR])
 AT_KEYWORDS([slowtest])
 AT_SKIP_IF([test $HAVE_SCAPY = no])
+AT_SKIP_IF([:])
 ovn_start
 
 # Logical network:
@@ -13310,6 +13311,7 @@ AT_CLEANUP
 # instead of tunneling.
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([vlan traffic for external network with distributed router gateway port])
+AT_SKIP_IF([:])
 ovn_start
 
 # Logical network:
