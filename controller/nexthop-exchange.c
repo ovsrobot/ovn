@@ -19,9 +19,11 @@
 
 #include "lib/netlink.h"
 #include "lib/netlink-socket.h"
+#include "hmapx.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
 #include "packets.h"
+#include "vec.h"
 
 #include "nexthop-exchange.h"
 
@@ -109,6 +111,20 @@ nexthop_entry_format(struct ds *ds, const struct nexthop_entry *nhe)
     }
 }
 
+struct nexthop_entry *
+nexthop_entry_find(const struct hmap *nexthops, uint32_t id)
+{
+    uint32_t hash = nexthop_entry_hash(id);
+    struct nexthop_entry *nhe;
+    HMAP_FOR_EACH_WITH_HASH (nhe, hmap_node, hash, nexthops) {
+        if (nhe->id == id) {
+            return nhe;
+        }
+    }
+
+    return NULL;
+}
+
 /* Parse Netlink message in buf, which is expected to contain a UAPI nhmsg
  * header and associated nexthop attributes. This will allocate
  * 'struct nexthop_entry' which needs to be freed by the caller.
@@ -126,6 +142,56 @@ nh_table_parse(struct ofpbuf *buf, struct nh_table_msg *change)
 
     return nh_table_parse__(buf, NLMSG_HDRLEN + sizeof *nh,
                             nlmsg, change);
+}
+
+bool
+nexthops_handle_changes(struct hmap *nexthops, struct vector *msgs)
+{
+    if (vector_is_empty(msgs)) {
+        return false;
+    }
+
+    struct hmapx updated_groups = HMAPX_INITIALIZER(&updated_groups);
+
+    struct nh_table_msg *msg;
+    VECTOR_FOR_EACH_PTR (msgs, msg) {
+        struct nexthop_entry *nhe = nexthop_entry_find(nexthops, msg->nhe->id);
+        if (nhe) {
+            hmap_remove(nexthops, &nhe->hmap_node);
+            free(nhe);
+        }
+
+        if (msg->nlmsg_type == RTM_NEWNEXTHOP) {
+            hmap_insert(nexthops, &msg->nhe->hmap_node,
+                        nexthop_entry_hash(msg->nhe->id));
+
+            if (msg->nhe->n_grps) {
+                hmapx_add(&updated_groups, msg->nhe);
+            }
+
+            /* The nexthop entry moved into the hmap, prevent double free. */
+            msg->nhe = NULL;
+        }
+    }
+
+    struct hmapx_node *hmapx_node;
+    HMAPX_FOR_EACH (hmapx_node, &updated_groups) {
+        struct nexthop_entry *nhe = hmapx_node->data;
+        nh_populate_grp_pointers(nhe, nexthops);
+    }
+
+    hmapx_destroy(&updated_groups);
+
+    return true;
+}
+
+void
+nexthops_destroy(struct hmap *nexthops)
+{
+    struct nexthop_entry *entry;
+    HMAP_FOR_EACH_POP (entry, hmap_node, nexthops) {
+        free(entry);
+    }
 }
 
 static int
@@ -214,25 +280,11 @@ nexthop_entry_hash(uint32_t id)
     return hash_int(id, 0);
 }
 
-static struct nexthop_entry *
-nexthop_find(struct hmap *nexthops, uint32_t id)
-{
-    uint32_t hash = nexthop_entry_hash(id);
-    struct nexthop_entry *nhe;
-    HMAP_FOR_EACH_WITH_HASH (nhe, hmap_node, hash, nexthops) {
-        if (nhe->id == id) {
-            return nhe;
-        }
-    }
-
-    return NULL;
-}
-
 static void
 nh_populate_grp_pointers(struct nexthop_entry *nhe, struct hmap *nexthops)
 {
     for (size_t i = 0; i < nhe->n_grps; i++) {
         struct nexthop_grp_entry *grp = &nhe->grps[i];
-        grp->gateway = nexthop_find(nexthops, grp->id);
+        grp->gateway = nexthop_entry_find(nexthops, grp->id);
     }
 }

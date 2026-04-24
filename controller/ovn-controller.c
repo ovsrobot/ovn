@@ -99,6 +99,7 @@
 #include "neighbor.h"
 #include "neighbor-exchange.h"
 #include "neighbor-exchange-netlink.h"
+#include "nexthop-exchange.h"
 #include "evpn-arp.h"
 #include "evpn-binding.h"
 #include "evpn-fdb.h"
@@ -6344,6 +6345,83 @@ en_neighbor_table_notify_run(struct engine_node *node OVS_UNUSED,
     return state;
 }
 
+/* The nexthop_exchange node is an input node, but is enabled/disabled
+ * based on en_neighbor_exchange node. The reason being that engine
+ * periodically runs input nodes to check if there are updates, so it could
+ * be polled for updates without requiring other nodes to run first. */
+struct ed_type_nexthop_exchange {
+    struct hmap nexthops;
+    bool enabled;
+    bool recompute;
+};
+
+static void *
+en_nexthop_exchange_init(struct engine_node *node OVS_UNUSED,
+                         struct engine_arg *arg OVS_UNUSED)
+{
+    struct ed_type_nexthop_exchange *nhe_data = xmalloc(sizeof *nhe_data);
+    *nhe_data = (struct ed_type_nexthop_exchange) {
+        .nexthops = HMAP_INITIALIZER(&nhe_data->nexthops),
+        .enabled = false,
+        .recompute = true,
+    };
+
+    return nhe_data;
+}
+
+static void
+en_nexthop_exchange_cleanup(void *data)
+{
+    struct ed_type_nexthop_exchange *nhe_data = data;
+    nexthops_destroy(&nhe_data->nexthops);
+    hmap_destroy(&nhe_data->nexthops);
+}
+
+static enum engine_node_state
+en_nexthop_exchange_run(struct engine_node *node OVS_UNUSED, void *data)
+{
+    struct ed_type_nexthop_exchange *nhe_data = data;
+
+    if (!nhe_data->enabled) {
+        return EN_UNCHANGED;
+    }
+
+    if (nhe_data->recompute) {
+        nexthops_destroy(&nhe_data->nexthops);
+        nexthops_sync(&nhe_data->nexthops);
+        /* We are doing a full sync, let's clear any data
+         * that might accumulate in the meantime. */
+        ovn_netlink_notifier_flush(OVN_NL_NOTIFIER_NEXTHOP);
+
+        nhe_data->recompute = false;
+        return EN_UPDATED;
+    }
+
+    struct vector *msgs = ovn_netlink_get_msgs(OVN_NL_NOTIFIER_NEXTHOP);
+    bool updated = nexthops_handle_changes(&nhe_data->nexthops, msgs);
+    ovn_netlink_notifier_flush(OVN_NL_NOTIFIER_NEXTHOP);
+
+    return updated ? EN_UPDATED : EN_UNCHANGED;
+}
+
+static void
+nexthop_exchange_update(struct ed_type_nexthop_exchange *nhe_data,
+                        bool enabled)
+{
+    if (nhe_data->enabled == enabled) {
+        return;
+    }
+
+    if (nhe_data->enabled && !enabled) {
+        nexthops_destroy(&nhe_data->nexthops);
+    } else if (!nhe_data->enabled && enabled) {
+        nhe_data->recompute = true;
+    }
+
+    nhe_data->enabled = enabled;
+    ovn_netlink_update_notifier(OVN_NL_NOTIFIER_NEXTHOP, enabled);
+}
+
 struct ed_type_neighbor_exchange {
     /* Contains 'struct evpn_remote_vtep'. */
     struct hmap remote_vteps;
@@ -6389,6 +6467,8 @@ en_neighbor_exchange_run(struct engine_node *node, void *data_)
         engine_get_input_data("neighbor", node);
     struct ed_type_neighbor_table_notify *nt_notify =
         engine_get_input_data("neighbor_table_notify", node);
+    struct ed_type_nexthop_exchange *nhe_data =
+        engine_get_input_data("nexthop_exchange", node);
 
     evpn_remote_vteps_clear(&data->remote_vteps);
     evpn_static_entries_clear(&data->static_fdbs);
@@ -6407,6 +6487,7 @@ en_neighbor_exchange_run(struct engine_node *node, void *data_)
 
     neighbor_exchange_run(&n_ctx_in, &n_ctx_out);
     neighbor_table_notify_update(&nt_notify->watches);
+    nexthop_exchange_update(nhe_data, !vector_is_empty(&nt_notify->watches));
 
     return EN_UPDATED;
 }
@@ -6864,6 +6945,7 @@ static ENGINE_NODE(neighbor);
 static ENGINE_NODE(neighbor_table_notify);
 static ENGINE_NODE(neighbor_exchange);
 static ENGINE_NODE(neighbor_exchange_status);
+static ENGINE_NODE(nexthop_exchange);
 static ENGINE_NODE(evpn_vtep_binding, CLEAR_TRACKED_DATA);
 static ENGINE_NODE(evpn_fdb, CLEAR_TRACKED_DATA);
 static ENGINE_NODE(evpn_arp, CLEAR_TRACKED_DATA);
@@ -7117,6 +7199,10 @@ inc_proc_ovn_controller_init(
     engine_add_input(&en_neighbor_exchange, &en_neighbor_table_notify, NULL);
     engine_add_input(&en_neighbor_exchange, &en_neighbor_exchange_status,
                      NULL);
+    /* We just need to enable/disable the nexthop exchange based on
+     * the neighbor status.  */
+    engine_add_input(&en_neighbor_exchange, &en_nexthop_exchange,
+                     engine_noop_handler);
 
     engine_add_input(&en_evpn_vtep_binding, &en_ovs_open_vswitch, NULL);
     engine_add_input(&en_evpn_vtep_binding, &en_ovs_bridge, NULL);
@@ -7133,6 +7219,9 @@ inc_proc_ovn_controller_init(
     engine_add_input(&en_evpn_fdb, &en_neighbor_exchange, NULL);
     engine_add_input(&en_evpn_fdb, &en_evpn_vtep_binding,
                      evpn_fdb_vtep_binding_handler);
+    /* XXX: This is just a place holder and it will be updated later on. */
+    engine_add_input(&en_evpn_fdb, &en_nexthop_exchange,
+                     engine_noop_handler);
 
     engine_add_input(&en_evpn_arp, &en_neighbor_exchange, NULL);
     engine_add_input(&en_evpn_arp, &en_evpn_vtep_binding,

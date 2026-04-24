@@ -18,6 +18,7 @@
 #include "lib/netlink.h"
 #include "openvswitch/hmap.h"
 #include "openvswitch/ofpbuf.h"
+#include "vec.h"
 
 #include "nexthop-exchange.h"
 
@@ -34,9 +35,28 @@ nexthop_entry_format(struct ds *ds OVS_UNUSED,
 {
 }
 
+struct nexthop_entry *
+nexthop_entry_find(const struct hmap *nexthops OVS_UNUSED,
+                   uint32_t id OVS_UNUSED)
+{
+    return NULL;
+}
+
 int
 nh_table_parse(struct ofpbuf *buf OVS_UNUSED,
                struct nh_table_msg *change OVS_UNUSED)
 {
     return 0;
+}
+
+bool
+nexthops_handle_changes(struct hmap *nexthops OVS_UNUSED,
+                        struct vector *msgs OVS_UNUSED)
+{
+    return false;
+}
+
+void
+nexthops_destroy(struct hmap *nexthops OVS_UNUSED)
+{
 }

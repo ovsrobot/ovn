@@ -23,6 +23,7 @@
 
 struct ds;
 struct ofpbuf;
+struct vector;
 
 struct nexthop_grp_entry {
     /* The id of the nexthop gateway. */
@@ -56,6 +57,10 @@ struct nh_table_msg {
 
 void nexthops_sync(struct hmap *nexthops);
 void nexthop_entry_format(struct ds *ds, const struct nexthop_entry *nhe);
+struct nexthop_entry *nexthop_entry_find(const struct hmap *nexthops,
+                                         uint32_t id);
 int nh_table_parse(struct ofpbuf *, struct nh_table_msg *change);
+bool nexthops_handle_changes(struct hmap *nexthops, struct vector *msgs);
+void nexthops_destroy(struct hmap *nexthops);
 
 #endif /* NEXTHOP_EXCHANGE_H */

@@ -401,11 +401,13 @@ digraph "Incremental-Processing-Engine" {
 	host_if_monitor [[style=filled, shape=box, fillcolor=white, label="host_if_monitor"]];
 	neighbor_table_notify [[style=filled, shape=box, fillcolor=white, label="neighbor_table_notify"]];
 	neighbor_exchange_status [[style=filled, shape=box, fillcolor=white, label="neighbor_exchange_status"]];
+	nexthop_exchange [[style=filled, shape=box, fillcolor=white, label="nexthop_exchange"]];
 	neighbor_exchange [[style=filled, shape=box, fillcolor=white, label="neighbor_exchange"]];
 	neighbor -> neighbor_exchange [[label=""]];
 	host_if_monitor -> neighbor_exchange [[label=""]];
 	neighbor_table_notify -> neighbor_exchange [[label=""]];
 	neighbor_exchange_status -> neighbor_exchange [[label=""]];
+	nexthop_exchange -> neighbor_exchange [[label="engine_noop_handler"]];
 	evpn_vtep_binding [[style=filled, shape=box, fillcolor=white, label="evpn_vtep_binding"]];
 	OVS_open_vswitch -> evpn_vtep_binding [[label=""]];
 	OVS_bridge -> evpn_vtep_binding [[label=""]];
@@ -416,6 +418,7 @@ digraph "Incremental-Processing-Engine" {
 	evpn_fdb [[style=filled, shape=box, fillcolor=white, label="evpn_fdb"]];
 	neighbor_exchange -> evpn_fdb [[label=""]];
 	evpn_vtep_binding -> evpn_fdb [[label="evpn_fdb_vtep_binding_handler"]];
+	nexthop_exchange -> evpn_fdb [[label="engine_noop_handler"]];
 	evpn_arp [[style=filled, shape=box, fillcolor=white, label="evpn_arp"]];
 	neighbor_exchange -> evpn_arp [[label=""]];
 	evpn_vtep_binding -> evpn_arp [[label="evpn_arp_vtep_binding_handler"]];
