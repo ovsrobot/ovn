@@ -3,6 +3,9 @@ Post v26.03.0
    - Dynamic Routing:
      * Add support for hub-and-spoke propagation via the "hub-spoke" option
        in dynamic-routing-redistribute settings.
+     * Add ECMP/multi-homing support for EVPN FDB entries. FDB entries
+       backed by a kernel nexthop group are load-balanced via OpenFlow
+       select groups with weighted buckets.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------

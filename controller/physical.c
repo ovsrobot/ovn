@@ -17,6 +17,7 @@
 #include "binding.h"
 #include "coverage.h"
 #include "byte-order.h"
+#include "extend-table.h"
 #include "ct-zone.h"
 #include "encaps.h"
 #include "evpn-binding.h"
@@ -54,6 +55,7 @@
 #include "socket-util.h"
 #include "sset.h"
 #include "util.h"
+#include "vec.h"
 #include "vswitch-idl.h"
 #include "hmapx.h"
 #include "neighbor-of.h"
@@ -3594,7 +3596,9 @@ physical_consider_evpn_multicast(const struct evpn_multicast_group *mc_group,
 
 static void
 physical_consider_evpn_fdb(const struct evpn_fdb *fdb,
+                           struct ovn_extend_table *group_table,
                            struct ofpbuf *ofpacts, struct match *match,
+                           struct ds *group_ds,
                            struct ovn_desired_flow_table *flow_table)
 {
     /* Static FDB flow. */
@@ -3604,22 +3608,63 @@ physical_consider_evpn_fdb(const struct evpn_fdb *fdb,
     match_set_metadata(match, htonll(fdb->dp_key));
     match_set_dl_dst(match, fdb->mac);
 
-    put_load(fdb->binding_key, MFF_LOG_REMOTE_OUTPORT, 0, 32, ofpacts);
+    if (vector_len(&fdb->paths) > 1) {
+        /* ECMP: create a select group with one bucket per path.
+         * Each bucket loads its binding_key into
+         * MFF_LOG_REMOTE_OUTPORT. */
+        const struct mf_field *mf = mf_from_id(MFF_LOG_REMOTE_OUTPORT);
+
+        ds_clear(group_ds);
+        ds_put_cstr(group_ds, "type=select,selection_method=dp_hash");
+
+        for (size_t i = 0; i < vector_len(&fdb->paths); i++) {
+            struct evpn_fdb_path path =
+                vector_get(&fdb->paths, i, struct evpn_fdb_path);
+            ds_put_format(group_ds, ",bucket=bucket_id=%"PRIuSIZE","
+                          "weight:%"PRIu16",actions=load:%"PRIu32"->%s[0..%u]",
+                          i, path.weight, path.binding_key, mf->name,
+                          mf->n_bits - 1);
+        }
+
+        uint32_t group_id = ovn_extend_table_assign_id(group_table,
+                                                       ds_cstr(group_ds),
+                                                       fdb->flow_uuid);
+        if (group_id == EXT_TABLE_ID_INVALID) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_WARN_RL(&rl, "Failed to allocate group ID for ECMP FDB "
+                         "entry "ETH_ADDR_FMT".", ETH_ADDR_ARGS(fdb->mac));
+            return;
+        }
+
+        struct ofpact_group *og = ofpact_put_GROUP(ofpacts);
+        og->group_id = group_id;
+    } else {
+        struct evpn_fdb_path path =
+            vector_get(&fdb->paths, 0, struct evpn_fdb_path);
+        put_load(path.binding_key, MFF_LOG_REMOTE_OUTPORT, 0, 32, ofpacts);
+    }
+
     ofctrl_add_flow(flow_table, OFTABLE_GET_REMOTE_FDB, 150,
                     fdb->flow_uuid.parts[0],
                     match, ofpacts, &fdb->flow_uuid);
 
-    /* Prevent dynamic learning if it's already known via static FDB. */
-    ofpbuf_clear(ofpacts);
-    match_init_catchall(match);
+    /* Prevent dynamic learning if it's already known via static FDB.
+     * Install one flow per path. */
+    for (size_t i = 0; i < vector_len(&fdb->paths); i++) {
+        struct evpn_fdb_path path =
+            vector_get(&fdb->paths, i, struct evpn_fdb_path);
 
-    match_set_metadata(match, htonll(fdb->dp_key));
-    match_set_reg(match, MFF_LOG_INPORT - MFF_REG0, fdb->binding_key);
-    match_set_dl_src(match, fdb->mac);
+        ofpbuf_clear(ofpacts);
+        match_init_catchall(match);
 
-    ofctrl_add_flow(flow_table, OFTABLE_LEARN_REMOTE_FDB, 150,
-                    fdb->flow_uuid.parts[0],
-                    match, ofpacts, &fdb->flow_uuid);
+        match_set_metadata(match, htonll(fdb->dp_key));
+        match_set_reg(match, MFF_LOG_INPORT - MFF_REG0, path.binding_key);
+        match_set_dl_src(match, fdb->mac);
+
+        ofctrl_add_flow(flow_table, OFTABLE_LEARN_REMOTE_FDB, 150,
+                        fdb->flow_uuid.parts[0],
+                        match, ofpacts, &fdb->flow_uuid);
+    }
 }
 
 static void
@@ -3677,10 +3722,15 @@ physical_eval_evpn_flows(const struct physical_ctx *ctx,
     }
     evpn_local_ip_map_destroy(&vni_ip_map);
 
+    struct ds group_ds = DS_EMPTY_INITIALIZER;
+
     const struct evpn_fdb *fdb;
     HMAP_FOR_EACH (fdb, hmap_node, ctx->evpn_fdbs) {
-        physical_consider_evpn_fdb(fdb, ofpacts, &match, flow_table);
+        physical_consider_evpn_fdb(fdb, ctx->group_table, ofpacts, &match,
+                                   &group_ds, flow_table);
     }
+
+    ds_destroy(&group_ds);
 
     const struct evpn_arp *arp;
     HMAP_FOR_EACH (arp, hmap_node, ctx->evpn_arps) {
@@ -3845,26 +3895,32 @@ physical_handle_evpn_binding_changes(
 
 void
 physical_handle_evpn_fdb_changes(struct ovn_desired_flow_table *flow_table,
+                                 struct ovn_extend_table *group_table,
                                  const struct hmapx *updated_fdbs,
                                  const struct uuidset *removed_fdbs)
 {
     struct ofpbuf ofpacts;
     ofpbuf_init(&ofpacts, 0);
     struct match match = MATCH_CATCHALL_INITIALIZER;
+    struct ds group_ds = DS_EMPTY_INITIALIZER;
 
     const struct hmapx_node *node;
     HMAPX_FOR_EACH (node, updated_fdbs) {
         const struct evpn_fdb *fdb = node->data;
 
         ofctrl_remove_flows(flow_table, &fdb->flow_uuid);
-        physical_consider_evpn_fdb(fdb, &ofpacts, &match, flow_table);
+        ovn_extend_table_remove_desired(group_table, &fdb->flow_uuid);
+        physical_consider_evpn_fdb(fdb, group_table, &ofpacts, &match,
+                                   &group_ds, flow_table);
     }
 
+    ds_destroy(&group_ds);
     ofpbuf_uninit(&ofpacts);
 
     const struct uuidset_node *uuidset_node;
     UUIDSET_FOR_EACH (uuidset_node, removed_fdbs) {
         ofctrl_remove_flows(flow_table, &uuidset_node->uuid);
+        ovn_extend_table_remove_desired(group_table, &uuidset_node->uuid);
     }
 }
 

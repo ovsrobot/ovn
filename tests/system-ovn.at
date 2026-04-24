@@ -18322,10 +18322,10 @@ check bridge fdb add f0:00:0f:16:10:60 dev $VXLAN_NAME dst 169.0.0.20 static ext
 check bridge fdb add f0:00:0f:16:10:70 dev $VXLAN_NAME dst 169.0.0.30 static extern_learn
 
 OVS_WAIT_FOR_OUTPUT_UNQUOTED([ovn-appctl evpn/vtep-fdb-list | cut -d',' -f2- | sort], [0], [dnl
- MAC: 00:00:00:00:00:01, vni: $vni, binding_key: 0x80000003, dp_key: $dp_key
- MAC: f0:00:0f:16:10:50, vni: $vni, binding_key: 0x80000001, dp_key: $dp_key
- MAC: f0:00:0f:16:10:60, vni: $vni, binding_key: 0x80000002, dp_key: $dp_key
- MAC: f0:00:0f:16:10:70, vni: $vni, binding_key: 0x80000003, dp_key: $dp_key
+ MAC: 00:00:00:00:00:01, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000003, weight=0}]]
+ MAC: f0:00:0f:16:10:50, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000001, weight=0}]]
+ MAC: f0:00:0f:16:10:60, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000002, weight=0}]]
+ MAC: f0:00:0f:16:10:70, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000003, weight=0}]]
 ])
 
 AT_CHECK_UNQUOTED([ovs-ofctl dump-flows br-int table=OFTABLE_GET_REMOTE_FDB | grep priority | \
@@ -18363,6 +18363,122 @@ ovn-appctl evpn/vtep-fdb-list > fdb_after
 check diff -q bindings_before bindings_after
 check diff -q mc_groups_before mc_groups_after
 check diff -q fdb_before fdb_after
+
+AS_BOX([L2 EVPN ECMP FDB (multi-homing)])
+
+# Allocate nexthop IDs that are not in use by the system.
+nh_id1=$(nexthop_alloc)
+nh_id2=$(nexthop_alloc)
+nh_grp_id=$(nexthop_alloc)
+
+# Create nexthop singletons and a weighted group for ECMP.
+check ip nexthop add id $nh_id1 via 169.0.0.10 fdb
+on_exit "ip nexthop del id $nh_id1"
+check ip nexthop add id $nh_id2 via 169.0.0.20 fdb
+on_exit "ip nexthop del id $nh_id2"
+check ip nexthop add id $nh_grp_id group $nh_id1,100/$nh_id2,200 fdb
+on_exit "ip nexthop del id $nh_grp_id"
+
+# Add an ECMP FDB entry using the nexthop group.
+check bridge fdb add f0:00:0f:16:10:90 dev $VXLAN_NAME nhid $nh_grp_id extern_learn
+
+# Verify the ECMP FDB entry has multiple paths with weights.
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([ovn-appctl evpn/vtep-fdb-list | cut -d',' -f2- | sort], [0], [dnl
+ MAC: 00:00:00:00:00:01, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000003, weight=0}]]
+ MAC: f0:00:0f:16:10:50, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000001, weight=0}]]
+ MAC: f0:00:0f:16:10:60, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000002, weight=0}]]
+ MAC: f0:00:0f:16:10:70, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000003, weight=0}]]
+ MAC: f0:00:0f:16:10:90, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000001, weight=100}, {key=0x80000002, weight=200}]]
+])
+
+# Verify OpenFlow: ECMP entry uses a group action, single-path entries
+# use direct load.  Normalize the dynamic group ID for comparison.
+AT_CHECK_UNQUOTED(
+    [ovs-ofctl dump-flows br-int table=OFTABLE_GET_REMOTE_FDB | grep priority | \
+     awk '{print $[7], $[8]}' | sed 's/group:[[0-9]]*/group:GID/' | sort], [0], [dnl
+priority=0 actions=load:0->NXM_NX_REG1[[]]
+priority=150,metadata=0x$dp_key,dl_dst=00:00:00:00:00:01 actions=load:0x80000003->NXM_NX_REG1[[]]
+priority=150,metadata=0x$dp_key,dl_dst=f0:00:0f:16:10:50 actions=load:0x80000001->NXM_NX_REG1[[]]
+priority=150,metadata=0x$dp_key,dl_dst=f0:00:0f:16:10:60 actions=load:0x80000002->NXM_NX_REG1[[]]
+priority=150,metadata=0x$dp_key,dl_dst=f0:00:0f:16:10:70 actions=load:0x80000003->NXM_NX_REG1[[]]
+priority=150,metadata=0x$dp_key,dl_dst=f0:00:0f:16:10:90 actions=group:GID
+])
+
+# Verify the select group exists with weighted buckets.
+AT_CHECK_UNQUOTED(
+    [ovn-appctl group-table-list | \
+     sed 's/:[[[:space:]]]*[[0-9]]*$/: GID/'], [0], [dnl
+type=select,selection_method=dp_hash,bucket=bucket_id=0,weight:100,actions=load:2147483649->reg1[[0..31]],bucket=bucket_id=1,weight:200,actions=load:2147483650->reg1[[0..31]]: GID
+])
+
+# Verify learning suppression flows: two ECMP drop flows added.
+AT_CHECK_UNQUOTED(
+    [ovs-ofctl dump-flows br-int table=OFTABLE_LEARN_REMOTE_FDB | grep priority | \
+     awk '{print $[7], $[8]}' | strip_cookie | sort], [0], [dnl
+priority=100,reg14=0x80000001,metadata=0x$dp_key actions=learn(table=OFTABLE_GET_REMOTE_FDB,priority=150,delete_learned,OXM_OF_METADATA[[]],NXM_OF_ETH_DST[[]]=NXM_OF_ETH_SRC[[]],load:NXM_NX_REG14[[]]->NXM_NX_REG1[[]])
+priority=100,reg14=0x80000002,metadata=0x$dp_key actions=learn(table=OFTABLE_GET_REMOTE_FDB,priority=150,delete_learned,OXM_OF_METADATA[[]],NXM_OF_ETH_DST[[]]=NXM_OF_ETH_SRC[[]],load:NXM_NX_REG14[[]]->NXM_NX_REG1[[]])
+priority=100,reg14=0x80000003,metadata=0x$dp_key actions=learn(table=OFTABLE_GET_REMOTE_FDB,priority=150,delete_learned,OXM_OF_METADATA[[]],NXM_OF_ETH_DST[[]]=NXM_OF_ETH_SRC[[]],load:NXM_NX_REG14[[]]->NXM_NX_REG1[[]])
+priority=150,reg14=0x80000001,metadata=0x$dp_key,dl_src=f0:00:0f:16:10:50 actions=drop
+priority=150,reg14=0x80000001,metadata=0x$dp_key,dl_src=f0:00:0f:16:10:90 actions=drop
+priority=150,reg14=0x80000002,metadata=0x$dp_key,dl_src=f0:00:0f:16:10:60 actions=drop
+priority=150,reg14=0x80000002,metadata=0x$dp_key,dl_src=f0:00:0f:16:10:90 actions=drop
+priority=150,reg14=0x80000003,metadata=0x$dp_key,dl_src=00:00:00:00:00:01 actions=drop
+priority=150,reg14=0x80000003,metadata=0x$dp_key,dl_src=f0:00:0f:16:10:70 actions=drop
+])
+
+# Update the nexthop group: remove one member.
+check ip nexthop replace id $nh_grp_id group $nh_id1,100 fdb
+
+# Verify the entry reverts to single path.
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([ovn-appctl evpn/vtep-fdb-list | cut -d',' -f2- | sort], [0], [dnl
+ MAC: 00:00:00:00:00:01, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000003, weight=0}]]
+ MAC: f0:00:0f:16:10:50, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000001, weight=0}]]
+ MAC: f0:00:0f:16:10:60, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000002, weight=0}]]
+ MAC: f0:00:0f:16:10:70, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000003, weight=0}]]
+ MAC: f0:00:0f:16:10:90, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000001, weight=100}]]
+])
+
+AT_CHECK_UNQUOTED(
+    [ovs-ofctl dump-flows br-int table=OFTABLE_GET_REMOTE_FDB | grep priority | \
+     awk '{print $[7], $[8]}' | sort], [0], [dnl
+priority=0 actions=load:0->NXM_NX_REG1[[]]
+priority=150,metadata=0x$dp_key,dl_dst=00:00:00:00:00:01 actions=load:0x80000003->NXM_NX_REG1[[]]
+priority=150,metadata=0x$dp_key,dl_dst=f0:00:0f:16:10:50 actions=load:0x80000001->NXM_NX_REG1[[]]
+priority=150,metadata=0x$dp_key,dl_dst=f0:00:0f:16:10:60 actions=load:0x80000002->NXM_NX_REG1[[]]
+priority=150,metadata=0x$dp_key,dl_dst=f0:00:0f:16:10:70 actions=load:0x80000003->NXM_NX_REG1[[]]
+priority=150,metadata=0x$dp_key,dl_dst=f0:00:0f:16:10:90 actions=load:0x80000001->NXM_NX_REG1[[]]
+])
+
+AT_CHECK_UNQUOTED(
+    [ovs-ofctl dump-flows br-int table=OFTABLE_LEARN_REMOTE_FDB | grep priority | \
+     awk '{print $[7], $[8]}' | strip_cookie | sort], [0], [dnl
+priority=100,reg14=0x80000001,metadata=0x$dp_key actions=learn(table=OFTABLE_GET_REMOTE_FDB,priority=150,delete_learned,OXM_OF_METADATA[[]],NXM_OF_ETH_DST[[]]=NXM_OF_ETH_SRC[[]],load:NXM_NX_REG14[[]]->NXM_NX_REG1[[]])
+priority=100,reg14=0x80000002,metadata=0x$dp_key actions=learn(table=OFTABLE_GET_REMOTE_FDB,priority=150,delete_learned,OXM_OF_METADATA[[]],NXM_OF_ETH_DST[[]]=NXM_OF_ETH_SRC[[]],load:NXM_NX_REG14[[]]->NXM_NX_REG1[[]])
+priority=100,reg14=0x80000003,metadata=0x$dp_key actions=learn(table=OFTABLE_GET_REMOTE_FDB,priority=150,delete_learned,OXM_OF_METADATA[[]],NXM_OF_ETH_DST[[]]=NXM_OF_ETH_SRC[[]],load:NXM_NX_REG14[[]]->NXM_NX_REG1[[]])
+priority=150,reg14=0x80000001,metadata=0x$dp_key,dl_src=f0:00:0f:16:10:50 actions=drop
+priority=150,reg14=0x80000001,metadata=0x$dp_key,dl_src=f0:00:0f:16:10:90 actions=drop
+priority=150,reg14=0x80000002,metadata=0x$dp_key,dl_src=f0:00:0f:16:10:60 actions=drop
+priority=150,reg14=0x80000003,metadata=0x$dp_key,dl_src=00:00:00:00:00:01 actions=drop
+priority=150,reg14=0x80000003,metadata=0x$dp_key,dl_src=f0:00:0f:16:10:70 actions=drop
+])
+
+# Check recompute stability while ECMP entry is still present.
+ovn-appctl evpn/vtep-fdb-list > fdb_ecmp_before
+check ovn-appctl inc-engine/recompute
+check ovn-nbctl --wait=hv sync
+ovn-appctl evpn/vtep-fdb-list > fdb_ecmp_after
+check diff -q fdb_ecmp_before fdb_ecmp_after
+
+# Remove the ECMP FDB entry.
+check bridge fdb del f0:00:0f:16:10:90 dev $VXLAN_NAME nhid $nh_grp_id
+
+# Verify the FDB entry is cleaned up.
+OVS_WAIT_FOR_OUTPUT_UNQUOTED([ovn-appctl evpn/vtep-fdb-list | cut -d',' -f2- | sort], [0], [dnl
+ MAC: 00:00:00:00:00:01, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000003, weight=0}]]
+ MAC: f0:00:0f:16:10:50, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000001, weight=0}]]
+ MAC: f0:00:0f:16:10:60, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000002, weight=0}]]
+ MAC: f0:00:0f:16:10:70, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000003, weight=0}]]
+])
 
 AS_BOX([L2 EVPN FDB advertising])
 
@@ -18859,10 +18975,10 @@ check bridge fdb add f0:00:0f:16:10:60 dev $VXLAN_NAME dst 169::20 static extern
 check bridge fdb add f0:00:0f:16:10:70 dev $VXLAN_NAME dst 169::30 static extern_learn
 
 OVS_WAIT_FOR_OUTPUT_UNQUOTED([ovn-appctl evpn/vtep-fdb-list | cut -d',' -f2- | sort], [0], [dnl
- MAC: 00:00:00:00:00:01, vni: $vni, binding_key: 0x80000003, dp_key: $dp_key
- MAC: f0:00:0f:16:10:50, vni: $vni, binding_key: 0x80000001, dp_key: $dp_key
- MAC: f0:00:0f:16:10:60, vni: $vni, binding_key: 0x80000002, dp_key: $dp_key
- MAC: f0:00:0f:16:10:70, vni: $vni, binding_key: 0x80000003, dp_key: $dp_key
+ MAC: 00:00:00:00:00:01, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000003, weight=0}]]
+ MAC: f0:00:0f:16:10:50, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000001, weight=0}]]
+ MAC: f0:00:0f:16:10:60, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000002, weight=0}]]
+ MAC: f0:00:0f:16:10:70, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000003, weight=0}]]
 ])
 
 AT_CHECK_UNQUOTED([ovs-ofctl dump-flows br-int table=OFTABLE_GET_REMOTE_FDB | grep priority | \
@@ -19426,12 +19542,12 @@ check bridge fdb add f0:00:0f:16:10:70 dev $VXLAN_NAME dst 169.0.0.30 static ext
 check bridge fdb add f0:00:0f:16:10:80 dev $VXLAN_V6_NAME dst 169::30 static extern_learn
 
 OVS_WAIT_FOR_OUTPUT_UNQUOTED([ovn-appctl evpn/vtep-fdb-list | cut -d',' -f2- | sort], [0], [dnl
- MAC: 00:00:00:00:00:01, vni: $vni, binding_key: 0x80000004, dp_key: $dp_key
- MAC: 00:00:00:00:00:10, vni: $vni, binding_key: 0x80000005, dp_key: $dp_key
- MAC: f0:00:0f:16:10:50, vni: $vni, binding_key: 0x80000001, dp_key: $dp_key
- MAC: f0:00:0f:16:10:60, vni: $vni, binding_key: 0x80000003, dp_key: $dp_key
- MAC: f0:00:0f:16:10:70, vni: $vni, binding_key: 0x80000004, dp_key: $dp_key
- MAC: f0:00:0f:16:10:80, vni: $vni, binding_key: 0x80000005, dp_key: $dp_key
+ MAC: 00:00:00:00:00:01, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000004, weight=0}]]
+ MAC: 00:00:00:00:00:10, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000005, weight=0}]]
+ MAC: f0:00:0f:16:10:50, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000001, weight=0}]]
+ MAC: f0:00:0f:16:10:60, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000003, weight=0}]]
+ MAC: f0:00:0f:16:10:70, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000004, weight=0}]]
+ MAC: f0:00:0f:16:10:80, vni: $vni, dp_key: $dp_key, paths: [[{key=0x80000005, weight=0}]]
 ])
 
 AT_CHECK_UNQUOTED([ovs-ofctl dump-flows br-int table=OFTABLE_GET_REMOTE_FDB | grep priority | \

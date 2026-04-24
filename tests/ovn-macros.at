@@ -1472,6 +1472,19 @@ netlink_if_index() {
     $ns_prefix ip -o link show dev $1 | awk -F: '{print $1}'
 }
 
+# Allocate a nexthop ID that is not currently in use by the system.
+# Prints the allocated ID to stdout.
+nexthop_alloc() {
+    for _nh_try in $(shuf -i 1000000-2000000 -n 10); do
+        if ! ip nexthop show id $_nh_try > /dev/null 2>&1; then
+            echo $_nh_try
+            return
+        fi
+    done
+    echo "Could not allocate a free nexthop ID"
+    AT_FAIL_IF([:])
+}
+
 OVS_END_SHELL_HELPERS
 
 m4_define([OVN_POPULATE_ARP], [AT_CHECK(ovn_populate_arp__, [0], [ignore])])

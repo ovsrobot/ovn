@@ -4641,6 +4641,8 @@ struct ed_type_pflow_output {
     struct ovn_desired_flow_table flow_table;
     /* Drop debugging options. */
     struct physical_debug debug;
+    /* Shared group table from lflow_output, set during main loop init. */
+    struct ovn_extend_table *group_table;
 };
 
 static void
@@ -4784,6 +4786,8 @@ static void init_physical_ctx(struct engine_node *node,
     struct ed_type_evpn_arp *earp_data =
         engine_get_input_data("evpn_arp", node);
 
+    struct ed_type_pflow_output *pfo = engine_get_internal_data(node);
+
     parse_encap_ips(ovs_table, &p_ctx->n_encap_ips, &p_ctx->encap_ips);
     p_ctx->sbrec_port_binding_by_name = sbrec_port_binding_by_name;
     p_ctx->sbrec_port_binding_by_datapath = sbrec_port_binding_by_datapath;
@@ -4808,6 +4812,7 @@ static void init_physical_ctx(struct engine_node *node,
     p_ctx->evpn_multicast_groups = &eb_data->multicast_groups;
     p_ctx->evpn_fdbs = &efdb_data->fdbs;
     p_ctx->evpn_arps = &earp_data->arps;
+    p_ctx->group_table = pfo->group_table;
 
     struct controller_engine_ctx *ctrl_ctx = engine_get_context()->client_ctx;
     p_ctx->if_mgr = ctrl_ctx->if_mgr;
@@ -5127,7 +5132,8 @@ pflow_output_fdb_handler(struct engine_node *node, void *data)
     struct ed_type_evpn_fdb *ef_data =
         engine_get_input_data("evpn_fdb", node);
 
-    physical_handle_evpn_fdb_changes(&pfo->flow_table, &ef_data->updated_fdbs,
+    physical_handle_evpn_fdb_changes(&pfo->flow_table, pfo->group_table,
+                                     &ef_data->updated_fdbs,
                                      &ef_data->removed_fdbs);
     return EN_HANDLED_UPDATED;
 }
@@ -6712,10 +6718,14 @@ en_evpn_fdb_run(struct engine_node *node, void *data_)
         engine_get_input_data("neighbor_exchange", node);
     const struct ed_type_evpn_vtep_binding *eb_data =
         engine_get_input_data("evpn_vtep_binding", node);
+    const struct ed_type_nexthop_exchange *nhe_data =
+        engine_get_input_data("nexthop_exchange", node);
 
     struct evpn_fdb_ctx_in f_ctx_in = {
         .static_fdbs = &ne_data->static_fdbs,
         .bindings = &eb_data->bindings,
+        .nexthops = &nhe_data->nexthops,
+        .datapaths = &eb_data->datapaths,
     };
 
     struct evpn_fdb_ctx_out f_ctx_out = {
@@ -7216,9 +7226,7 @@ inc_proc_ovn_controller_init(
     engine_add_input(&en_evpn_fdb, &en_neighbor_exchange, NULL);
     engine_add_input(&en_evpn_fdb, &en_evpn_vtep_binding,
                      evpn_fdb_vtep_binding_handler);
-    /* XXX: This is just a place holder and it will be updated later on. */
-    engine_add_input(&en_evpn_fdb, &en_nexthop_exchange,
-                     engine_noop_handler);
+    engine_add_input(&en_evpn_fdb, &en_nexthop_exchange, NULL);
 
     engine_add_input(&en_evpn_arp, &en_neighbor_exchange, NULL);
     engine_add_input(&en_evpn_arp, &en_evpn_vtep_binding,
@@ -7646,6 +7654,7 @@ main(int argc, char *argv[])
     struct ovn_extend_table group_table;
     ovn_extend_table_init(&group_table, "group-table", 0);
     lflow_output_data->group_table = &group_table;
+    pflow_output_data->group_table = &group_table;
 
     ofctrl_init(&group_table, &lflow_output_data->meter_table);
 

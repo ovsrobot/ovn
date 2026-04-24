@@ -21,6 +21,7 @@
 #include "hmapx.h"
 #include "openvswitch/hmap.h"
 #include "uuidset.h"
+#include "vec.h"
 
 struct unixctl_conn;
 
@@ -29,27 +30,41 @@ struct evpn_fdb_ctx_in {
     const struct hmap *bindings;
     /* Contains 'struct evpn_static_entry', one for each FDB. */
     const struct hmap *static_fdbs;
+    /* Contains 'struct nexthop_entry'. */
+    const struct hmap *nexthops;
+    /* Contains 'struct evpn_datapath'. */
+    const struct hmap *datapaths;
 };
 
 struct evpn_fdb_ctx_out {
     /* Contains 'struct evpn_fdb'. */
     struct hmap *fdbs;
-    /* Contains pointers to 'struct evpn_binding'. */
+    /* Contains pointers to 'struct evpn_fdb'. */
     struct hmapx *updated_fdbs;
-    /* Contains 'flow_uuid' from removed 'struct evpn_binding'. */
+    /* Contains 'flow_uuid' from removed 'struct evpn_fdb'. */
     struct uuidset *removed_fdbs;
+};
+
+struct evpn_fdb_path {
+    uint32_t binding_key;
+    /* Nexthop weight from the kernel nexthop group.
+     * 0 for single-path entries (no ECMP). */
+    uint16_t weight;
+    /* Must be zero; memcmp-based equality depends on it. */
+    uint16_t pad;
 };
 
 struct evpn_fdb {
     struct hmap_node hmap_node;
     /* UUID used to identify physical flows related to this FDB. */
     struct uuid flow_uuid;
-    /* IP address of the remote VTEP. */
+    /* MAC address of the remote workload. */
     struct eth_addr mac;
     uint32_t vni;
-    /* Local tunnel key to identify the binding. */
-    uint32_t binding_key;
     uint32_t dp_key;
+    /* Contains 'struct evpn_fdb_path', one per ECMP path.
+     * For single-path entries len == 1. */
+    struct vector paths;
 };
 
 void evpn_fdb_run(const struct evpn_fdb_ctx_in *, struct evpn_fdb_ctx_out *);

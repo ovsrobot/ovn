@@ -30,6 +30,7 @@
 struct hmap;
 struct ovsdb_idl_index;
 struct ovsrec_bridge;
+struct ovn_extend_table;
 struct simap;
 struct sbrec_multicast_group_table;
 struct sbrec_port_binding_table;
@@ -76,6 +77,7 @@ struct physical_ctx {
     const struct hmap *evpn_multicast_groups;
     const struct hmap *evpn_fdbs;
     const struct hmap *evpn_arps;
+    struct ovn_extend_table *group_table;
 
     /* Set of port binding names that have been already reprocessed during
      * the I-P run. */
@@ -101,6 +103,7 @@ void physical_handle_evpn_binding_changes(
     const struct uuidset *removed_bindings,
     const struct uuidset *removed_multicast_groups);
 void physical_handle_evpn_fdb_changes(struct ovn_desired_flow_table *,
+                                      struct ovn_extend_table *group_table,
                                       const struct hmapx *updated_fdbs,
                                       const struct uuidset *removed_fdbs);
 void physical_handle_evpn_arp_changes(const struct hmap *local_datapaths,

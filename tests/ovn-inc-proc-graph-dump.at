@@ -418,7 +418,7 @@ digraph "Incremental-Processing-Engine" {
 	evpn_fdb [[style=filled, shape=box, fillcolor=white, label="evpn_fdb"]];
 	neighbor_exchange -> evpn_fdb [[label=""]];
 	evpn_vtep_binding -> evpn_fdb [[label="evpn_fdb_vtep_binding_handler"]];
-	nexthop_exchange -> evpn_fdb [[label="engine_noop_handler"]];
+	nexthop_exchange -> evpn_fdb [[label=""]];
 	evpn_arp [[style=filled, shape=box, fillcolor=white, label="evpn_arp"]];
 	neighbor_exchange -> evpn_arp [[label=""]];
 	evpn_vtep_binding -> evpn_arp [[label="evpn_arp_vtep_binding_handler"]];
