@@ -71,3 +71,6 @@ northd_ovn_northd_LDADD = \
 man_MANS += northd/ovn-northd.8
 EXTRA_DIST += northd/ovn-northd.8.xml
 CLEANFILES += northd/ovn-northd.8
+man_MANS += northd/ovn-logical-flows.7
+EXTRA_DIST += northd/ovn-logical-flows.7.xml
+CLEANFILES += northd/ovn-logical-flows.7
