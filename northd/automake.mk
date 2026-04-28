@@ -72,5 +72,8 @@ man_MANS += northd/ovn-northd.8
 EXTRA_DIST += northd/ovn-northd.8.xml
 CLEANFILES += northd/ovn-northd.8
 man_MANS += northd/ovn-logical-flows.7
-EXTRA_DIST += northd/ovn-logical-flows.7.xml
+EXTRA_DIST += northd/ovn-logical-flows.7.rst
 CLEANFILES += northd/ovn-logical-flows.7
+
+northd/ovn-logical-flows.7: northd/ovn-logical-flows.7.rst
+	$(AM_V_GEN)rst2man $< > $@.tmp && sed 's/^\.ft C/.ft B/' $@.tmp > $@ && rm $@.tmp

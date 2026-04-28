@@ -63,6 +63,7 @@ BuildRequires: libcap-ng libcap-ng-devel
 BuildRequires: tcpdump
 %endif
 BuildRequires: unbound unbound-devel
+BuildRequires: python3-docutils
 
 Requires: openssl hostname iproute module-init-tools openvswitch
 Requires: python3-openvswitch

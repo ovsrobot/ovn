@@ -117,6 +117,11 @@ other than plain text, only if you have the following:
 
 - dot from graphviz (http://www.graphviz.org/).
 
+Certain OVN manpages are built from reStructuredText documents and
+require the following:
+
+- rst2man.
+
 If you are going to extensively modify OVN, consider installing the
 following to obtain better warnings:
 
