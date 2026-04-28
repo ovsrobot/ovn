@@ -619,6 +619,8 @@ Options:\n\
                             (default: %s)\n\
   --dry-run                 start in paused state (do not commit db changes)\n\
   --n-threads=N             specify number of threads\n\
+  --dump-inc-proc-graph[=NODE]\n\
+                            dump incremental processing graph and exit\n\
   --unixctl=SOCKET          override default control socket name\n\
   -h, --help                display this help message\n\
   -o, --options             list available options\n\
