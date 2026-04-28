@@ -2770,6 +2770,15 @@ or
         router.
       </column>
 
+      <column name="options" key="event" type='{"type": "boolean"}'>
+        If set to <code>true</code> and the load balancer has no active
+        backends, whenever the load balancer receives traffic, the event
+        is reported in the <ref table="Controller_Event"
+        db="OVN_Southbound"/> table in the OVN Southbound database.
+        The <code>event</code> option cannot be used together with the
+        <code>reject</code> option.
+      </column>
+
     </group>
   </table>
 
