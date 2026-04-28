@@ -1,5 +1,11 @@
 Post v26.03.0
 -------------
+   - Documented missing ovn-nbctl commands: "mirror-rule-add",
+     "mirror-rule-del", "lr-nat-update-ext-ip",
+     "ha-chassis-group-set-chassis-prio", "lsp-add-router-port",
+     and "lsp-add-localnet-port".  Also documented missing options for
+     "lb-add", "meter-add", "lr-policy-add", and "lr-policy-del", and
+     fixed the "nfg-list" signature.
    - Dynamic Routing:
      * Add support for hub-and-spoke propagation via the "hub-spoke" option
        in dynamic-routing-redistribute settings.

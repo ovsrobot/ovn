@@ -545,10 +545,12 @@
       </p>
       </dd>
 
-      <dt><code>nfg-list</code></dt>
+      <dt><code>nfg-list</code> [<var>nfg</var>]</dt>
       <dd>
         <p>
-          Lists all network function groups.
+          Lists all network function groups.  If a specific network
+          function group <var>nfg</var> is given, only that group is
+          listed.
         </p>
       </dd>
 
@@ -634,7 +636,7 @@
 
     <h2>Meter Commands</h2>
     <dl>
-        <dt><code>meter-add</code> <var>name</var> <var>action</var> <var>rate</var> <var>unit</var> [<var>burst</var>]</dt>
+        <dt>[<code>--fair</code>] [<code>--may-exist</code>] <code>meter-add</code> <var>name</var> <var>action</var> <var>rate</var> <var>unit</var> [<var>burst</var>]</dt>
       <dd>
         <p>
           Adds the specified meter.  <var>name</var> must be a unique
@@ -665,6 +667,18 @@
           Names that start with "__" (two underscores) are reserved for
           internal use by OVN, so <code>ovn-nbctl</code> does not allow
           adding them.
+        </p>
+
+        <p>
+          If <code>--fair</code> is specified, the meter's
+          <code>fair</code> column is set to <code>true</code>, enabling
+          fair bandwidth sharing among rows that reference this meter.
+        </p>
+
+        <p>
+          If <code>--may-exist</code> is specified, adding a meter with
+          a name that already exists will update the existing meter
+          instead of reporting an error.
         </p>
       </dd>
 
@@ -974,6 +988,40 @@
       <dd>
         Detaches the mirror <var>m</var> from the logical port <var>port</var>.
       </dd>
+
+      <dt>[<code>--may-exist</code>] <code>lsp-add-router-port</code>
+          <var>switch</var> <var>port</var> <var>lrp_peer</var></dt>
+      <dd>
+        <p>
+          Creates a new logical switch port named <var>port</var> on
+          <var>switch</var> with type <code>router</code>, sets the
+          <code>router-port</code> option to <var>lrp_peer</var>, and
+          sets addresses to <code>router</code>.
+        </p>
+
+        <p>
+          With <code>--may-exist</code>, it is not an error if the port
+          already exists, as long as it is in the same switch, has the
+          same type, and has the same <code>router-port</code> option.
+        </p>
+      </dd>
+
+      <dt>[<code>--may-exist</code>] <code>lsp-add-localnet-port</code>
+          <var>switch</var> <var>port</var> <var>network</var></dt>
+      <dd>
+        <p>
+          Creates a new logical switch port named <var>port</var> on
+          <var>switch</var> with type <code>localnet</code>, sets the
+          <code>network_name</code> option to <var>network</var>, and
+          sets addresses to <code>unknown</code>.
+        </p>
+
+        <p>
+          With <code>--may-exist</code>, it is not an error if the port
+          already exists, as long as it is in the same switch, has the
+          same type, and has the same <code>network_name</code> option.
+        </p>
+      </dd>
     </dl>
 
     <h2>Forwarding Group Commands</h2>
@@ -1254,7 +1302,8 @@
 
     <dl>
       <dt>[<code>--may-exist</code>] [<code>--bfd</code>]
-          [<code>--route-table</code>=<var>ROUTE_TABLE</var>]
+          [<code>--chain</code>=<var>CHAIN</var>]
+          [<code>--output-port</code>=<var>OUTPUT_PORT</var>]
           <code>lr-policy-add</code>
           <var>router</var> <var>priority</var> <var>match</var>
           <var>action</var> [<var>nexthop</var>[,<var>nexthop</var>,...]]
@@ -1262,16 +1311,18 @@
       <dd>
         <p>
           Add Policy to <var>router</var> which provides a way to configure
-          permit/deny and reroute policies on the router. Permit/deny policies
-          are similar to OVN ACLs, but exist on the logical-router. Reroute
-          policies are needed for service-insertion and service-chaining.
-          <var>nexthop</var> is an optional parameter. It needs to be provided
-          only when <var>action</var> is <var>reroute</var>. Multiple
-          <code>nexthops</code> can be specified for ECMP routing.
-          A policy is uniquely identified by <var>priority</var> and
-          <var>match</var>. Multiple policies can have the same
-          <var>priority</var>. <var>options</var> sets the router policy
-          options as key-value pair.
+          allow, drop, jump, and reroute policies on the router.  Allow and
+          drop policies are similar to OVN ACLs, but exist on the
+          logical-router.  Reroute policies are needed for service-insertion
+          and service-chaining.  The <var>action</var> must be one of
+          <code>allow</code>, <code>drop</code>, <code>jump</code>, or
+          <code>reroute</code>.  <var>nexthop</var> is an optional
+          parameter.  It needs to be provided only when <var>action</var>
+          is <code>reroute</code>.  Multiple <code>nexthops</code> can be
+          specified for ECMP routing.  A policy is uniquely identified by
+          <var>priority</var> and <var>match</var>.  Multiple policies can
+          have the same <var>priority</var>.  <var>options</var> sets the
+          router policy options as key-value pair.
           The supported option is : <code>pkt_mark</code>.
         </p>
 
@@ -1283,9 +1334,14 @@
         </p>
 
         <p>
-          The <code>--route-table</code> option can be used to list the
-          routes assigned to route table <var>ROUTE_TABLE</var> instead of
-          the default <code>&lt;main&gt;</code> table.
+          The <code>--chain</code> option specifies the policy chain name.
+          This is used when the <var>action</var> is <code>jump</code>.
+        </p>
+
+        <p>
+          The <code>--output-port</code> option specifies the output
+          logical router port.  This is only valid when the
+          <var>action</var> is <code>reroute</code>.
         </p>
 
         <p>
@@ -1313,7 +1369,9 @@
           </p>
       </dd>
 
-      <dt>[<code>--if-exists</code>] <code>lr-policy-del</code>
+      <dt>[<code>--if-exists</code>]
+          [<code>--chain</code>=<var>CHAIN</var>]
+          <code>lr-policy-del</code>
           <var>router</var> [<var>{priority | uuid} [match]</var>]</dt>
       <dd>
         <p>
@@ -1329,6 +1387,11 @@
           policy with specified uuid is deleted. It is an error if
           <var>uuid</var> does not exist, unless <code>--if-exists</code>
           is specified.
+        </p>
+
+        <p>
+          If <code>--chain</code> is specified, only policies in the
+          specified chain are considered for deletion.
         </p>
       </dd>
 
@@ -1474,11 +1537,36 @@
       <dd>
         Lists the NATs on <var>router</var>.
       </dd>
+
+      <dt>[<code>--is-exempted</code>] <code>lr-nat-update-ext-ip</code>
+          <var>router</var> <var>type</var> <var>ip</var>
+          <var>address_set</var></dt>
+      <dd>
+        <p>
+          Updates the external IP address set for an existing NAT rule on
+          <var>router</var>.  <var>type</var> must be one of
+          <code>dnat</code>, <code>snat</code>, or
+          <code>dnat_and_snat</code>.  The command finds the matching
+          NAT rule by <var>type</var> and <var>ip</var>, then sets the
+          <code>allowed_ext_ips</code> column of the NAT rule to
+          <var>address_set</var>.
+        </p>
+
+        <p>
+          If <code>--is-exempted</code> is specified, sets
+          <code>exempted_ext_ips</code> instead of
+          <code>allowed_ext_ips</code>.
+        </p>
+
+        <p>
+          It is an error if no matching NAT rule is found.
+        </p>
+      </dd>
     </dl>
 
     <h2>Load Balancer Commands</h2>
     <dl>
-        <dt>[<code>--may-exist</code> | <code>--add-duplicate</code> | <code>--reject</code> | <code>--event</code> | <code>--template</code>] <code>lb-add</code> <var>lb</var> <var>vip</var> <var>ips</var> [<var>protocol</var>]</dt>
+        <dt>[<code>--may-exist</code> | <code>--add-duplicate</code> | <code>--reject</code> | <code>--event</code> | <code>--template</code> | <code>--add-route</code>] <code>lb-add</code> <var>lb</var> <var>vip</var> <var>ips</var> [<var>protocol</var>] [<var>address_family</var>]</dt>
       <dd>
         <p>
          Creates a new load balancer named <var>lb</var> with the provided
@@ -1535,6 +1623,17 @@
          formats, see <code>ovn-nb</code>(5). The following example adds a
          templated load balancer: <code>ovn-nbctl --template lb-add lb1
          ^vip:^vport ^backend udp ipv4</code>.
+        </p>
+
+        <p>
+         If <code>--add-route</code> is specified, a route is automatically
+         added for the load balancer's VIP subnet.
+        </p>
+
+        <p>
+         The optional <var>address_family</var> argument specifies the
+         address family (<code>ipv4</code> or <code>ipv6</code>).  This
+         is primarily used with template load balancers.
         </p>
 
         <p>
@@ -1708,6 +1807,18 @@
         group <code>group</code>. It is an error if <code>chassis</code> does
         not exist.
       </dd>
+
+      <dt><code>ha-chassis-group-set-chassis-prio</code> <var>group</var>
+      <var>chassis</var> <var>priority</var></dt>
+      <dd>
+        <p>
+          Sets the priority of an existing HA chassis <var>chassis</var>
+          within the HA chassis group <var>group</var>.
+          <var>priority</var> must be between <code>0</code> and
+          <code>32767</code>, inclusive.  It is an error if
+          <var>chassis</var> does not exist in <var>group</var>.
+        </p>
+      </dd>
     </dl>
 
     <h2> Control Plane Protection Policy commands</h2>
@@ -1820,6 +1931,31 @@
       <dt><code>mirror-list</code></dt>
       <dd>
         Lists the mirrors.
+      </dd>
+
+      <dt><code>mirror-rule-add</code> <var>mirror_name</var>
+      <var>priority</var> <var>match</var> <var>action</var></dt>
+      <dd>
+        <p>
+          Adds a mirror rule to the mirror named <var>mirror_name</var>.
+          <var>priority</var> is an integer between <code>0</code> and
+          <code>32767</code>, inclusive.  <var>match</var> is a match
+          expression for selecting traffic.  <var>action</var> must be
+          <code>mirror</code> or <code>skip</code>.  It is an error if
+          a duplicate rule already exists on the mirror.
+        </p>
+      </dd>
+
+      <dt><code>mirror-rule-del</code> <var>mirror_name</var>
+      [<var>priority</var> <var>match</var>]</dt>
+      <dd>
+        <p>
+          Deletes mirror rules from the mirror named
+          <var>mirror_name</var>.  If only <var>mirror_name</var> is
+          given, all mirror rules are deleted from that mirror.  If
+          <var>priority</var> and <var>match</var> are also given, only
+          the rule matching both is deleted.
+        </p>
       </dd>
     </dl>
 
