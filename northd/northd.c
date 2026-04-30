@@ -14026,6 +14026,7 @@ build_lrouter_nd_flow(const struct ovn_datapath *od, struct ovn_port *op,
 
 static void
 build_lrouter_nat_arp_nd_flow(const struct ovn_datapath *od,
+                              struct ovn_port *op,
                               struct ovn_nat *nat_entry,
                               struct lflow_table *lflows,
                               const struct shash *meter_groups,
@@ -14033,16 +14034,20 @@ build_lrouter_nat_arp_nd_flow(const struct ovn_datapath *od,
 {
     struct lport_addresses *ext_addrs = &nat_entry->ext_addrs;
     const struct nbrec_nat *nat = nat_entry->nb;
+    if (op && lrp_is_l3dgw(op) && (!op->peer || !op->peer->cr_port)) {
+        return;
+    }
 
+    op = NULL;
     if (nat_entry_is_v6(nat_entry)) {
-        build_lrouter_nd_flow(od, NULL, "nd_na",
+        build_lrouter_nd_flow(od, op, "nd_na",
                               ext_addrs->ipv6_addrs[0].addr_s,
                               ext_addrs->ipv6_addrs[0].sn_addr_s,
                               REG_INPORT_ETH_ADDR, NULL, false, 90,
                               &nat->header_, lflows, meter_groups,
                               lflow_ref);
     } else {
-        build_lrouter_arp_flow(od, NULL,
+        build_lrouter_arp_flow(od, op,
                                ext_addrs->ipv4_addrs[0].addr_s,
                                REG_INPORT_ETH_ADDR, NULL, false, 90,
                                &nat->header_, lflows,
@@ -14113,21 +14118,10 @@ build_lrouter_port_nat_arp_nd_flow(struct ovn_port *op,
                               mac_s, &match, false, 92,
                               &nat->header_, lflows, meter_groups,
                               lflow_ref);
-        build_lrouter_nd_flow(op->od, op, "nd_na",
-                              ext_addrs->ipv6_addrs[0].addr_s,
-                              ext_addrs->ipv6_addrs[0].sn_addr_s,
-                              mac_s, NULL, true, 91,
-                              &nat->header_, lflows, meter_groups,
-                              lflow_ref);
     } else {
         build_lrouter_arp_flow(op->od, op,
                                ext_addrs->ipv4_addrs[0].addr_s,
                                mac_s, &match, false, 92,
-                               &nat->header_, lflows,
-                               lflow_ref);
-        build_lrouter_arp_flow(op->od, op,
-                               ext_addrs->ipv4_addrs[0].addr_s,
-                               mac_s, NULL, true, 91,
                                &nat->header_, lflows,
                                lflow_ref);
     }
@@ -16846,6 +16840,8 @@ build_lrouter_ipv4_default_ttl_expired_flows(
         ds_clear(&ip_ds);
         if (lrp_is_l3dgw(op)) {
             ds_put_cstr(&ip_ds, "ip4.dst <-> ip4.src");
+            ds_put_format(match, "is_chassis_resident(%s) && ",
+                                              op->cr_port->json_key);
         } else {
             ds_put_format(&ip_ds, "ip4.dst = ip4.src; ip4.src = %s",
                           op->lrp_networks.ipv4_addrs[i].addr_s);
@@ -16922,6 +16918,8 @@ build_lrouter_ipv6_default_ttl_expired_flows(
         ds_clear(&ip_ds);
         if (lrp_is_l3dgw(op)) {
             ds_put_cstr(&ip_ds, "ip6.dst <-> ip6.src");
+            ds_put_format(match, "is_chassis_resident(%s) && ",
+                                  op->cr_port->json_key);
         } else {
             ds_put_format(&ip_ds, "ip6.dst = ip6.src; ip6.src = %s",
                           op->lrp_networks.ipv6_addrs[i].addr_s);
@@ -17141,7 +17139,11 @@ build_lrouter_arp_nd_for_datapath(const struct ovn_datapath *od,
         if (nat_entry->type == SNAT) {
             continue;
         }
-        build_lrouter_nat_arp_nd_flow(od, nat_entry, lflows, meter_groups,
+        struct ovn_port *op = NULL;
+        if (nat_entry->l3dgw_port) {
+            op = nat_entry->l3dgw_port;
+        }
+        build_lrouter_nat_arp_nd_flow(od, op, nat_entry, lflows, meter_groups,
                                       lflow_ref);
     }
 
@@ -17157,7 +17159,11 @@ build_lrouter_arp_nd_for_datapath(const struct ovn_datapath *od,
         struct ovn_nat *nat_entry =
             CONTAINER_OF(ovs_list_front(&snat_ip->snat_entries),
                          struct ovn_nat, ext_addr_list_node);
-        build_lrouter_nat_arp_nd_flow(od, nat_entry, lflows, meter_groups,
+        struct ovn_port *op = NULL;
+        if (nat_entry->l3dgw_port) {
+            op = nat_entry->l3dgw_port;
+        }
+        build_lrouter_nat_arp_nd_flow(od, op, nat_entry, lflows, meter_groups,
                                       lflow_ref);
     }
 }
