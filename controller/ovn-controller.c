@@ -170,6 +170,7 @@ static char *unixctl_path;
 struct controller_engine_ctx {
     struct lflow_cache *lflow_cache;
     struct if_status_mgr *if_mgr;
+    unsigned int *ovnsb_expected_cond_seqno;
 };
 
 /* Pending packet to be injected into connected OVS. */
@@ -1145,9 +1146,50 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
      * track that column which should be addressed in the future. */
 }
 
+struct ed_type_datapaths_updated {
+    struct uuidset waiting_sb_cond_update;
+};
+
+static void *
+en_datapaths_updated_init(struct engine_node *node OVS_UNUSED,
+                          struct engine_arg *arg OVS_UNUSED)
+{
+    struct ed_type_datapaths_updated *data = xzalloc(sizeof *data);
+    uuidset_init(&data->waiting_sb_cond_update);
+    return data;
+}
+
+static void
+en_datapaths_updated_cleanup(void *data)
+{
+    struct ed_type_datapaths_updated *sb_data = data;
+    uuidset_destroy(&sb_data->waiting_sb_cond_update);
+}
+
 struct ed_type_ofctrl_is_connected {
     bool connected;
 };
+
+static enum engine_node_state
+en_datapaths_updated_run(struct engine_node *node OVS_UNUSED,
+                         void *data)
+{
+    struct controller_engine_ctx *ctrl_ctx = engine_get_context()->client_ctx;
+    struct ovsdb_idl_txn *ovnsb_idl_txn = engine_get_context()->ovnsb_idl_txn;
+    if (!ovnsb_idl_txn) {
+        return EN_UNCHANGED;
+    }
+    struct ovsdb_idl *ovnsb_idl = ovsdb_idl_txn_get_idl(ovnsb_idl_txn);
+    if (*ctrl_ctx->ovnsb_expected_cond_seqno ==
+            ovsdb_idl_get_condition_seqno(ovnsb_idl)) {
+        struct ed_type_datapaths_updated *dp_data = data;
+        if (!uuidset_is_empty(&dp_data->waiting_sb_cond_update)) {
+            uuidset_clear(&dp_data->waiting_sb_cond_update);
+            return EN_UNCHANGED;
+        }
+    }
+    return EN_UNCHANGED;
+}
 
 static void *
 en_ofctrl_is_connected_init(struct engine_node *node OVS_UNUSED,
@@ -1175,6 +1217,41 @@ en_ofctrl_is_connected_run(struct engine_node *node OVS_UNUSED, void *data)
             ofctrl_seqno_flush();
             if_status_mgr_clear(ctrl_ctx->if_mgr);
         }
+        return EN_UPDATED;
+    }
+    return EN_UNCHANGED;
+}
+
+struct ed_type_sb_cond_seqno {
+    unsigned int last_sb_cond_seqno;
+};
+
+static void *
+en_sb_cond_seqno_init(struct engine_node *node OVS_UNUSED,
+                      struct engine_arg *arg OVS_UNUSED)
+{
+    struct ed_type_sb_cond_seqno *data = xzalloc(sizeof *data);
+    return data;
+}
+
+static void en_sb_cond_seqno_cleanup (void *data OVS_UNUSED)
+{
+}
+
+static enum engine_node_state
+en_sb_cond_seqno_run(struct engine_node *node OVS_UNUSED, void *data)
+{
+    struct ed_type_sb_cond_seqno *sb_seqno_data = data;
+    struct ovsdb_idl_txn *ovnsb_idl_txn = engine_get_context()->ovnsb_idl_txn;
+    if (!ovnsb_idl_txn) {
+        return EN_UNCHANGED;
+    }
+
+    unsigned int curr_seqno =
+        ovsdb_idl_get_condition_seqno(ovsdb_idl_txn_get_idl(ovnsb_idl_txn));
+
+    if (sb_seqno_data->last_sb_cond_seqno != curr_seqno) {
+        sb_seqno_data->last_sb_cond_seqno = curr_seqno;
         return EN_UPDATED;
     }
     return EN_UNCHANGED;
@@ -1512,6 +1589,7 @@ en_runtime_data_clear_tracked_data(void *data_)
 }
 
 static void *
+
 en_runtime_data_init(struct engine_node *node OVS_UNUSED,
                      struct engine_arg *arg OVS_UNUSED)
 {
@@ -6745,6 +6823,50 @@ evpn_arp_vtep_binding_handler(struct engine_node *node, void *data OVS_UNUSED)
     return EN_UNHANDLED;
 }
 
+static enum engine_input_handler_result
+new_datapaths_handler(struct engine_node *node,
+                                    void *data)
+{
+    struct ed_type_datapaths_updated *dp_data = data;
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+
+    enum engine_input_handler_result status = EN_HANDLED_UNCHANGED;
+    struct tracked_datapath *tdp;
+    HMAP_FOR_EACH_SAFE (tdp, node, &rt_data->tracked_dp_bindings) {
+        if (tdp->tracked_type == TRACKED_RESOURCE_NEW) {
+            uuidset_insert(&dp_data->waiting_sb_cond_update,
+                           &tdp->dp->header_.uuid);
+            status = EN_HANDLED_UPDATED;
+        }
+    }
+    return status;
+}
+
+static enum engine_input_handler_result
+datapaths_update_sb_cond_handler(struct engine_node *node OVS_UNUSED,
+                                 void *data)
+{
+    struct controller_engine_ctx *ctrl_ctx = engine_get_context()->client_ctx;
+    struct ovsdb_idl_txn *ovnsb_idl_txn = engine_get_context()->ovnsb_idl_txn;
+    if (!ovnsb_idl_txn) {
+        return EN_HANDLED_UNCHANGED;
+    }
+    struct ovsdb_idl *ovnsb_idl = ovsdb_idl_txn_get_idl(ovnsb_idl_txn);
+    if (ovnsb_idl_txn) {
+        if (*ctrl_ctx->ovnsb_expected_cond_seqno ==
+            ovsdb_idl_get_condition_seqno(ovnsb_idl)) {
+            struct ed_type_datapaths_updated *dp_data = data;
+
+            if (!uuidset_is_empty(&dp_data->waiting_sb_cond_update)) {
+                uuidset_clear(&dp_data->waiting_sb_cond_update);
+                return EN_HANDLED_UPDATED;
+            }
+        }
+    }
+    return EN_HANDLED_UNCHANGED;
+}
+
 /* Define engine node functions for nodes that represent SB tables.
  *
  * en_sb_<TABLE_NAME>_run()
@@ -6867,6 +6989,8 @@ static ENGINE_NODE(neighbor_exchange_status);
 static ENGINE_NODE(evpn_vtep_binding, CLEAR_TRACKED_DATA);
 static ENGINE_NODE(evpn_fdb, CLEAR_TRACKED_DATA);
 static ENGINE_NODE(evpn_arp, CLEAR_TRACKED_DATA);
+static ENGINE_NODE(datapaths_updated);
+static ENGINE_NODE(sb_cond_seqno);
 
 static void
 inc_proc_ovn_controller_init(
@@ -6889,6 +7013,8 @@ inc_proc_ovn_controller_init(
     engine_add_input(&en_template_vars, &en_sb_chassis_template_var,
                      template_vars_sb_chassis_template_var_handler);
 
+    engine_add_input(&en_datapaths_updated, &en_sb_cond_seqno,
+                     datapaths_update_sb_cond_handler);
     engine_add_input(&en_lb_data, &en_sb_load_balancer,
                      lb_data_sb_load_balancer_handler);
     engine_add_input(&en_lb_data, &en_template_vars,
@@ -6974,6 +7100,9 @@ inc_proc_ovn_controller_init(
                      pflow_output_debug_handler);
     engine_add_input(&en_pflow_output, &en_sb_sb_global,
                      pflow_output_debug_handler);
+
+    engine_add_input(&en_datapaths_updated, &en_runtime_data,
+                    new_datapaths_handler);
 
     engine_add_input(&en_northd_options, &en_sb_sb_global,
                      en_northd_options_sb_sb_global_handler);
@@ -7163,6 +7292,7 @@ inc_proc_ovn_controller_init(
     engine_add_input(&en_acl_id, &en_sb_acl_id, NULL);
     engine_add_input(&en_controller_output, &en_acl_id,
                      controller_output_acl_id_handler);
+    engine_add_input(&en_controller_output, &en_datapaths_updated, NULL);
 
     struct engine_arg engine_arg = {
         .sb_idl = sb_idl_loop->idl,
@@ -7556,6 +7686,8 @@ main(int argc, char *argv[])
         engine_get_internal_data(&en_evpn_fdb);
     struct ed_type_evpn_arp *earp_data =
         engine_get_internal_data(&en_evpn_arp);
+    struct ed_type_datapaths_updated *dp_updated_data =
+        engine_get_internal_data(&en_datapaths_updated);
 
     ofctrl_init(&lflow_output_data->group_table,
                 &lflow_output_data->meter_table);
@@ -7659,6 +7791,7 @@ main(int argc, char *argv[])
     struct controller_engine_ctx ctrl_engine_ctx = {
         .lflow_cache = lflow_cache_create(),
         .if_mgr = if_status_mgr_create(),
+        .ovnsb_expected_cond_seqno = &ovnsb_expected_cond_seqno,
     };
     struct if_status_mgr *if_mgr = ctrl_engine_ctx.if_mgr;
 
@@ -7915,6 +8048,7 @@ main(int argc, char *argv[])
 
                     bool recompute_allowed = (ovnsb_idl_txn &&
                                               !ofctrl_has_backlog());
+
                     engine_run(recompute_allowed);
                     tracked_acl_ids = engine_get_data(&en_acl_id);
 
@@ -8085,11 +8219,23 @@ main(int argc, char *argv[])
                         runtime_data ? &runtime_data->lbinding_data : NULL;
                     stopwatch_start(IF_STATUS_MGR_UPDATE_STOPWATCH_NAME,
                                     time_msec());
+                    if (sb_monitor_all && dp_updated_data) {
+                        uuidset_clear(
+                            &dp_updated_data->waiting_sb_cond_update);
+                    }
+
+                    struct uuidset *waiting_sb_cond_update = dp_updated_data ?
+                        &dp_updated_data->waiting_sb_cond_update
+                        : NULL;
                     if_status_mgr_update(if_mgr, binding_data, chassis,
                                          ovsrec_interface_table_get(
                                                     ovs_idl_loop.idl),
                                          sbrec_port_binding_table_get(
                                                     ovnsb_idl_loop.idl),
+                                         runtime_data ?
+                                               &runtime_data->local_datapaths
+                                               : NULL,
+                                         waiting_sb_cond_update,
                                          !ovs_idl_txn,
                                          !ovnsb_idl_txn);
                     stopwatch_stop(IF_STATUS_MGR_UPDATE_STOPWATCH_NAME,
