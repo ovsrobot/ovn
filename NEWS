@@ -3,6 +3,13 @@ Post v26.03.0
    - Dynamic Routing:
      * Add support for hub-and-spoke propagation via the "hub-spoke" option
        in dynamic-routing-redistribute settings.
+   - Fixed Load_Balancer health checks for backends referenced via a
+     Logical_Switch_Port whose type is "external" on a Logical_Switch that
+     also has a localnet port (typical Neutron / ovn-octavia-provider
+     baremetal pool member configuration).  Previously such backends
+     remained permanently offline in Service_Monitor.status because the
+     per-backend reply punt lflow's "inport == <backend_lsp>" match did
+     not fit traffic that re-enters br-int through the localnet port.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
