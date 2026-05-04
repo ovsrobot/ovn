@@ -20672,3 +20672,89 @@ check_column "$global_svc_mon_mac" sb:Service_Monitor src_mac port=2
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV_PARALLELIZATION([
+AT_SETUP([Load balancer health checks - external LSP backend on localnet LS])
+ovn_start
+
+dnl Topology:
+dnl   lr0  --  ls-tenant (vm-port: type="", 10.0.0.10)
+dnl     \---  ls-prov   (bm-port: type=external, 192.168.0.10
+dnl                       MAC 02:bb:bb:00:00:01;
+dnl                      provnet-physnet1: type=localnet)
+dnl
+dnl LB lb0 attached to lr0:
+dnl   vip 10.10.10.10:80 -> 10.0.0.10:80,192.168.0.10:80 (tcp)
+dnl   ip_port_mappings: 10.0.0.10  = vm-port:10.0.0.1
+dnl                     192.168.0.10 = bm-port:192.168.0.1
+dnl
+dnl Expectation:
+dnl   1) On ls-tenant the existing per-backend reply lflow is emitted
+dnl      with `inport == "vm-port"`.
+dnl   2) On ls-prov  the existing per-backend reply lflow is emitted
+dnl      with `inport == "bm-port"` AND, additionally, the new lflow
+dnl      added by this commit is emitted with `eth.src == <bm-mac>`
+dnl      and action `outport = "bm-port"; handle_svc_check(outport);
+dnl      outport = "";`.
+
+check ovn-nbctl                                                 \
+    -- lr-add lr0                                               \
+      -- lrp-add lr0 lr0-tenant 02:00:00:00:01:01 10.0.0.1/24   \
+      -- lrp-add lr0 lr0-prov   02:00:00:00:02:01 192.168.0.1/24
+
+check ovn-nbctl                                                 \
+    -- ls-add ls-tenant                                         \
+      -- lsp-add ls-tenant ls-tenant-lr0                        \
+      -- lsp-set-type      ls-tenant-lr0 router                 \
+      -- lsp-set-options   ls-tenant-lr0 router-port=lr0-tenant \
+      -- lsp-set-addresses ls-tenant-lr0 router                 \
+      -- lsp-add ls-tenant vm-port                              \
+      -- lsp-set-addresses vm-port "02:aa:aa:00:00:01 10.0.0.10"
+
+check ovn-nbctl                                                 \
+    -- ls-add ls-prov                                           \
+      -- lsp-add ls-prov ls-prov-lr0                            \
+      -- lsp-set-type      ls-prov-lr0 router                   \
+      -- lsp-set-options   ls-prov-lr0 router-port=lr0-prov     \
+      -- lsp-set-addresses ls-prov-lr0 router                   \
+      -- lsp-add ls-prov bm-port                                \
+      -- lsp-set-type      bm-port external                     \
+      -- lsp-set-addresses bm-port "02:bb:bb:00:00:01 192.168.0.10" \
+      -- lsp-add ls-prov provnet-physnet1                       \
+      -- lsp-set-type      provnet-physnet1 localnet            \
+      -- lsp-set-addresses provnet-physnet1 unknown             \
+      -- lsp-set-options   provnet-physnet1 network_name=physnet1
+
+check ovn-nbctl --wait=sb lb-add lb0 \
+    10.10.10.10:80 10.0.0.10:80,192.168.0.10:80 tcp
+lb0=$(fetch_column nb:Load_Balancer _uuid name=lb0)
+check ovn-nbctl                                                          \
+    -- set load_balancer $lb0 ip_port_mappings:10.0.0.10=vm-port:10.0.0.1 \
+    -- set load_balancer $lb0 ip_port_mappings:192.168.0.10=bm-port:192.168.0.1
+
+check_uuid ovn-nbctl --id=@hc create Load_Balancer_Health_Check    \
+    vip="10.10.10.10\:80" -- add Load_Balancer $lb0 health_check @hc
+check ovn-nbctl --wait=sb lr-lb-add lr0 lb0
+
+dnl Existing per-backend reply lflow on the tenant (VM) datapath.
+AT_CHECK([ovn-sbctl lflow-list ls-tenant | grep handle_svc_check | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=110  , match=(eth.dst == $svc_monitor_mac && (tcp || icmp || icmp6)), action=(handle_svc_check(inport);)
+  table=??(ls_in_l2_lkup      ), priority=110  , match=(inport == "vm-port" && ip4.dst == 10.0.0.1 && ip4.src == 10.0.0.10 && eth.dst == 02:00:00:00:01:01 && tcp.src == 80), action=(handle_svc_check(inport);)
+])
+
+dnl On the provider datapath, BOTH the existing per-backend reply lflow
+dnl AND the new external-LSP reply lflow added by this commit must be
+dnl present.  The new lflow uses eth.src to identify the backend (so it
+dnl matches replies that re-enter via the localnet port) and forces
+dnl MFF_LOG_INPORT to the backend LSP's tunnel_key by going through
+dnl outport, then resets outport to "" to avoid reflecting the reply
+dnl back to the backend.
+AT_CHECK([ovn-sbctl lflow-list ls-prov | grep handle_svc_check | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_l2_lkup      ), priority=110  , match=(eth.dst == $svc_monitor_mac && (tcp || icmp || icmp6)), action=(handle_svc_check(inport);)
+  table=??(ls_in_l2_lkup      ), priority=110  , match=(eth.src == 02:bb:bb:00:00:01 && ip4.dst == 192.168.0.1 && ip4.src == 192.168.0.10 && eth.dst == 02:00:00:00:02:01 && tcp.src == 80), action=(outport = "bm-port"; handle_svc_check(outport); outport = "";)
+  table=??(ls_in_l2_lkup      ), priority=110  , match=(inport == "bm-port" && ip4.dst == 192.168.0.1 && ip4.src == 192.168.0.10 && eth.dst == 02:00:00:00:02:01 && tcp.src == 80), action=(handle_svc_check(inport);)
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])

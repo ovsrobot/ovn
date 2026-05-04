@@ -8962,6 +8962,79 @@ build_lb_health_check_response_lflows(
             ovn_lflow_add(lflows, peer_switch_od, S_SWITCH_IN_L2_LKUP, 110,
                           ds_cstr(match), "handle_svc_check(inport);",
                           lb_dps->lflow_ref, WITH_CTRL_METER(meter));
+
+            /* The lflow above only matches replies whose ingress logical
+             * inport is the backend LSP itself.  This holds for backends
+             * behind tunnels or local OVS ports.  For backends whose LSP
+             * is type=external on a Logical_Switch that has a localnet
+             * port (typical for Neutron / ovn-octavia-provider baremetal
+             * pool members on a provider VLAN), the reply re-enters
+             * br-int through the localnet port; MFF_LOG_INPORT therefore
+             * holds the localnet LSP's tunnel_key and the lflow above
+             * never matches.  pinctrl_handle_svc_check() then fails its
+             * (dp_key, port_key) lookup and Service_Monitor.status stays
+             * 'offline' indefinitely, even though the backend is fully
+             * reachable on the wire.
+             *
+             * Emit an additional reply punt lflow that:
+             *  - identifies the backend by eth.src instead of inport,
+             *  - loads the backend LSP's tunnel_key into MFF_LOG_INPORT
+             *    via 'outport = "<lsp>"; handle_svc_check(outport);'
+             *    (the latter borrows MFF_LOG_OUTPORT's value into
+             *    MFF_LOG_INPORT for the controller dispatch),
+             *  - resets outport to "" so the cleared MFF_LOG_OUTPORT
+             *    does not leak into egress and reflect the reply back
+             *    to the backend.
+             */
+            if (vector_is_empty(&peer_switch_od->localnet_ports)) {
+                continue;
+            }
+            struct ovn_port *backend_op = ovn_port_find(
+                &peer_switch_od->ports, backend_nb->logical_port);
+            if (!backend_op || !backend_op->nbsp || !backend_op->nbsp->type
+                || strcmp(backend_op->nbsp->type, "external")
+                || !backend_op->n_lsp_addrs) {
+                continue;
+            }
+
+            ds_clear(match);
+            ds_clear(action);
+
+            const char *bm_mac = backend_op->lsp_addrs[0].ea_s;
+            if (addr_is_ipv6(backend_nb->svc_mon_src_ip)) {
+                ds_put_format(match, "eth.src == %s && ip6.dst == %s && "
+                              "ip6.src == %s && eth.dst == %s && ",
+                              bm_mac,
+                              backend_nb->svc_mon_src_ip,
+                              backend->ip_str,
+                              backend_nb->svc_mon_lrp->lrp_networks.ea_s);
+                if (!strcmp(protocol, "tcp")) {
+                    ds_put_format(match, "tcp.src == %s",
+                                  backend->port_str);
+                } else {
+                    ds_put_cstr(match, "icmp6.type == 1");
+                }
+            } else {
+                ds_put_format(match, "eth.src == %s && ip4.dst == %s && "
+                              "ip4.src == %s && eth.dst == %s && ",
+                              bm_mac,
+                              backend_nb->svc_mon_src_ip,
+                              backend->ip_str,
+                              backend_nb->svc_mon_lrp->lrp_networks.ea_s);
+                if (!strcmp(protocol, "tcp")) {
+                    ds_put_format(match, "tcp.src == %s",
+                                  backend->port_str);
+                } else {
+                    ds_put_cstr(match, "icmp4.type == 3");
+                }
+            }
+            ds_put_format(action,
+                          "outport = \"%s\"; handle_svc_check(outport); "
+                          "outport = \"\";",
+                          backend_nb->logical_port);
+            ovn_lflow_add(lflows, peer_switch_od, S_SWITCH_IN_L2_LKUP, 110,
+                          ds_cstr(match), ds_cstr(action),
+                          lb_dps->lflow_ref, WITH_CTRL_METER(meter));
         }
     }
 }
