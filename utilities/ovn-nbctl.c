@@ -289,64 +289,62 @@ General commands:\n\
   show ROUTER               print overview of database contents for ROUTER\n\
 \n\
 Logical switch commands:\n\
+  [--may-exist | --add-duplicate]\n\
   ls-add [SWITCH]           create a logical switch named SWITCH\n\
+  [--if-exists]\n\
   ls-del SWITCH             delete SWITCH and all its ports\n\
   ls-list                   print the names of all logical switches\n\
 \n\
 ACL commands:\n\
-  [--type={switch | port-group}] [--log] [--severity=SEVERITY] [--name=NAME] [--may-exist]\n\
-  acl-add {SWITCH | PORTGROUP} DIRECTION PRIORITY MATCH ACTION [NETWORK-FUNCTION-GROUP]\n\
+  [--type={switch | port-group}] [--log] [--severity=SEVERITY]\n\
+  [--name=NAME] [--meter=METER] [--label=LABEL] [--may-exist]\n\
+  [--apply-after-lb] [--tier=TIER]\n\
+  [--sample-new=COLLECTOR_SET_ID] [--sample-est=COLLECTOR_SET_ID]\n\
+  acl-add {SWITCH | PORTGROUP} DIRECTION PRIORITY MATCH ACTION\n\
+          [NETWORK-FUNCTION-GROUP]\n\
                             add an ACL to SWITCH/PORTGROUP\n\
-  [--type={switch | port-group}]\n\
+  [--type={switch | port-group}] [--tier=TIER]\n\
   acl-del {SWITCH | PORTGROUP} [DIRECTION [PRIORITY MATCH]]\n\
                             remove ACLs from SWITCH/PORTGROUP\n\
-  [--type={switch | port-group}]\n\
+  [--type={switch | port-group}] [--all]\n\
   acl-list {SWITCH | PORTGROUP}\n\
-                            print ACLs for SWITCH\n\
+                            print ACLs for SWITCH/PORTGROUP\n\
 \n\
 QoS commands:\n\
-  qos-add SWITCH DIRECTION PRIORITY MATCH [rate=RATE [burst=BURST]] [dscp=DSCP] [mark=MARK]\n\
-                            add an QoS rule to SWITCH\n\
+  [--may-exist]\n\
+  qos-add SWITCH DIRECTION PRIORITY MATCH [rate=RATE [burst=BURST]]\n\
+          [dscp=DSCP] [mark=MARK]\n\
+                            add a QoS rule to SWITCH\n\
   qos-del SWITCH [{DIRECTION | UUID} [PRIORITY MATCH]]\n\
                             remove QoS rules from SWITCH\n\
   qos-list SWITCH           print QoS rules for SWITCH\n\
 \n\
 Mirror commands:\n\
-  mirror-add NAME TYPE [INDEX] FILTER {IP | MIRROR-ID| TARGET-PORT} \n\
+  [--may-exist]\n\
+  mirror-add NAME TYPE [INDEX] FILTER DEST\n\
                             add a mirror with given name\n\
-                            specify TYPE 'gre', 'erspan', 'local'\n\
-                                or 'lport'.\n\
-                            specify the tunnel INDEX value\n\
-                                (indicates key if GRE\n\
-                                 erpsan_idx if ERSPAN)\n\
-                            specify FILTER for mirroring selection\n\
-                                'to-lport' / 'from-lport' / 'both'\n\
-                            specify Sink / Destination i.e. Remote IP, or a\n\
-                                local interface with external-ids:mirror-id\n\
-                                matching MIRROR-ID\n\
-                                In case of lport type specify logical switch\n\
-                                port, which is a mirror target.\n\
   mirror-del [NAME]         remove mirrors\n\
   mirror-list               print mirrors\n\
-  mirror-rule-add MIRROR-NAME PRIORITY MATCH ACTION \n\
-                            add a mirror rule selection to given lport\n\
-                            mirror.\n\
-                            specify MATCH for selecting mirrored traffic.\n\
-                            specify ACTION 'mirror' or 'skip'.\n\
-  mirror-rule-del MIRROR-NAME [PRIORITY | MATCH] remove mirrors\n\
+  mirror-rule-add MIRROR-NAME PRIORITY MATCH ACTION\n\
+                            add a mirror rule to given mirror\n\
+                            ACTION must be 'mirror' or 'skip'\n\
+  mirror-rule-del MIRROR-NAME [PRIORITY MATCH]\n\
+                            remove mirror rules from a mirror\n\
 \n\
 Meter commands:\n\
-  [--fair]\n\
+  [--fair] [--may-exist]\n\
   meter-add NAME ACTION RATE UNIT [BURST]\n\
                             add a meter\n\
   meter-del [NAME]          remove meters\n\
   meter-list                print meters\n\
 \n\
 Logical switch port commands:\n\
+  [--may-exist]\n\
   lsp-add SWITCH PORT       add logical port PORT on SWITCH\n\
   lsp-add SWITCH PORT PARENT TAG\n\
                             add logical port PORT on SWITCH with PARENT\n\
                             on TAG\n\
+  [--if-exists]\n\
   lsp-del PORT              delete PORT from its attached switch\n\
   lsp-list SWITCH           print the names of all logical ports on SWITCH\n\
   lsp-get-parent PORT       get the parent of PORT if set\n\
@@ -363,7 +361,8 @@ Logical switch port commands:\n\
                             ('enabled' or 'disabled')\n\
   lsp-get-enabled PORT      get administrative state PORT\n\
                             ('enabled' or 'disabled')\n\
-  lsp-set-type PORT TYPE    set the type for PORT\n\
+  lsp-set-type PORT TYPE [peer=PEER]\n\
+                            set the type for PORT\n\
   lsp-get-type PORT         get the type for PORT\n\
   lsp-set-options PORT KEY=VALUE [KEY=VALUE]...\n\
                             set options related to the type of PORT\n\
@@ -375,50 +374,65 @@ Logical switch port commands:\n\
                             set dhcpv6 options for PORT\n\
   lsp-get-dhcpv6-options PORT  get the dhcpv6 options for PORT\n\
   lsp-get-ls PORT           get the logical switch which the port belongs to\n\
+  [--may-exist]\n\
   lsp-attach-mirror PORT MIRROR   attach source PORT to MIRROR\n\
   lsp-detach-mirror PORT MIRROR   detach source PORT from MIRROR\n\
-  lsp-add-router-port LS PORT LRP_PEER\n\
-                                    Create LSP of type router with\n\
-                                    router-port set to LRP_PEER\n\
-  lsp-add-localnet-port LS PORT NETWORK\n\
-                                    Create LSP of type localnet with\n\
-                                    network_name set to NETWORK\n\
+  [--may-exist]\n\
+  lsp-add-router-port SWITCH PORT LRP_PEER\n\
+                            create LSP of type router with\n\
+                            router-port set to LRP_PEER\n\
+  [--may-exist]\n\
+  lsp-add-localnet-port SWITCH PORT NETWORK\n\
+                            create LSP of type localnet with\n\
+                            network_name set to NETWORK\n\
 \n\
 Forwarding group commands:\n\
   [--liveness]\n\
   fwd-group-add GROUP SWITCH VIP VMAC PORTS...\n\
                             add a forwarding group on SWITCH\n\
+  [--if-exists]\n\
   fwd-group-del GROUP       delete a forwarding group\n\
-  fwd-group-list [SWITCH]   print forwarding groups\n\
+  fwd-group-list [GROUP]    print forwarding groups\n\
 \n\
 Network function group commands:\n\
+  [--may-exist]\n\
   nfg-add NETWORK-FUNCTION-GROUP ID MODE [NETWORK-FUNCTION]...\n\
                             create a network-function-group\n\
+  [--if-exists]\n\
   nfg-del NETWORK-FUNCTION-GROUP\n\
                             delete a network-function-group\n\
-  nfg-list print all network-function-groups\n\
+  nfg-list [NETWORK-FUNCTION-GROUP]\n\
+                            print network-function-groups\n\
+  [--may-exist]\n\
   nfg-add-nf NETWORK-FUNCTION-GROUP NETWORK-FUNCTION\n\
                             add a network-function to a\n\
                             network-function-group\n\
+  [--if-exists]\n\
   nfg-del-nf NETWORK-FUNCTION-GROUP NETWORK-FUNCTION\n\
                             delete a network-function from a\n\
                             network-function-group\n\
 \n\
 Network function commands:\n\
+  [--may-exist]\n\
   nf-add NETWORK-FUNCTION ID PORT-IN PORT-OUT\n\
                            create a network-function\n\
+  [--if-exists]\n\
   nf-del NETWORK-FUNCTION  delete a network-function\n\
   nf-list                  print all network-functions\n\
 \n\n",program_name, program_name);
     printf("\
 Logical router commands:\n\
+  [--may-exist | --add-duplicate]\n\
   lr-add [ROUTER]           create a logical router named ROUTER\n\
+  [--if-exists]\n\
   lr-del ROUTER             delete ROUTER and all its ports\n\
   lr-list                   print the names of all logical routers\n\
 \n\
 Logical router port commands:\n\
-  lrp-add ROUTER PORT MAC [NETWORK]... [peer=PEER]\n\
+  [--may-exist]\n\
+  lrp-add ROUTER PORT MAC [NETWORK]... [COLUMN[:KEY]=VALUE]...\n\
                             add logical port PORT on ROUTER\n\
+  [--may-exist]\n\
   lrp-set-gateway-chassis PORT CHASSIS [PRIORITY]\n\
                             set gateway chassis for port PORT\n\
   lrp-set-options PORT KEY=VALUE [KEY=VALUE]...\n\
@@ -428,6 +442,7 @@ Logical router port commands:\n\
   lrp-get-gateway-chassis PORT\n\
                             print the names of all gateway chassis on PORT\n\
                             with PRIORITY\n\
+  [--if-exists]\n\
   lrp-del PORT              delete PORT from its attached router\n\
   lrp-list ROUTER           print the names of all ports on ROUTER\n\
   lrp-set-enabled PORT STATE\n\
@@ -445,53 +460,59 @@ Logical router port commands:\n\
                             ('overlay' or 'bridged')\n\
 \n\
 Route commands:\n\
-  [--policy=POLICY]\n\
-  [--ecmp]\n\
-  [--ecmp-symmetric-reply]\n\
-  [--route-table=ROUTE_TABLE]\n\
-  [--bfd]\n\
+  [--may-exist] [--policy=POLICY] [--ecmp] [--ecmp-symmetric-reply]\n\
+  [--route-table=ROUTE_TABLE] [--bfd]\n\
   lr-route-add ROUTER PREFIX NEXTHOP [PORT]\n\
                             add a route to ROUTER\n\
-  [--policy=POLICY]\n\
-  [--route-table=ROUTE_TABLE]\n\
+  [--if-exists] [--policy=POLICY] [--route-table=ROUTE_TABLE]\n\
   lr-route-del ROUTER [PREFIX [NEXTHOP [PORT]]]\n\
                             remove routes from ROUTER\n\
   [--route-table=ROUTE_TABLE]\n\
   lr-route-list ROUTER      print routes for ROUTER\n\
 \n\
 Policy commands:\n\
-  [--bfd]\n\
-  lr-policy-add ROUTER PRIORITY MATCH ACTION [NEXTHOP,[NEXTHOP,...]] \
-[OPTIONS KEY=VALUE ...] \n\
-                            add a policy to router\n\
+  [--may-exist] [--bfd] [--chain=CHAIN] [--output-port=OUTPUT_PORT]\n\
+  lr-policy-add ROUTER PRIORITY MATCH ACTION [NEXTHOP,[NEXTHOP,...]]\n\
+                [OPTIONS KEY=VALUE ...]\n\
+                            add a policy to ROUTER\n\
+  [--if-exists] [--chain=CHAIN]\n\
   lr-policy-del ROUTER [{PRIORITY | UUID} [MATCH]]\n\
                             remove policies from ROUTER\n\
   lr-policy-list ROUTER     print policies for ROUTER\n\
 \n\n");
     printf("\
 NAT commands:\n\
-  [--stateless]\n\
-  [--portrange]\n\
-  [--add-route]\n\
-  [--gateway-port=GATEWAY_PORT]\n\
-  lr-nat-add ROUTER TYPE EXTERNAL_IP LOGICAL_IP [LOGICAL_PORT EXTERNAL_MAC]\n\
-                            [EXTERNAL_PORT_RANGE]\n\
+  [--may-exist] [--stateless] [--portrange] [--add-route]\n\
+  [--gateway-port=GATEWAY_PORT] [--priority=PRIORITY] [--match=MATCH]\n\
+  lr-nat-add ROUTER TYPE EXTERNAL_IP LOGICAL_IP\n\
+             [LOGICAL_PORT EXTERNAL_MAC] [EXTERNAL_PORT_RANGE]\n\
                             add a NAT to ROUTER\n\
+  [--if-exists] [--match=MATCH]\n\
   lr-nat-del ROUTER [TYPE [IP] [GATEWAY_PORT]]\n\
                             remove NATs from ROUTER\n\
   lr-nat-list ROUTER        print NATs for ROUTER\n\
+  [--is-exempted]\n\
+  lr-nat-update-ext-ip ROUTER TYPE IP ADDRESS_SET\n\
+                            update external IP address set for a NAT rule\n\
 \n\
 LB commands:\n\
-  lb-add LB VIP[:PORT] IP[:PORT]... [PROTOCOL]\n\
+  [--may-exist | --add-duplicate] [--reject] [--event] [--template]\n\
+  [--add-route]\n\
+  lb-add LB VIP[:PORT] IP[:PORT]... [PROTOCOL] [ADDRESS_FAMILY]\n\
                             create a load-balancer or add a VIP to an\n\
                             existing load balancer\n\
+  [--if-exists]\n\
   lb-del LB [VIP]           remove a load-balancer or just the VIP from\n\
                             the load balancer\n\
   lb-list [LB]              print load-balancers\n\
+  [--may-exist]\n\
   lr-lb-add ROUTER LB       add a load-balancer to ROUTER\n\
+  [--if-exists]\n\
   lr-lb-del ROUTER [LB]     remove load-balancers from ROUTER\n\
   lr-lb-list ROUTER         print load-balancers\n\
+  [--may-exist]\n\
   ls-lb-add SWITCH LB       add a load-balancer to SWITCH\n\
+  [--if-exists]\n\
   ls-lb-del SWITCH [LB]     remove load-balancers from SWITCH\n\
   ls-lb-list SWITCH         print load-balancers\n\
 \n\
@@ -500,11 +521,10 @@ DHCP Options commands:\n\
                            create a DHCP options row with CIDR\n\
   dhcp-options-del DHCP_OPTIONS_UUID\n\
                            delete DHCP_OPTIONS_UUID\n\
-  dhcp-options-list        \n\
-                           lists the DHCP_Options rows\n\
-  dhcp-options-set-options DHCP_OPTIONS_UUID  KEY=VALUE [KEY=VALUE]...\n\
+  dhcp-options-list        lists the DHCP_Options rows\n\
+  dhcp-options-set-options DHCP_OPTIONS_UUID KEY=VALUE [KEY=VALUE]...\n\
                            set DHCP options for DHCP_OPTIONS_UUID\n\
-  dhcp-options-get-options DHCO_OPTIONS_UUID \n\
+  dhcp-options-get-options DHCP_OPTIONS_UUID\n\
                            displays the DHCP options for DHCP_OPTIONS_UUID\n\
 \n\
 Connection commands:\n\
@@ -516,50 +536,57 @@ Connection commands:\n\
 SSL/TLS commands:\n\
   get-ssl                     print the SSL/TLS configuration\n\
   del-ssl                     delete the SSL/TLS configuration\n\
-  set-ssl PRIV-KEY CERT CA-CERT [SSL-PROTOS [SSL-CIPHERS [SSL-CIPHERSUITES]]] \
-set the SSL/TLS configuration\n\
+  [--bootstrap]\n\
+  set-ssl PRIV-KEY CERT CA-CERT [SSL-PROTOS [SSL-CIPHERS [SSL-CIPHERSUITES]]]\n\
+                              set the SSL/TLS configuration\n\
+\n\
 Port group commands:\n\
-  pg-add PG [PORTS]           Create port group PG with optional PORTS\n\
-  pg-set-ports PG PORTS       Set PORTS on port group PG\n\
-  pg-del PG                   Delete port group PG\n\
-  pg-get-ports PG             Get PORTS on port group PG\n\
+  pg-add PG [PORTS]           create port group PG with optional PORTS\n\
+  pg-set-ports PG PORTS       set PORTS on port group PG\n\
+  pg-del PG                   delete port group PG\n\
+  pg-get-ports PG             get PORTS on port group PG\n\
+\n\
 HA chassis group commands:\n\
-  ha-chassis-group-add GRP    Create an HA chassis group GRP\n\
-  ha-chassis-group-del GRP    Delete the HA chassis group GRP\n\
-  ha-chassis-group-list [GRP] Print the supplied HA chassis group or all\n\
+  ha-chassis-group-add GRP    create an HA chassis group GRP\n\
+  ha-chassis-group-del GRP    delete the HA chassis group GRP\n\
+  ha-chassis-group-list [GRP] print the supplied HA chassis group or all\n\
                               if none supplied\n\
-  ha-chassis-group-add-chassis GRP CHASSIS PRIORITY Adds an HA\
-chassis with mandatory PRIORITY to the HA chassis group GRP\n\
-  ha-chassis-group-remove-chassis GRP CHASSIS Removes the HA chassis\
-CHASSIS from the HA chassis group GRP\n\
+  ha-chassis-group-add-chassis GRP CHASSIS PRIORITY\n\
+                              add an HA chassis with PRIORITY to GRP\n\
+  ha-chassis-group-remove-chassis GRP CHASSIS\n\
+                              remove the HA chassis CHASSIS from GRP\n\
+  ha-chassis-group-set-chassis-prio GRP CHASSIS PRIORITY\n\
+                              set PRIORITY of CHASSIS in GRP\n\
 \n\
 Control Plane Protection Policy commands:\n\
   copp-add NAME PROTO METER\n\
-                            Add a copp policy for PROTO packets on NAME\n\
+                            add a copp policy for PROTO packets on NAME\n\
                             CoPP policy based on an existing METER.\n\
   copp-del NAME [PROTO]\n\
-                            Delete the copp policy for PROTO packets for\n\
+                            delete the copp policy for PROTO packets for\n\
                             NAME copp. If PROTO is not specified, delete all\n\
                             copp policies defined for NAME.\n\
   copp-list NAME\n\
-                            List all copp policies defined for control\n\
+                            list all copp policies defined for control\n\
                             protocols NAME.\n\
   ls-copp-add NAME SWITCH\n\
-                            Add a NAME copp policy on SWITCH logical switch.\n\
+                            add a NAME copp policy on SWITCH logical switch.\n\
   lr-copp-add NAME ROUTER\n\
-                            Add a NAME copp policy on ROUTER logical router.\n\
+                            add a NAME copp policy on ROUTER logical router.\n\
 \n\
 MAC_Binding commands:\n\
+  [--may-exist]\n\
   static-mac-binding-add LOGICAL_PORT IP MAC\n\
-                                    Add a Static_MAC_Binding entry\n\
+                                    add a Static_MAC_Binding entry\n\
+  [--if-exists]\n\
   static-mac-binding-del LOGICAL_PORT IP\n\
-                                    Delete Static_MAC_Binding entry\n\
-  static-mac-binding-list           List all Static_MAC_Binding entries\n\
+                                    delete Static_MAC_Binding entry\n\
+  static-mac-binding-list           list all Static_MAC_Binding entries\n\
 \n\
 Logical Switch Port Health Check:\n\
-  lsp-hc-add PORT PROTOCOL SOURCE_IP DST_PORT ADDRESS...\n\
+  lsp-hc-add PORT PROTOCOL SOURCE_IP [DST_PORT] ADDRESS\n\
                             add health check monitoring for PORT\n\
-  lsp-hc-del PORT HC_UUID   delete health check monitoring for PORT\n\
+  lsp-hc-del PORT [HC_UUID] delete health check monitoring for PORT\n\
   lsp-hc-list PORT          list health checks for PORT\n\
 \n\
 %s\
