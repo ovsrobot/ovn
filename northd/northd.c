@@ -8922,35 +8922,103 @@ build_lb_health_check_response_lflows(
                 continue;
             }
 
+            /* For backends whose LSP is type=external on a switch with a
+             * localnet port (typical for Neutron / ovn-octavia-provider
+             * baremetal pool members on a provider VLAN), the reply
+             * re-enters br-int via the localnet port.  At that point
+             * MFF_LOG_INPORT carries the localnet LSP's tunnel_key, not
+             * the backend's, so the original 'inport == <backend>' match
+             * never fires and pinctrl_handle_svc_check() never runs.
+             *
+             * Detect that case here so we can substitute a localnet-aware
+             * match (keyed on flags.localnet + eth.src) and an action
+             * that loads the backend LSP's tunnel_key into MFF_LOG_INPORT
+             * before dispatching to ovn-controller, which is what
+             * pinctrl_find_svc_monitor() keys on. */
+            struct ovn_port *backend_op = NULL;
+            struct ovn_port *op;
+            HMAP_FOR_EACH (op, dp_node, &peer_switch_od->ports) {
+                if (op->nbsp && op->key
+                    && !strcmp(op->key, backend_nb->logical_port)) {
+                    backend_op = op;
+                    break;
+                }
+            }
+            bool external_via_localnet =
+                backend_op && backend_op->nbsp && backend_op->nbsp->type
+                && !strcmp(backend_op->nbsp->type, "external")
+                && backend_op->n_lsp_addrs
+                && ls_has_localnet_port(peer_switch_od);
+
             ds_clear(match);
             ds_clear(action);
 
             /* icmp6 type 1 and icmp4 type 3 are included in the match, because
              * the controller is using them to detect unreachable ports. */
             if (addr_is_ipv6(backend_nb->svc_mon_src_ip)) {
-                ds_put_format(match, "inport == \"%s\" && ip6.dst == %s && "
-                              "ip6.src == %s && eth.dst == %s && ",
-                              backend_nb->logical_port,
-                              backend_nb->svc_mon_src_ip,
-                              backend->ip_str,
-                              backend_nb->svc_mon_lrp->lrp_networks.ea_s);
+                if (external_via_localnet) {
+                    ds_put_format(match,
+                                  "flags.localnet == 1 && eth.src == %s && "
+                                  "ip6.dst == %s && ip6.src == %s && "
+                                  "eth.dst == %s && ",
+                                  backend_op->lsp_addrs[0].ea_s,
+                                  backend_nb->svc_mon_src_ip,
+                                  backend->ip_str,
+                                  backend_nb->svc_mon_lrp->lrp_networks.ea_s);
+                } else {
+                    ds_put_format(match, "inport == \"%s\" && ip6.dst == %s && "
+                                  "ip6.src == %s && eth.dst == %s && ",
+                                  backend_nb->logical_port,
+                                  backend_nb->svc_mon_src_ip,
+                                  backend->ip_str,
+                                  backend_nb->svc_mon_lrp->lrp_networks.ea_s);
+                }
                 if (!strcmp(protocol, "tcp")) {
                     ds_put_format(match, "tcp.src == %s", backend->port_str);
                 } else {
                     ds_put_cstr(match, "icmp6.type == 1");
                 }
             } else {
-                ds_put_format(match, "inport == \"%s\" && ip4.dst == %s && "
-                              "ip4.src == %s && eth.dst == %s && ",
-                              backend_nb->logical_port,
-                              backend_nb->svc_mon_src_ip,
-                              backend->ip_str,
-                              backend_nb->svc_mon_lrp->lrp_networks.ea_s);
+                if (external_via_localnet) {
+                    ds_put_format(match,
+                                  "flags.localnet == 1 && eth.src == %s && "
+                                  "ip4.dst == %s && ip4.src == %s && "
+                                  "eth.dst == %s && ",
+                                  backend_op->lsp_addrs[0].ea_s,
+                                  backend_nb->svc_mon_src_ip,
+                                  backend->ip_str,
+                                  backend_nb->svc_mon_lrp->lrp_networks.ea_s);
+                } else {
+                    ds_put_format(match, "inport == \"%s\" && ip4.dst == %s && "
+                                  "ip4.src == %s && eth.dst == %s && ",
+                                  backend_nb->logical_port,
+                                  backend_nb->svc_mon_src_ip,
+                                  backend->ip_str,
+                                  backend_nb->svc_mon_lrp->lrp_networks.ea_s);
+                }
                 if (!strcmp(protocol, "tcp")) {
                     ds_put_format(match, "tcp.src == %s", backend->port_str);
                 } else {
                     ds_put_cstr(match, "icmp4.type == 3");
                 }
+            }
+
+            /* For the type=external/localnet case, MFF_LOG_INPORT at this
+             * point holds the localnet LSP's tunnel_key but pinctrl indexes
+             * Service_Monitor by the backend LSP's tunnel_key.  Borrow
+             * MFF_LOG_OUTPORT to carry the backend LSP's tunnel_key into
+             * MFF_LOG_INPORT for the controller dispatch (handle_svc_check()
+             * saves/moves/restores MFF_LOG_INPORT around the punt), then
+             * clear outport so the cleared MFF_LOG_OUTPORT does not leak
+             * into egress. */
+            if (external_via_localnet) {
+                ds_put_format(action,
+                              "outport = \"%s\"; "
+                              "handle_svc_check(outport); "
+                              "outport = \"\";",
+                              backend_nb->logical_port);
+            } else {
+                ds_put_cstr(action, "handle_svc_check(inport);");
             }
 
             /* ovn-controller expects health check responses from the LS
@@ -8960,7 +9028,7 @@ build_lb_health_check_response_lflows(
                                                peer_switch_od->nbs->copp,
                                                meter_groups);
             ovn_lflow_add(lflows, peer_switch_od, S_SWITCH_IN_L2_LKUP, 110,
-                          ds_cstr(match), "handle_svc_check(inport);",
+                          ds_cstr(match), ds_cstr(action),
                           lb_dps->lflow_ref, WITH_CTRL_METER(meter));
         }
     }
