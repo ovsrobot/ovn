@@ -12,6 +12,11 @@ Post v26.03.0
      * Add ECMP/multi-homing support for EVPN FDB entries. FDB entries
        backed by a kernel nexthop group are load-balanced via OpenFlow
        select groups with weighted buckets.
+   - The DHCP relay now also forwards DHCPREQUEST packets whose
+     source IP lies in the relay LRP's subnet, in addition to
+     ip4.src == 0.0.0.0.  Controlled by the new NB_Global option
+     dhcp_relay_handle_rebind (default true); set it to false to
+     match only ip4.src == 0.0.0.0.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
