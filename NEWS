@@ -6,6 +6,12 @@ Post v26.03.0
      * Add ECMP/multi-homing support for EVPN FDB entries. FDB entries
        backed by a kernel nexthop group are load-balanced via OpenFlow
        select groups with weighted buckets.
+   - Fixed Load_Balancer health check replies failing silently for
+     baremetal pool members whose backend LSP is type=external on a
+     Logical_Switch that has a localnet port.  ovn-northd now emits a
+     localnet-aware reply lflow (matched on flags.localnet + eth.src)
+     and loads the backend LSP's tunnel_key into MFF_LOG_INPORT for
+     the controller dispatch so pinctrl_find_svc_monitor() succeeds.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
