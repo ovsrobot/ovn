@@ -15,6 +15,7 @@
 # If libcap-ng isn't available and there is no need for running OVS
 # as regular user, specify the '--without libcapng'
 %bcond_without libcapng
+%bcond_without sphinx
 
 # Enable PIE, bz#955181
 %global _hardened_build 1
@@ -53,7 +54,9 @@ BuildRequires: python3-devel
 BuildRequires: desktop-file-utils
 BuildRequires: groff graphviz
 BuildRequires: checkpolicy, selinux-policy-devel
+%if %{with sphinx}
 BuildRequires: /usr/bin/sphinx-build
+%endif
 # make check dependencies
 BuildRequires: procps-ng
 %if %{with libcapng}
@@ -538,7 +541,9 @@ fi
 %{_bindir}/ovn-northd
 %{_bindir}/ovn-ic
 %{_mandir}/man8/ovn-northd.8*
+%if %{with sphinx}
 %{_mandir}/man7/ovn-logical-flows.7*
+%endif
 %config %{_datadir}/ovn/ovn-nb.ovsschema
 %config %{_datadir}/ovn/ovn-sb.ovsschema
 %config %{_datadir}/ovn/ovn-ic-nb.ovsschema
