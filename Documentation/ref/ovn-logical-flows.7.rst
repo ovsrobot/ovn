@@ -1415,6 +1415,11 @@ This table implements switching behavior.  It contains these logical flows:
   IPv6 Neighbor Advertisements to this port as well. These allow to build proper
   ARP/IPv6 neighbor list on this port.
 
+- Priority-95 flows for each IP address/VIP/NAT address owned by a router port
+  connected to the switch. These flows match GARP packets for the specific I
+  addresses. Matched packets are forwarded to the ``MC_FLOOD_L2`` multicast
+  group  which contains all non-router logical ports.
+
 - Priority-90 flows for transit switches that forward registered IP multicast
   traffic to their corresponding multicast group , which ``ovn-northd`` creates
   based on learnt ``IGMP_Group`` entries.
@@ -1451,8 +1456,8 @@ This table implements switching behavior.  It contains these logical flows:
 - Priority-80 flows for each IP address/VIP/NAT address owned by a router port
   connected to the switch. These flows match ARP requests and ND packets for the
   specific IP addresses.  Matched packets are forwarded only to the router that
-  owns the IP address and to the ``MC_FLOOD_L2`` multicast group which contains
-  all non-router logical ports.
+  owns the IP address and to the ``MC_UNKNOWN`` multicast group which contains
+  all enabled logical ports that accept unknown destination packets.
 
 - Priority-75 flows for each port connected to a logical router matching self
   originated ARP request/RARP request/ND packets.  These packets are flooded to
@@ -1467,7 +1472,7 @@ This table implements switching behavior.  It contains these logical flows:
 
 - A priority-72 flow that outputs all ARP requests and ND NS (Neighbor
   Solicitation) packets with an Ethernet broadcast or multicast ``eth.dst`` to
-  the ``MC_FLOOD_L2`` multicast group if ``other_config:broadcast-arps-to-all-
+  the ``MC_UNKNOWN`` multicast group if ``other_config:broadcast-arps-to-all-
   routers=false``.
 
 - A priority-71 flow that outputs all ARP packets with an Ethernet broadcast or
