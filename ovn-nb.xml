@@ -464,6 +464,24 @@
         </p>
       </column>
 
+      <column name="options" key="dhcp_relay_handle_rebind"
+              type='{"type": "boolean"}'>
+        <p>
+          Default is <code>true</code>.  The DHCP relay forwards both
+          broadcast DHCPREQUEST packets sent with no source IP
+          assigned and those sent with the client's currently leased
+          IP as the source address.  The latter are typically sent by
+          clients in the REBINDING state (T2 timer expiry) when they
+          cannot reach their original DHCP server.
+        </p>
+
+        <p>
+          Set to <code>false</code> to forward only DHCPREQUEST
+          packets sent with no source IP assigned.  Refer to
+          <code>ovn-northd</code>(8) for the exact logical-flow match.
+        </p>
+      </column>
+
       <group title="Options for services health check confguration">
         <p>
           These options are used when health configuration is enabled for

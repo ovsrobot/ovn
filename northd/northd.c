@@ -105,6 +105,11 @@ static bool default_acl_drop;
  * and ports tunnel key allocation (12 bits for each instead of default 16). */
 static bool vxlan_mode;
 
+/* If 'true' (default), DHCP relay flows match both ip4.src == 0.0.0.0
+ * and ip4.src within the relay LRP's CIDR.  If 'false', only
+ * ip4.src == 0.0.0.0 is matched. */
+static bool dhcp_relay_handle_rebind = true;
+
 #define MAX_OVN_TAGS 4096
 
 #define MAX_OVN_NF_GROUP_IDS 256
@@ -10072,14 +10077,25 @@ build_lswitch_dhcp_relay_flows(struct ovn_port *op,
     ds_clear(match);
     ds_clear(actions);
 
+    /* Match 0.0.0.0 and the LRP's CIDR when 'dhcp_relay_handle_rebind'
+     * is enabled (default); match only 0.0.0.0 when disabled. */
+    struct ds src_ip_match = DS_EMPTY_INITIALIZER;
+    if (dhcp_relay_handle_rebind && rp->lrp_networks.n_ipv4_addrs > 0) {
+        ds_put_format(&src_ip_match, "ip4.src == {0.0.0.0, %s/%u}",
+                      rp->lrp_networks.ipv4_addrs[0].network_s,
+                      rp->lrp_networks.ipv4_addrs[0].plen);
+    } else {
+        ds_put_cstr(&src_ip_match, "ip4.src == 0.0.0.0");
+    }
+
     ds_put_format(
         match, "inport == %s && eth.src == %s && "
-        "ip4.src == 0.0.0.0 && ip4.dst == 255.255.255.255 && "
+        "%s && ip4.dst == 255.255.255.255 && "
         "udp.src == 68 && udp.dst == 67",
-        op->json_key, op->lsp_addrs[0].ea_s);
+        op->json_key, op->lsp_addrs[0].ea_s, ds_cstr(&src_ip_match));
     ds_put_format(actions,
                   "eth.dst = %s; outport = %s; next; /* DHCP_RELAY_REQ */",
-                  rp->lrp_networks.ea_s,sp->json_key);
+                  rp->lrp_networks.ea_s, sp->json_key);
     ovn_lflow_add(lflows, op->od,
                   S_SWITCH_IN_L2_LKUP, 100,
                   ds_cstr(match),
@@ -10089,6 +10105,8 @@ build_lswitch_dhcp_relay_flows(struct ovn_port *op,
                   WITH_HINT(&op->nbsp->header_));
     ds_clear(match);
     ds_clear(actions);
+    ds_destroy(&src_ip_match);
+
     free(server_ip_str);
 }
 
@@ -16734,11 +16752,22 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
     ds_clear(match);
     ds_clear(actions);
 
+    /* Match 0.0.0.0 and the LRP's CIDR when 'dhcp_relay_handle_rebind'
+     * is enabled (default); match only 0.0.0.0 when disabled. */
+    struct ds src_ip_match = DS_EMPTY_INITIALIZER;
+    if (dhcp_relay_handle_rebind) {
+        ds_put_format(&src_ip_match, "ip4.src == {0.0.0.0, %s/%u}",
+                      op->lrp_networks.ipv4_addrs[0].network_s,
+                      op->lrp_networks.ipv4_addrs[0].plen);
+    } else {
+        ds_put_cstr(&src_ip_match, "ip4.src == 0.0.0.0");
+    }
+
     ds_put_format(
         match, "inport == %s && "
-        "ip4.src == 0.0.0.0 && ip4.dst == 255.255.255.255 && "
+        "%s && ip4.dst == 255.255.255.255 && "
         "ip.frag == 0 && udp.src == 68 && udp.dst == 67",
-        op->json_key);
+        op->json_key, ds_cstr(&src_ip_match));
     ds_put_format(actions,
                   REGBIT_DHCP_RELAY_REQ_CHK
                   " = dhcp_relay_req_chk(%s, %s);"
@@ -16757,10 +16786,10 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
 
     ds_put_format(
         match, "inport == %s && "
-        "ip4.src == 0.0.0.0 && ip4.dst == 255.255.255.255 && "
+        "%s && ip4.dst == 255.255.255.255 && "
         "udp.src == 68 && udp.dst == 67 && "
         REGBIT_DHCP_RELAY_REQ_CHK,
-        op->json_key);
+        op->json_key, ds_cstr(&src_ip_match));
     ds_put_format(actions,
                   "ip4.src = %s; ip4.dst = %s; udp.src = 67; next; "
                   "/* DHCP_RELAY_REQ */",
@@ -16775,10 +16804,10 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
 
     ds_put_format(
         match, "inport == %s && "
-        "ip4.src == 0.0.0.0 && ip4.dst == 255.255.255.255 && "
+        "%s && ip4.dst == 255.255.255.255 && "
         "udp.src == 68 && udp.dst == 67 && "
         REGBIT_DHCP_RELAY_REQ_CHK" == 0",
-        op->json_key);
+        op->json_key, ds_cstr(&src_ip_match));
     ds_put_format(actions, "drop; /* DHCP_RELAY_REQ */");
 
     ovn_lflow_add(lflows, op->od, S_ROUTER_IN_DHCP_RELAY_REQ, 1,
@@ -16787,6 +16816,7 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
 
     ds_clear(match);
     ds_clear(actions);
+    ds_destroy(&src_ip_match);
 
     ds_put_format(
         match, "ip4.src == %s && ip4.dst == %s && "
@@ -21249,6 +21279,9 @@ ovnnb_db_run(struct northd_input *input_data,
                                               false);
     use_common_zone = smap_get_bool(input_data->nb_options, "use_common_zone",
                                     false);
+    dhcp_relay_handle_rebind = smap_get_bool(input_data->nb_options,
+                                             "dhcp_relay_handle_rebind",
+                                             true);
 
     vxlan_mode = input_data->vxlan_mode;
 

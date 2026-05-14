@@ -1392,7 +1392,9 @@ This table implements switching behavior.  It contains these logical flows:
 
 - A priority-100 flow that forwards all DHCP broadcast packets coming from VIFs
   to the logical router port's MAC when DHCP relay is enabled on the logical
-  switch.
+  switch.  By default the ``ip4.src`` match is the set ``{0.0.0.0, lrp_cidr}``.
+  If ``dhcp_relay_handle_rebind`` in the ``NB_Global`` ``options`` column is set
+  to ``false`` the match is ``ip4.src == 0.0.0.0`` only.
 
 - A priority-100 flow that matches ``reg8[23] == 1`` and does ``output`` action.
   This ensures that packets that got injected back into this table from egress
@@ -2199,9 +2201,11 @@ contains the following flows to implement very basic IP host functionality.
 - For each logical router port configured with DHCP relay the following
   priority-110 flows are added to manage the DHCP relay traffic:
 
-  - if ``inport`` is lrp and ``ip4.src == 0.0.0.0`` and ``ip4.dst ==
-    255.255.255.255`` and ``ip4.frag == 0`` and ``udp.src == 68`` and ``udp.dst
-    == 67``, the ``dhcp_relay_req_chk`` action is executed. ::
+  - if ``inport`` is lrp and ``ip4.src == {0.0.0.0, lrp_cidr}`` and ``ip4.dst
+    == 255.255.255.255`` and ``ip4.frag == 0`` and ``udp.src == 68`` and
+    ``udp.dst == 67``, the ``dhcp_relay_req_chk`` action is executed.  Setting
+    ``dhcp_relay_handle_rebind`` in the ``NB_Global`` ``options`` column to
+    ``false`` restricts the ``ip4.src`` match to ``0.0.0.0`` only. ::
 
         reg9[7] = dhcp_relay_req_chk(lrp_ip, dhcp_server_ip);next
 
@@ -2499,10 +2503,12 @@ This stage process the DHCP request packets on which ``dhcp_relay_req_chk``
 action is applied in the IP input stage.
 
 - A priority-100 logical flow is added for each logical router port configured
-  with DHCP relay that matches ``inport`` is lrp and ``ip4.src == 0.0.0.0`` and
-  ``ip4.dst == 255.255.255.255`` and ``udp.src == 68`` and ``udp.dst == 67`` and
-  ``reg9[7] == 1`` and applies following actions. If ``reg9[7]`` is set to 1
-  then, ``dhcp_relay_req_chk`` action was successful. ::
+  with DHCP relay that matches ``inport`` is lrp and ``ip4.src == {0.0.0.0,
+  lrp_cidr}`` and ``ip4.dst == 255.255.255.255`` and ``udp.src == 68`` and
+  ``udp.dst == 67`` and ``reg9[7] == 1`` and applies following actions. If
+  ``reg9[7]`` is set to 1 then, ``dhcp_relay_req_chk`` action was successful.
+  Setting ``dhcp_relay_handle_rebind`` in the ``NB_Global`` ``options`` column
+  to ``false`` restricts the ``ip4.src`` match to ``0.0.0.0`` only. ::
 
       ip4.src=lrp ip;
       ip4.dst=dhcp server ip;
@@ -2510,10 +2516,12 @@ action is applied in the IP input stage.
       next;
 
 - A priority-1 logical flow is added for each logical router port configured
-  with DHCP relay that matches ``inport`` is lrp and ``ip4.src == 0.0.0.0`` and
-  ``ip4.dst == 255.255.255.255`` and ``udp.src == 68`` and ``udp.dst == 67`` and
-  ``reg9[7] == 0`` and drops the packet. If ``reg9[7]`` is set to 0 then,
-  ``dhcp_relay_req_chk`` action was unsuccessful.
+  with DHCP relay that matches ``inport`` is lrp and ``ip4.src == {0.0.0.0,
+  lrp_cidr}`` and ``ip4.dst == 255.255.255.255`` and ``udp.src == 68`` and
+  ``udp.dst == 67`` and ``reg9[7] == 0`` and drops the packet. If ``reg9[7]``
+  is set to 0 then, ``dhcp_relay_req_chk`` action was unsuccessful.  Setting
+  ``dhcp_relay_handle_rebind`` in the ``NB_Global`` ``options`` column to
+  ``false`` restricts the ``ip4.src`` match to ``0.0.0.0`` only.
 
 - A priority-0 flow that matches all packets to advance to the next table.
 
