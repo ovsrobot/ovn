@@ -588,6 +588,10 @@
 
     <column name="name"/>
     <column name="addresses"/>
+    <group title="Common Columns">
+      <column name="options">
+      </column>
+    </group>
   </table>
 
   <table name="Port_Group" title="Port Groups">

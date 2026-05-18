@@ -43,7 +43,8 @@ VLOG_DEFINE_THIS_MODULE(en_sync_to_sb);
 
 static void sync_addr_set(struct ovsdb_idl_txn *ovnsb_txn, const char *name,
                           struct sorted_array *addresses,
-                          struct shash *sb_address_sets);
+                          struct shash *sb_address_sets,
+                          const struct smap *options);
 static void sync_addr_sets(struct ovsdb_idl_txn *ovnsb_txn,
                            const struct nbrec_address_set_table *,
                            const struct nbrec_port_group_table *,
@@ -118,6 +119,18 @@ en_sync_to_sb_addr_set_cleanup(void *data OVS_UNUSED)
 
 }
 
+static void
+sync_address_set_options(const struct sbrec_address_set *sb_addr_set,
+                         const struct smap *nb_options)
+{
+    if (!smap_equal(&sb_addr_set->options, nb_options)) {
+        struct smap new_options;
+        smap_clone(&new_options, nb_options);
+        sbrec_address_set_set_options(sb_addr_set, &new_options);
+        smap_destroy(&new_options);
+    }
+}
+
 enum engine_input_handler_result
 sync_to_sb_addr_set_nb_address_set_handler(struct engine_node *node,
                                            void *data OVS_UNUSED)
@@ -153,6 +166,7 @@ sync_to_sb_addr_set_nb_address_set_handler(struct engine_node *node,
             sorted_array_from_dbrec(nb_addr_set, addresses);
         update_sb_addr_set(&addrs, sb_addr_set);
         sorted_array_destroy(&addrs);
+        sync_address_set_options(sb_addr_set, &nb_addr_set->options);
     }
 
     return EN_HANDLED_UNCHANGED;
@@ -449,7 +463,8 @@ sync_to_sb_pb_lr_stateful_handler(struct engine_node *node,
 static void
 sync_addr_set(struct ovsdb_idl_txn *ovnsb_txn, const char *name,
               struct sorted_array *addresses,
-              struct shash *sb_address_sets)
+              struct shash *sb_address_sets,
+              const struct smap *options)
 {
     const struct sbrec_address_set *sb_address_set;
     sb_address_set = shash_find_and_delete(sb_address_sets,
@@ -461,6 +476,9 @@ sync_addr_set(struct ovsdb_idl_txn *ovnsb_txn, const char *name,
                                         addresses->n);
     } else {
         update_sb_addr_set(addresses, sb_address_set);
+    }
+    if (options) {
+        sync_address_set_options(sb_address_set, options);
     }
 }
 
@@ -500,7 +518,7 @@ sync_addr_sets(struct ovsdb_idl_txn *ovnsb_txn,
     const char *svc_macs[] = {svc_monitor_macp, svc_monitor_macp_dst};
     struct sorted_array svc =
         sorted_array_from_unsorted(svc_macs, ARRAY_SIZE(svc_macs), false);
-    sync_addr_set(ovnsb_txn, "svc_monitor_mac", &svc, &sb_address_sets);
+    sync_addr_set(ovnsb_txn, "svc_monitor_mac", &svc, &sb_address_sets, NULL);
     sorted_array_destroy(&svc);
 
     /* sync port group generated address sets first */
@@ -519,9 +537,9 @@ sync_addr_sets(struct ovsdb_idl_txn *ovnsb_txn,
                 sorted_array_from_svec(&ipv6_addrs);
 
         sync_addr_set(ovnsb_txn, ipv4_addrs_name,
-                      &ipv4_addrs_sorted, &sb_address_sets);
+                      &ipv4_addrs_sorted, &sb_address_sets, NULL);
         sync_addr_set(ovnsb_txn, ipv6_addrs_name,
-                      &ipv6_addrs_sorted, &sb_address_sets);
+                      &ipv6_addrs_sorted, &sb_address_sets, NULL);
         sorted_array_destroy(&ipv4_addrs_sorted);
         sorted_array_destroy(&ipv6_addrs_sorted);
         svec_destroy(&ipv4_addrs);
@@ -544,7 +562,7 @@ sync_addr_sets(struct ovsdb_idl_txn *ovnsb_txn,
                 &lr_stateful_rec->lb_ips->ips_v4_reachable);
 
             sync_addr_set(ovnsb_txn, ipv4_addrs_name,
-                          &ipv4_addrs_sorted, &sb_address_sets);
+                          &ipv4_addrs_sorted, &sb_address_sets, NULL);
             sorted_array_destroy(&ipv4_addrs_sorted);
             free(ipv4_addrs_name);
         }
@@ -556,7 +574,7 @@ sync_addr_sets(struct ovsdb_idl_txn *ovnsb_txn,
                 &lr_stateful_rec->lb_ips->ips_v6_reachable);
 
             sync_addr_set(ovnsb_txn, ipv6_addrs_name,
-                          &ipv6_addrs_sorted, &sb_address_sets);
+                          &ipv6_addrs_sorted, &sb_address_sets, NULL);
             sorted_array_destroy(&ipv6_addrs_sorted);
             free(ipv6_addrs_name);
         }
@@ -570,7 +588,8 @@ sync_addr_sets(struct ovsdb_idl_txn *ovnsb_txn,
         struct sorted_array addrs =
                 sorted_array_from_dbrec(nb_address_set, addresses);
         sync_addr_set(ovnsb_txn, nb_address_set->name,
-                      &addrs, &sb_address_sets);
+                      &addrs, &sb_address_sets,
+                      &nb_address_set->options);
         sorted_array_destroy(&addrs);
     }
 
