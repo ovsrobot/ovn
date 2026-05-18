@@ -276,6 +276,19 @@ tunnel_add(struct tunnel_ctx *tc,
         if (forceencaps) {
             smap_add(&options, "ipsec_forceencaps", "yes");
         }
+
+        struct smap_node *node;
+        SMAP_FOR_EACH (node, &sbg->options) {
+            char ipsec_prefix[] = "ipsec_";
+            if (!strncmp(ipsec_prefix, node->key, strlen(ipsec_prefix)) &&
+                strcmp("ipsec_encapsulation", node->key) &&
+                strcmp("ipsec_forceencaps", node->key)) {
+                const char *ipsec_option = smap_get(&sbg->options, node->key);
+                if (ipsec_option) {
+                    smap_add(&options, node->key, ipsec_option);
+                }
+            }
+        }
     }
 
     if (is_ramp_tunnel(&chassis_rec->other_config)) {
