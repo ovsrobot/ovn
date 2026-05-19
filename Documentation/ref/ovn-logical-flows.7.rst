@@ -49,6 +49,13 @@ Ingress table 0 contains these logical flows:
   processing on gateway chassis. The ``REGBIT_EXT_ARP`` register is set for all
   ARP requests originating from physical ports with priority 75 flow.
 
+- For each ``type=external`` logical port on a switch that has a localnet port,
+  a priority 75 flow matches on ``inport == <localnet_port> && eth.src ==
+  <external_mac>`` and applies ``flags.localnet = 1; inport = <external_lsp>;
+  next;``.  This rewrites ``inport`` from the localnet port to the external LSP
+  so that all downstream stages observe the correct logical inport for traffic
+  originating from the baremetal member.
+
 - For each (enabled) vtep logical port, a priority 70 flow is added which
   matches on all packets and applies the action ``next(pipeline=ingress,
   table=S_SWITCH_IN_L3_LKUP) = 1;`` to skip most stages of ingress pipeline and
