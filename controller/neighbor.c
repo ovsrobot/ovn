@@ -280,6 +280,10 @@ neighbor_collect_mac_to_advertise(const struct neighbor_ctx_in *n_ctx_in,
             continue;
         }
 
+        if (!smap_get_bool(&pb->options, "dynamic-routing-advertise", true)) {
+            continue;
+        }
+
         for (size_t i = 0; i < pb->n_mac; i++) {
             struct lport_addresses addresses;
             if (!extract_lsp_addresses(pb->mac[i], &addresses)) {
@@ -326,6 +330,10 @@ neighbor_collect_ip_mac_to_advertise(
             neighbor_get_relevant_port_binding(n_ctx_in->sbrec_pb_by_name,
                                                adv_mb->logical_port);
         if (!lport_pb_is_chassis_resident(n_ctx_in->chassis, pb)) {
+            continue;
+        }
+
+        if (!smap_get_bool(&pb->options, "dynamic-routing-advertise", true)) {
             continue;
         }
 
