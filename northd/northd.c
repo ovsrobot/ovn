@@ -13900,7 +13900,7 @@ lrouter_nat_add_ext_ip_match(const struct ovn_datapath *od,
 static void
 build_lrouter_arp_flow(const struct ovn_datapath *od, struct ovn_port *op,
                        const char *ip_address, const char *eth_addr,
-                       struct ds *extra_match, bool drop, uint16_t priority,
+                       struct ds *extra_match, uint16_t priority,
                        const struct ovsdb_idl_row *hint,
                        struct lflow_table *lflows,
                        struct lflow_ref *lflow_ref)
@@ -13917,22 +13917,19 @@ build_lrouter_arp_flow(const struct ovn_datapath *od, struct ovn_port *op,
     if (extra_match && ds_last(extra_match) != EOF) {
         ds_put_format(&match, " && %s", ds_cstr(extra_match));
     }
-    if (drop) {
-        ds_put_cstr(&actions, debug_drop_action());
-    } else {
-        ds_put_format(&actions,
-                      "eth.dst = eth.src; "
-                      "eth.src = %s; "
-                      "arp.op = 2; /* ARP reply */ "
-                      "arp.tha = arp.sha; "
-                      "arp.sha = %s; "
-                      "arp.tpa <-> arp.spa; "
-                      "outport = inport; "
-                      "flags.loopback = 1; "
-                      "output;",
-                      eth_addr,
-                      eth_addr);
-    }
+
+    ds_put_format(&actions,
+                  "eth.dst = eth.src; "
+                  "eth.src = %s; "
+                  "arp.op = 2; /* ARP reply */ "
+                  "arp.tha = arp.sha; "
+                  "arp.sha = %s; "
+                  "arp.tpa <-> arp.spa; "
+                  "outport = inport; "
+                  "flags.loopback = 1; "
+                  "output;",
+                  eth_addr,
+                  eth_addr);
 
     ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, priority, ds_cstr(&match),
                   ds_cstr(&actions), lflow_ref, WITH_HINT(hint));
@@ -13951,7 +13948,7 @@ static void
 build_lrouter_nd_flow(const struct ovn_datapath *od, struct ovn_port *op,
                       const char *action, const char *ip_address,
                       const char *sn_ip_address, const char *eth_addr,
-                      struct ds *extra_match, bool drop, uint16_t priority,
+                      struct ds *extra_match, uint16_t priority,
                       const struct ovsdb_idl_row *hint,
                       struct lflow_table *lflows,
                       const struct shash *meter_groups,
@@ -13975,31 +13972,26 @@ build_lrouter_nd_flow(const struct ovn_datapath *od, struct ovn_port *op,
         ds_put_format(&match, " && %s", ds_cstr(extra_match));
     }
 
-    if (drop) {
-        ds_put_cstr(&actions, debug_drop_action());
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, priority,
-                      ds_cstr(&match), ds_cstr(&actions), lflow_ref,
-                      WITH_HINT(hint));
-    } else {
-        ds_put_format(&actions,
-                      "%s { "
-                        "eth.src = %s; "
-                        "ip6.src = nd.target; "
-                        "nd.tll = %s; "
-                        "outport = inport; "
-                        "flags.loopback = 1; "
-                        "output; "
-                      "};",
-                      action,
-                      eth_addr,
-                      eth_addr);
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, priority,
-                      ds_cstr(&match), ds_cstr(&actions), lflow_ref,
-                      WITH_CTRL_METER(copp_meter_get(COPP_ND_NA,
-                                                     od->nbr->copp,
-                                                     meter_groups)),
-                      WITH_HINT(hint));
-    }
+
+    ds_put_format(&actions,
+                  "%s { "
+                    "eth.src = %s; "
+                    "ip6.src = nd.target; "
+                    "nd.tll = %s; "
+                    "outport = inport; "
+                    "flags.loopback = 1; "
+                    "output; "
+                  "};",
+                  action,
+                  eth_addr,
+                  eth_addr);
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_IP_INPUT, priority,
+                  ds_cstr(&match), ds_cstr(&actions), lflow_ref,
+                  WITH_CTRL_METER(copp_meter_get(COPP_ND_NA,
+                                                 od->nbr->copp,
+                                                 meter_groups)),
+                  WITH_HINT(hint));
+
 
     ds_destroy(&match);
     ds_destroy(&actions);
@@ -14007,6 +13999,7 @@ build_lrouter_nd_flow(const struct ovn_datapath *od, struct ovn_port *op,
 
 static void
 build_lrouter_nat_arp_nd_flow(const struct ovn_datapath *od,
+                              struct ovn_port *op,
                               struct ovn_nat *nat_entry,
                               struct lflow_table *lflows,
                               const struct shash *meter_groups,
@@ -14014,18 +14007,21 @@ build_lrouter_nat_arp_nd_flow(const struct ovn_datapath *od,
 {
     struct lport_addresses *ext_addrs = &nat_entry->ext_addrs;
     const struct nbrec_nat *nat = nat_entry->nb;
+    if (op && lrp_is_l3dgw(op) && (!op->peer || !op->peer->cr_port)) {
+        return;
+    }
 
     if (nat_entry_is_v6(nat_entry)) {
         build_lrouter_nd_flow(od, NULL, "nd_na",
                               ext_addrs->ipv6_addrs[0].addr_s,
                               ext_addrs->ipv6_addrs[0].sn_addr_s,
-                              REG_INPORT_ETH_ADDR, NULL, false, 90,
+                              REG_INPORT_ETH_ADDR, NULL, 90,
                               &nat->header_, lflows, meter_groups,
                               lflow_ref);
     } else {
         build_lrouter_arp_flow(od, NULL,
                                ext_addrs->ipv4_addrs[0].addr_s,
-                               REG_INPORT_ETH_ADDR, NULL, false, 90,
+                               REG_INPORT_ETH_ADDR, NULL, 90,
                                &nat->header_, lflows,
                                lflow_ref);
     }
@@ -14091,24 +14087,13 @@ build_lrouter_port_nat_arp_nd_flow(struct ovn_port *op,
         build_lrouter_nd_flow(op->od, op, "nd_na",
                               ext_addrs->ipv6_addrs[0].addr_s,
                               ext_addrs->ipv6_addrs[0].sn_addr_s,
-                              mac_s, &match, false, 92,
-                              &nat->header_, lflows, meter_groups,
-                              lflow_ref);
-        build_lrouter_nd_flow(op->od, op, "nd_na",
-                              ext_addrs->ipv6_addrs[0].addr_s,
-                              ext_addrs->ipv6_addrs[0].sn_addr_s,
-                              mac_s, NULL, true, 91,
+                              mac_s, &match, 92,
                               &nat->header_, lflows, meter_groups,
                               lflow_ref);
     } else {
         build_lrouter_arp_flow(op->od, op,
                                ext_addrs->ipv4_addrs[0].addr_s,
-                               mac_s, &match, false, 92,
-                               &nat->header_, lflows,
-                               lflow_ref);
-        build_lrouter_arp_flow(op->od, op,
-                               ext_addrs->ipv4_addrs[0].addr_s,
-                               mac_s, NULL, true, 91,
+                               mac_s, &match, 92,
                                &nat->header_, lflows,
                                lflow_ref);
     }
@@ -17014,7 +16999,7 @@ build_ipv6_input_flows_for_lrouter_port(
         build_lrouter_nd_flow(op->od, op, "nd_na_router",
                               op->lrp_networks.ipv6_addrs[i].addr_s,
                               op->lrp_networks.ipv6_addrs[i].sn_addr_s,
-                              REG_INPORT_ETH_ADDR, match, false, 90,
+                              REG_INPORT_ETH_ADDR, match, 90,
                               &op->nbrp->header_, lflows, meter_groups,
                               lflow_ref);
     }
@@ -17130,8 +17115,9 @@ build_lrouter_arp_nd_for_datapath(const struct ovn_datapath *od,
         if (nat_entry->type == SNAT) {
             continue;
         }
-        build_lrouter_nat_arp_nd_flow(od, nat_entry, lflows, meter_groups,
-                                      lflow_ref);
+
+        build_lrouter_nat_arp_nd_flow(od, nat_entry->l3dgw_port, nat_entry,
+                                      lflows, meter_groups, lflow_ref);
     }
 
     /* Now handle SNAT entries too, one per unique SNAT IP. */
@@ -17146,8 +17132,9 @@ build_lrouter_arp_nd_for_datapath(const struct ovn_datapath *od,
         struct ovn_nat *nat_entry =
             CONTAINER_OF(ovs_list_front(&snat_ip->snat_entries),
                          struct ovn_nat, ext_addr_list_node);
-        build_lrouter_nat_arp_nd_flow(od, nat_entry, lflows, meter_groups,
-                                      lflow_ref);
+
+        build_lrouter_nat_arp_nd_flow(od, nat_entry->l3dgw_port, nat_entry,
+                                      lflows, meter_groups, lflow_ref);
     }
 }
 
@@ -17221,7 +17208,7 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
 
         build_lrouter_arp_flow(op->od, op,
                                op->lrp_networks.ipv4_addrs[i].addr_s,
-                               REG_INPORT_ETH_ADDR, match, false, 90,
+                               REG_INPORT_ETH_ADDR, match, 90,
                                &op->nbrp->header_, lflows, lflow_ref);
     }
 
@@ -17324,7 +17311,7 @@ build_lrouter_ipv4_ip_input_for_lbnats(
                                                    AF_INET);
         build_lrouter_arp_flow(op->od, op, lb_ips_v4_as,
                                REG_INPORT_ETH_ADDR,
-                               match, false, 90, NULL, lflows, lflow_ref);
+                               match, 90, NULL, lflows, lflow_ref);
         free(lb_ips_v4_as);
     }
 
@@ -17340,7 +17327,7 @@ build_lrouter_ipv4_ip_input_for_lbnats(
         char *lb_ips_v6_as = lr_lb_address_set_ref(op->od->tunnel_key,
                                                    AF_INET6);
         build_lrouter_nd_flow(op->od, op, "nd_na", lb_ips_v6_as, NULL,
-                              REG_INPORT_ETH_ADDR, match, false, 90,
+                              REG_INPORT_ETH_ADDR, match, 90,
                               NULL, lflows, meter_groups, lflow_ref);
         free(lb_ips_v6_as);
     }
