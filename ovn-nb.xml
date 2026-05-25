@@ -603,6 +603,12 @@
       </column>
     </group>
 
+    <column name="options" key="ipsec_*">
+      IPsec configuration paramaters are passed to IPsec backend by prefixing
+      libreswan/strongswan options with ipsec_. Please reference the backends
+      documentation for a complete list of options.
+    </column>
+
     <group title="Read-only Options">
       <column name="options" key="max_tunid">
         <p>
