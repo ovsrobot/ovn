@@ -41164,8 +41164,12 @@ sid=$src_ip
 # send packet
 send_dhcp_packet $src_mac $src_ip $dst_mac $dst_ip 01 01 $yiaddr $giaddr $sid vif0
 
+# The default set match ip4.src == {0.0.0.0, lrp_cidr} compiles to
+# two OF flows; only the 0.0.0.0 one sees the DISCOVER packet.
+# Sort for stable ordering.
 OVS_WAIT_FOR_OUTPUT([ovs-ofctl dump-flows br-int table=$dhcp_relay_req_table | grep -v NXST | grep 255.255.255.255 | grep resubmit |
-cut -d ' ' -f5-5 | sed "s/,//"], [0], [dnl
+cut -d ' ' -f5-5 | sed "s/,//" | sort], [0], [dnl
+n_packets=0
 n_packets=1
 ])
 
@@ -41176,7 +41180,8 @@ giaddr=`ip_to_hex 192.168.1.1`
 send_dhcp_packet $src_mac $src_ip $dst_mac $dst_ip 01 01 $yiaddr $giaddr $sid vif0
 
 OVS_WAIT_FOR_OUTPUT([ovs-ofctl dump-flows br-int table=$dhcp_relay_req_table | grep -v NXST | grep 255.255.255.255 | grep drop |
-cut -d ' ' -f5-5 | sed "s/,//"], [0], [dnl
+cut -d ' ' -f5-5 | sed "s/,//" | sort], [0], [dnl
+n_packets=0
 n_packets=1
 ])
 
