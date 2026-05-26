@@ -2907,6 +2907,14 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
                 smap_add(&options, "peer", op->peer->key);
             }
 
+            const char *dynamic_routing_advertise =
+                smap_get(&op->nbsp->options, "dynamic-routing-advertise");
+            if (dynamic_routing_advertise) {
+                smap_add(&options, "dynamic-routing-advertise",
+                         !strcasecmp(dynamic_routing_advertise, "false")
+                         ? "false" : "true");
+            }
+
             sbrec_port_binding_set_options(op->sb, &options);
             smap_destroy(&options);
             if (lsp_is_switch(op->nbsp)) {
