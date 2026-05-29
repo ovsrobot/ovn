@@ -18,6 +18,11 @@ Post v26.03.0
      static routes as higher-priority than connected routes, which in turn led
      to changes in administrative distance for specific route types. Please see
      the "Route Administrative Distance" section of the ovn-northd manpage.
+   - Add vtap mode support for Network Function. In vtap mode, traffic matching
+     ACLs is mirrored to the network function while continuing to flow to the
+     original destination. This enables passive monitoring use cases where
+     network functions can observe traffic without being inline in
+     the data path.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
