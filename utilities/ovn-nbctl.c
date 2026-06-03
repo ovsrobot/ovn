@@ -2783,6 +2783,9 @@ nbctl_acl_print(struct ctl_context *ctx, const struct nbrec_acl **acls,
         if (acl->label) {
           ds_put_format(&ctx->output, " label=%"PRId64, acl->label);
         }
+        if (acl->tier) {
+            ds_put_format(&ctx->output, " [tier %"PRId64"]", acl->tier);
+        }
         if (smap_get_bool(&acl->options, "apply-after-lb", false)) {
             ds_put_cstr(&ctx->output, " [after-lb]");
         }
