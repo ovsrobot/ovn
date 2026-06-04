@@ -2988,7 +2988,8 @@ handle_deleted_vif_lport(const struct sbrec_port_binding *pb,
     }
 
     handle_deleted_lport(pb, b_ctx_in, b_ctx_out);
-    if (lbinding && lbinding->iface && lbinding->iface->name) {
+    if (lport_type == LP_VIF && lbinding && lbinding->iface &&
+        lbinding->iface->name) {
         if_status_mgr_remove_ovn_installed(b_ctx_out->if_mgr,
                                            lbinding->iface);
     }
