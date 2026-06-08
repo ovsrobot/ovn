@@ -141,6 +141,7 @@ static unixctl_cb_func debug_delay_nb_cfg_report;
 
 #define OVS_NB_CFG_NAME "ovn-nb-cfg"
 #define OVS_NB_CFG_TS_NAME "ovn-nb-cfg-ts"
+#define OVS_NB_CFG_SB_TS_NAME "ovn-nb-cfg-sb-ts"
 #define OVS_STARTUP_TS_NAME "ovn-startup-ts"
 
 struct br_int_remote {
@@ -825,28 +826,62 @@ struct ed_type_ct_zones {
 };
 
 
+/* Returns the current SB_Global.nb_cfg and, if 'ts_out' is non-NULL, also
+ * the matching SB_Global.nb_cfg_timestamp.  The pair is always read from
+ * the same SB_Global snapshot so callers can rely on (nb_cfg, ts) being
+ * consistent.
+ *
+ * 'nb_cfg_timestamp' is the wall-clock time northd wrote nb_cfg to SB.
+ * The delta between that and the local completion time is the per-chassis
+ * end-to-end propagation latency (northd compile + SB write + relay
+ * fan-out + ovn-controller engine + ofctrl barrier ack).
+ *
+ * If a monitor condition change is in flight the cached pair from the
+ * previous call is returned, because updates received between the request
+ * and the cond ack could be from before the SB_Global value we're trying
+ * to read.
+ */
 static uint64_t
 get_nb_cfg(const struct sbrec_sb_global_table *sb_global_table,
-           unsigned int cond_seqno, unsigned int expected_cond_seqno)
+           unsigned int cond_seqno, unsigned int expected_cond_seqno,
+           int64_t *ts_out)
 {
     static uint64_t nb_cfg = 0;
+    static int64_t nb_cfg_ts = 0;
 
-    /* Delay getting nb_cfg if there are monitor condition changes
-     * in flight.  It might be that those changes would instruct the
-     * server to send updates that happened before SB_Global.nb_cfg.
-     */
-    if (cond_seqno != expected_cond_seqno) {
-        return nb_cfg;
+    if (cond_seqno == expected_cond_seqno) {
+        const struct sbrec_sb_global *sb
+          = sbrec_sb_global_table_first(sb_global_table);
+        nb_cfg = sb ? sb->nb_cfg : 0;
+        nb_cfg_ts = sb ? sb->nb_cfg_timestamp : 0;
     }
 
-    const struct sbrec_sb_global *sb
-        = sbrec_sb_global_table_first(sb_global_table);
-    nb_cfg = sb ? sb->nb_cfg : 0;
+    if (ts_out) {
+        *ts_out = nb_cfg_ts;
+    }
+
     return nb_cfg;
 }
 
 /* Propagates the local cfg seqno, 'cur_cfg', to the chassis_private record
  * and to the local OVS DB.
+ *
+ * The br-int external_ids triplet (ovn-nb-cfg, ovn-nb-cfg-ts,
+ * ovn-nb-cfg-sb-ts) is stamped unconditionally, independent of
+ * 'enable_ch_nb_cfg_update'.  The SB chassis_private writeback remains
+ * gated by 'enable_ch_nb_cfg_update' for deployments that want to suppress
+ * the per-bump SB write load.  An external exporter watching br-int can
+ * compute the per-chassis propagation delta as
+ *     (ovn-nb-cfg-ts - ovn-nb-cfg-sb-ts)
+ * regardless of the writeback setting.
+ *
+ * 'ovn-nb-cfg-sb-ts' is the SB_Global.nb_cfg_timestamp that was paired
+ * with this cur_cfg at the moment the barrier was queued (snapshotted via
+ * ofctrl-seqno's req_ts).  This avoids the pitfall of pairing the just-
+ * acked cur_cfg with whatever SB_Global timestamp happens to be current
+ * now -- on a fast-churning fleet SB_Global may already have advanced
+ * past cur_cfg by the time the barrier acks, which would under-report
+ * the delta.
  */
 static void
 store_nb_cfg(struct ovsdb_idl_txn *sb_txn, struct ovsdb_idl_txn *ovs_txn,
@@ -858,6 +893,7 @@ store_nb_cfg(struct ovsdb_idl_txn *sb_txn, struct ovsdb_idl_txn *ovs_txn,
     struct ofctrl_acked_seqnos *acked_nb_cfg_seqnos =
         ofctrl_acked_seqnos_get(ofctrl_seq_type_nb_cfg);
     uint64_t cur_cfg = acked_nb_cfg_seqnos->last_acked;
+    uint64_t cur_cfg_sb_ts = acked_nb_cfg_seqnos->last_acked_req_ts;
     int64_t startup_ts = daemon_startup_ts();
 
     if (ovs_txn && br_int
@@ -894,6 +930,13 @@ store_nb_cfg(struct ovsdb_idl_txn *sb_txn, struct ovsdb_idl_txn *ovs_txn,
                                                  cur_cfg_str);
         ovsrec_bridge_update_external_ids_setkey(br_int, OVS_NB_CFG_TS_NAME,
                                                  cur_cfg_ts_str);
+        if (cur_cfg_sb_ts) {
+            char *sb_ts_str = xasprintf("%"PRIu64, cur_cfg_sb_ts);
+            ovsrec_bridge_update_external_ids_setkey(br_int,
+                                                     OVS_NB_CFG_SB_TS_NAME,
+                                                     sb_ts_str);
+            free(sb_ts_str);
+        }
         free(cur_cfg_ts_str);
         free(cur_cfg_str);
     }
@@ -8200,12 +8243,20 @@ main(int argc, char *argv[])
                                      chassis, mac_cache_data);
                     }
 
-                    ofctrl_seqno_update_create(
-                        ofctrl_seq_type_nb_cfg,
-                        get_nb_cfg(sbrec_sb_global_table_get(
-                                                       ovnsb_idl_loop.idl),
-                                              ovnsb_cond_seqno,
-                                              ovnsb_expected_cond_seqno));
+                    /* Snapshot (nb_cfg, sb_ts) atomically from SB_Global
+                     * and pair them through the barrier ack so the
+                     * eventual completion can be attributed to the
+                     * timestamp that corresponded to this exact nb_cfg
+                     * generation -- not whatever SB_Global value has
+                     * moved on to by the time the barrier acks. */
+                    int64_t sb_nb_cfg_ts = 0;
+                    uint64_t sb_nb_cfg = get_nb_cfg(
+                        sbrec_sb_global_table_get(ovnsb_idl_loop.idl),
+                        ovnsb_cond_seqno, ovnsb_expected_cond_seqno,
+                        &sb_nb_cfg_ts);
+                    ofctrl_seqno_update_create(ofctrl_seq_type_nb_cfg,
+                                               sb_nb_cfg,
+                                               (uint64_t) sb_nb_cfg_ts);
 
                     struct local_binding_data *binding_data =
                         runtime_data ? &runtime_data->lbinding_data : NULL;

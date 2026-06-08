@@ -712,7 +712,7 @@ if_status_mgr_update(struct if_status_mgr *mgr,
     if (new_ifaces) {
         mgr->iface_seqno++;
         ofctrl_seqno_update_create(mgr->iface_seq_type_pb_cfg,
-                                   mgr->iface_seqno);
+                                   mgr->iface_seqno, 0);
         VLOG_DBG("Seqno requested: %"PRIu32, mgr->iface_seqno);
     }
 }

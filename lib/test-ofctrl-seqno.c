@@ -123,7 +123,7 @@ test_ofctrl_seqno_ack_seqnos(struct ovs_cmdl_context *ctx)
                                         &app_seqno)) {
                 return;
             }
-            ofctrl_seqno_update_create(i, app_seqno);
+            ofctrl_seqno_update_create(i, app_seqno, 0);
         }
     }
     printf("ofctrl-seqno-req-cfg: %u\n", n_reqs);

@@ -299,7 +299,7 @@ main(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
             ofctrl_seqno_update_create(
                 ofctrl_seq_type_br_cfg,
                 get_ovnbr_cfg(ovnbrrec_br_global_table_get(ovnbr_idl_loop.idl),
-                              ovnbr_cond_seqno, ovnbr_expected_cond_seqno));
+                              ovnbr_cond_seqno, ovnbr_expected_cond_seqno), 0);
 
             br_ofctrls_put(ofctrl_seqno_get_req_cfg(),
                            engine_node_changed(&en_lflow_output),
