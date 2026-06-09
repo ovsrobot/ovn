@@ -18,16 +18,44 @@
 
 #include "lib/inc-proc-eng.h"
 #include "lib/uuidset.h"
+#include "openvswitch/hmap.h"
+#include "hmapx.h"
+
+/* Track what changed in the dynamic_routes engine node's parsed_routes.
+ * All hmapx node data are pointers to struct parsed_route. */
+struct dynamic_routes_tracked_data {
+    struct hmapx trk_created_parsed_routes;
+    struct hmapx trk_deleted_parsed_routes;
+
+    /* Matched (unchanged) entries from the previous cycle, kept alive
+     * until the next cycle because downstream nodes (en_group_ecmp_route)
+     * may still reference them via unique_routes_node.route pointers. */
+    struct hmapx trk_matched_parsed_routes;
+};
 
 struct dynamic_routes_data {
-    /* Stores struct ar_entry, one for each dynamic route. */
+    /* Stores struct ar_entry, one for each dynamic route. Fed only to
+     * en_advertised_route_sync (SB Advertised_Route table). */
     struct hmap routes;
+    /* Stores struct parsed_route, one per VIP/NAT-external IP whose
+     * advertisement was synthesized from a *connected-neighbour* LR (i.e.
+     * dynamic-routing-redistribute=lb/nat for an LRP whose peer LS hosts
+     * another LR that owns the LB/NAT). Without these the advertising LR
+     * would claim reachability for a prefix it had no local forwarding
+     * route to. Fed to en_group_ecmp_route alongside en_routes and
+     * en_learned_route_sync. */
+    struct hmap parsed_routes;
     /* Contains the uuids of all NB Logical Routers where we used a
      * lr_stateful_record during computation. */
     struct uuidset nb_lr;
     /* Contains the uuids of all NB Logical Switches where we rely on port
      * changes for host routes. */
     struct uuidset nb_ls;
+
+    /* 'tracked' is set to true if there is information available for
+     * incremental processing. If true then trk_data is valid. */
+    bool tracked;
+    struct dynamic_routes_tracked_data trk_data;
 };
 
 void *en_advertised_route_sync_init(struct engine_node *, struct engine_arg *);
