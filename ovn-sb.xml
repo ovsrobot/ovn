@@ -5047,8 +5047,8 @@ tcp.flags = RST;
       </p>
 
       <column name="type">
-        The type of the service. Supported values are "load-balancer" and
-        "network-function".
+        The type of the service. Supported values are "load-balancer",
+        "network-function", and "logical-switch-port".
       </column>
 
       <column name="ip">
@@ -5423,6 +5423,58 @@ tcp.flags = RST;
 
       An announcing chassis can use this information to check if this
       destination is local and adjust the route priorities based on that.
+    </column>
+
+    <column name="tracked_service_ip">
+      Optional. Together with
+      <ref column="tracked_service_port"/> and
+      <ref column="tracked_service_protocol"/>, identifies the specific
+      backend service (typically a Load_Balancer backend) whose health
+      governs this route's advertisement.
+
+      <p>
+        Set by <code>ovn-northd</code> for routes emitted from a
+        Load_Balancer with <code>ip_port_mappings</code> configured.
+        When all three <code>tracked_service_*</code> columns are
+        present, <code>ovn-controller</code> joins them with
+        <ref column="tracked_port"/> and the local chassis name to
+        find the matching <ref table="Service_Monitor"/> row(s) on
+        <ref table="Service_Monitor" column="type"/>=<code>load-balancer</code>
+        and gates kernel-route installation on their
+        <code>status</code>: if matching rows exist on this chassis
+        and none report <code>online</code>, the route is withdrawn
+        locally.
+      </p>
+
+      <p>
+        The controller requires all three columns to be set before
+        gating the route on Service_Monitor status. Rows with any
+        column unset are installed unconditionally, since the
+        controller cannot distinguish an LB row with a missing
+        selector from a non-LB row (the route source is not stored
+        in this table).
+      </p>
+
+      <p>
+        <b>Rolling upgrade:</b> all three columns are optional (min 0).
+        During a mixed-version upgrade, an older northd that does not
+        set these columns will leave them absent, and an older
+        controller that does not read them will ignore them - so the
+        behavior degrades gracefully to the pre-per-backend state (one
+        Advertised_Route per VIP, no health-check gating). No special
+        upgrade orchestration is required.
+      </p>
+    </column>
+
+    <column name="tracked_service_port">
+      Optional. L4 port of the backend service that this route
+      depends on. See <ref column="tracked_service_ip"/>.
+    </column>
+
+    <column name="tracked_service_protocol">
+      Optional. L4 protocol of the backend service that this route
+      depends on. See <ref column="tracked_service_ip"/>. Mirrors the
+      <ref table="Service_Monitor" column="protocol"/> enum.
     </column>
 
     <column name="external_ids">

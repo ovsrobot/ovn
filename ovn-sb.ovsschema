@@ -1,7 +1,7 @@
 {
     "name": "OVN_Southbound",
-    "version": "21.8.0",
-    "cksum": "614397313 36713",
+    "version": "21.9.0",
+    "cksum": "341356787 37499",
     "tables": {
         "SB_Global": {
             "columns": {
@@ -670,11 +670,23 @@
                                                   "refType": "strong"},
                                           "min": 0,
                                           "max": 1}},
+                "tracked_service_ip": {"type": {"key": "string",
+                                                "min": 0, "max": 1}},
+                "tracked_service_port": {"type": {"key": {"type": "integer",
+                                                          "minInteger": 0,
+                                                          "maxInteger": 65535},
+                                                  "min": 0, "max": 1}},
+                "tracked_service_protocol": {
+                    "type": {"key": {"type": "string",
+                             "enum": ["set", ["tcp", "udp", "icmp"]]},
+                             "min": 0, "max": 1}},
                 "external_ids": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}}},
             "indexes": [["datapath", "logical_port",
-                         "ip_prefix", "tracked_port"]],
+                         "ip_prefix", "tracked_port",
+                         "tracked_service_ip", "tracked_service_port",
+                         "tracked_service_protocol"]],
             "isRoot": true},
         "Learned_Route": {
             "columns": {

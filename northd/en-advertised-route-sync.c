@@ -23,7 +23,11 @@
 #include "en-lr-stateful.h"
 #include "lb.h"
 #include "openvswitch/hmap.h"
+#include "openvswitch/vlog.h"
 #include "ovn-util.h"
+#include "util.h"
+
+VLOG_DEFINE_THIS_MODULE(en_advertised_route_sync);
 
 struct ar_entry {
     struct hmap_node hmap_node;
@@ -36,6 +40,16 @@ struct ar_entry {
     const struct ovn_port *tracked_port; /* If set, the port whose chassis
                                           * advertises this route with a
                                           * higher priority. */
+    /* Optional backend service selector. Populated for LB-derived routes
+     * when northd has per-backend information (ip_port_mappings on the
+     * Load_Balancer). All three fields must be set together or all left
+     * unset: a partial selector could match an unrelated Service_Monitor
+     * row, so the entire tuple is omitted when the LB protocol is not
+     * accepted by lb_service_monitor_protocol_supported(). */
+    char *tracked_service_ip;
+    int64_t tracked_service_port;
+    bool has_tracked_service_port;
+    char *tracked_service_protocol;
     enum route_source source;
 };
 
@@ -74,12 +88,23 @@ ar_entry_add(struct hmap *routes, const struct ovn_datapath *od,
                                tracked_port, source);
 }
 
+/* Find an ar_entry whose (datapath, logical_port, ip_prefix,
+ * tracked_port, tracked_service_ip, tracked_service_port,
+ * tracked_service_protocol) tuple matches the full key. The SB
+ * Advertised_Route unique index includes the service selector
+ * columns, so multiple rows for the same VIP IP and
+ * backend LSP are allowed when they differ by per-backend
+ * selector, so ar_entry_find must compare the full key. */
 static struct ar_entry *
 ar_entry_find(struct hmap *route_map,
               const struct sbrec_datapath_binding *sb_db,
               const struct sbrec_port_binding *logical_port,
               const char *ip_prefix,
-              const struct sbrec_port_binding *tracked_port)
+              const struct sbrec_port_binding *tracked_port,
+              const char *tracked_service_ip,
+              bool has_tracked_service_port,
+              int64_t tracked_service_port,
+              const char *tracked_service_protocol)
 {
     struct ar_entry *route_e;
     uint32_t hash;
@@ -106,6 +131,24 @@ ar_entry_find(struct hmap *route_map,
                     tracked_port != route_e->tracked_port->sb) {
                 continue;
             }
+        } else if (route_e->tracked_port) {
+            continue;
+        }
+
+        if (!nullable_string_is_equal(tracked_service_ip,
+                                      route_e->tracked_service_ip)) {
+            continue;
+        }
+        if (has_tracked_service_port != route_e->has_tracked_service_port) {
+            continue;
+        }
+        if (has_tracked_service_port &&
+            tracked_service_port != route_e->tracked_service_port) {
+            continue;
+        }
+        if (!nullable_string_is_equal(tracked_service_protocol,
+                                      route_e->tracked_service_protocol)) {
+            continue;
         }
 
         return route_e;
@@ -118,7 +161,53 @@ static void
 ar_entry_free(struct ar_entry *route_e)
 {
     free(route_e->ip_prefix);
+    free(route_e->tracked_service_ip);
+    free(route_e->tracked_service_protocol);
     free(route_e);
+}
+
+/* Attach a per-backend service selector (ip, l4 port, protocol) to a
+ * previously added ar_entry. All three parameters are required:
+ * a partial selector could match an unrelated Service_Monitor row
+ * on the same (ip, port) for a different protocol.
+ *
+ * protocol must be one of the protocols accepted by
+ * lb_service_monitor_protocol_supported(), or the caller must leave the entire
+ * selector unset (i.e. not invoke this helper) for LB protocols
+ * outside that set. */
+static void
+ar_entry_set_service_selector(struct ar_entry *route_e,
+                               const char *ip, int64_t port,
+                               const char *protocol)
+{
+    if (!ip || !protocol) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
+        VLOG_WARN_RL(&rl, "Cannot set partial service selector: "
+                     "ip=%s protocol=%s", ip ? ip : "(null)",
+                     protocol ? protocol : "(null)");
+        return;
+    }
+
+    route_e->tracked_service_ip = xstrdup(ip);
+    route_e->tracked_service_port = port;
+    route_e->has_tracked_service_port = true;
+    route_e->tracked_service_protocol = xstrdup(protocol);
+}
+
+static void
+ar_entry_copy_service_selector(struct ar_entry *dst,
+                               const struct ar_entry *src)
+{
+    if (src->tracked_service_ip) {
+        dst->tracked_service_ip = xstrdup(src->tracked_service_ip);
+    }
+    if (src->has_tracked_service_port) {
+        dst->tracked_service_port = src->tracked_service_port;
+        dst->has_tracked_service_port = true;
+    }
+    if (src->tracked_service_protocol) {
+        dst->tracked_service_protocol = xstrdup(src->tracked_service_protocol);
+    }
 }
 
 static void
@@ -204,6 +293,13 @@ add_redistribute_parsed_route(struct hmap *parsed_routes_out,
     /* Parse the prefix (the VIP/FIP). */
     struct in6_addr prefix;
     if (!ip46_parse(ip_address, &prefix)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "Failed to parse IP address '%s' for %s "
+                     "redistribute forwarding route on datapath %s",
+                     ip_address,
+                     source == ROUTE_SOURCE_LB ? "LB" : "NAT",
+                     advertising_od->nbr ? advertising_od->nbr->name
+                                         : "<unknown>");
         return;
     }
     bool is_v6 = !IN6_IS_ADDR_V4MAPPED(&prefix);
@@ -217,6 +313,13 @@ add_redistribute_parsed_route(struct hmap *parsed_routes_out,
         nexthop_s = tracked_port->lrp_networks.ipv6_addrs[0].addr_s;
     }
     if (!nexthop_s) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "No %s address on tracked port %s for %s "
+                     "redistribute forwarding route (prefix %s)",
+                     is_v6 ? "IPv6" : "IPv4",
+                     tracked_port->key,
+                     source == ROUTE_SOURCE_LB ? "LB" : "NAT",
+                     ip_address);
         return;
     }
 
@@ -257,7 +360,7 @@ add_redistribute_parsed_route(struct hmap *parsed_routes_out,
  * parsed_route on advertising_op->od for each NAT external IP whose
  * nexthop is available from tracked_port (i.e. a peer LRP). This is the
  * connected-neighbour redistribution case where the advertising LR
- * needs to forward to the peer's LR.*/
+ * needs to forward to the peer's LR. */
 static void
 build_nat_route_for_port(const struct ovn_port *advertising_op,
                          const struct lr_nat_record *lr_nat,
@@ -283,10 +386,13 @@ build_nat_route_for_port(const struct ovn_port *advertising_op,
             ? ovn_port_find(ls_ports, nat->nb->logical_port)
             : nat->l3dgw_port;
 
+        /* NAT routes carry no service selector, so pass NULL/0/NULL for
+         * the selector portion of the dedup key. */
         if (!ar_entry_find(routes, advertising_od->sdp->sb_dp,
                            advertising_op->sb,
                            nat->nb->external_ip,
-                           tracked_port ? tracked_port->sb : NULL)) {
+                           tracked_port ? tracked_port->sb : NULL,
+                           NULL, false, 0, NULL)) {
             ar_entry_add(routes, advertising_od, advertising_op,
                          nat->nb->external_ip, tracked_port,
                          ROUTE_SOURCE_NAT);
@@ -397,6 +503,91 @@ build_nat_connected_routes(
     }
 }
 
+/* For each LB attached to peer_lr_nbr, emit one Advertised_Route per
+ * (VIP, backend LSP) pair, plus one forwarding parsed_route per VIP.
+ * Backends without ip_port_mappings fall back to one Advertised_Route
+ * per VIP with fallback_tracked_port in place of a per-backend LSP.
+ * The forwarding route is emitted once per VIP regardless of backend
+ * count: the data-plane forwarding decision is independent of which
+ * backend ends up serving the flow. */
+static void
+build_lb_lr_routes(const struct ovn_port *advertising_op,
+                   const struct ovn_port *fallback_tracked_port,
+                   const struct nbrec_logical_router *peer_lr_nbr,
+                   const struct hmap *lb_datapaths_map,
+                   const struct hmap *ls_ports,
+                   struct hmap *routes,
+                   struct hmap *parsed_routes_out)
+{
+    const struct ovn_datapath *advertising_od = advertising_op->od;
+
+    if (!peer_lr_nbr) {
+        return;
+    }
+
+    for (size_t i = 0; i < peer_lr_nbr->n_load_balancer; i++) {
+        const struct nbrec_load_balancer *nbrec_lb =
+            peer_lr_nbr->load_balancer[i];
+        if (!smap_get_bool(&nbrec_lb->options,
+                           "dynamic-routing-advertise", true)) {
+            continue;
+        }
+        const struct uuid *lb_uuid = &nbrec_lb->header_.uuid;
+        const struct ovn_lb_datapaths *lb_dps =
+            ovn_lb_datapaths_find(lb_datapaths_map, lb_uuid);
+        if (!lb_dps) {
+            continue;
+        }
+        const struct ovn_northd_lb *lb = lb_dps->lb;
+        for (size_t v = 0; v < lb->n_vips; v++) {
+            const struct ovn_lb_vip *vip = &lb->vips[v];
+            const struct ovn_northd_lb_vip *vip_nb = &lb->vips_nb[v];
+
+            if (parsed_routes_out) {
+                add_redistribute_parsed_route(
+                    parsed_routes_out, advertising_od, advertising_op,
+                    fallback_tracked_port, vip->vip_str, ROUTE_SOURCE_LB);
+            }
+
+            /* Protocols not accepted by
+             * lb_service_monitor_protocol_supported() can never produce a
+             * matching Service_Monitor row, and a partial selector
+             * (ip+port, no protocol) risks matching an unrelated
+             * monitor on the same ip/port for a different protocol.
+             * Leave the whole selector unset in that case. */
+            bool proto_supported = lb_service_monitor_protocol_supported(lb->proto);
+
+            bool emitted_any = false;
+            for (size_t b = 0; b < vip_nb->n_backends; b++) {
+                const char *lsp_name = vip_nb->backends_nb[b].logical_port;
+                if (!lsp_name) {
+                    continue;
+                }
+                const struct ovn_port *backend_op =
+                    ovn_port_find(ls_ports, lsp_name);
+                if (!backend_op) {
+                    continue;
+                }
+                struct ar_entry *route_e =
+                    ar_entry_add(routes, advertising_od, advertising_op,
+                                 vip->vip_str, backend_op, ROUTE_SOURCE_LB);
+                if (proto_supported) {
+                    const struct ovn_lb_backend *backend =
+                        vector_get_ptr(&vip->backends, b);
+                    ar_entry_set_service_selector(route_e, backend->ip_str,
+                                                  backend->port, lb->proto);
+                }
+                emitted_any = true;
+            }
+            if (!emitted_any) {
+                ar_entry_add(routes, advertising_od, advertising_op,
+                             vip->vip_str, fallback_tracked_port,
+                             ROUTE_SOURCE_LB);
+            }
+        }
+    }
+}
+
 /* Own-LR entry point used by the own-LR (gateway-router/DGP) path,
  * which doesn't currently route through a peer LR's LBs. Emits one
  * Advertised_Route per IP in lb_ips with tracked_port as-is.
@@ -441,7 +632,8 @@ build_lb_route_for_port(const struct ovn_port *advertising_op,
  * LB VIPs too.*/
 static void
 build_lb_connected_routes(const struct ovn_datapath *od,
-                          const struct lr_stateful_table *lr_stateful_table,
+                          const struct hmap *lb_datapaths_map,
+                          const struct hmap *ls_ports,
                           struct dynamic_routes_data *data)
 {
     const struct ovn_port *op;
@@ -459,13 +651,11 @@ build_lb_connected_routes(const struct ovn_datapath *od,
         /* Track the peer datapath for any changes. */
         dynamic_routes_track_od(data, peer_od);
 
-        const struct lr_stateful_record *lr_stateful_rec;
         /* This is directly connected LR peer. */
         if (peer_od->nbr) {
-            lr_stateful_rec = lr_stateful_table_find_by_uuid(
-                lr_stateful_table, peer_od->key);
-            build_lb_route_for_port(op, op->peer, lr_stateful_rec->lb_ips,
-                                    &data->routes, &data->parsed_routes);
+            build_lb_lr_routes(op, op->peer, peer_od->nbr,
+                               lb_datapaths_map, ls_ports,
+                               &data->routes, &data->parsed_routes);
             continue;
         }
 
@@ -478,11 +668,9 @@ build_lb_connected_routes(const struct ovn_datapath *od,
                  * function.*/
                 continue;
             }
-            lr_stateful_rec = lr_stateful_table_find_by_uuid(
-                lr_stateful_table, rp->peer->od->key);
-
-            build_lb_route_for_port(op, rp->peer, lr_stateful_rec->lb_ips,
-                                    &data->routes, &data->parsed_routes);
+            build_lb_lr_routes(op, rp->peer, rp->peer->od->nbr,
+                               lb_datapaths_map, ls_ports,
+                               &data->routes, &data->parsed_routes);
             /* Track the LR datapath on the other side of LS
              * for any changes. */
             dynamic_routes_track_od(data, rp->peer->od);
@@ -784,7 +972,8 @@ en_dynamic_routes_run(struct engine_node *node, void *data)
 
         build_lb_routes(od, lr_stateful_rec->lb_ips,
                         &dynamic_routes_data->routes);
-        build_lb_connected_routes(od, &lr_stateful_data->table,
+        build_lb_connected_routes(od, &northd_data->lb_datapaths_map,
+                                  &northd_data->ls_ports,
                                   dynamic_routes_data);
     }
 
@@ -968,9 +1157,13 @@ advertised_route_table_sync(
         const struct sbrec_port_binding *tracked_port =
             route->tracked_port ? route->tracked_port->sb : NULL;
         char *ip_prefix = normalize_v46_prefix(&route->prefix, route->plen);
+ /* Parsed routes (static, connected, NAT) carry no per-backend
+         * service selector, so pass NULL/0/NULL to compare against
+         * existing sync entries on the (dp, lp, prefix, tracked_port)
+         * portion of the key with empty selectors. */
         if (ar_entry_find(&sync_routes, route->od->sdp->sb_dp,
                           route->out_port->sb, ip_prefix,
-                          tracked_port)) {
+                          tracked_port, NULL, false, 0, NULL)) {
             free(ip_prefix);
             continue;
         }
@@ -980,7 +1173,10 @@ advertised_route_table_sync(
                             route->source);
     }
 
-    /* Then add the set of dynamic routes that need sync-ing. */
+    /* Then add the set of dynamic routes that need sync-ing. The SB
+     * unique index includes the selector columns, so two rows with
+     * the same VIP and backend LSP but different selectors are
+     * distinct entries and both must land in sync_routes. */
     struct ar_entry *route_e;
     HMAP_FOR_EACH (route_e, hmap_node, dynamic_routes) {
         if (!should_advertise_route(route_e->od, route_e->op,
@@ -992,32 +1188,46 @@ advertised_route_table_sync(
             route_e->tracked_port ? route_e->tracked_port->sb : NULL;
         if (ar_entry_find(&sync_routes, route_e->od->sdp->sb_dp,
                           route_e->op->sb,
-                          route_e->ip_prefix, tracked_pb)) {
-            /* We could already have advertised route entry for LRP IP that
-             * corresponds to "snat" when "connected-as-host" is combined
-             * with "nat". Skip it. */
+                          route_e->ip_prefix, tracked_pb,
+                          route_e->tracked_service_ip,
+                          route_e->has_tracked_service_port,
+                          route_e->tracked_service_port,
+                          route_e->tracked_service_protocol)) {
+            /* Exact duplicate of an entry already in sync_routes (e.g.
+             * the snat/connected-as-host overlap, or two LB
+             * configurations describing the same backend service).
+             * Skip the redundant insert. */
             continue;
         }
-        ar_entry_add(&sync_routes, route_e->od, route_e->op,
-                     route_e->ip_prefix, route_e->tracked_port,
-                     route_e->source);
+        struct ar_entry *sync_e =
+            ar_entry_add(&sync_routes, route_e->od, route_e->op,
+                         route_e->ip_prefix, route_e->tracked_port,
+                         route_e->source);
+        /* Preserve the per-backend service selector across the copy
+         * into sync_routes. build_lb_lr_routes sets it on route_e but
+         * ar_entry_add starts the new sync_e with NULL/zero fields. */
+        ar_entry_copy_service_selector(sync_e, route_e);
     }
 
     const struct sbrec_advertised_route *sb_route;
     SBREC_ADVERTISED_ROUTE_TABLE_FOR_EACH_SAFE (sb_route,
                                                 sbrec_advertised_route_table) {
+        bool have_port = sb_route->n_tracked_service_port > 0;
+        int64_t sb_port = have_port ? sb_route->tracked_service_port[0] : 0;
         route_e = ar_entry_find(&sync_routes, sb_route->datapath,
                                 sb_route->logical_port, sb_route->ip_prefix,
-                                sb_route->tracked_port);
+                                sb_route->tracked_port,
+                                sb_route->tracked_service_ip,
+                                have_port, sb_port,
+                                sb_route->tracked_service_protocol);
         if (!route_e) {
+            /* No matching entry in the to-emit set: the LB,
+             * its backends, or the selector drifted. The
+             * replacement row (if any) will be inserted below. */
             sbrec_advertised_route_delete(sb_route);
             continue;
         }
-
-        if (route_e->tracked_port && !sb_route->tracked_port) {
-            sbrec_advertised_route_set_tracked_port(
-                sb_route, route_e->tracked_port->sb);
-        }
+        /* Full-key match: nothing to update. */
         hmap_remove(&sync_routes, &route_e->hmap_node);
         ar_entry_free(route_e);
     }
@@ -1031,6 +1241,18 @@ advertised_route_table_sync(
         if (route_e->tracked_port && route_e->tracked_port->sb) {
             sbrec_advertised_route_set_tracked_port(sr,
                                                     route_e->tracked_port->sb);
+        }
+        if (route_e->tracked_service_ip) {
+            sbrec_advertised_route_set_tracked_service_ip(
+                sr, route_e->tracked_service_ip);
+        }
+        if (route_e->has_tracked_service_port) {
+            int64_t port = route_e->tracked_service_port;
+            sbrec_advertised_route_set_tracked_service_port(sr, &port, 1);
+        }
+        if (route_e->tracked_service_protocol) {
+            sbrec_advertised_route_set_tracked_service_protocol(
+                sr, route_e->tracked_service_protocol);
         }
         ar_entry_free(route_e);
     }
