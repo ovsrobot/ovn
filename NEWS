@@ -1,5 +1,9 @@
 Post v26.03.0
 -------------
+   - Added Transit Switch port support:
+     * Support the creation of Transit Switch Ports.
+     * Added new ovn-ic-nbctl 'tsp-add', 'tsp-del' and 'tsp-set-addr' commands
+       to manage Transit Switch Ports.
    - Added ability to set any "ipsec_*" NB_Global option to configure the
      IPsec backend.
    - Documented missing ovn-nbctl commands: "mirror-rule-add",
