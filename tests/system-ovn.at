@@ -21876,3 +21876,524 @@ OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
 
 AT_CLEANUP
 ])
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([dynamic-routing - LB redistribute gated by Service_Monitor.status])
+AT_KEYWORDS([dynamic-routing])
+
+VRF_RESERVE([1339])
+
+# Verifies the controller-side gate that skips installing the
+# advertise-only kernel route for an LB-derived Advertised_Route
+# that carries the full backend service selector (tracked_service_ip,
+# tracked_service_port, tracked_service_protocol all set) and whose
+# matching local Service_Monitor row, joined on (logical_port,
+# chassis_name, type='load-balancer', ip, port, protocol), is not
+# reporting online. The gate is not controlled by any LRP option: it
+# acts automatically when the full selector is present and the matching
+# SM row exists. Selector-less rows are installed unconditionally.
+#
+# Topology: two chassis-bound LRs (lr-origin, lr-target) share a
+# common LS (ls-share). lr-origin has redistribute=lb on its LRP into
+# ls-share, so northd emits per-backend Advertised_Route rows on
+# lr-origin's datapath with tracked_port = the backend LSP and the
+# full per-listener service selector populated. lr-target owns the
+# LB. The backend LSP (be0) is on ls-share, bound to hv1.
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+
+ADD_BR([br-int])
+check ovs-vsctl \
+    -- set Open_vSwitch . external-ids:system-id=hv1 \
+    -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+    -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+    -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+    -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+start_daemon ovn-controller
+
+# Shared LS holding both LR LRPs and the backend LSP.
+check ovn-nbctl ls-add ls-share
+
+# lr-origin: GW, vrf 1339, has the redistribute LRP into ls-share.
+check ovn-nbctl lr-add lr-origin \
+    -- set Logical_Router lr-origin options:chassis=hv1 \
+                                    options:dynamic-routing=true \
+                                    options:dynamic-routing-vrf-id=1339
+check ovn-nbctl lrp-add lr-origin lr-origin-share 00:de:ad:00:00:01 \
+        192.168.0.1/24 \
+    -- set Logical_Router_Port lr-origin-share \
+            options:dynamic-routing-redistribute="lb" \
+            options:dynamic-routing-maintain-vrf=true
+check ovn-nbctl lsp-add ls-share share-lr-origin \
+    -- set Logical_Switch_Port share-lr-origin type=router \
+                                               options:router-port=lr-origin-share \
+    -- lsp-set-addresses share-lr-origin router
+
+# lr-target: GW, owns the LB. Also attached to ls-share so lr-origin
+# can walk LR-LS-LR to discover the LB.
+check ovn-nbctl lr-add lr-target \
+    -- set Logical_Router lr-target options:chassis=hv1
+check ovn-nbctl lrp-add lr-target lr-target-share 00:de:ad:00:00:02 \
+        192.168.0.2/24
+check ovn-nbctl lsp-add ls-share share-lr-target \
+    -- set Logical_Switch_Port share-lr-target type=router \
+                                               options:router-port=lr-target-share \
+    -- lsp-set-addresses share-lr-target router
+
+# Backend LSP on the same LS. Veth-backed so it's claimed locally.
+check ovn-nbctl lsp-add ls-share be0
+check ovn-nbctl lsp-set-addresses be0 "00:de:ad:00:00:10 192.168.0.10"
+ADD_NAMESPACES(be0_ns)
+ADD_VETH(be0, be0_ns, br-int, "192.168.0.10/24", "00:de:ad:00:00:10")
+
+# LB with ip_port_mappings -> backend LSP "be0". options:distributed=true
+# is required for northd to populate ovn_northd_lb_backend.logical_port
+# (see ovn_lb_vip_backends_ip_port_mappings_init). The
+# Load_Balancer_Health_Check is what makes ovn-northd populate the
+# Service_Monitor SB table for the backend: a manually-created row
+# would be garbage-collected as orphaned. ovn-controller then probes
+# the backend and updates Service_Monitor.status, which is exactly
+# what the controller-side gate observes.
+check ovn-nbctl \
+    -- lb-add lb0 172.16.1.10:80 192.168.0.10:80 \
+    -- set Load_Balancer lb0 options:distributed=true \
+        ip_port_mappings:192.168.0.10="be0:192.168.0.2" \
+    -- lr-lb-add lr-target lb0
+check_uuid ovn-nbctl --id=@hc create Load_Balancer_Health_Check \
+        vip="172.16.1.10\:80" \
+        options:interval=2 options:timeout=1 \
+        options:success_count=1 options:failure_count=1 \
+    -- add Load_Balancer lb0 health_check @hc
+
+check ovn-nbctl --wait=hv sync
+wait_for_ports_up
+OVS_CTL_TIMEOUT=30
+
+# Baseline: no listener on be0:80 -> ovn-controller's probe fails ->
+# Service_Monitor.status=offline -> the gate withdraws the route from
+# the VRF on this chassis. The blackhole route for 172.16.1.10 must
+# NOT appear in ovnvrf1339.
+OVS_WAIT_UNTIL([test -n "`ip vrf show ovnvrf1339 2>/dev/null`"])
+wait_row_count Service_Monitor 1 logical_port=be0
+wait_row_count Service_Monitor 1 logical_port=be0 status=offline
+
+# Confirm the gate is firing: no route for the LB VIP.
+AT_CHECK([
+    ip route list vrf ovnvrf1339 | grep -c "blackhole 172.16.1.10" || true
+], [0], [0
+])
+
+# Start a TCP listener on be0:80. ovn-controller's probe now succeeds
+# and Service_Monitor.status flips to online, so the gate lets the route
+# through and the route shows up in the VRF. OVS_START_L7 uses netstat
+# for readiness which may not be available, so start test-l7.py directly
+# and use Service_Monitor.status as the readiness signal instead.
+be0_pid_file=$(mktemp be0_http.XXX.pid)
+NETNS_DAEMONIZE([be0_ns],
+    [[$PYTHON $srcdir/test-l7.py http]], [$be0_pid_file])
+wait_row_count Service_Monitor 1 logical_port=be0 status=online
+OVS_WAIT_UNTIL([
+    ip route list vrf ovnvrf1339 | grep -q "blackhole 172.16.1.10"])
+
+# Kill the listener. The probe fails again, status=offline, and the
+# route is withdrawn from the VRF so that any routing speaker reading
+# it retracts the advertisement.
+kill `cat $be0_pid_file`
+wait_row_count Service_Monitor 1 logical_port=be0 status=offline
+OVS_WAIT_UNTIL([
+    ! ip route list vrf ovnvrf1339 | grep -q "blackhole 172.16.1.10"])
+
+# Remove the health_check from the LB -> northd deletes the SM row ->
+# gate is inert again -> route reinstalled (the route is unconditional
+# for unmonitored backends).
+check ovn-nbctl clear Load_Balancer lb0 health_check
+wait_row_count Service_Monitor 0 logical_port=be0
+OVS_WAIT_UNTIL([
+    ip route list vrf ovnvrf1339 | grep -q "blackhole 172.16.1.10"])
+
+OVS_APP_EXIT_AND_WAIT([ovn-controller])
+
+as ovn-sb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as ovn-nb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as northd
+OVS_APP_EXIT_AND_WAIT([ovn-northd])
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([dynamic-routing - shared backend LSP gates per-VIP])
+AT_KEYWORDS([dynamic-routing])
+
+VRF_RESERVE([1340])
+
+# Two distinct LBs (lb-a:80 and lb-b:443) share one backend LSP (be0).
+# Each LB has its own Load_Balancer_Health_Check probing the backend
+# port specific to that LB. This is the K8s-style multi-Service-per-pod
+# shape: one backend LSP serves several VIPs whose health states are
+# independent.
+#
+# With the full selector tuple match
+# (logical_port + tracked_service_ip + tracked_service_port +
+# tracked_service_protocol against Service_Monitor), each VIP's
+# kernel-route presence depends only on its own backend port's SM
+# row. Bringing one listener up and leaving the other down must
+# install exactly the corresponding VIP's route, never both, never
+# neither. This is a regression test for the previous looser
+# (tracked_port, chassis) matching that would advertise both VIPs
+# whenever any backend port was healthy.
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+
+ADD_BR([br-int])
+check ovs-vsctl \
+    -- set Open_vSwitch . external-ids:system-id=hv1 \
+    -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+    -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+    -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+    -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+start_daemon ovn-controller
+
+check ovn-nbctl ls-add ls-share
+
+check ovn-nbctl lr-add lr-origin \
+    -- set Logical_Router lr-origin options:chassis=hv1 \
+                                    options:dynamic-routing=true \
+                                    options:dynamic-routing-vrf-id=1340
+check ovn-nbctl lrp-add lr-origin lr-origin-share 00:de:ad:00:00:01 \
+        192.168.0.1/24 \
+    -- set Logical_Router_Port lr-origin-share \
+            options:dynamic-routing-redistribute="lb" \
+            options:dynamic-routing-maintain-vrf=true
+check ovn-nbctl lsp-add ls-share share-lr-origin \
+    -- set Logical_Switch_Port share-lr-origin type=router \
+                                               options:router-port=lr-origin-share \
+    -- lsp-set-addresses share-lr-origin router
+
+check ovn-nbctl lr-add lr-target \
+    -- set Logical_Router lr-target options:chassis=hv1
+check ovn-nbctl lrp-add lr-target lr-target-share 00:de:ad:00:00:02 \
+        192.168.0.2/24
+check ovn-nbctl lsp-add ls-share share-lr-target \
+    -- set Logical_Switch_Port share-lr-target type=router \
+                                               options:router-port=lr-target-share \
+    -- lsp-set-addresses share-lr-target router
+
+# One backend LSP shared by both LBs, with two listeners on different
+# ports (:80 and :443) inside the same netns.
+check ovn-nbctl lsp-add ls-share be0
+check ovn-nbctl lsp-set-addresses be0 "00:de:ad:00:00:10 192.168.0.10"
+ADD_NAMESPACES(be0_ns)
+ADD_VETH(be0, be0_ns, br-int, "192.168.0.10/24", "00:de:ad:00:00:10")
+
+# lb-a: VIP 172.16.1.10:80 -> 192.168.0.10:80
+check ovn-nbctl \
+    -- lb-add lb-a 172.16.1.10:80 192.168.0.10:80 \
+    -- set Load_Balancer lb-a options:distributed=true \
+        ip_port_mappings:192.168.0.10="be0:192.168.0.2" \
+    -- lr-lb-add lr-target lb-a
+check_uuid ovn-nbctl --id=@hc create Load_Balancer_Health_Check \
+        vip="172.16.1.10\:80" \
+        options:interval=2 options:timeout=1 \
+        options:success_count=1 options:failure_count=1 \
+    -- add Load_Balancer lb-a health_check @hc
+
+# lb-b: VIP 172.16.1.11:443 -> 192.168.0.10:443 (same backend LSP).
+check ovn-nbctl \
+    -- lb-add lb-b 172.16.1.11:443 192.168.0.10:443 \
+    -- set Load_Balancer lb-b options:distributed=true \
+        ip_port_mappings:192.168.0.10="be0:192.168.0.2" \
+    -- lr-lb-add lr-target lb-b
+check_uuid ovn-nbctl --id=@hc create Load_Balancer_Health_Check \
+        vip="172.16.1.11\:443" \
+        options:interval=2 options:timeout=1 \
+        options:success_count=1 options:failure_count=1 \
+    -- add Load_Balancer lb-b health_check @hc
+
+check ovn-nbctl --wait=hv sync
+wait_for_ports_up
+OVS_CTL_TIMEOUT=30
+
+# Baseline: nothing listening -> both SM rows offline -> neither VIP
+# advertised. VRF exists (maintain-vrf=true) but carries no LB route.
+OVS_WAIT_UNTIL([test -n "`ip vrf show ovnvrf1340 2>/dev/null`"])
+wait_row_count Service_Monitor 1 logical_port=be0 port=80
+wait_row_count Service_Monitor 1 logical_port=be0 port=80 status=offline
+wait_row_count Service_Monitor 1 logical_port=be0 port=443 status=offline
+AT_CHECK([
+    ip route list vrf ovnvrf1340 | grep -c "blackhole 172.16.1." || true
+], [0], [0
+])
+
+# Bring up the :80 listener only. SM for :80 flips to online, SM for
+# :443 stays offline. Tuple match must install ONLY the :80 route.
+be80_pid_file=$(mktemp be0_http80.XXX.pid)
+NETNS_DAEMONIZE([be0_ns],
+    [[$PYTHON $srcdir/test-l7.py http]], [$be80_pid_file])
+wait_row_count Service_Monitor 1 logical_port=be0 port=80 status=online
+OVS_WAIT_UNTIL([
+    ip route list vrf ovnvrf1340 | grep -q "blackhole 172.16.1.10"])
+# The :443 VIP must NOT be advertised: this is the regression the
+# tuple match buys. Under the loose (tracked_port, chassis) match the
+# :80 SM going online would suffice to advertise 172.16.1.11 too.
+AT_CHECK([
+    ip route list vrf ovnvrf1340 | grep -c "blackhole 172.16.1.11" || true
+], [0], [0
+])
+
+# Bring up the :443 listener too. test-l7.py only binds :80, so spin
+# up a separate Python TCP listener for :443.
+be443_pid_file=$(mktemp be0_tcp443.XXX.pid)
+NETNS_DAEMONIZE([be0_ns],
+    [python3 -c "import socket; s=socket.socket(); s.bind(('0.0.0.0',443)); s.listen(1)
+while True:
+ c,_=s.accept(); c.close()"],
+    [$be443_pid_file])
+wait_row_count Service_Monitor 1 logical_port=be0 port=443 status=online
+OVS_WAIT_UNTIL([
+    ip route list vrf ovnvrf1340 | grep -q "blackhole 172.16.1.11"])
+# :80 route should still be there.
+AT_CHECK([
+    ip route list vrf ovnvrf1340 | grep -c "blackhole 172.16.1.10"
+], [0], [1
+])
+
+# Kill ONLY the :80 listener. :443 still healthy. Only the 172.16.1.10
+# VIP must withdraw. 172.16.1.11 stays.
+kill `cat $be80_pid_file`
+wait_row_count Service_Monitor 1 logical_port=be0 port=80 status=offline
+OVS_WAIT_UNTIL([
+    ! ip route list vrf ovnvrf1340 | grep -q "blackhole 172.16.1.10"])
+AT_CHECK([
+    ip route list vrf ovnvrf1340 | grep -c "blackhole 172.16.1.11"
+], [0], [1
+])
+
+OVS_APP_EXIT_AND_WAIT([ovn-controller])
+
+as ovn-sb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as ovn-nb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as northd
+OVS_APP_EXIT_AND_WAIT([ovn-northd])
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([dynamic-routing - shared VIP IP and cross-VIP isolation])
+AT_KEYWORDS([dynamic-routing])
+
+VRF_RESERVE([1341])
+
+# This test exercises the per-listener route emission and the
+# per-listener controller gate over a single backend LSP that hosts
+# services for two distinct VIP IPs:
+#
+#   - VIP A 172.16.1.20: two LB listeners (lb-c:80, lb-d:443) share
+#     the same VIP IP and the same backend LSP (be0). The routing
+#     speaker advertises 172.16.1.20 once but two Advertised_Route rows, one per
+#     listener, carry distinct service selectors and gate
+#     independently. The chassis advertises the prefix while ANY
+#     listener for that VIP IP is healthy locally.
+#
+#   - VIP B 172.16.1.30: a third LB (lb-e:8080) advertises a
+#     different VIP IP off the same backend LSP. Its health must
+#     not influence VIP A and vice versa.
+#
+# The cross-VIP isolation case (VIP A all offline, VIP B online) is
+# the regression catcher: with the SB schema's unique index now
+# spanning the per-listener selector columns, northd emits separate
+# rows per listener and each row's gate matches only its own
+# Service_Monitor on the full selector tuple. An earlier coarser
+# match keyed on (logical_port, chassis) alone would let VIP B's
+# healthy backend keep VIP A wrongly advertised. The full-selector
+# gate keeps the two VIP IPs independent.
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+
+ADD_BR([br-int])
+check ovs-vsctl \
+    -- set Open_vSwitch . external-ids:system-id=hv1 \
+    -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+    -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+    -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+    -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+start_daemon ovn-controller
+
+check ovn-nbctl ls-add ls-share
+
+check ovn-nbctl lr-add lr-origin \
+    -- set Logical_Router lr-origin options:chassis=hv1 \
+                                    options:dynamic-routing=true \
+                                    options:dynamic-routing-vrf-id=1341
+check ovn-nbctl lrp-add lr-origin lr-origin-share 00:de:ad:00:00:01 \
+        192.168.0.1/24 \
+    -- set Logical_Router_Port lr-origin-share \
+            options:dynamic-routing-redistribute="lb" \
+            options:dynamic-routing-maintain-vrf=true
+check ovn-nbctl lsp-add ls-share share-lr-origin \
+    -- set Logical_Switch_Port share-lr-origin type=router \
+                                               options:router-port=lr-origin-share \
+    -- lsp-set-addresses share-lr-origin router
+
+check ovn-nbctl lr-add lr-target \
+    -- set Logical_Router lr-target options:chassis=hv1
+check ovn-nbctl lrp-add lr-target lr-target-share 00:de:ad:00:00:02 \
+        192.168.0.2/24
+check ovn-nbctl lsp-add ls-share share-lr-target \
+    -- set Logical_Switch_Port share-lr-target type=router \
+                                               options:router-port=lr-target-share \
+    -- lsp-set-addresses share-lr-target router
+
+check ovn-nbctl lsp-add ls-share be0
+check ovn-nbctl lsp-set-addresses be0 "00:de:ad:00:00:10 192.168.0.10"
+ADD_NAMESPACES(be0_ns)
+ADD_VETH(be0, be0_ns, br-int, "192.168.0.10/24", "00:de:ad:00:00:10")
+
+# VIP A, listener 1: lb-c carries 172.16.1.20:80 -> 192.168.0.10:80.
+check ovn-nbctl \
+    -- lb-add lb-c 172.16.1.20:80 192.168.0.10:80 \
+    -- set Load_Balancer lb-c options:distributed=true \
+        ip_port_mappings:192.168.0.10="be0:192.168.0.2" \
+    -- lr-lb-add lr-target lb-c
+check_uuid ovn-nbctl --id=@hc create Load_Balancer_Health_Check \
+        vip="172.16.1.20\:80" \
+        options:interval=2 options:timeout=1 \
+        options:success_count=1 options:failure_count=1 \
+    -- add Load_Balancer lb-c health_check @hc
+
+# VIP A, listener 2: lb-d carries 172.16.1.20:443 -> 192.168.0.10:443.
+check ovn-nbctl \
+    -- lb-add lb-d 172.16.1.20:443 192.168.0.10:443 \
+    -- set Load_Balancer lb-d options:distributed=true \
+        ip_port_mappings:192.168.0.10="be0:192.168.0.2" \
+    -- lr-lb-add lr-target lb-d
+check_uuid ovn-nbctl --id=@hc create Load_Balancer_Health_Check \
+        vip="172.16.1.20\:443" \
+        options:interval=2 options:timeout=1 \
+        options:success_count=1 options:failure_count=1 \
+    -- add Load_Balancer lb-d health_check @hc
+
+# VIP B: lb-e carries 172.16.1.30:8080 -> 192.168.0.10:8080.
+check ovn-nbctl \
+    -- lb-add lb-e 172.16.1.30:8080 192.168.0.10:8080 \
+    -- set Load_Balancer lb-e options:distributed=true \
+        ip_port_mappings:192.168.0.10="be0:192.168.0.2" \
+    -- lr-lb-add lr-target lb-e
+check_uuid ovn-nbctl --id=@hc create Load_Balancer_Health_Check \
+        vip="172.16.1.30\:8080" \
+        options:interval=2 options:timeout=1 \
+        options:success_count=1 options:failure_count=1 \
+    -- add Load_Balancer lb-e health_check @hc
+
+check ovn-nbctl --wait=hv sync
+wait_for_ports_up
+OVS_CTL_TIMEOUT=30
+
+# Northd emits one Advertised_Route per listener: two for VIP A and
+# one for VIP B (three total on lr-origin's datapath), each row
+# carrying its own per-listener selector. The SB index now spans the
+# selector columns so the two VIP-A rows coexist.
+OVS_WAIT_UNTIL([test -n "`ip vrf show ovnvrf1341 2>/dev/null`"])
+wait_row_count Service_Monitor 1 logical_port=be0 port=80
+wait_row_count Service_Monitor 1 logical_port=be0 port=80 status=offline
+wait_row_count Service_Monitor 1 logical_port=be0 port=443 status=offline
+wait_row_count Service_Monitor 1 logical_port=be0 port=8080 status=offline
+wait_row_count sb:Advertised_Route 2 ip_prefix='"172.16.1.20"'
+wait_row_count sb:Advertised_Route 1 ip_prefix='"172.16.1.30"'
+wait_row_count sb:Advertised_Route 1 ip_prefix='"172.16.1.20"' tracked_service_port=80
+wait_row_count sb:Advertised_Route 1 ip_prefix='"172.16.1.20"' tracked_service_port=443
+wait_row_count sb:Advertised_Route 1 ip_prefix='"172.16.1.30"' tracked_service_port=8080
+
+# Baseline: nothing listening -> neither VIP A nor VIP B advertised.
+AT_CHECK([
+    ip route list vrf ovnvrf1341 | grep -c "blackhole 172.16.1." || true
+], [0], [0
+])
+
+# Bring up VIP B's :8080 listener only. VIP B's row matches the
+# online SM (be0, 192.168.0.10, 8080, tcp) and the route for
+# 172.16.1.30 appears. Critically, VIP A's two rows match the
+# (be0, 192.168.0.10, 80) and (be0, 192.168.0.10, 443) SMs and
+# both stay offline, so 172.16.1.20 must NOT be advertised.
+be8080_pid_file=$(mktemp be0_tcp8080.XXX.pid)
+NETNS_DAEMONIZE([be0_ns],
+    [python3 -c "import socket; s=socket.socket(); s.bind(('0.0.0.0',8080)); s.listen(1)
+while True:
+ c,_=s.accept(); c.close()"],
+    [$be8080_pid_file])
+wait_row_count Service_Monitor 1 logical_port=be0 port=8080 status=online
+OVS_WAIT_UNTIL([
+    ip route list vrf ovnvrf1341 | grep -q "blackhole 172.16.1.30"])
+AT_CHECK([
+    ip route list vrf ovnvrf1341 | grep -c "blackhole 172.16.1.20" || true
+], [0], [0
+])
+
+# Bring up VIP A's :80 listener. VIP A's :80 row passes its gate
+# and the route for 172.16.1.20 appears, even though VIP A's :443
+# row is still offline. This is the "advertise while any listener
+# for this VIP IP is healthy" semantic.
+be80_pid_file=$(mktemp be0_http80.XXX.pid)
+NETNS_DAEMONIZE([be0_ns],
+    [[$PYTHON $srcdir/test-l7.py http]], [$be80_pid_file])
+wait_row_count Service_Monitor 1 logical_port=be0 port=80 status=online
+OVS_WAIT_UNTIL([
+    ip route list vrf ovnvrf1341 | grep -q "blackhole 172.16.1.20"])
+
+# Kill VIP A's :80 listener. VIP A is back to no healthy local
+# listener -> route for 172.16.1.20 withdraws. VIP B's listener
+# is still up, so 172.16.1.30 stays advertised. This is the
+# cross-VIP isolation case: VIP B's online SM has a different
+# (ip, port, protocol) selector than VIP A's offline SMs, so it
+# cannot bleed into VIP A's per-listener gates and keep VIP A
+# advertised.
+kill `cat $be80_pid_file`
+wait_row_count Service_Monitor 1 logical_port=be0 port=80 status=offline
+OVS_WAIT_UNTIL([
+    ! ip route list vrf ovnvrf1341 | grep -q "blackhole 172.16.1.20"])
+AT_CHECK([
+    ip route list vrf ovnvrf1341 | grep -c "blackhole 172.16.1.30"
+], [0], [1
+])
+
+OVS_APP_EXIT_AND_WAIT([ovn-controller])
+
+as ovn-sb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as ovn-nb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as northd
+OVS_APP_EXIT_AND_WAIT([ovn-northd])
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+
+AT_CLEANUP
+])
