@@ -12151,7 +12151,7 @@ parsed_route_lookup(struct hmap *routes, size_t hash,
             continue;
         }
 
-        if (pr->nexthop && ipv6_addr_equals(pr->nexthop, new_pr->nexthop)) {
+        if (pr->nexthop && !ipv6_addr_equals(pr->nexthop, new_pr->nexthop)) {
             continue;
         }
 
