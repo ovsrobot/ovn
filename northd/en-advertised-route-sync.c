@@ -166,16 +166,104 @@ dynamic_routes_track_od(struct dynamic_routes_data *data,
     uuidset_insert(od->nbr ? &data->nb_lr : &data->nb_ls, &od->key);
 }
 
+/* Install a parsed_route on advertising_od that forwards ip_address (a
+ * LB VIP or NAT external IP) through advertising_op to tracked_port,
+ * where tracked_port must be a peer LRP on the shared LS so that its
+ * first matching-family network address is a valid nexthop.
+ *
+ * Used by the connected-neighbour redistribution paths
+ * (build_{lb,nat}_connected_routes) so the advertising LR can
+ * forward to the peer's VIPs and external IPs, not just advertise
+ * reachability for them.
+ *
+ * For distributed NAT the tracked_port is the backend's LSP (not an LRP) and
+ * doesn't carry lrp_networks - in that case this function is a no-op. Such
+ * deployments still rely on the existing ARP-resolved data path.
+ *
+ * Silently no-ops when:
+ *   - tracked_port is not an LRP (no nexthop derivable from this hop), or
+ *   - the prefix string fails to parse, or
+ *   - the peer LRP carries no address of the prefix's IP family.
+ *
+ * When advertising_op is unnumbered for the nexthop's family, lrp_addr_s
+ * is NULL. */
+static void
+add_redistribute_parsed_route(struct hmap *parsed_routes_out,
+                              const struct ovn_datapath *advertising_od,
+                              const struct ovn_port *advertising_op,
+                              const struct ovn_port *tracked_port,
+                              const char *ip_address,
+                              enum route_source source)
+{
+    if (!tracked_port || !tracked_port->nbrp) {
+        /* Not an LRP-typed tracked port (e.g. distributed NAT bound to a
+         * specific LSP). No nexthop available from this hop. */
+        return;
+    }
+
+    /* Parse the prefix (the VIP/FIP). */
+    struct in6_addr prefix;
+    if (!ip46_parse(ip_address, &prefix)) {
+        return;
+    }
+    bool is_v6 = !IN6_IS_ADDR_V4MAPPED(&prefix);
+    unsigned int plen = is_v6 ? 128 : 32;
+
+    /* Choose the nexthop from the peer LRP's first matching-family address. */
+    const char *nexthop_s = NULL;
+    if (!is_v6 && tracked_port->lrp_networks.n_ipv4_addrs) {
+        nexthop_s = tracked_port->lrp_networks.ipv4_addrs[0].addr_s;
+    } else if (is_v6 && tracked_port->lrp_networks.n_ipv6_addrs) {
+        nexthop_s = tracked_port->lrp_networks.ipv6_addrs[0].addr_s;
+    }
+    if (!nexthop_s) {
+        return;
+    }
+
+    /* If advertising_op has an address in the nexthop's family, use it as
+     * eth.src. Otherwise (unnumbered LRP) leave lrp_addr_s NULL so the
+     * emitted route omits REG_SRC_IPV{4,6}. ARP resolution still works:
+     * the LS-level ls_in_arp_rsp responder matches on arp.tpa alone. */
+    const char *lrp_addr_s = lrp_find_member_ip(advertising_op, nexthop_s);
+
+    struct in6_addr *nexthop = xmalloc(sizeof *nexthop);
+    if (!ip46_parse(nexthop_s, nexthop)) {
+        free(nexthop);
+        return;
+    }
+
+    parsed_route_add(advertising_od, nexthop, &prefix, plen,
+                     false,
+                     lrp_addr_s, advertising_op,
+                     0,
+                     false,
+                     false,
+                     false,
+                     NULL,
+                     source,
+                     false,
+                     NULL,
+                     tracked_port,
+                     parsed_routes_out);
+}
+
 /* This function adds a new route for each entry in lr_nat record
  * to "routes". Logical port of the route is set to "advertising_op" and
  * tracked port is set to NAT's distributed gw port. If NAT doesn't have
  * DGP (for example if it's set on gateway router), no tracked port will
- * be set.*/
+ * be set.
+ *
+ * If parsed_routes_out is non-NULL, also installs a local forwarding
+ * parsed_route on advertising_op->od for each NAT external IP whose
+ * nexthop is available from tracked_port (i.e. a peer LRP). This is the
+ * connected-neighbour redistribution case where the advertising LR
+ * needs to forward to the peer's LR.*/
 static void
 build_nat_route_for_port(const struct ovn_port *advertising_op,
                          const struct lr_nat_record *lr_nat,
                          const struct hmap *ls_ports,
-                         struct hmap *routes)
+                         struct hmap *routes,
+                         struct hmap *parsed_routes_out)
 {
     const struct ovn_datapath *advertising_od = advertising_op->od;
 
@@ -203,11 +291,21 @@ build_nat_route_for_port(const struct ovn_port *advertising_op,
                          nat->nb->external_ip, tracked_port,
                          ROUTE_SOURCE_NAT);
         }
+
+        if (parsed_routes_out) {
+            add_redistribute_parsed_route(parsed_routes_out, advertising_od,
+                                          advertising_op, tracked_port,
+                                          nat->nb->external_ip,
+                                          ROUTE_SOURCE_NAT);
+        }
     }
 }
 
 /* Generate routes for NAT external IPs in lr_nat, for each ovn port
- * in "od" that has enabled redistribution of NAT adresses.*/
+ * in "od" that has enabled redistribution of NAT addresses.
+ *
+ * No forwarding route is needed because the LR owns the NAT and
+ * its own NAT pipeline handles ingress for the external IP. */
 static void
 build_nat_routes(const struct ovn_datapath *od,
                  const struct lr_nat_record *lr_nat,
@@ -220,7 +318,8 @@ build_nat_routes(const struct ovn_datapath *od,
             continue;
         }
 
-        build_nat_route_for_port(op, lr_nat, ls_ports, routes);
+        build_nat_route_for_port(op, lr_nat, ls_ports, routes,
+                                 NULL);
     }
 }
 
@@ -260,9 +359,12 @@ build_nat_connected_routes(
                 continue;
             }
 
-            /* Advertise peer's NAT routes via the local port too. */
+            /* Advertise peer's NAT routes via the local port too, and
+             * install forwarding routes so we can reach the
+             * peer's external IPs. */
             build_nat_route_for_port(op, peer_lr_stateful->lrnat_rec,
-                                     ls_ports, &data->routes);
+                                     ls_ports, &data->routes,
+                                     &data->parsed_routes);
             continue;
         }
 
@@ -282,9 +384,12 @@ build_nat_connected_routes(
                 continue;
             }
 
-            /* Advertise peer's NAT routes via the local port too. */
+            /* Advertise peer's NAT routes via the local port too, and
+             * install forwarding routes so we can reach the
+             * peer's external IPs. */
             build_nat_route_for_port(op, peer_lr_stateful->lrnat_rec,
-                                     ls_ports, &data->routes);
+                                     ls_ports, &data->routes,
+                                     &data->parsed_routes);
             /* Track the LR datapath on the other side of LS
              * for any changes. */
             dynamic_routes_track_od(data, rp->peer->od);
@@ -292,12 +397,19 @@ build_nat_connected_routes(
     }
 }
 
-/* This function adds a new route for each IP in lb_ips to "routes".*/
+/* Own-LR entry point used by the own-LR (gateway-router/DGP) path,
+ * which doesn't currently route through a peer LR's LBs. Emits one
+ * Advertised_Route per IP in lb_ips with tracked_port as-is.
+ *
+ * If parsed_routes_out is non-NULL, also installs one local forwarding
+ * parsed_route per VIP, used by the connected-neighbour redistribution
+ * case so the advertising LR can reach the peer's VIPs. */
 static void
 build_lb_route_for_port(const struct ovn_port *advertising_op,
                         const struct ovn_port *tracked_port,
                         const struct ovn_lb_ip_set *lb_ips,
-                        struct hmap *routes)
+                        struct hmap *routes,
+                        struct hmap *parsed_routes_out)
 {
     const struct ovn_datapath *advertising_od = advertising_op->od;
 
@@ -305,10 +417,20 @@ build_lb_route_for_port(const struct ovn_port *advertising_op,
     SSET_FOR_EACH (ip_address, &lb_ips->ips_v4_adv) {
         ar_entry_add(routes, advertising_od, advertising_op,
                      ip_address, tracked_port, ROUTE_SOURCE_LB);
+        if (parsed_routes_out) {
+            add_redistribute_parsed_route(parsed_routes_out, advertising_od,
+                                          advertising_op, tracked_port,
+                                          ip_address, ROUTE_SOURCE_LB);
+        }
     }
     SSET_FOR_EACH (ip_address, &lb_ips->ips_v6_adv) {
         ar_entry_add(routes, advertising_od, advertising_op,
                      ip_address, tracked_port, ROUTE_SOURCE_LB);
+        if (parsed_routes_out) {
+            add_redistribute_parsed_route(parsed_routes_out, advertising_od,
+                                          advertising_op, tracked_port,
+                                          ip_address, ROUTE_SOURCE_LB);
+        }
     }
 }
 
@@ -343,7 +465,7 @@ build_lb_connected_routes(const struct ovn_datapath *od,
             lr_stateful_rec = lr_stateful_table_find_by_uuid(
                 lr_stateful_table, peer_od->key);
             build_lb_route_for_port(op, op->peer, lr_stateful_rec->lb_ips,
-                                    &data->routes);
+                                    &data->routes, &data->parsed_routes);
             continue;
         }
 
@@ -360,7 +482,7 @@ build_lb_connected_routes(const struct ovn_datapath *od,
                 lr_stateful_table, rp->peer->od->key);
 
             build_lb_route_for_port(op, rp->peer, lr_stateful_rec->lb_ips,
-                                    &data->routes);
+                                    &data->routes, &data->parsed_routes);
             /* Track the LR datapath on the other side of LS
              * for any changes. */
             dynamic_routes_track_od(data, rp->peer->od);
@@ -388,11 +510,13 @@ build_lb_routes(const struct ovn_datapath *od,
          * throuh all DGPs of this distributed router otherwise. */
 
         if (od->is_gw_router) {
-            build_lb_route_for_port(op, NULL, lb_ips, routes);
+            build_lb_route_for_port(op, NULL, lb_ips, routes,
+                                    NULL);
         } else {
             struct ovn_port *dgp;
             VECTOR_FOR_EACH (&od->l3dgw_ports, dgp) {
-                build_lb_route_for_port(op, dgp, lb_ips, routes);
+                build_lb_route_for_port(op, dgp, lb_ips, routes,
+                                        NULL);
             }
         }
     }
@@ -528,11 +652,30 @@ en_dynamic_routes_init(struct engine_node *node OVS_UNUSED,
     struct dynamic_routes_data *data = xmalloc(sizeof *data);
     *data = (struct dynamic_routes_data) {
         .routes = HMAP_INITIALIZER(&data->routes),
+        .parsed_routes = HMAP_INITIALIZER(&data->parsed_routes),
         .nb_lr = UUIDSET_INITIALIZER(&data->nb_lr),
         .nb_ls = UUIDSET_INITIALIZER(&data->nb_ls),
+        .tracked = false,
+        .trk_data.trk_created_parsed_routes =
+            HMAPX_INITIALIZER(&data->trk_data.trk_created_parsed_routes),
+        .trk_data.trk_deleted_parsed_routes =
+            HMAPX_INITIALIZER(&data->trk_data.trk_deleted_parsed_routes),
     };
 
     return data;
+}
+
+static void
+dynamic_routes_clear_tracked(struct dynamic_routes_data *data)
+{
+    hmapx_clear(&data->trk_data.trk_created_parsed_routes);
+    struct hmapx_node *hmapx_node;
+    HMAPX_FOR_EACH_SAFE (hmapx_node,
+                         &data->trk_data.trk_deleted_parsed_routes) {
+        parsed_route_free(hmapx_node->data);
+        hmapx_delete(&data->trk_data.trk_deleted_parsed_routes, hmapx_node);
+    }
+    data->tracked = false;
 }
 
 static void
@@ -543,6 +686,40 @@ en_dynamic_routes_clear(struct dynamic_routes_data *data)
         ar_entry_free(ar);
     }
 
+    struct parsed_route *pr;
+    HMAP_FOR_EACH_POP (pr, key_node, &data->parsed_routes) {
+        parsed_route_free(pr);
+    }
+
+    dynamic_routes_clear_tracked(data);
+
+    uuidset_clear(&data->nb_lr);
+    uuidset_clear(&data->nb_ls);
+}
+
+static void
+dynamic_routes_prepare_rebuild(struct dynamic_routes_data *data,
+                               struct hmap *old_parsed_routes);
+
+static void
+dynamic_routes_diff_parsed(struct dynamic_routes_data *data,
+                           struct hmap *old_parsed_routes);
+
+/* Save current parsed_routes into *old_parsed_routes and reinitialise
+ * data->parsed_routes for a full rebuild. */
+static void
+dynamic_routes_prepare_rebuild(struct dynamic_routes_data *data,
+                               struct hmap *old_parsed_routes)
+{
+    dynamic_routes_clear_tracked(data);
+
+    hmap_swap(old_parsed_routes, &data->parsed_routes);
+    hmap_init(&data->parsed_routes);
+
+    struct ar_entry *ar;
+    HMAP_FOR_EACH_POP (ar, hmap_node, &data->routes) {
+        ar_entry_free(ar);
+    }
     uuidset_clear(&data->nb_lr);
     uuidset_clear(&data->nb_ls);
 }
@@ -554,6 +731,9 @@ en_dynamic_routes_cleanup(void *data_)
 
     en_dynamic_routes_clear(data);
     hmap_destroy(&data->routes);
+    hmap_destroy(&data->parsed_routes);
+    hmapx_destroy(&data->trk_data.trk_created_parsed_routes);
+    hmapx_destroy(&data->trk_data.trk_deleted_parsed_routes);
     uuidset_destroy(&data->nb_lr);
     uuidset_destroy(&data->nb_ls);
 }
@@ -566,7 +746,8 @@ en_dynamic_routes_run(struct engine_node *node, void *data)
     struct ed_type_lr_stateful *lr_stateful_data =
         engine_get_input_data("lr_stateful", node);
 
-    en_dynamic_routes_clear(data);
+    struct hmap old_parsed_routes = HMAP_INITIALIZER(&old_parsed_routes);
+    dynamic_routes_prepare_rebuild(dynamic_routes_data, &old_parsed_routes);
 
     const struct ovn_datapath *od;
     HMAP_FOR_EACH (od, key_node, &northd_data->lr_datapaths.datapaths) {
@@ -598,7 +779,51 @@ en_dynamic_routes_run(struct engine_node *node, void *data)
         build_lb_connected_routes(od, &lr_stateful_data->table,
                                   dynamic_routes_data);
     }
+
+    dynamic_routes_diff_parsed(dynamic_routes_data, &old_parsed_routes);
+    hmap_destroy(&old_parsed_routes);
+
     return EN_UPDATED;
+}
+
+static void
+dynamic_routes_diff_parsed(struct dynamic_routes_data *data,
+                           struct hmap *old_parsed_routes)
+{
+    struct parsed_route *pr;
+    HMAP_FOR_EACH (pr, key_node, old_parsed_routes) {
+        pr->stale = true;
+    }
+
+    HMAP_FOR_EACH_SAFE (pr, key_node, &data->parsed_routes) {
+        size_t hash = parsed_route_hash(pr);
+        struct parsed_route *old_pr = parsed_route_lookup(
+            old_parsed_routes, hash, pr);
+        if (old_pr) {
+            old_pr->stale = false;
+            /* Swap in the pre-existing route so that pointers held by
+             * group_ecmp_route remain valid.  Detach from
+             * old_parsed_routes first: hmap_node is intrusive and
+             * cannot live in two maps. */
+            hmap_remove(old_parsed_routes, &old_pr->key_node);
+            hmap_remove(&data->parsed_routes, &pr->key_node);
+            hmap_insert(&data->parsed_routes, &old_pr->key_node, hash);
+            parsed_route_free(pr);
+        } else {
+            hmapx_add(&data->trk_data.trk_created_parsed_routes, pr);
+        }
+    }
+
+    HMAP_FOR_EACH_SAFE (pr, key_node, old_parsed_routes) {
+        if (pr->stale) {
+            hmapx_add(&data->trk_data.trk_deleted_parsed_routes, pr);
+        }
+    }
+
+    if (!hmapx_is_empty(&data->trk_data.trk_created_parsed_routes)
+        || !hmapx_is_empty(&data->trk_data.trk_deleted_parsed_routes)) {
+        data->tracked = true;
+    }
 }
 
 enum engine_input_handler_result
@@ -801,7 +1026,7 @@ advertised_route_table_sync(
         sbrec_advertised_route_set_datapath(sr, route_e->od->sdp->sb_dp);
         sbrec_advertised_route_set_logical_port(sr, route_e->op->sb);
         sbrec_advertised_route_set_ip_prefix(sr, route_e->ip_prefix);
-        if (route_e->tracked_port) {
+        if (route_e->tracked_port && route_e->tracked_port->sb) {
             sbrec_advertised_route_set_tracked_port(sr,
                                                     route_e->tracked_port->sb);
         }
