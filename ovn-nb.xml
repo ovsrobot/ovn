@@ -2858,6 +2858,24 @@ or
         The number of failure checks after which the endpoint is considered
         offline.
       </column>
+
+      <column name="options" key="forward_unknown"
+              type='{"type": "boolean"}'>
+        <p>
+          By default (<code>true</code>) a backend whose health is not yet
+          known is treated as available, so that traffic is forwarded to it
+          while the first health check probes are still pending.  This avoids
+          disrupting traffic when health checks are first enabled.
+        </p>
+
+        <p>
+          When set to <code>false</code>, a backend whose service monitor
+          status is still unknown (empty) is treated as unavailable and is
+          excluded from the load balancer backends until its first successful
+          health check probe.  This prevents traffic from being forwarded to
+          unverified backends during the initial monitoring grace period.
+        </p>
+      </column>
     </group>
 
     <group title="Common Columns">

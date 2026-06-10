@@ -3451,6 +3451,7 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
 
 static bool
 backend_is_available(const struct ovn_northd_lb *lb,
+                     const struct ovn_northd_lb_vip *lb_vip_nb,
                      const struct ovn_lb_backend *backend,
                      const struct ovn_northd_lb_backend *backend_nb,
                      const struct svc_monitors_map_data *svc_mons_data)
@@ -3474,9 +3475,20 @@ backend_is_available(const struct ovn_northd_lb *lb,
 
     ovs_assert(mon_info->sbrec_mon);
 
-    return (mon_info->sbrec_mon->status &&
-           strcmp(mon_info->sbrec_mon->status, "online")) ?
-           false : true;
+    const char *status = mon_info->sbrec_mon->status;
+
+    /* By default OVN "fails open": a backend whose service monitor status is
+     * not yet known (empty) is treated as available so that traffic is not
+     * disrupted while the first health check probes are still pending.  When
+     * the "forward_unknown" option is disabled, a backend with an unknown
+     * (empty) status is instead treated as unavailable until its first
+     * successful probe. */
+    if (!status || !status[0]) {
+        return smap_get_bool(&lb_vip_nb->lb_health_check->options,
+                             "forward_unknown", true);
+    }
+
+    return !strcmp(status, "online");
 }
 
 static bool
@@ -3531,6 +3543,7 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
 
             if (backend_nb->health_check &&
                 !backend_is_available(lb,
+                                      lb_vip_nb,
                                       backend,
                                       backend_nb,
                                       svc_mons_data)) {

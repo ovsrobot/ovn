@@ -33,6 +33,11 @@ Post v26.03.0
      The DHCP and unbound-router ARP/ND drop lflows for external
      ports were updated to key on the external LSP's inport
      accordingly.
+   - Added "forward_unknown" option to Load_Balancer_Health_Check.  When set to
+     "false", backends whose service monitor status is still unknown (empty)
+     are treated as unavailable and excluded until their first successful
+     health check probe.  The default ("true") preserves the previous
+     fail-open behavior.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
