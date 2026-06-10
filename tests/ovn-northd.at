@@ -19175,6 +19175,54 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([lr_in_admission cr-port guard dropped on distributed LB attach to DGP LR])
+ovn_start
+
+check ovn-sbctl chassis-add ch1 geneve 127.0.0.1
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lrp1 02:ac:10:01:00:01 172.16.1.1/24
+# Set gateway_mtu so build_gateway_mtu_flow() emits both the priority-50
+# (unicast, with check_pkt_larger) and priority-55 (ARP) lr_in_admission
+# flows on the LRP. Both code paths gate their is_chassis_resident
+# guard on consider_l3dgw_port_is_centralized().
+check ovn-nbctl set logical_router_port lrp1 options:gateway_mtu=1400
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lsp-add-router-port ls1 ls1-lrp1 lrp1
+# Make lrp1 a distributed gateway port with a chassis-redirect.
+check ovn-nbctl lrp-set-gateway-chassis lrp1 ch1
+check ovn-nbctl --wait=sb sync
+
+# Attach a distributed LB to a router that already has a chassis-redirect
+# port. The incremental path must rebuild admission
+# flows when is_distributed flipped, allowing LB traffic on
+# non-gateway chassis.
+check ovn-nbctl lb-add lb1 1.1.1.1:80 192.168.0.1:8080
+check ovn-nbctl set load_balancer lb1 options:distributed=true
+check ovn-nbctl --wait=sb lr-lb-add lr1 lb1
+
+ovn-sbctl lflow-list lr1 > lr1_lflows
+
+# Unicast (priority-50) and ARP (priority-55) admission flows on the
+# DGP LRP must not be gated by is_chassis_resident("cr-lrp1") once a
+# distributed LB is attached.
+AT_CHECK([grep lr_in_admission lr1_lflows | grep -E 'priority=5[[05]]' | grep '02:ac:10:01:00:01' | grep -v eth.mcast | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_admission    ), priority=50   , match=(eth.dst == 02:ac:10:01:00:01 && inport == "lrp1"), action=(reg9[[1]] = check_pkt_larger(1414); xreg0[[0..47]] = 02:ac:10:01:00:01; next;)
+  table=??(lr_in_admission    ), priority=55   , match=(eth.dst == 02:ac:10:01:00:01 && inport == "lrp1" && (arp)), action=(xreg0[[0..47]] = 02:ac:10:01:00:01; next;)
+])
+
+# As a cross-check, the cr-port's always-redirect option should also
+# be off, because has_distributed_lb on the LR's lr_stateful record is
+# now true.
+AT_CHECK([ovn-sbctl --bare --columns options find Port_Binding logical_port=cr-lrp1 | tr ' ' '\n' | sort], [0], [dnl
+distributed-port=lrp1
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([ip_port_mappings validation: IPv6])
 ovn_start
 

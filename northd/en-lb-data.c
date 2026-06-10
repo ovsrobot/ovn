@@ -698,10 +698,8 @@ handle_od_lb_changes(struct nbrec_load_balancer **nbrec_lbs,
             ovs_assert(lb);
 
             trk_lb_data->has_health_checks |= lb->health_checks;
-            if (!trk_lb_data->has_routable_lb) {
-                trk_lb_data->has_routable_lb |= lb->routable;
-                trk_lb_data->has_distributed_lb |= lb->is_distributed;
-            }
+            trk_lb_data->has_routable_lb |= lb->routable;
+            trk_lb_data->has_distributed_lb |= lb->is_distributed;
         }
 
         if (unode) {
@@ -762,8 +760,8 @@ destroy_tracked_data(struct ed_type_lb_data *lb_data)
     lb_data->tracked_lb_data.has_dissassoc_lbs_from_lbgrps = false;
     lb_data->tracked_lb_data.has_dissassoc_lbs_from_od = false;
     lb_data->tracked_lb_data.has_dissassoc_lbgrps_from_od = false;
-    lb_data->tracked_lb_data.has_health_checks = false;
     lb_data->tracked_lb_data.has_routable_lb = false;
+    lb_data->tracked_lb_data.has_distributed_lb = false;
 
     struct hmapx_node *node;
     HMAPX_FOR_EACH_SAFE (node, &lb_data->tracked_lb_data.deleted_lbs) {

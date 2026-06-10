@@ -3587,7 +3587,7 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
     return reject;
 }
 
-static inline void
+static inline bool
 handle_od_lb_datapath_modes(struct ovn_datapath *od,
                             struct ovn_lb_datapaths *lb_dps)
 {
@@ -3595,9 +3595,14 @@ handle_od_lb_datapath_modes(struct ovn_datapath *od,
         hmapx_add(&lb_dps->ls_lb_with_stateless_mode, od);
     }
 
+    bool transition = false;
     if (od->nbr && lb_dps->lb->is_distributed) {
+        if (!od->is_distributed) {
+            transition = true;
+        }
         od->is_distributed = true;
     }
+    return transition;
 }
 
 static void
@@ -5695,6 +5700,10 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
         return false;
     }
 
+    if (trk_lb_data->has_distributed_lb) {
+        return false;
+    }
+
     struct ovn_lb_datapaths *lb_dps;
     struct ovn_northd_lb *lb;
     struct ovn_datapath *od;
@@ -5803,7 +5812,13 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
             lb_dps = ovn_lb_datapaths_find(lb_datapaths_map, &uuidnode->uuid);
             ovs_assert(lb_dps);
             ovn_lb_datapaths_add_lr(lb_dps, 1, &od, ods_size(lr_datapaths));
-            handle_od_lb_datapath_modes(od, lb_dps);
+            if (handle_od_lb_datapath_modes(od, lb_dps)) {
+                /* od->is_distributed transitioned to true. LRP-level
+                 * lr_in_admission and other od_is_centralized()-gated
+                 * flows are not rebuilt on LB-association changes, so
+                 * fall back to a full recompute. */
+                return false;
+            }
 
             /* Add the lb to the northd tracked data. */
             hmapx_add(&nd_changes->trk_lbs.crupdated, lb_dps);
