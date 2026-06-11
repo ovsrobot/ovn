@@ -7352,7 +7352,8 @@ wait_column "up" nb:bfd status logical_port=rp-public
 OVS_WAIT_UNTIL([ovn-sbctl dump-flows R1 |grep lr_in_ip_routing |grep 'ip4.dst == 100.0.0.0/8' |grep -q 172.16.1.50])
 
 # un-associate the bfd connection and the static route
-check ovn-nbctl clear logical_router_static_route $route_uuid bfd
+check ovn-nbctl --wait=sb clear logical_router_static_route $route_uuid bfd
+cat northd/ovn-northd.log
 wait_column "admin_down" nb:bfd status logical_port=rp-public
 OVS_WAIT_UNTIL([ip netns exec server bfdd-control status | grep -qi state=Down])
 
@@ -7416,7 +7417,7 @@ wait_column "up" nb:bfd status logical_port=rp-public
 OVS_WAIT_UNTIL([ovn-sbctl dump-flows R1 |grep lr_in_ip_routing |grep 'ip4.dst == 100.0.0.0/8' |grep -q 172.16.1.50])
 check_row_count Advertised_Route 1 ip_prefix=100.0.0.0/8
 
-check ovn-nbctl clear logical_router_static_route $route_uuid bfd
+check ovn-nbctl --wait=sb clear logical_router_static_route $route_uuid bfd
 wait_column "admin_down" nb:bfd status logical_port=rp-public
 OVS_WAIT_UNTIL([ip netns exec server bfdd-control status | grep -qi state=Down])
 check ovn-nbctl destroy bfd $uuid
