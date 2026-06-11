@@ -39,16 +39,6 @@ static int nh_table_parse__(struct ofpbuf *, size_t ofs,
 static void nh_populate_grp_pointers(struct nexthop_entry *, struct hmap *);
 static uint32_t nexthop_entry_hash(uint32_t id);
 
-/* The following definition should be available in Linux 6.12 and might be
- * missing if we have older headers. */
-#ifndef HAVE_NH_GRP_WEIGHT
-static uint16_t
-nexthop_grp_weight(const struct nexthop_grp *entry)
-{
-    return entry->weight + 1;
-}
-#endif
-
 /* Populates 'nexthops' with all nexthop entries
  * (struct nexthop_entry) with fdb flag set that exist in the table. */
 void

@@ -31,12 +31,6 @@ VLOG_DEFINE_THIS_MODULE(neighbor_exchange_netlink);
 
 #define NETNL_REQ_BUFFER_SIZE 128
 
-/* NTF_EXT_LEARNED was introduced in Linux v3.19, define it if
- * not available. */
-#ifndef NTF_EXT_LEARNED
-#define NTF_EXT_LEARNED (1 << 4)
-#endif
-
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
 
 /* Inspired from route_table_dump_one_table() in OVS. */
