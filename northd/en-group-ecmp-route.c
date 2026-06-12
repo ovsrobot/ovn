@@ -21,8 +21,10 @@
 #include "openvswitch/vlog.h"
 #include "northd.h"
 
+#include "en-advertised-route-sync.h"
 #include "en-group-ecmp-route.h"
 #include "en-learned-route-sync.h"
+#include "hmapx.h"
 #include "openvswitch/hmap.h"
 
 VLOG_DEFINE_THIS_MODULE(en_group_ecmp_route);
@@ -356,7 +358,8 @@ add_route(struct group_ecmp_datapath *gn, const struct parsed_route *pr)
 static void
 group_ecmp_route(struct group_ecmp_route_data *data,
                  const struct routes_data *routes_data,
-                 const struct learned_route_sync_data *learned_route_data)
+                 const struct learned_route_sync_data *learned_route_data,
+                 const struct dynamic_routes_data *dynamic_routes_data)
 {
     struct group_ecmp_datapath *gn;
     const struct parsed_route *pr;
@@ -366,6 +369,11 @@ group_ecmp_route(struct group_ecmp_route_data *data,
     }
 
     HMAP_FOR_EACH (pr, key_node, &learned_route_data->parsed_routes) {
+        gn = group_ecmp_datapath_lookup_or_add(data, pr->od);
+        add_route(gn, pr);
+    }
+
+    HMAP_FOR_EACH (pr, key_node, &dynamic_routes_data->parsed_routes) {
         gn = group_ecmp_datapath_lookup_or_add(data, pr->od);
         add_route(gn, pr);
     }
@@ -381,8 +389,11 @@ en_group_ecmp_route_run(struct engine_node *node, void *_data)
         = engine_get_input_data("routes", node);
     struct learned_route_sync_data *learned_route_data
         = engine_get_input_data("learned_route_sync", node);
+    struct dynamic_routes_data *dynamic_routes_data
+        = engine_get_input_data("dynamic_routes", node);
 
-    group_ecmp_route(data, routes_data, learned_route_data);
+    group_ecmp_route(data, routes_data, learned_route_data,
+                     dynamic_routes_data);
 
     return EN_UPDATED;
 }
@@ -515,6 +526,67 @@ group_ecmp_route_learned_route_change_handler(struct engine_node *eng_node,
 
     if (!(hmapx_is_empty(&data->trk_data.crupdated_datapath_routes) &&
           hmapx_is_empty(&data->trk_data.deleted_datapath_routes))) {
+        return EN_HANDLED_UPDATED;
+    }
+    return EN_HANDLED_UNCHANGED;
+}
+
+/* When parsed_routes is empty, dynamic_routes has no new content for us.
+ * When tracked is false but parsed_routes is non-empty we fall back to a
+ * full recompute. Otherwise process tracked adds/deletes incrementally
+ * (see group_ecmp_route_learned_route_change_handler for the pattern). */
+enum engine_input_handler_result
+group_ecmp_route_dynamic_routes_change_handler(struct engine_node *eng_node,
+                                                void *data)
+{
+    struct group_ecmp_route_data *gdata = data;
+    struct dynamic_routes_data *dynamic_routes_data
+        = engine_get_input_data("dynamic_routes", eng_node);
+
+    if (!dynamic_routes_data->tracked) {
+        if (hmap_is_empty(&dynamic_routes_data->parsed_routes)) {
+            return EN_HANDLED_UNCHANGED;
+        }
+        gdata->tracked = false;
+        return EN_UNHANDLED;
+    }
+
+    gdata->tracked = true;
+
+    struct hmapx updated_routes = HMAPX_INITIALIZER(&updated_routes);
+
+    const struct hmapx_node *hmapx_node;
+    const struct parsed_route *pr;
+    HMAPX_FOR_EACH (hmapx_node,
+                    &dynamic_routes_data->trk_data.trk_deleted_parsed_routes) {
+        pr = hmapx_node->data;
+        if (!handle_deleted_route(gdata, pr, &updated_routes)) {
+            hmapx_destroy(&updated_routes);
+            return EN_UNHANDLED;
+        }
+    }
+
+    HMAPX_FOR_EACH (hmapx_node,
+                    &dynamic_routes_data->trk_data.trk_created_parsed_routes) {
+        pr = hmapx_node->data;
+        handle_added_route(gdata, pr, &updated_routes);
+    }
+
+    HMAPX_FOR_EACH (hmapx_node, &updated_routes) {
+        struct group_ecmp_datapath *node = hmapx_node->data;
+        if (hmap_is_empty(&node->unique_routes) &&
+                hmap_is_empty(&node->ecmp_groups)) {
+            hmapx_add(&gdata->trk_data.deleted_datapath_routes, node);
+            hmap_remove(&gdata->datapaths, &node->hmap_node);
+        } else {
+            hmapx_add(&gdata->trk_data.crupdated_datapath_routes, node);
+        }
+    }
+
+    hmapx_destroy(&updated_routes);
+
+    if (!(hmapx_is_empty(&gdata->trk_data.crupdated_datapath_routes) &&
+          hmapx_is_empty(&gdata->trk_data.deleted_datapath_routes))) {
         return EN_HANDLED_UPDATED;
     }
     return EN_HANDLED_UNCHANGED;
