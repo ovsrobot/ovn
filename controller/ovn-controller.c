@@ -5301,6 +5301,8 @@ en_route_run(struct engine_node *node, void *data)
 
     const struct sbrec_advertised_route_table *advertised_route_table =
         EN_OVSDB_GET(engine_get_input("SB_advertised_route", node));
+    const struct sbrec_service_monitor_table *service_monitor_table =
+        EN_OVSDB_GET(engine_get_input("SB_service_monitor", node));
 
     const struct ovsrec_open_vswitch *cfg
         = ovsrec_open_vswitch_table_first(ovs_table);
@@ -5309,6 +5311,7 @@ en_route_run(struct engine_node *node, void *data)
 
     struct route_ctx_in r_ctx_in = {
         .advertised_route_table = advertised_route_table,
+        .service_monitor_table = service_monitor_table,
         .sbrec_port_binding_by_name = sbrec_port_binding_by_name,
         .chassis = chassis,
         .dynamic_routing_port_mapping = dynamic_routing_port_mapping,
@@ -5614,6 +5617,23 @@ route_sb_datapath_binding_handler(struct engine_node *node,
 
         if (sbrec_datapath_binding_is_updated(
                 dp, SBREC_DATAPATH_BINDING_COL_EXTERNAL_IDS)) {
+            return EN_UNHANDLED;
+        }
+    }
+
+    return EN_HANDLED_UNCHANGED;
+}
+
+static enum engine_input_handler_result
+route_sb_service_monitor_handler(struct engine_node *node,
+                                 void *data OVS_UNUSED)
+{
+    const struct sbrec_service_monitor_table *sm_table =
+        EN_OVSDB_GET(engine_get_input("SB_service_monitor", node));
+
+    const struct sbrec_service_monitor *sm;
+    SBREC_SERVICE_MONITOR_TABLE_FOR_EACH_TRACKED (sm, sm_table) {
+        if (sm->type && !strcmp(sm->type, "load-balancer")) {
             return EN_UNHANDLED;
         }
     }
@@ -6869,7 +6889,8 @@ evpn_arp_vtep_binding_handler(struct engine_node *node, void *data OVS_UNUSED)
     SB_NODE(acl_id) \
     SB_NODE(advertised_route) \
     SB_NODE(learned_route) \
-    SB_NODE(advertised_mac_binding)
+    SB_NODE(advertised_mac_binding) \
+    SB_NODE(service_monitor)
 
 enum sb_engine_node {
 #define SB_NODE(NAME) SB_##NAME,
@@ -7002,6 +7023,8 @@ inc_proc_ovn_controller_init(
                      route_sb_advertised_route_data_handler);
     engine_add_input(&en_route, &en_sb_datapath_binding,
                      route_sb_datapath_binding_handler);
+    engine_add_input(&en_route, &en_sb_service_monitor,
+                     route_sb_service_monitor_handler);
 
     engine_add_input(&en_route_exchange, &en_route, NULL);
     engine_add_input(&en_route_exchange, &en_sb_learned_route,

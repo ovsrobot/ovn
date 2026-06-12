@@ -38,6 +38,19 @@ VLOG_DEFINE_THIS_MODULE(exchange);
 #define PRIORITY_DEFAULT 1000
 #define PRIORITY_LOCAL_BOUND 100
 
+/* Key for the service-monitor LB index (sm_lb_index).  All string
+ * pointers alias SB rows and are valid for the duration of
+ * en_route_run(). */
+struct sm_lb_key {
+    struct hmap_node node;
+    const char *logical_port;
+    const char *chassis_name;
+    const char *ip;
+    int64_t port;
+    const char *protocol;
+    bool online;
+};
+
 static bool
 route_exchange_relevant_port(const struct sbrec_port_binding *pb)
 {
@@ -315,6 +328,36 @@ route_run(struct route_ctx_in *r_ctx_in,
         }
     }
 
+    struct hmap sm_lb_index = HMAP_INITIALIZER(&sm_lb_index);
+    if (r_ctx_in->service_monitor_table) {
+        const struct sbrec_service_monitor *sm;
+        SBREC_SERVICE_MONITOR_TABLE_FOR_EACH (
+            sm, r_ctx_in->service_monitor_table) {
+            if (!sm->type || strcmp(sm->type, "load-balancer")) {
+                continue;
+            }
+            if (!sm->logical_port || !sm->chassis_name ||
+                !sm->ip || !sm->protocol) {
+                continue;
+            }
+            struct sm_lb_key *k = xmalloc(sizeof *k);
+            uint32_t hash = hash_string(sm->logical_port, 0);
+            hash = hash_string(sm->chassis_name, hash);
+            hash = hash_string(sm->ip, hash);
+            hash = hash_int((uint32_t) sm->port, hash);
+            hash = hash_string(sm->protocol, hash);
+            *k = (struct sm_lb_key) {
+                .logical_port = sm->logical_port,
+                .chassis_name = sm->chassis_name,
+                .ip = sm->ip,
+                .port = sm->port,
+                .protocol = sm->protocol,
+                .online = sm->status && !strcmp(sm->status, "online"),
+            };
+            hmap_insert(&sm_lb_index, &k->node, hash);
+        }
+    }
+
     const struct sbrec_advertised_route *route;
     SBREC_ADVERTISED_ROUTE_TABLE_FOR_EACH (route,
                                            r_ctx_in->advertised_route_table) {
@@ -357,6 +400,58 @@ route_run(struct route_ctx_in *r_ctx_in,
                 priority = PRIORITY_LOCAL_BOUND;
                 sset_add(r_ctx_out->tracked_ports_local,
                          route->tracked_port->logical_port);
+
+                /* If the route carries the full backend service selector,
+                 * look up matching Service_Monitor rows on this chassis.
+                 * Skip installing the route when matching rows exist but
+                 * none report online.  Routes without the full selector
+                 * are installed unconditionally.
+                 *
+                 * The full selector (ip + port + protocol) is required to
+                 * identify the row as LB-derived, since route_source is
+                 * not stored on the SB row.  A partial selector could
+                 * match an unrelated SM on the same (ip, port) for a
+                 * different protocol or LB. */
+                bool has_full_selector =
+                    route->tracked_service_ip &&
+                    route->n_tracked_service_port > 0 &&
+                    route->tracked_service_protocol;
+                if (has_full_selector &&
+                    !hmap_is_empty(&sm_lb_index)) {
+                    const char *want_ip = route->tracked_service_ip;
+                    int64_t want_port = route->tracked_service_port[0];
+                    ovs_assert(want_port >= 0 && want_port <= UINT16_MAX);
+                    const char *want_proto = route->tracked_service_protocol;
+                    const char *want_lp = route->tracked_port->logical_port;
+                    const char *want_chassis = r_ctx_in->chassis->name;
+
+                    uint32_t hash = hash_string(want_lp, 0);
+                    hash = hash_string(want_chassis, hash);
+                    hash = hash_string(want_ip, hash);
+                    hash = hash_int((uint32_t) want_port, hash);
+                    hash = hash_string(want_proto, hash);
+
+                    bool seen = false, any_online = false;
+                    struct sm_lb_key *k;
+                    HMAP_FOR_EACH_WITH_HASH (k, node, hash,
+                                             &sm_lb_index) {
+                        if (k->port != want_port ||
+                            strcmp(k->logical_port, want_lp) ||
+                            strcmp(k->chassis_name, want_chassis) ||
+                            strcmp(k->ip, want_ip) ||
+                            strcmp(k->protocol, want_proto)) {
+                            continue;
+                        }
+                        seen = true;
+                        if (k->online) {
+                            any_online = true;
+                            break;
+                        }
+                    }
+                    if (seen && !any_online) {
+                        continue;
+                    }
+                }
             } else {
                 sset_add(r_ctx_out->tracked_ports_remote,
                          route->tracked_port->logical_port);
@@ -385,6 +480,12 @@ route_run(struct route_ctx_in *r_ctx_in,
         hmap_insert(&ad->routes, &ar->node,
                     advertise_route_hash(&ar->addr, &ar->nexthop, plen));
     }
+
+    struct sm_lb_key *k;
+    HMAP_FOR_EACH_POP (k, node, &sm_lb_index) {
+        free(k);
+    }
+    hmap_destroy(&sm_lb_index);
 
     smap_destroy(&port_mapping);
 }
