@@ -366,6 +366,11 @@ en_routes_run(struct engine_node *node, void *data)
     routes_destroy(data);
     routes_init(data);
 
+    struct parsed_route *pr;
+    HMAP_FOR_EACH (pr, key_node, &routes_data->parsed_routes) {
+        pr->stale = true;
+    }
+
     struct ovn_datapath *od;
     HMAP_FOR_EACH (od, key_node, &northd_data->lr_datapaths.datapaths) {
         for (int i = 0; i < od->nbr->n_ports; i++) {
@@ -380,6 +385,15 @@ en_routes_run(struct engine_node *node, void *data)
                             &routes_data->parsed_routes,
                             &routes_data->route_tables,
                             &routes_data->bfd_active_connections);
+    }
+
+    HMAP_FOR_EACH_SAFE (pr, key_node, &routes_data->parsed_routes) {
+        if (!pr->stale) {
+            continue;
+        }
+
+        hmap_remove(&routes_data->parsed_routes, &pr->key_node);
+        parsed_route_free(pr);
     }
 
     return EN_UPDATED;
