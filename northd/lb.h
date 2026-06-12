@@ -240,4 +240,18 @@ ovn_lb_group_datapaths_add_lr(struct ovn_lb_group_datapaths *lbg_dps,
     vector_push(&lbg_dps->lr, &lr);
 }
 
+/* Returns true if protocol (the LB's L4 protocol string) is one of the
+ * values in the Service_Monitor.protocol SB schema enum.
+ * Protocols outside the enum (e.g. SCTP) cannot produce Service_Monitor rows
+ * and must not be used to populate the per-backend service selector on
+ * Advertised_Route. */
+static inline bool
+lb_service_monitor_protocol_supported(const char *protocol)
+{
+    return protocol
+        && (!strcmp(protocol, "tcp")
+            || !strcmp(protocol, "udp")
+            || !strcmp(protocol, "icmp"));
+}
+
 #endif /* OVN_NORTHD_LB_H */
