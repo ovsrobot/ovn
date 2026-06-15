@@ -2871,6 +2871,11 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
                     smap_add(&options, "additional-chassis-activated",
                              activated_str);
                 }
+                const char *ready_str = smap_get(&op->sb->options,
+                                                 "additional-chassis-ready");
+                if (ready_str) {
+                    smap_add(&options, "additional-chassis-ready", ready_str);
+                }
             }
 
             /* Preserve virtual port options. */

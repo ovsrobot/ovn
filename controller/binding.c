@@ -1009,6 +1009,50 @@ local_binding_is_down(struct shash *local_bindings, const char *pb_name,
     return true;
 }
 
+static bool
+is_chassis_in_list(const char *chassis_list, const char *chassis_name)
+{
+    if (!chassis_list) {
+        return false;
+    }
+
+    char *save_ptr, *tokstr = xstrdup(chassis_list);
+    for (const char *name = strtok_r(tokstr, ",", &save_ptr);
+         name != NULL; name = strtok_r(NULL, ",", &save_ptr)) {
+        if (!strcmp(name, chassis_name)) {
+            free(tokstr);
+            return true;
+        }
+    }
+    free(tokstr);
+
+    return false;
+}
+
+static char *
+remove_chassis_from_list(const char *chassis_list, const char *chassis_name)
+{
+    if (!chassis_list) {
+        return NULL;
+    }
+
+    char *save_ptr, *tokstr = xstrdup(chassis_list);
+    struct ds result = DS_EMPTY_INITIALIZER;
+
+    for (const char *name = strtok_r(tokstr, ",", &save_ptr);
+         name != NULL; name = strtok_r(NULL, ",", &save_ptr)) {
+        if (strcmp(name, chassis_name)) {
+            if (result.length) {
+                ds_put_char(&result, ',');
+            }
+            ds_put_cstr(&result, name);
+        }
+    }
+    free(tokstr);
+
+    return ds_steal_cstr(&result);
+}
+
 void
 local_binding_set_up(struct shash *local_bindings, const char *pb_name,
                      const struct sbrec_chassis *chassis_rec,
@@ -1036,6 +1080,25 @@ local_binding_set_up(struct shash *local_bindings, const char *pb_name,
         binding_lport_set_up(b_lport, sb_readonly);
         LIST_FOR_EACH (b_lport, list_node, &lbinding->binding_lports) {
             binding_lport_set_up(b_lport, sb_readonly);
+        }
+    }
+
+    if (!sb_readonly && lbinding && b_lport &&
+        is_additional_chassis(b_lport->pb, chassis_rec)) {
+        const char *current = smap_get(&b_lport->pb->options,
+                                       "additional-chassis-ready");
+        if (!is_chassis_in_list(current, chassis_rec->name)) {
+            char *val;
+
+            if (current) {
+                val = xasprintf("%s,%s", current, chassis_rec->name);
+            } else {
+                val = xstrdup(chassis_rec->name);
+            }
+
+            sbrec_port_binding_update_options_setkey(
+                    b_lport->pb, "additional-chassis-ready", val);
+            free(val);
         }
     }
 }
@@ -1568,6 +1631,22 @@ release_lport_additional_chassis(const struct sbrec_port_binding *pb,
             return false;
         }
         remove_additional_chassis(pb, chassis_rec);
+    }
+
+    const char *ready = smap_get(&pb->options, "additional-chassis-ready");
+    if (ready && is_chassis_in_list(ready, chassis_rec->name)) {
+        if (sb_readonly) {
+            return false;
+        }
+        char *updated = remove_chassis_from_list(ready, chassis_rec->name);
+        if (updated && updated[0]) {
+            sbrec_port_binding_update_options_setkey(
+                pb, "additional-chassis-ready", updated);
+        } else {
+            sbrec_port_binding_update_options_delkey(
+                pb, "additional-chassis-ready");
+        }
+        free(updated);
     }
 
     VLOG_INFO("Releasing lport %s from this additional chassis.",

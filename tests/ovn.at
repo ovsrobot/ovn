@@ -17337,6 +17337,164 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([options:additional-chassis-ready for logical port])
+AT_KEYWORDS([multi-chassis])
+TAG_UNSTABLE
+ovn_start
+
+net_add n1
+
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.11
+
+sim_add hv2
+as hv2
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.12
+
+check ovn-nbctl ls-add ls0
+check ovn-nbctl lsp-add ls0 lsp0
+
+# Allow only chassis hv1 to bind logical port lsp0.
+check ovn-nbctl lsp-set-options lsp0 requested-chassis=hv1
+
+as hv1 check ovs-vsctl -- add-port br-int lsp0 -- \
+    set Interface lsp0 external-ids:iface-id=lsp0
+as hv2 check ovs-vsctl -- add-port br-int lsp0 -- \
+    set Interface lsp0 external-ids:iface-id=lsp0
+
+wait_row_count Chassis 1 name=hv1
+wait_row_count Chassis 1 name=hv2
+hv1_uuid=$(fetch_column Chassis _uuid name=hv1)
+hv2_uuid=$(fetch_column Chassis _uuid name=hv2)
+
+wait_column "$hv1_uuid" Port_Binding chassis logical_port=lsp0
+wait_column "$hv1_uuid" Port_Binding requested_chassis logical_port=lsp0
+wait_column "" Port_Binding additional_chassis logical_port=lsp0
+wait_column "" Port_Binding requested_additional_chassis logical_port=lsp0
+
+pb_uuid=$(ovn-sbctl --bare --columns _uuid find Port_Binding logical_port=lsp0)
+
+# additional-chassis-ready should not be set yet
+AT_CHECK([ovn-sbctl get Port_Binding $pb_uuid options:additional-chassis-ready 2>/dev/null], [1], [ignore], [ignore])
+
+# Request port binding at an additional chassis (simulate migration start)
+check ovn-nbctl lsp-set-options lsp0 \
+    requested-chassis=hv1,hv2
+
+wait_column "$hv1_uuid" Port_Binding chassis logical_port=lsp0
+wait_column "$hv2_uuid" Port_Binding additional_chassis logical_port=lsp0
+wait_column "$hv2_uuid" Port_Binding requested_additional_chassis logical_port=lsp0
+
+# Wait for ovn-installed on both chassis
+wait_for_ports_up
+
+for hv in hv1 hv2; do
+    OVS_WAIT_UNTIL([test `as $hv ovs-vsctl get Interface lsp0 external_ids:ovn-installed` = '"true"'])
+done
+
+# Verify additional-chassis-ready=hv2 is set in Port_Binding options
+OVS_WAIT_UNTIL([test xhv2 = x$(ovn-sbctl get Port_Binding $pb_uuid options:additional-chassis-ready | tr -d '""')])
+
+# Complete migration: move binding to hv2
+check ovn-nbctl lsp-set-options lsp0 requested-chassis=hv2
+
+wait_column "$hv2_uuid" Port_Binding chassis logical_port=lsp0
+wait_column "$hv2_uuid" Port_Binding requested_chassis logical_port=lsp0
+wait_column "" Port_Binding additional_chassis logical_port=lsp0
+wait_column "" Port_Binding requested_additional_chassis logical_port=lsp0
+
+# Verify additional-chassis-ready is cleared after migration completes
+OVS_WAIT_UNTIL([test x = x$(ovn-sbctl get Port_Binding $pb_uuid options:additional-chassis-ready 2>/dev/null)])
+
+OVN_CLEANUP([hv1
+ignored_dp=ls0],[hv2])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([options:additional-chassis-ready with multiple additional chassis])
+AT_KEYWORDS([multi-chassis])
+TAG_UNSTABLE
+ovn_start
+
+net_add n1
+
+for i in 1 2 3; do
+    sim_add hv$i
+    as hv$i
+    check ovs-vsctl add-br br-phys
+    ovn_attach n1 br-phys 192.168.0.1$i
+done
+
+check ovn-nbctl ls-add ls0
+check ovn-nbctl lsp-add ls0 lsp0
+
+# Bind the port to hv1 initially
+check ovn-nbctl lsp-set-options lsp0 requested-chassis=hv1
+
+for i in 1 2 3; do
+    as hv$i check ovs-vsctl -- add-port br-int lsp0 -- \
+        set Interface lsp0 external-ids:iface-id=lsp0
+done
+
+for i in 1 2 3; do
+    wait_row_count Chassis 1 name=hv$i
+done
+hv1_uuid=$(fetch_column Chassis _uuid name=hv1)
+hv2_uuid=$(fetch_column Chassis _uuid name=hv2)
+hv3_uuid=$(fetch_column Chassis _uuid name=hv3)
+
+wait_column "$hv1_uuid" Port_Binding chassis logical_port=lsp0
+
+pb_uuid=$(ovn-sbctl --bare --columns _uuid find Port_Binding logical_port=lsp0)
+
+# Request binding at two additional chassis
+check ovn-nbctl lsp-set-options lsp0 requested-chassis=hv1,hv2,hv3
+
+wait_column "$hv1_uuid" Port_Binding chassis logical_port=lsp0
+wait_column "$hv2_uuid $hv3_uuid" Port_Binding additional_chassis logical_port=lsp0
+
+wait_for_ports_up
+
+for hv in hv1 hv2 hv3; do
+    OVS_WAIT_UNTIL([test `as $hv ovs-vsctl get Interface lsp0 external_ids:ovn-installed` = '"true"'])
+done
+
+# Verify additional-chassis-ready contains both hv2 and hv3
+OVS_WAIT_UNTIL([
+    ready=$(ovn-sbctl get Port_Binding $pb_uuid options:additional-chassis-ready | tr -d '""')
+    echo "$ready" | grep -q hv2 && echo "$ready" | grep -q hv3
+])
+
+# Remove hv3 from additional chassis
+check ovn-nbctl lsp-set-options lsp0 requested-chassis=hv1,hv2
+
+wait_column "$hv2_uuid" Port_Binding additional_chassis logical_port=lsp0
+
+# Verify hv3 is removed from additional-chassis-ready but hv2 remains
+OVS_WAIT_UNTIL([test xhv2 = x$(ovn-sbctl get Port_Binding $pb_uuid options:additional-chassis-ready | tr -d '""')])
+
+# Complete migration
+check ovn-nbctl lsp-set-options lsp0 requested-chassis=hv2
+
+wait_column "$hv2_uuid" Port_Binding chassis logical_port=lsp0
+wait_column "" Port_Binding additional_chassis logical_port=lsp0
+
+# Verify additional-chassis-ready fully cleaned up
+OVS_WAIT_UNTIL([test x = x$(ovn-sbctl get Port_Binding $pb_uuid options:additional-chassis-ready 2>/dev/null)])
+
+OVN_CLEANUP([hv1
+ignored_dp=ls0],[hv2],[hv3
+ignored_dp=ls0])
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([options:requested-chassis for logical port])
 ovn_start
 
