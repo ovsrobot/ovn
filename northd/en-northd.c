@@ -207,7 +207,8 @@ northd_nb_logical_router_handler(struct engine_node *node,
     }
 
     if (northd_has_lr_nats_in_tracked_data(&nd->trk_data) ||
-        northd_has_lrouters_in_tracked_data(&nd->trk_data)) {
+        northd_has_lrouters_in_tracked_data(&nd->trk_data) ||
+        northd_has_lr_route_in_tracked_data(&nd->trk_data)) {
         return EN_HANDLED_UPDATED;
     }
 
@@ -329,7 +330,7 @@ en_route_policies_run(struct engine_node *node, void *data)
 
 enum engine_input_handler_result
 routes_northd_change_handler(struct engine_node *node,
-                                    void *data OVS_UNUSED)
+                             void *data OVS_UNUSED)
 {
     struct northd_data *northd_data = engine_get_input_data("northd", node);
     if (!northd_has_tracked_data(&northd_data->trk_data)) {
@@ -347,12 +348,144 @@ routes_northd_change_handler(struct engine_node *node,
      *      Note: When we add I-P to the created/deleted logical routers or
      *      logical router ports, we need to revisit this handler.
      *
-     *      This node also accesses the static routes of the logical router.
-     *      When these static routes gets updated, en_northd engine recomputes
-     *      and so does this node.
-     *      Note: When we add I-P to handle static routes changes, we need
-     *      to revisit this handler.
      */
+    return EN_HANDLED_UNCHANGED;
+}
+enum engine_input_handler_result
+routes_static_route_change_handler(struct engine_node *node,
+                                   void *data)
+{
+    struct routes_data *routes_data = data;
+    const struct nbrec_logical_router_static_route_table *
+      nb_lr_static_route_table =
+    EN_OVSDB_GET(engine_get_input("NB_logical_router_static_route", node));
+
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    struct bfd_data *bfd_data = engine_get_input_data("bfd", node);
+    struct parsed_route *pr;
+    const struct nbrec_logical_router_static_route *changed_static_route;
+    NBREC_LOGICAL_ROUTER_STATIC_ROUTE_TABLE_FOR_EACH_TRACKED (
+                            changed_static_route, nb_lr_static_route_table) {
+
+        bool is_deleted = nbrec_logical_router_static_route_is_deleted(
+                                                        changed_static_route);
+        bool is_new = nbrec_logical_router_static_route_is_new(
+                                                        changed_static_route);
+
+
+        if (is_new && is_deleted) {
+            continue;
+        }
+
+        if (is_new) {
+            struct ovn_datapath *od = ovn_datapath_find_by_static_route(
+                                        &northd_data->trk_data.trk_lrs_routes,
+                                        &changed_static_route->header_.uuid);
+            if (!od) {
+                continue;
+            }
+            pr = parsed_routes_add_static(od, &northd_data->lr_ports,
+                                        changed_static_route,
+                                        &bfd_data->bfd_connections,
+                                        &routes_data->parsed_routes,
+                                        &routes_data->route_tables,
+                                        &routes_data->bfd_active_connections);
+            if (!pr) {
+                return EN_UNHANDLED;
+            }
+            hmapx_add(&routes_data->trk_data.trk_crupdated_parsed_route,
+                       pr);
+        }
+
+        if (is_deleted) {
+            pr = parsed_route_lookup_by_source(
+                                            ROUTE_SOURCE_STATIC,
+                                            &changed_static_route->header_,
+                                            &routes_data->parsed_routes);
+            if (!pr) {
+                pr = parsed_route_lookup_by_source(ROUTE_SOURCE_IC_DYNAMIC,
+                                            &changed_static_route->header_,
+                                            &routes_data->parsed_routes);
+            }
+            if (pr) {
+                hmapx_add(&routes_data->trk_data.trk_deleted_parsed_route, pr);
+                hmap_remove(&routes_data->parsed_routes, &pr->key_node);
+
+            }
+            continue;
+        }
+
+        if (!is_new &&
+            (nbrec_logical_router_static_route_is_updated(
+                    changed_static_route,
+                    NBREC_LOGICAL_ROUTER_STATIC_ROUTE_COL_NEXTHOP)
+            || nbrec_logical_router_static_route_is_updated(
+                    changed_static_route,
+                    NBREC_LOGICAL_ROUTER_STATIC_ROUTE_COL_IP_PREFIX)
+            || nbrec_logical_router_static_route_is_updated(
+                    changed_static_route,
+                    NBREC_LOGICAL_ROUTER_STATIC_ROUTE_COL_OUTPUT_PORT)
+            || nbrec_logical_router_static_route_is_updated(
+                    changed_static_route,
+                    NBREC_LOGICAL_ROUTER_STATIC_ROUTE_COL_POLICY)
+            || nbrec_logical_router_static_route_is_updated(
+                    changed_static_route,
+                    NBREC_LOGICAL_ROUTER_STATIC_ROUTE_COL_ROUTE_TABLE)
+            || nbrec_logical_router_static_route_is_updated(
+                    changed_static_route,
+                    NBREC_LOGICAL_ROUTER_STATIC_ROUTE_COL_SELECTION_FIELDS)
+            ||  nbrec_logical_router_static_route_is_updated(
+                    changed_static_route,
+                    NBREC_LOGICAL_ROUTER_STATIC_ROUTE_COL_OPTIONS))) {
+            pr = parsed_route_lookup_by_source(
+                                            ROUTE_SOURCE_STATIC,
+                                            &changed_static_route->header_,
+                                            &routes_data->parsed_routes);
+            if (!pr) {
+                pr = parsed_route_lookup_by_source(
+                                                ROUTE_SOURCE_IC_DYNAMIC,
+                                                &changed_static_route->header_,
+                                                &routes_data->parsed_routes);
+            }
+
+            if (!pr || !pr->od) {
+                return EN_UNHANDLED;
+            }
+            struct parsed_route *old_pr = pr;
+            struct hmapx_node *route_node =
+                hmapx_add(&routes_data->trk_data.trk_deleted_parsed_route,
+                          old_pr);
+            hmap_remove(&routes_data->parsed_routes, &old_pr->key_node);
+            pr = parsed_routes_add_static(old_pr->od, &northd_data->lr_ports,
+                                        changed_static_route,
+                                        &bfd_data->bfd_connections,
+                                        &routes_data->parsed_routes,
+                                        &routes_data->route_tables,
+                                        &routes_data->bfd_active_connections);
+            if (!pr) {
+                hmapx_delete(&routes_data->trk_data.trk_deleted_parsed_route,
+                             route_node);
+                return EN_UNHANDLED;
+            }
+
+            hmapx_add(&routes_data->trk_data.trk_crupdated_parsed_route,
+                       pr);
+        }
+
+        if (!is_new && nbrec_logical_router_static_route_is_updated(
+                    changed_static_route,
+                    NBREC_LOGICAL_ROUTER_STATIC_ROUTE_COL_BFD))
+        {
+                return EN_UNHANDLED;
+        }
+    }
+
+    if (!hmapx_is_empty(&routes_data->trk_data.trk_crupdated_parsed_route) ||
+        !hmapx_is_empty(&routes_data->trk_data.trk_deleted_parsed_route)) {
+        routes_data->tracked = true;
+        return EN_HANDLED_UPDATED;
+    }
+
     return EN_HANDLED_UNCHANGED;
 }
 
@@ -590,6 +723,11 @@ en_routes_cleanup(void *data)
     routes_destroy(data);
 }
 
+void
+en_routes_clear_tracked_data(void *data)
+{
+    routes_clear_tracked(data);
+}
 void
 en_bfd_cleanup(void *data)
 {
