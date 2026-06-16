@@ -364,11 +364,15 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
                      NULL);
     engine_add_input(&en_advertised_mac_binding_sync,
                      &en_sb_advertised_mac_binding, NULL);
-    /* No need for an explicit handler for northd changes.
-     * We do need to access en_northd (input) data, i.e., to
-     * lookup OVN ports. */
-    engine_add_input(&en_advertised_mac_binding_sync, &en_northd,
-                     engine_noop_handler);
+    /* Recompute on northd changes: besides looking up OVN ports, this node
+     * reads per-datapath EVPN settings (dynamic-routing-vni and the
+     * dynamic-routing-redistribute 'ip'/'nat' tokens).  Toggling those must
+     * re-evaluate which IPs/MACs and floating IPs are advertised. */
+    engine_add_input(&en_advertised_mac_binding_sync, &en_northd, NULL);
+    /* Distributed dnat_and_snat NAT entries (e.g. floating IPs) are
+     * advertised via EVPN as well.  Trigger a recompute on any lr_nat
+     * change so that those entries are picked up. */
+    engine_add_input(&en_advertised_mac_binding_sync, &en_lr_nat, NULL);
 
     engine_add_input(&en_learned_route_sync, &en_sb_learned_route,
                      learned_route_sync_sb_learned_route_change_handler);
