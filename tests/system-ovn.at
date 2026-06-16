@@ -5143,15 +5143,15 @@ OVS_WAIT_UNTIL(
 )
 
 # From sw0-p2 send traffic to vip - 2001::a
-for i in `seq 1 20`; do
-    echo Request $i
-    ovn-sbctl list service_monitor
-    NS_CHECK_EXEC([sw0-p2], [wget http://[[2001::a]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
-done
+OVS_WAIT_FOR_OUTPUT([
+    for i in `seq 1 20`; do
+        ovn-sbctl list service_monitor >> service_monitor.log
+        NS_EXEC([sw0-p2], [wget http://[[2001::a]] -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+    done
 
-dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(2001::a) | grep -v fe80 | \
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
+    dnl Each server should have at least one connection.
+    ovs-appctl dpctl/dump-conntrack | FORMAT_CT(2001::a) | grep -v fe80 | \
+    sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=2001::4,dst=2001::a,sport=<cleared>,dport=<cleared>),reply=(src=2001::3,dst=2001::4,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 tcp,orig=(src=2001::4,dst=2001::a,sport=<cleared>,dport=<cleared>),reply=(src=2002::3,dst=2001::4,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2,protoinfo=(state=<cleared>)
 ])
@@ -12191,29 +12191,29 @@ OVS_START_L7([bar1], [sctp])
 on_exit "ovs-ofctl -O OpenFlow13 dump-flows br-int"
 
 dnl Should work with the virtual IP address through NAT
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [nc --sctp --recv-only 30.0.0.1 12345 > client$i.log])
-done
+OVS_WAIT_FOR_OUTPUT([
+    for i in `seq 1 20`; do
+        NS_EXEC([alice1], [nc --sctp --recv-only 30.0.0.1 12345 > client$i.log])
+    done
 
-dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/' |
-sed 's/,protoinfo=.*$//' | uniq], [0], [dnl
+    dnl Each server should have at least one connection.
+    ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.1) |
+    sed -e 's/zone=[[0-9]]*/zone=<cleared>/' |
+    sed 's/,protoinfo=.*$//' | uniq], [0], [dnl
 sctp,orig=(src=172.16.1.2,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2
 sctp,orig=(src=172.16.1.2,dst=30.0.0.1,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2
 ])
 
 dnl Test load-balancing that includes L4 ports in NAT.
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [nc --sctp --recv-only 30.0.0.2 8000 > clients$i.log])
-done
+OVS_WAIT_FOR_OUTPUT([
+    for i in `seq 1 20`; do
+        NS_EXEC([alice1], [nc --sctp --recv-only 30.0.0.2 8000 > clients$i.log])
+    done
 
-dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.2) |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/' |
-sed 's/,protoinfo=.*$//' | uniq], [0], [dnl
+    dnl Each server should have at least one connection.
+    ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.2) |
+    sed -e 's/zone=[[0-9]]*/zone=<cleared>/' |
+    sed 's/,protoinfo=.*$//' | uniq], [0], [dnl
 sctp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2
 sctp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=2
 ])
@@ -12248,15 +12248,15 @@ ovn-sbctl dump-flows R2
 OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-flows br-int table=$(ovn-debug lflow-stage-to-oftable lr_out_snat) | grep 'nat(src=20.0.0.2)'])
 
 dnl Test load-balancing that includes L4 ports in NAT.
-for i in `seq 1 20`; do
-    echo Request $i
-    NS_CHECK_EXEC([alice1], [nc --sctp --recv-only 30.0.0.2 8000 > clients$i.log])
-done
+OVS_WAIT_FOR_OUTPUT([
+    for i in `seq 1 20`; do
+        NS_EXEC([alice1], [nc --sctp --recv-only 30.0.0.2 8000 > clients$i.log])
+    done
 
-dnl Each server should have at least one connection.
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.2) |
-sed -e 's/zone=[[0-9]]*/zone=<cleared>/' |
-sed 's/,protoinfo=.*$//' | uniq], [0], [dnl
+    dnl Each server should have at least one connection.
+    ovs-appctl dpctl/dump-conntrack | FORMAT_CT(30.0.0.2) |
+        sed -e 's/zone=[[0-9]]*/zone=<cleared>/' |
+        sed 's/,protoinfo=.*$//' | uniq], [0], [dnl
 sctp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=10
 sctp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=172.16.1.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=10
 ])
@@ -17733,20 +17733,14 @@ NETNS_START_TCPDUMP([foo1], [-neei foo1 src 20.0.0.2 and tcp], [foo1])
 NETNS_START_TCPDUMP([bar1], [-neei bar1 src 20.0.0.2 and tcp], [bar1])
 
 check ovs-appctl dpctl/flush-conntrack
-for i in $(seq 10); do
-    NS_CHECK_EXEC([alice1], [wget 172.16.1.1:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
-done
 
-OVS_WAIT_UNTIL([
-    n_pkt=$(cat foo1.tcpdump | wc -l)
-    test "${n_pkt}" -ge 1
-])
-OVS_WAIT_UNTIL([
-    n_pkt=$(cat bar1.tcpdump | wc -l)
-    test "${n_pkt}" -ge 1
-])
-
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(20.0.0.2) | \
+OVS_WAIT_FOR_OUTPUT([
+    for i in $(seq 10); do
+        NS_EXEC([alice1], [wget 172.16.1.1:8000 -t 5 -T 1 --retry-connrefused -v -o wget$i.log])
+    done
+    test $(cat foo1.tcpdump | wc -l) -ge 1 && \
+    test $(cat bar1.tcpdump | wc -l) -ge 1 && \
+    ovs-appctl dpctl/dump-conntrack | FORMAT_CT(20.0.0.2) | \
 sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
 tcp,orig=(src=172.16.1.2,dst=192.168.1.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.1.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
 tcp,orig=(src=172.16.1.2,dst=192.168.2.2,sport=<cleared>,dport=<cleared>),reply=(src=192.168.2.2,dst=20.0.0.2,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
