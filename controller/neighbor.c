@@ -301,6 +301,44 @@ neighbor_collect_mac_to_advertise(const struct neighbor_ctx_in *n_ctx_in,
     }
 
     sbrec_port_binding_index_destroy_row(target);
+
+    /* Some MACs need to be advertised over EVPN even though they are not the
+     * address of any port_binding on this Logical Switch (for example, the
+     * external_mac of a distributed dnat_and_snat NAT entry / floating IP).
+     * For those, ovn-northd populates the Advertised_MAC_Binding table on
+     * this Logical Switch and we inject them into the FDB here. */
+    struct sbrec_advertised_mac_binding *amb_target =
+        sbrec_advertised_mac_binding_index_init_row(n_ctx_in->sbrec_amb_by_dp);
+    sbrec_advertised_mac_binding_index_set_datapath(amb_target, dp);
+
+    const struct sbrec_advertised_mac_binding *adv_mb;
+    SBREC_ADVERTISED_MAC_BINDING_FOR_EACH_EQUAL (adv_mb, amb_target,
+                                                 n_ctx_in->sbrec_amb_by_dp) {
+        if (!adv_mb->logical_port) {
+            continue;
+        }
+
+        const struct sbrec_port_binding *pb =
+            neighbor_get_relevant_port_binding(n_ctx_in->sbrec_pb_by_name,
+                                               adv_mb->logical_port);
+        if (!lport_pb_is_chassis_resident(n_ctx_in->chassis, pb)) {
+            continue;
+        }
+
+        struct eth_addr ea;
+        char *err = str_to_mac(adv_mb->mac, &ea);
+        if (err) {
+            free(err);
+            continue;
+        }
+
+        if (!advertise_neigh_find(neighbors, ea, &in6addr_any)) {
+            advertise_neigh_add(neighbors, ea, in6addr_any);
+        }
+        sset_add(advertised_pbs, pb->logical_port);
+    }
+
+    sbrec_advertised_mac_binding_index_destroy_row(amb_target);
 }
 
 static void
