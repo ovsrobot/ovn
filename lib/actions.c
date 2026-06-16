@@ -2600,6 +2600,80 @@ ovnact_lookup_mac_bind_ip_free(
 
 }
 
+/* chk_evpn_arp action. */
+
+static void
+format_CHK_EVPN_ARP(const struct ovnact_chk_evpn_arp *chk, struct ds *s)
+{
+    expr_field_format(&chk->dst, s);
+    ds_put_cstr(s, " = chk_evpn_arp(");
+    expr_field_format(&chk->ip, s);
+    ds_put_cstr(s, ");");
+}
+
+static void
+encode_CHK_EVPN_ARP(const struct ovnact_chk_evpn_arp *chk,
+                     const struct ovnact_encode_params *ep,
+                     struct ofpbuf *ofpacts)
+{
+    struct mf_subfield ip_sf = expr_resolve_field(&chk->ip);
+    const struct arg args[] = {
+        { ip_sf, ip_sf.n_bits == 32 ? MFF_REG0 : MFF_XXREG0 },
+    };
+    encode_setup_args(args, ARRAY_SIZE(args), ofpacts);
+
+    put_load(0, MFF_LOG_FLAGS, MLF_EVPN_LOOKUP_BIT, 1, ofpacts);
+    emit_resubmit(ofpacts, ep->evpn_arp_ptable);
+
+    struct mf_subfield dst = expr_resolve_field(&chk->dst);
+    struct ofpact_reg_move *orm = ofpact_put_REG_MOVE(ofpacts);
+    orm->dst = dst;
+    orm->src.field = mf_from_id(MFF_LOG_FLAGS);
+    orm->src.ofs = MLF_EVPN_LOOKUP_BIT;
+    orm->src.n_bits = 1;
+
+    encode_restore_args(args, ARRAY_SIZE(args), ofpacts);
+}
+
+static void
+parse_chk_evpn_arp(struct action_context *ctx,
+                   const struct expr_field *dst,
+                   struct ovnact_chk_evpn_arp *chk)
+{
+    /* Validate destination is a 1-bit modifiable field. */
+    char *error = expr_type_check(dst, 1, true, ctx->scope);
+    if (error) {
+        lexer_error(ctx->lexer, "%s", error);
+        free(error);
+        return;
+    }
+    chk->dst = *dst;
+
+    lexer_get(ctx->lexer);  /* Skip "chk_evpn_arp". */
+    lexer_get(ctx->lexer); /* Skip '('. * */
+
+    if (!expr_field_parse(ctx->lexer, ctx->pp->symtab,
+                          &chk->ip, &ctx->prereqs)) {
+        return;
+    }
+
+    /* Validate IP width: must be 32 (IPv4) or 128 (IPv6). */
+    struct mf_subfield ip_sf = expr_resolve_field(&chk->ip);
+    if (ip_sf.n_bits != 32 && ip_sf.n_bits != 128) {
+        lexer_error(ctx->lexer,
+                    "chk_evpn_arp requires a 32-bit or "
+                    "128-bit IP field");
+        return;
+    }
+
+    lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+}
+
+static void
+ovnact_chk_evpn_arp_free(struct ovnact_chk_evpn_arp *chk OVS_UNUSED)
+{
+}
+
 
 static void
 parse_gen_opt(struct action_context *ctx, struct ovnact_gen_option *o,
@@ -5877,6 +5951,10 @@ parse_set_action(struct action_context *ctx)
                 && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
             parse_lookup_mac_bind_ip(ctx, &lhs, 128,
                                      ovnact_put_LOOKUP_ND_IP(ctx->ovnacts));
+        } else if (!strcmp(ctx->lexer->token.s, "chk_evpn_arp")
+                   && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
+            parse_chk_evpn_arp(ctx, &lhs,
+                               ovnact_put_CHK_EVPN_ARP(ctx->ovnacts));
         } else if (!strcmp(ctx->lexer->token.s, "chk_lb_hairpin")
                    && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
             parse_chk_lb_hairpin(ctx, &lhs,
