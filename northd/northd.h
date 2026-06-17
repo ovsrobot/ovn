@@ -1120,6 +1120,25 @@ lsp_can_learn_mac(const struct nbrec_logical_switch_port *nbsp)
     return smap_get_bool(&nbsp->options, "lsp_learn_fdb", true);
 }
 
+/* True if 'op' can receive unknown-unicast floods, i.e. it has 'unknown'
+ * among its addresses and "receive_multicast" is not disabled. */
+static inline bool
+lsp_can_receive_unknown_flood(const struct ovn_port *op)
+{
+    return op->nbsp
+           && op->has_unknown
+           && lsp_can_receive_multicast(op->nbsp);
+}
+
+/* True if 'op' is a local MC_UNKNOWN-member ingress port (excludes
+ * remote ports).  Used to set flags.inport_in_mc_unknown. */
+static inline bool
+lsp_is_mc_unknown_ingress_member(const struct ovn_port *op)
+{
+    return lsp_can_receive_unknown_flood(op)
+           && strcmp(op->nbsp->type, "remote");
+}
+
 const char *lrp_find_member_ip(const struct ovn_port *op, const char *ip_s);
 
 /* This function returns true if 'op' is a gateway router port.

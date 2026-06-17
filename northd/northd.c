@@ -176,6 +176,10 @@ static bool vxlan_mode;
 #define REGBIT_NF_ENABLED         "reg8[21]"
 #define REGBIT_NF_ORIG_DIR        "reg8[22]"
 #define REGBIT_NF_EGRESS_LOOPBACK "reg8[23]"
+/* Set when a packet returning from an inline network function is about to
+ * be sent back out of the port it originally arrived on; such loopback
+ * copies are dropped. */
+#define REGBIT_NF_LOOKUP_HIT      "reg8[24]"
 /* Register to store the network function group id */
 #define REG_NF_GROUP_ID           "reg0[22..29]"
 /* REG_NF_ID overrides REG_NF_GROUP_ID in the pre_network_function stage. */
@@ -314,6 +318,8 @@ static const char *reg_ct_state[] = {
  * |    | REGBIT_NF_{ENABLED/ORIG_DIR/                 | G |                                   |
  * |    |            EGRESS_LOOPBACK}                  | 4 |                                   |
  * |    |       (>= ACL_EVAL* && <= NF*)               |   |                                   |
+ * |    | REGBIT_NF_LOOKUP_HIT                         |   |                                   |
+ * |    |     (>= OUT_PRE_ACL && <= OUT_CHECK_PORT_SEC)|   |                                   |
  * +----+----------------------------------------------+   +-----------------------------------+
  * | R9 |              OBS_POINT_ID_EST                |   |                                   |
  * |    |       (>= ACL_EVAL* && <= ACL_ACTION*)       |   |                                   |
@@ -6306,6 +6312,19 @@ build_lswitch_port_sec_op(struct ovn_port *op, struct lflow_table *lflows,
     }
 }
 
+/* True if 'op' emits the FDB-learn (LOOKUP_FDB / PUT_FDB) flows. */
+static bool
+lsp_emits_fdb_learn_lflow(const struct ovn_port *op)
+{
+    if (op->lsp_has_port_sec || !op->has_unknown) {
+        return false;
+    }
+    return lsp_is_remote(op->nbsp)
+        || (!strcmp(op->nbsp->type, "") && lsp_can_learn_mac(op->nbsp))
+        || lsp_is_switch(op->nbsp)
+        || (lsp_is_localnet(op->nbsp) && localnet_can_learn_mac(op->nbsp));
+}
+
 static void
 build_lswitch_learn_fdb_op(
     struct ovn_port *op, struct lflow_table *lflows,
@@ -6313,36 +6332,35 @@ build_lswitch_learn_fdb_op(
 {
     ovs_assert(op->nbsp);
 
-    if (op->lsp_has_port_sec || !op->has_unknown) {
+    if (!lsp_emits_fdb_learn_lflow(op)) {
         return;
     }
 
     bool remote = lsp_is_remote(op->nbsp);
 
-    if (remote || (!strcmp(op->nbsp->type, "") && lsp_can_learn_mac(op->nbsp))
-        || lsp_is_switch(op->nbsp)
-        || (lsp_is_localnet(op->nbsp) && localnet_can_learn_mac(op->nbsp))) {
-        ds_clear(match);
-        ds_clear(actions);
-        ds_put_format(match, "inport == %s", op->json_key);
-        if (lsp_is_localnet(op->nbsp)) {
-            ds_put_cstr(actions, "flags.localnet = 1; ");
-        }
-        ds_put_format(actions, REGBIT_LKUP_FDB
-                      " = lookup_fdb(inport, eth.src); next;");
-        ovn_lflow_add(lflows, op->od, remote ? S_SWITCH_OUT_LOOKUP_FDB
-                                             : S_SWITCH_IN_LOOKUP_FDB,
-                      100, ds_cstr(match), ds_cstr(actions), op->lflow_ref,
-                      WITH_IO_PORT(op->key), WITH_HINT(&op->nbsp->header_));
-
-        ds_put_cstr(match, " && "REGBIT_LKUP_FDB" == 0");
-        ds_clear(actions);
-        ds_put_cstr(actions, "put_fdb(inport, eth.src); next;");
-        ovn_lflow_add(lflows, op->od, remote ? S_SWITCH_OUT_PUT_FDB
-                                             : S_SWITCH_IN_PUT_FDB,
-                      100, ds_cstr(match), ds_cstr(actions), op->lflow_ref,
-                      WITH_IO_PORT(op->key), WITH_HINT(&op->nbsp->header_));
+    ds_clear(match);
+    ds_clear(actions);
+    ds_put_format(match, "inport == %s", op->json_key);
+    if (lsp_is_localnet(op->nbsp)) {
+        ds_put_cstr(actions, "flags.localnet = 1; ");
     }
+    if (!remote && lsp_is_mc_unknown_ingress_member(op)) {
+        ds_put_cstr(actions, "flags.inport_in_mc_unknown = 1; ");
+    }
+    ds_put_format(actions, REGBIT_LKUP_FDB
+                  " = lookup_fdb(inport, eth.src); next;");
+    ovn_lflow_add(lflows, op->od, remote ? S_SWITCH_OUT_LOOKUP_FDB
+                                         : S_SWITCH_IN_LOOKUP_FDB,
+                  100, ds_cstr(match), ds_cstr(actions), op->lflow_ref,
+                  WITH_IO_PORT(op->key), WITH_HINT(&op->nbsp->header_));
+
+    ds_put_cstr(match, " && "REGBIT_LKUP_FDB" == 0");
+    ds_clear(actions);
+    ds_put_cstr(actions, "put_fdb(inport, eth.src); next;");
+    ovn_lflow_add(lflows, op->od, remote ? S_SWITCH_OUT_PUT_FDB
+                                         : S_SWITCH_IN_PUT_FDB,
+                  100, ds_cstr(match), ds_cstr(actions), op->lflow_ref,
+                  WITH_IO_PORT(op->key), WITH_HINT(&op->nbsp->header_));
 }
 
 static void
@@ -10354,20 +10372,52 @@ build_arp_nd_service_monitor_lflow(const char *svc_monitor_mac,
 
 /* Ingress table: Lookup FDB.  Set flags.localnet for packets arriving from
  * localnet ports so that downstream stages (e.g., ARP/ND responder) can
- * condition their behavior on whether the packet came from localnet. */
+ * condition their behavior on whether the packet came from localnet.  Also
+ * set flags.inport_in_mc_unknown for MC_UNKNOWN-member localnet ports. */
 static void
 build_lswitch_from_localnet_op(struct ovn_port *op,
                                struct lflow_table *lflows,
-                               struct ds *match)
+                               struct ds *actions, struct ds *match)
 {
     ovs_assert(op->nbsp);
     if (!lsp_is_localnet(op->nbsp)) {
         return;
     }
     ds_clear(match);
+    ds_clear(actions);
+    ds_put_format(match, "inport == %s", op->json_key);
+    ds_put_cstr(actions, "flags.localnet = 1; ");
+    if (lsp_is_mc_unknown_ingress_member(op)) {
+        ds_put_cstr(actions, "flags.inport_in_mc_unknown = 1; ");
+    }
+    ds_put_cstr(actions, "next;");
+    ovn_lflow_add(lflows, op->od, S_SWITCH_IN_LOOKUP_FDB, 50,
+                  ds_cstr(match), ds_cstr(actions),
+                  op->lflow_ref, WITH_IO_PORT(op->key),
+                  WITH_HINT(&op->nbsp->header_));
+}
+
+/* Ingress table: Lookup FDB.  Set flags.inport_in_mc_unknown for
+ * MC_UNKNOWN-member ports not already covered by the FDB-learn or
+ * localnet flows. */
+static void
+build_lswitch_set_inport_in_mc_unknown_op(struct ovn_port *op,
+                                          struct lflow_table *lflows,
+                                          struct ds *match)
+{
+    ovs_assert(op->nbsp);
+    if (!lsp_is_mc_unknown_ingress_member(op)) {
+        return;
+    }
+    if (lsp_emits_fdb_learn_lflow(op) || lsp_is_localnet(op->nbsp)) {
+        return;
+    }
+
+    ds_clear(match);
     ds_put_format(match, "inport == %s", op->json_key);
     ovn_lflow_add(lflows, op->od, S_SWITCH_IN_LOOKUP_FDB, 50,
-                  ds_cstr(match), "flags.localnet = 1; next;",
+                  ds_cstr(match),
+                  "flags.inport_in_mc_unknown = 1; next;",
                   op->lflow_ref, WITH_IO_PORT(op->key),
                   WITH_HINT(&op->nbsp->header_));
 }
@@ -19167,6 +19217,66 @@ network_function_configure_fail_open_flows(struct lflow_table *lflows,
     ds_destroy(&match);
 }
 
+/* Emit IPv4 and IPv6 nf_learn_orig_src_port() flows for flagged IP packets.
+ * If 'exclude_mcast' is true, multicast is excluded from the match (used where
+ * no higher-priority flow already skips multicast).  'extra_match' is ANDed
+ * onto the match if non-NULL; 'action_suffix' runs after the learn. */
+static void
+build_nf_learn_orig_src_port_flows(struct lflow_table *lflows,
+                                   const struct ovn_datapath *od,
+                                   const struct ovn_stage *stage,
+                                   uint16_t priority,
+                                   bool exclude_mcast,
+                                   const char *extra_match,
+                                   const char *action_suffix,
+                                   struct lflow_ref *lflow_ref)
+{
+    for (int ipv6 = 0; ipv6 <= 1; ipv6++) {
+        struct ds match = DS_EMPTY_INITIALIZER;
+        struct ds action = DS_EMPTY_INITIALIZER;
+
+        ds_put_cstr(&match, ipv6 ? "ip6" : "ip4");
+        if (exclude_mcast) {
+            ds_put_cstr(&match, " && !eth.mcast");
+        }
+        ds_put_cstr(&match, " && flags.inport_in_mc_unknown == 1");
+        if (extra_match) {
+            ds_put_format(&match, " && %s", extra_match);
+        }
+        ds_put_format(&action, "nf_learn_orig_src_port(ipv6 = %s); %s",
+                      ipv6 ? "true" : "false", action_suffix);
+        ovn_lflow_add(lflows, od, stage, priority, ds_cstr(&match),
+                      ds_cstr(&action), lflow_ref);
+        ds_destroy(&match);
+        ds_destroy(&action);
+    }
+}
+
+/* Emit a post-NF nf_lookup_orig_src_port() flow for packets re-entering on
+ * 'port'.  A hit sets REGBIT_NF_LOOKUP_HIT, which ls_out_check_port_sec
+ * drops.  'action_suffix' runs after the lookup. */
+static void
+build_nf_lookup_orig_src_port_flow(struct lflow_table *lflows,
+                                   const struct ovn_datapath *od,
+                                   const struct ovn_stage *stage,
+                                   uint16_t priority,
+                                   const struct ovn_port *port,
+                                   const char *action_suffix,
+                                   struct lflow_ref *lflow_ref)
+{
+    struct ds match = DS_EMPTY_INITIALIZER;
+    struct ds action = DS_EMPTY_INITIALIZER;
+
+    ds_put_format(&match, "inport == %s", port->json_key);
+    ds_put_format(&action,
+                  REGBIT_NF_LOOKUP_HIT " = nf_lookup_orig_src_port(); %s",
+                  action_suffix);
+    ovn_lflow_add(lflows, od, stage, priority, ds_cstr(&match),
+                  ds_cstr(&action), lflow_ref);
+    ds_destroy(&match);
+    ds_destroy(&action);
+}
+
 static void
 consider_network_function(struct lflow_table *lflows,
                           const struct ovn_datapath *od,
@@ -19272,6 +19382,15 @@ consider_network_function(struct lflow_table *lflows,
                   (uint8_t) nf->id);
     ovn_lflow_add(lflows, od, fwd_stage, 99, ds_cstr(&match),
                   ds_cstr(&action), lflow_ref);
+
+    /* Priority 100 flows in fwd_stage:
+     * Same as the priority-99 redirect above, but learn the original source
+     * port first (for flagged IP packets).  Multicast is already skipped by
+     * the higher-priority (110) flow below, so it is not matched here. */
+    build_nf_learn_orig_src_port_flows(lflows, od, fwd_stage, 100, false,
+                                       ds_cstr(&match), ds_cstr(&action),
+                                       lflow_ref);
+
     ds_clear(&match);
     ds_clear(&action);
 
@@ -19309,53 +19428,64 @@ consider_network_function(struct lflow_table *lflows,
     ds_clear(&match);
     ds_clear(&action);
 
-    /* Priority 100 flow in in_nf:
+    /* Priority 110 flow in in_nf:
      * Allow packets to go through if coming from network-function port as
      * we don't want the packets to be redirected again based on from-lport
      * match.
      */
     ds_put_format(&match, "inport == %s", input_port->json_key);
     ds_put_format(&action, REG_TUN_OFPORT" = ct_label.tun_if_id; next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 100,
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 110,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
 
     ds_put_format(&match, "inport == %s", output_port->json_key);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 100,
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 110,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
     ds_clear(&action);
 
-    /* Priority 100 flow in out_nf:
+    /* Priority 110 flow in out_nf:
      * Allow packets to go through if outport is network-function port as
      * we don't want the packets to be redirected again based on to-lport
      * match.
      */
     ds_put_format(&match, "outport == %s", input_port->json_key);
     ds_put_format(&action, "next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 100,
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 110,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
 
     ds_put_format(&match, "outport == %s", output_port->json_key);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 100,
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 110,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
     ds_clear(&action);
 
-    /* For packets redirected from egress pipleline to the NF, when they come
-     * out from the other NF port, we don't want to process them again through
-     * egress stages they already went through, especially not again through
-     * conntrack as these packets are already accounted for there. Hence we
-     * need to skip the initial pipeline stages for such packets and directly
-     * start from the NF table. The packets that fall under this category are
-     * the response packets from NF for from-lport ACLs and request packets
-     * received from NF for to-lport ACLs. */
-    ds_put_format(&match, "inport == %s", input_port->json_key);
+    /* Priority 115 flow in out_pre_acl (input_port):
+     * A post-NF packet redirected from the egress pipeline already ran the
+     * egress stages, so look it up here and skip the NF table to avoid
+     * re-running conntrack.  A hit means it is heading back out the port it
+     * arrived on, and ls_out_check_port_sec drops it.
+     *
+     * Priority 115 (above the 110 cluster used by skip_port_from_conntrack
+     * for router/switch/localnet ports) so this lookup deterministically wins
+     * against the localnet "ip && outport == <ln>" skip flow when the looped
+     * post-NF copy egresses a localnet port (the actual MAC-flap case). */
     ds_put_format(&action, "next(pipeline=egress, table=%d);",
-                  (ovn_stage_get_table(S_SWITCH_OUT_NF) + 1));
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110, ds_cstr(&match),
-                  ds_cstr(&action), lflow_ref);
+                  ovn_stage_get_table(S_SWITCH_OUT_NF) + 1);
+    build_nf_lookup_orig_src_port_flow(lflows, od, S_SWITCH_OUT_PRE_ACL, 115,
+                                       input_port, ds_cstr(&action),
+                                       lflow_ref);
+    ds_clear(&action);
+
+    /* Priority 2 flow in out_nf (output_port):
+     * A post-NF packet re-entering here is doing a fresh egress and has not
+     * run the egress stages, so run the lookup here.  A hit means it is
+     * heading back out the port it arrived on, and ls_out_check_port_sec
+     * drops it. */
+    build_nf_lookup_orig_src_port_flow(lflows, od, S_SWITCH_OUT_NF, 2,
+                                       output_port, "next;", lflow_ref);
 
     /* Priority 120 flows in out_stateful:
      * If packet was received on a tunnel interface and being forwarded to a
@@ -19376,6 +19506,7 @@ build_network_function(const struct ovn_datapath *od,
 {
     unsigned long *nfg_ingress_bitmap = bitmap_allocate(MAX_OVN_NF_GROUP_IDS);
     unsigned long *nfg_egress_bitmap = bitmap_allocate(MAX_OVN_NF_GROUP_IDS);
+    bool has_nfg = false;
 
     /* This flow matches packets injected from out_nf stage -
      * after it sets the outport - back to in_l2_lkup stage. This rule must be
@@ -19403,13 +19534,14 @@ build_network_function(const struct ovn_datapath *od,
                   REGBIT_NF_ENABLED" == 1 && " REGBIT_NF_ORIG_DIR" == 1",
                   REG_NF_ID" = 0; next;", lflow_ref);
 
-    /* Ingress and Egress NF Table (Priority 100): ACL stage determined these
+    /* Ingress and Egress NF Table (Priority 110): ACL stage determined these
      * packets should be redirected, but these are multicast/broadcast
-     * packets which can cause L2 loop if redirected to NF. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 100,
+     * packets which can cause L2 loop if redirected to NF.  Higher priority
+     * than the redirect/learn flows so they skip both. */
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 110,
                   REGBIT_NF_ENABLED" == 1 && eth.mcast",
                   "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 100,
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 110,
                   REGBIT_NF_ENABLED" == 1 && eth.mcast",
                   "next;", lflow_ref);
 
@@ -19444,6 +19576,7 @@ build_network_function(const struct ovn_datapath *od,
                 continue;
             }
             nfg_bitmap = bitmap_set1(nfg_bitmap, nfg_id);
+            has_nfg = true;
             consider_network_function(lflows, od, acl->network_function_group,
                                       ingress, lflow_ref);
         }
@@ -19469,6 +19602,7 @@ build_network_function(const struct ovn_datapath *od,
                         continue;
                     }
                     nfg_bitmap = bitmap_set1(nfg_bitmap, nfg_id);
+                    has_nfg = true;
                     consider_network_function(lflows, od,
                                               acl->network_function_group,
                                               ingress, lflow_ref);
@@ -19476,6 +19610,34 @@ build_network_function(const struct ovn_datapath *od,
             }
         }
     }
+
+    if (has_nfg) {
+        /* Drop flow for loopback duplicates that the post-NF lookup
+         * marked via REGBIT_NF_LOOKUP_HIT.  The lookup runs on both NF
+         * return ports (ls_out_pre_acl for input_port, ls_out_nf for
+         * output_port) and is installed by consider_network_function(). */
+        ovn_lflow_add(lflows, od, S_SWITCH_OUT_CHECK_PORT_SEC, 110,
+                      REGBIT_NF_LOOKUP_HIT " == 1", debug_drop_action(),
+                      lflow_ref);
+
+        /* Priority 50 flows in in_nf, overlay switches only:
+         * Learn the ingress port of a flagged unicast IP packet this ACL did
+         * not redirect to an NF (REGBIT_NF_ENABLED == 0), so a post-NF copy
+         * reflected back to that port can be dropped.  On overlay switches
+         * the redirect may run on a different node than the source port, so
+         * the priority-100 redirect-path learn would land on the wrong node;
+         * learning here keeps it on the source port's node, co-located with
+         * the lookup.  VLAN-backed switches don't need this: the re-flood
+         * returns to the redirecting node, where the 100 learn already ran.
+         * Unlike the redirect-path learn, no higher-priority flow skips
+         * multicast here, so exclude it in the match. */
+        if (!ls_has_localnet_port(od)) {
+            build_nf_learn_orig_src_port_flows(lflows, od, S_SWITCH_IN_NF, 50,
+                                               true, REGBIT_NF_ENABLED" == 0",
+                                               "next;", lflow_ref);
+        }
+    }
+
     bitmap_free(nfg_ingress_bitmap);
     bitmap_free(nfg_egress_bitmap);
 }
@@ -19623,7 +19785,8 @@ build_lswitch_and_lrouter_iterate_by_lsp(struct ovn_port *op,
     build_mirror_lflows(op, ls_ports, lflows);
     build_lswitch_port_sec_op(op, lflows, actions, match);
     build_lswitch_learn_fdb_op(op, lflows, actions, match);
-    build_lswitch_from_localnet_op(op, lflows, match);
+    build_lswitch_from_localnet_op(op, lflows, actions, match);
+    build_lswitch_set_inport_in_mc_unknown_op(op, lflows, match);
     build_lswitch_arp_nd_responder_known_ips(op, lflows, ls_ports,
                                              meter_groups, actions, match);
     build_lswitch_dhcp_options_and_response(op, lflows, meter_groups);

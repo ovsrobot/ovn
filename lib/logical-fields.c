@@ -181,6 +181,11 @@ ovn_init_symtab(struct shash *symtab)
     snprintf(flags_str, sizeof flags_str, "flags[%d]", MLF_PKT_SAMPLED_BIT);
     expr_symtab_add_subfield(symtab, "flags.pkt_sampled", NULL, flags_str);
 
+    snprintf(flags_str, sizeof flags_str, "flags[%d]",
+             MLF_INPORT_IN_MC_UNKNOWN_BIT);
+    expr_symtab_add_subfield(symtab, "flags.inport_in_mc_unknown", NULL,
+                             flags_str);
+
     /* Connection tracking state. */
     expr_symtab_add_field_scoped(symtab, "ct_mark", MFF_CT_MARK, NULL, false,
                                  WR_CT_COMMIT);
