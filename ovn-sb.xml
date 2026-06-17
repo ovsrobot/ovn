@@ -3855,6 +3855,18 @@ tcp.flags = RST;
         that the port was activated using the strategy specified.
       </column>
 
+      <column name="options" key="additional-chassis-ready">
+        A comma-separated list of chassis names that have finished installing
+        OpenFlow flows for this port binding as an additional chassis.  Set by
+        <code>ovn-controller</code> when the interface reaches the
+        <code>ovn-installed</code> state on the additional chassis.  This
+        allows a CMS to monitor the Southbound DB for migration readiness
+        without requiring an agent on each chassis.  The option is
+        automatically cleaned up when the chassis is removed from
+        <ref column="additional_chassis"/> or when
+        <ref column="requested_additional_chassis"/> is cleared.
+      </column>
+
       <column name="options" key="iface-id-ver">
         If set, this port will be bound by <code>ovn-controller</code>
         only if this same key and value is configured in the

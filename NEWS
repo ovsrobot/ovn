@@ -1,5 +1,7 @@
 Post v26.03.0
 -------------
+   - Added Port_Binding options:additional-chassis-ready to report per-chassis
+     flow installation readiness to the Southbound DB during live migration.
    - Added ability to set any "ipsec_*" NB_Global option to configure the
      IPsec backend.
    - Documented missing ovn-nbctl commands: "mirror-rule-add",

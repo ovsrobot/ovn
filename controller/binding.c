@@ -1031,11 +1031,35 @@ local_binding_set_up(struct shash *local_bindings, const char *pb_name,
                                                     ts_now_str);
     }
 
-    if (!sb_readonly && lbinding && b_lport && b_lport->pb->n_up &&
-            !b_lport->pb->up[0] && b_lport->pb->chassis == chassis_rec) {
-        binding_lport_set_up(b_lport, sb_readonly);
-        LIST_FOR_EACH (b_lport, list_node, &lbinding->binding_lports) {
+    if (!sb_readonly && lbinding && b_lport) {
+        if (b_lport->pb->n_up && !b_lport->pb->up[0] &&
+            b_lport->pb->chassis == chassis_rec) {
             binding_lport_set_up(b_lport, sb_readonly);
+            struct binding_lport *iter;
+            LIST_FOR_EACH (iter, list_node, &lbinding->binding_lports) {
+                binding_lport_set_up(iter, sb_readonly);
+            }
+        }
+
+        if (is_additional_chassis(b_lport->pb, chassis_rec)) {
+            const char *current = smap_get(&b_lport->pb->options,
+                                           "additional-chassis-ready");
+            if (!current) {
+                sbrec_port_binding_update_options_setkey(
+                        b_lport->pb, "additional-chassis-ready",
+                        chassis_rec->name);
+            } else {
+                struct sset ready_set;
+                sset_from_delimited_string(&ready_set, current, ",");
+                if (!sset_contains(&ready_set, chassis_rec->name)) {
+                    char *val = xasprintf("%s,%s", current,
+                                          chassis_rec->name);
+                    sbrec_port_binding_update_options_setkey(
+                            b_lport->pb, "additional-chassis-ready", val);
+                    free(val);
+                }
+                sset_destroy(&ready_set);
+            }
         }
     }
 }
@@ -1568,6 +1592,28 @@ release_lport_additional_chassis(const struct sbrec_port_binding *pb,
             return false;
         }
         remove_additional_chassis(pb, chassis_rec);
+    }
+
+    const char *ready = smap_get(&pb->options, "additional-chassis-ready");
+    if (ready) {
+        struct sset ready_set;
+        sset_from_delimited_string(&ready_set, ready, ",");
+        if (sset_find_and_delete(&ready_set, chassis_rec->name)) {
+            if (sb_readonly) {
+                sset_destroy(&ready_set);
+                return false;
+            }
+            if (!sset_is_empty(&ready_set)) {
+                char *updated = sset_join(&ready_set, ",", "");
+                sbrec_port_binding_update_options_setkey(
+                    pb, "additional-chassis-ready", updated);
+                free(updated);
+            } else {
+                sbrec_port_binding_update_options_delkey(
+                    pb, "additional-chassis-ready");
+            }
+        }
+        sset_destroy(&ready_set);
     }
 
     VLOG_INFO("Releasing lport %s from this additional chassis.",
