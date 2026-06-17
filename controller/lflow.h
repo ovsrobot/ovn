@@ -104,6 +104,7 @@ struct uuid;
 #define OFTABLE_CT_ORIG_PROTO_LOAD       86
 #define OFTABLE_GET_REMOTE_FDB           87
 #define OFTABLE_LEARN_REMOTE_FDB         88
+#define OFTABLE_NF_ORIG_SRC_PORT_LEARN   89
 
 
 struct lflow_ctx_in {

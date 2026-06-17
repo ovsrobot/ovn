@@ -140,6 +140,8 @@ struct collector_set_ids;
     OVNACT(FLOOD_REMOTE,      ovnact_null)            \
     OVNACT(CT_STATE_SAVE,     ovnact_result)          \
     OVNACT(MIRROR,            ovnact_mirror)          \
+    OVNACT(NF_LEARN_ORIG_SRC_PORT,  ovnact_nf_learn)  \
+    OVNACT(NF_LOOKUP_ORIG_SRC_PORT, ovnact_nf_lookup) \
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -511,6 +513,19 @@ struct ovnact_lookup_fdb {
     struct ovnact ovnact;
     struct expr_field mac;     /* 48-bit Ethernet address. */
     struct expr_field port;    /* Logical port name. */
+    struct expr_field dst;     /* 1-bit destination field. */
+};
+
+/* OVNACT_NF_LEARN_ORIG_SRC_PORT. */
+struct ovnact_nf_learn {
+    struct ovnact ovnact;
+    bool ipv6;                 /* Learn IPv6 (true) or IPv4 (false) flow. */
+    uint16_t idle_timeout;     /* Idle timeout of the learned flow, seconds. */
+};
+
+/* OVNACT_NF_LOOKUP_ORIG_SRC_PORT. */
+struct ovnact_nf_lookup {
+    struct ovnact ovnact;
     struct expr_field dst;     /* 1-bit destination field. */
 };
 

@@ -3603,6 +3603,21 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
         case OVNACT_CT_STATE_SAVE:
             execute_ct_save_state(ovnact_get_CT_STATE_SAVE(a), uflow, super);
             break;
+        case OVNACT_NF_LEARN_ORIG_SRC_PORT:
+            /* Nothing to do for tracing. */
+            break;
+        case OVNACT_NF_LOOKUP_ORIG_SRC_PORT: {
+            /* Assume a lookup miss and clear the destination subfield. */
+            const struct ovnact_nf_lookup *nf_lookup =
+                ovnact_get_NF_LOOKUP_ORIG_SRC_PORT(a);
+            struct mf_subfield dst = expr_resolve_field(&nf_lookup->dst);
+            union mf_subvalue sv = { .u8_val = 0 };
+            mf_write_subfield_flow(&dst, &sv, uflow);
+            ovntrace_node_append(super, OVNTRACE_NODE_ACTION,
+                                 "/* nf_lookup_orig_src_port miss "
+                                 "(learn table not modelled). */");
+            break;
+        }
         }
     }
     ofpbuf_uninit(&stack);
