@@ -1787,6 +1787,14 @@
           </p>
 
           <p>
+            northd emits the learn action only for packets entering on a port
+            that is a member of the <code>MC_UNKNOWN</code> multicast group
+            (gated by <code>flags.inport_in_mc_unknown</code>, set in the
+            <code>ls_in_lookup_fdb</code> stage), since only such packets can
+            be re-flooded by the NF.
+          </p>
+
+          <p>
             <b>Example:</b>
             <code>nf_learn_orig_src_port(ipv6 = false);</code>
           </p>

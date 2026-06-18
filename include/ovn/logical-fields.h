@@ -150,6 +150,7 @@ enum mff_log_flags_bits {
     MLF_PKT_SAMPLED_BIT = 23,
     MLF_RECIRC_BIT = 24,
     MLF_NF_LOOKUP_HIT_BIT = 25,
+    MLF_INPORT_IN_MC_UNKNOWN_BIT = 26,
     MLF_NETWORK_ID_START_BIT = 28,
     MLF_NETWORK_ID_END_BIT = 31,
 };
@@ -231,6 +232,14 @@ enum mff_log_flags {
      * logical switch on.  Used to drop such "loop-back" copies and avoid
      * MAC flaps / L2 loops after network function redirection. */
     MLF_NF_LOOKUP_HIT = (1 << MLF_NF_LOOKUP_HIT_BIT),
+
+    /* Indicate that the packet entered the logical switch on a port that
+     * is a member of MC_UNKNOWN (i.e. the port has "unknown" in its
+     * addresses and "receive_multicast" is not disabled, so it can both
+     * receive and originate unknown-unicast floods).  Used by the inline
+     * network function loop prevention to learn the original source port
+     * before redirection. */
+    MLF_INPORT_IN_MC_UNKNOWN = (1 << MLF_INPORT_IN_MC_UNKNOWN_BIT),
 
     /* Assign network ID to packet to choose correct network for snat when
      * lb_force_snat_ip=router_ip. */

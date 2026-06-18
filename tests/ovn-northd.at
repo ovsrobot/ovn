@@ -7875,7 +7875,7 @@ AT_CAPTURE_FILE([S1flows])
 #Verify the flows for default port type (VM port)
 AT_CHECK([grep -e "ls_in_l2_lkup.*S1-vm1" S1flows | grep -e "match=(eth.dst == 50:54:00:00:00:01)"], [1], [])
 AT_CHECK([grep -e "ls_in_.*_fdb.*S1-vm1" S1flows | ovn_strip_lflows], [0], [dnl
-  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "S1-vm1"), action=(reg0[[11]] = lookup_fdb(inport, eth.src); next;)
+  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "S1-vm1"), action=(flags.inport_in_mc_unknown = 1; reg0[[11]] = lookup_fdb(inport, eth.src); next;)
   table=??(ls_in_put_fdb      ), priority=100  , match=(inport == "S1-vm1" && reg0[[11]] == 0), action=(put_fdb(inport, eth.src); next;)
 ])
 
@@ -7951,15 +7951,19 @@ AT_CAPTURE_FILE([S1flows])
 
 dnl Check that S2-vm address is not known on S1 and the forwarding to
 dnl _MC_unknown group is configured.
-AT_CHECK([grep -E "ls_in_l2_lkup.*S1-|unknown" S1flows | ovn_strip_lflows], [0], [dnl
+AT_CHECK([grep -E "ls_in_l2_lkup.*S1-|ls_in_l2_unknown" S1flows | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_l2_lkup      ), priority=50   , match=(eth.dst == 50:54:00:00:00:01), action=(outport = "S1-vm"; output;)
   table=??(ls_in_l2_unknown   ), priority=0    , match=(1), action=(output;)
   table=??(ls_in_l2_unknown   ), priority=50   , match=(outport == "none"), action=(outport = "_MC_unknown"; output;)
 ])
 
 dnl Check that FDB learning is enabled for the switch port.
+dnl The port type "switch" implicitly carries unknown addresses and thus
+dnl can receive unknown-unicast floods, so flags.inport_in_mc_unknown is
+dnl also set (consumed by inline NF redirection in ls_in_nf; harmless
+dnl otherwise).
 AT_CHECK([grep -E "ls_.*fdb.*S1-" S1flows | ovn_strip_lflows], [0], [dnl
-  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "S1-S2"), action=(reg0[[11]] = lookup_fdb(inport, eth.src); next;)
+  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "S1-S2"), action=(flags.inport_in_mc_unknown = 1; reg0[[11]] = lookup_fdb(inport, eth.src); next;)
   table=??(ls_in_put_fdb      ), priority=100  , match=(inport == "S1-S2" && reg0[[11]] == 0), action=(put_fdb(inport, eth.src); next;)
 ])
 
@@ -7968,7 +7972,7 @@ AT_CAPTURE_FILE([S2flows])
 
 dnl Check that S1-vm address is not known on S2 and the forwarding to
 dnl _MC_unknown group is configured.
-AT_CHECK([grep -E "ls_in_l2_lkup.*S2-|unknown" S2flows | ovn_strip_lflows], [0], [dnl
+AT_CHECK([grep -E "ls_in_l2_lkup.*S2-|ls_in_l2_unknown" S2flows | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_l2_lkup      ), priority=50   , match=(eth.dst == 50:54:00:00:00:02), action=(outport = "S2-vm"; output;)
   table=??(ls_in_l2_unknown   ), priority=0    , match=(1), action=(output;)
   table=??(ls_in_l2_unknown   ), priority=50   , match=(outport == "none"), action=(outport = "_MC_unknown"; output;)
@@ -7976,7 +7980,7 @@ AT_CHECK([grep -E "ls_in_l2_lkup.*S2-|unknown" S2flows | ovn_strip_lflows], [0],
 
 dnl Check that FDB learning is enabled for the switch port.
 AT_CHECK([grep -E "ls_.*fdb.*S2-" S2flows | ovn_strip_lflows], [0], [dnl
-  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "S2-S1"), action=(reg0[[11]] = lookup_fdb(inport, eth.src); next;)
+  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "S2-S1"), action=(flags.inport_in_mc_unknown = 1; reg0[[11]] = lookup_fdb(inport, eth.src); next;)
   table=??(ls_in_put_fdb      ), priority=100  , match=(inport == "S2-S1" && reg0[[11]] == 0), action=(put_fdb(inport, eth.src); next;)
 ])
 
@@ -7988,7 +7992,7 @@ AT_CAPTURE_FILE([S1flows2])
 
 dnl Check that that address is now known on S1, but forwarding to _MC_unknown
 dnl group is still configured for other potential addresses.
-AT_CHECK([grep -E "ls_in_l2_lkup.*S1-|unknown" S1flows2 | ovn_strip_lflows], [0], [dnl
+AT_CHECK([grep -E "ls_in_l2_lkup.*S1-|ls_in_l2_unknown" S1flows2 | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_l2_lkup      ), priority=50   , match=(eth.dst == 50:54:00:00:00:01), action=(outport = "S1-vm"; output;)
   table=??(ls_in_l2_lkup      ), priority=50   , match=(eth.dst == 50:54:00:00:00:02), action=(outport = "S1-S2"; output;)
   table=??(ls_in_l2_unknown   ), priority=0    , match=(1), action=(output;)
@@ -7997,7 +8001,7 @@ AT_CHECK([grep -E "ls_in_l2_lkup.*S1-|unknown" S1flows2 | ovn_strip_lflows], [0]
 
 dnl Check that FDB learning is still enabled for the switch port.
 AT_CHECK([grep -E "ls_.*fdb.*S1-" S1flows | ovn_strip_lflows], [0], [dnl
-  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "S1-S2"), action=(reg0[[11]] = lookup_fdb(inport, eth.src); next;)
+  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "S1-S2"), action=(flags.inport_in_mc_unknown = 1; reg0[[11]] = lookup_fdb(inport, eth.src); next;)
   table=??(ls_in_put_fdb      ), priority=100  , match=(inport == "S1-S2" && reg0[[11]] == 0), action=(put_fdb(inport, eth.src); next;)
 ])
 
@@ -10188,10 +10192,14 @@ AT_CHECK([ovn-nbctl ls-add ls0])
 AT_CHECK([ovn-nbctl lsp-add-localnet-port ls0 ln_port phys])
 AT_CHECK([ovn-nbctl --wait=sb sync])
 
-# Check MAC learning flows with 'localnet_learn_fdb' default (false)
+# Check MAC learning flows with 'localnet_learn_fdb' default (false).
+# Because lsp-add-localnet-port defaults addresses to "unknown", the
+# localnet port can receive unknown-unicast floods and gets
+# flags.inport_in_mc_unknown set (consumed by inline NF redirection
+# in ls_in_nf; harmless otherwise).
 AT_CHECK([ovn-sbctl dump-flows ls0 | grep -e 'ls_in_\(put\|lookup\)_fdb' | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_lookup_fdb   ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "ln_port"), action=(flags.localnet = 1; next;)
+  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "ln_port"), action=(flags.localnet = 1; flags.inport_in_mc_unknown = 1; next;)
   table=??(ls_in_put_fdb      ), priority=0    , match=(1), action=(next;)
 ])
 
@@ -10199,8 +10207,8 @@ AT_CHECK([ovn-sbctl dump-flows ls0 | grep -e 'ls_in_\(put\|lookup\)_fdb' | ovn_s
 AT_CHECK([ovn-nbctl --wait=sb lsp-set-options ln_port localnet_learn_fdb=true])
 AT_CHECK([ovn-sbctl dump-flows ls0 | grep -e 'ls_in_\(put\|lookup\)_fdb' | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_lookup_fdb   ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "ln_port"), action=(flags.localnet = 1; reg0[[11]] = lookup_fdb(inport, eth.src); next;)
-  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "ln_port"), action=(flags.localnet = 1; next;)
+  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "ln_port"), action=(flags.localnet = 1; flags.inport_in_mc_unknown = 1; reg0[[11]] = lookup_fdb(inport, eth.src); next;)
+  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "ln_port"), action=(flags.localnet = 1; flags.inport_in_mc_unknown = 1; next;)
   table=??(ls_in_put_fdb      ), priority=0    , match=(1), action=(next;)
   table=??(ls_in_put_fdb      ), priority=100  , match=(inport == "ln_port" && reg0[[11]] == 0), action=(put_fdb(inport, eth.src); next;)
 ])
@@ -10209,7 +10217,7 @@ AT_CHECK([ovn-sbctl dump-flows ls0 | grep -e 'ls_in_\(put\|lookup\)_fdb' | ovn_s
 AT_CHECK([ovn-nbctl --wait=sb lsp-set-options ln_port localnet_learn_fdb=false])
 AT_CHECK([ovn-sbctl dump-flows ls0 | grep -e 'ls_in_\(put\|lookup\)_fdb' | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_lookup_fdb   ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "ln_port"), action=(flags.localnet = 1; next;)
+  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "ln_port"), action=(flags.localnet = 1; flags.inport_in_mc_unknown = 1; next;)
   table=??(ls_in_put_fdb      ), priority=0    , match=(1), action=(next;)
 ])
 
@@ -10582,7 +10590,7 @@ dnl ls1: ls_in_lookup_fdb should have priority 0 default +
 dnl priority 50 flags.localnet.
 AT_CHECK([ovn-sbctl dump-flows ls1 | grep -e 'ls_in_lookup_fdb' | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_lookup_fdb   ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "ln1"), action=(flags.localnet = 1; next;)
+  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "ln1"), action=(flags.localnet = 1; flags.inport_in_mc_unknown = 1; next;)
 ])
 
 dnl ls1: ls_in_arp_rsp should include flags.localnet condition for
@@ -10622,8 +10630,8 @@ dnl ls1: ls_in_lookup_fdb should have priority 100 FDB +
 dnl priority 50 fallback.
 AT_CHECK([ovn-sbctl dump-flows ls1 | grep -e 'ls_in_lookup_fdb' | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_lookup_fdb   ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "ln1"), action=(flags.localnet = 1; reg0[[11]] = lookup_fdb(inport, eth.src); next;)
-  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "ln1"), action=(flags.localnet = 1; next;)
+  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "ln1"), action=(flags.localnet = 1; flags.inport_in_mc_unknown = 1; reg0[[11]] = lookup_fdb(inport, eth.src); next;)
+  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "ln1"), action=(flags.localnet = 1; flags.inport_in_mc_unknown = 1; next;)
 ])
 
 dnl ls1: ls_in_arp_rsp should be unchanged.
@@ -10644,7 +10652,7 @@ check ovn-nbctl --wait=sb lsp-set-options ln1 localnet_learn_fdb=false
 
 AT_CHECK([ovn-sbctl dump-flows ls1 | grep -e 'ls_in_lookup_fdb' | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_lookup_fdb   ), priority=0    , match=(1), action=(next;)
-  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "ln1"), action=(flags.localnet = 1; next;)
+  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "ln1"), action=(flags.localnet = 1; flags.inport_in_mc_unknown = 1; next;)
 ])
 
 AT_CHECK([ovn-sbctl dump-flows ls1 | grep -e 'ls_in_arp_rsp' | ovn_strip_lflows], [0], [dnl
@@ -19657,15 +19665,20 @@ AT_CHECK(
   [grep -E 'ls_(in|out)_network_function' sw0flows | ovn_strip_lflows | sort], [0], [dnl
   table=??(ls_in_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_in_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "sw0-nf-p1"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "sw0-nf-p2"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 101), action=(nf_learn_orig_src_port(ipv6 = false); outport = "sw0-nf-p1"; output;)
+  table=??(ls_in_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 101), action=(nf_learn_orig_src_port(ipv6 = true); outport = "sw0-nf-p1"; output;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "sw0-nf-p1"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "sw0-nf-p2"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip4 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = false); next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip6 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = true); next;)
   table=??(ls_in_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 101), action=(outport = "sw0-nf-p1"; output;)
   table=??(ls_out_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_out_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "sw0-nf-p1"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "sw0-nf-p2"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "sw0-nf-p1"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "sw0-nf-p2"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=2    , match=(inport == "sw0-nf-p2"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next;)
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 0 && ct_label.nf_id == 101), action=(outport = "sw0-nf-p2"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
 ])
 
@@ -19673,8 +19686,11 @@ AT_CHECK([grep "ls_in_l2_lkup" sw0flows | ovn_strip_lflows | grep 'priority=100'
   table=??(ls_in_l2_lkup      ), priority=100  , match=(reg8[[23]] == 1), action=(output;)
 ])
 
+dnl LOOKUP runs on both NF return ports: input_port in ls_out_pre_acl (also
+dnl skipping the already-traversed egress stages) and output_port in
+dnl ls_out_nf (fresh egress, after conntrack).
 AT_CHECK([grep "ls_out_pre_acl" sw0flows | ovn_strip_lflows | grep 'sw0-nf-p1'], [0], [dnl
-  table=??(ls_out_pre_acl     ), priority=110  , match=(inport == "sw0-nf-p1"), action=(next(pipeline=egress, table=??);)
+  table=??(ls_out_pre_acl     ), priority=115  , match=(inport == "sw0-nf-p1"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next(pipeline=egress, table=??);)
 ])
 
 AT_CHECK(
@@ -19765,20 +19781,28 @@ AT_CHECK(
   [grep -E 'ls_(in|out)_network_function' sw0flows | ovn_strip_lflows |  sort], [0], [dnl
   table=??(ls_in_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_in_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "sw0-nf-p1"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "sw0-nf-p2"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "sw0-nf-p3"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "sw0-nf-p4"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 101), action=(nf_learn_orig_src_port(ipv6 = false); outport = "sw0-nf-p1"; output;)
+  table=??(ls_in_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 101), action=(nf_learn_orig_src_port(ipv6 = true); outport = "sw0-nf-p1"; output;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "sw0-nf-p1"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "sw0-nf-p2"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "sw0-nf-p3"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "sw0-nf-p4"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip4 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = false); next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip6 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = true); next;)
   table=??(ls_in_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 0 && ct_label.nf_id == 102), action=(outport = "sw0-nf-p3"; output;)
   table=??(ls_in_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 101), action=(outport = "sw0-nf-p1"; output;)
   table=??(ls_out_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_out_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "sw0-nf-p1"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "sw0-nf-p2"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "sw0-nf-p3"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "sw0-nf-p4"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 102), action=(nf_learn_orig_src_port(ipv6 = false); outport = "sw0-nf-p4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
+  table=??(ls_out_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 102), action=(nf_learn_orig_src_port(ipv6 = true); outport = "sw0-nf-p4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "sw0-nf-p1"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "sw0-nf-p2"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "sw0-nf-p3"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "sw0-nf-p4"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=2    , match=(inport == "sw0-nf-p2"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next;)
+  table=??(ls_out_network_function), priority=2    , match=(inport == "sw0-nf-p4"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next;)
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 0 && ct_label.nf_id == 101), action=(outport = "sw0-nf-p2"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 102), action=(outport = "sw0-nf-p4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
 ])
@@ -19847,20 +19871,28 @@ AT_CHECK(
   [grep -E 'ls_(in|out)_network_function' sw1flows | ovn_strip_lflows | sort], [0], [dnl
   table=??(ls_in_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_in_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "sw1-nf-p1"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "sw1-nf-p2"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "sw1-nf-p3"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "sw1-nf-p4"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 101), action=(nf_learn_orig_src_port(ipv6 = false); outport = "sw1-nf-p1"; output;)
+  table=??(ls_in_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 101), action=(nf_learn_orig_src_port(ipv6 = true); outport = "sw1-nf-p1"; output;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "sw1-nf-p1"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "sw1-nf-p2"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "sw1-nf-p3"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "sw1-nf-p4"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip4 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = false); next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip6 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = true); next;)
   table=??(ls_in_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 0 && ct_label.nf_id == 102), action=(outport = "sw1-nf-p3"; output;)
   table=??(ls_in_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 101), action=(outport = "sw1-nf-p1"; output;)
   table=??(ls_out_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_out_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "sw1-nf-p1"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "sw1-nf-p2"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "sw1-nf-p3"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "sw1-nf-p4"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 102), action=(nf_learn_orig_src_port(ipv6 = false); outport = "sw1-nf-p4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
+  table=??(ls_out_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 102), action=(nf_learn_orig_src_port(ipv6 = true); outport = "sw1-nf-p4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "sw1-nf-p1"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "sw1-nf-p2"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "sw1-nf-p3"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "sw1-nf-p4"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=2    , match=(inport == "sw1-nf-p2"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next;)
+  table=??(ls_out_network_function), priority=2    , match=(inport == "sw1-nf-p4"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next;)
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 0 && ct_label.nf_id == 101), action=(outport = "sw1-nf-p2"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 102), action=(outport = "sw1-nf-p4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
 ])
@@ -19889,6 +19921,210 @@ ct_next(ct_state=new|trk) {
         };
     };
 };
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Network function -- inline post-NF re-flood loop prevention])
+
+dnl Verifies that with an inline-mode Network_Function_Group attached to an
+dnl ACL, northd installs:
+dnl  - flags.inport_in_mc_unknown = 1 in ls_in_lookup_fdb for every port
+dnl    that can receive an unknown-unicast flood,
+dnl  - per-NFG nf_learn_orig_src_port() redirect-path flows (priority 101)
+dnl    in ls_in_nf (or ls_out_nf for to-lport ACLs) gated on that flag, and,
+dnl    on overlay switches only, a per-LS default-path flow (priority 50) in
+dnl    ls_in_nf,
+dnl  - nf_lookup_orig_src_port() flows on both NF ports: input_port in
+dnl    ls_out_pre_acl (also skipping the already-traversed egress stages)
+dnl    and output_port in ls_out_nf (fresh egress, after conntrack), and
+dnl  - the ls_out_check_port_sec drop on REGBIT_NF_LOOKUP_HIT.
+
+ovn_start
+
+check ovn-nbctl ls-add sw0
+
+dnl NF port-pair.
+check ovn-nbctl lsp-add sw0 sw0-nf-p1
+check ovn-nbctl lsp-add sw0 sw0-nf-p2
+check ovn-nbctl set logical_switch_port sw0-nf-p1 \
+    options:receive_multicast=false options:lsp_learn_mac=false \
+    options:is-nf=true options:nf-linked-port=sw0-nf-p2
+check ovn-nbctl set logical_switch_port sw0-nf-p2 \
+    options:receive_multicast=false options:lsp_learn_mac=false \
+    options:is-nf=true options:nf-linked-port=sw0-nf-p1
+
+dnl A VM port and a localnet port, both with "unknown" in addresses: each
+dnl can receive an unknown-unicast flood, so each must get the flag.
+check ovn-nbctl lsp-add sw0 sw0-vm1 -- \
+    lsp-set-addresses sw0-vm1 "00:00:00:00:00:01 10.0.0.10" unknown
+check ovn-nbctl lsp-add sw0 sw0-ln -- \
+    lsp-set-type sw0-ln localnet -- \
+    lsp-set-options sw0-ln network_name=phys -- \
+    lsp-set-addresses sw0-ln unknown
+
+dnl A second VM port without "unknown" must NOT get the flag set.
+check ovn-nbctl lsp-add sw0 sw0-vm2 -- \
+    lsp-set-addresses sw0-vm2 "00:00:00:00:00:02 10.0.0.11"
+
+dnl A third port with "unknown" but with receive_multicast=false must NOT
+dnl get the flag set (it would never be a flood target).
+check ovn-nbctl lsp-add sw0 sw0-vm3 -- \
+    lsp-set-addresses sw0-vm3 "00:00:00:00:00:03 10.0.0.12" unknown -- \
+    lsp-set-options sw0-vm3 receive_multicast=false
+
+check ovn-nbctl nf-add nf0 101 sw0-nf-p1 sw0-nf-p2
+check ovn-nbctl nfg-add nfg0 201 inline nf0
+check ovn-nbctl acl-add sw0 from-lport 1234 'ip' allow-related nfg0
+check ovn-nbctl --wait=sb sync
+
+ovn-sbctl dump-flows sw0 > sw0flows
+AT_CAPTURE_FILE([sw0flows])
+
+dnl FLAG: every port that can receive an unknown-unicast flood gets
+dnl flags.inport_in_mc_unknown = 1 set in ls_in_lookup_fdb.  The VIF with
+dnl "unknown" gets the action appended to its priority-100 FDB-learn flow;
+dnl the localnet (without localnet_learn_fdb) gets it appended to its
+dnl priority-50 flags.localnet flow.
+AT_CHECK([grep 'ls_in_lookup_fdb' sw0flows | ovn_strip_lflows | \
+          grep inport_in_mc_unknown | sort], [0], [dnl
+  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "sw0-vm1"), action=(flags.inport_in_mc_unknown = 1; reg0[[11]] = lookup_fdb(inport, eth.src); next;)
+  table=??(ls_in_lookup_fdb   ), priority=50   , match=(inport == "sw0-ln"), action=(flags.localnet = 1; flags.inport_in_mc_unknown = 1; next;)
+])
+
+dnl FLAG must not be set for NF ports (receive_multicast=false), plain VM
+dnl ports without "unknown", or ports with receive_multicast=false.
+AT_CHECK([grep 'ls_in_lookup_fdb' sw0flows | ovn_strip_lflows | \
+          grep inport_in_mc_unknown | \
+          grep -E 'sw0-nf-p[[12]]|sw0-vm2|sw0-vm3' | wc -l], [0], [0
+])
+
+dnl LEARN (redirect path): for the inline-mode NFG attached via from-lport
+dnl ACL, ls_in_nf has priority-100 LEARN+redirect flows for IPv4 and IPv6,
+dnl gated on the flag.  Multicast is skipped by the higher-priority (110)
+dnl flow, so it is not matched here.  The existing priority-99 redirect flow
+dnl remains as a catch-all.
+AT_CHECK([grep 'ls_in_network_function' sw0flows | ovn_strip_lflows | \
+          grep nf_learn | grep 'priority=100' | sort], [0], [dnl
+  table=??(ls_in_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 101), action=(nf_learn_orig_src_port(ipv6 = false); outport = "sw0-nf-p1"; output;)
+  table=??(ls_in_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 101), action=(nf_learn_orig_src_port(ipv6 = true); outport = "sw0-nf-p1"; output;)
+])
+
+dnl LEARN (default path): the per-LS priority-50 default-path LEARN is only
+dnl emitted on overlay switches.  sw0 has a localnet port (VLAN-backed), where
+dnl the redirect-path learn already co-locates with the lookup, so it must NOT
+dnl have any priority-50 nf_learn flow.  (Overlay coverage is below.)
+AT_CHECK([grep 'ls_in_network_function' sw0flows | ovn_strip_lflows | \
+          grep nf_learn | grep 'priority=50' | wc -l], [0], [0
+])
+
+dnl LOOKUP: both NF ports run nf_lookup_orig_src_port() and stash the result
+dnl in REGBIT_NF_LOOKUP_HIT.  input_port runs in ls_out_pre_acl and also
+dnl skips the already-traversed egress stages; output_port (fresh egress,
+dnl e.g. a re-flooded request) runs in ls_out_nf, after conntrack.
+AT_CHECK([grep 'ls_out_pre_acl' sw0flows | ovn_strip_lflows | \
+          grep 'sw0-nf-p1'], [0], [dnl
+  table=??(ls_out_pre_acl     ), priority=115  , match=(inport == "sw0-nf-p1"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next(pipeline=egress, table=??);)
+])
+AT_CHECK([grep 'ls_out_network_function' sw0flows | ovn_strip_lflows | \
+          grep nf_lookup], [0], [dnl
+  table=??(ls_out_network_function), priority=2    , match=(inport == "sw0-nf-p2"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next;)
+])
+
+dnl DROP: ls_out_check_port_sec drops on REGBIT_NF_LOOKUP_HIT == 1.
+AT_CHECK([grep 'ls_out_check_port_sec' sw0flows | ovn_strip_lflows | \
+          grep 'reg8\[[24\]] == 1'], [0], [dnl
+  table=??(ls_out_check_port_sec), priority=110  , match=(reg8[[24]] == 1), action=(drop;)
+])
+
+AS_BOX([An overlay switch (no localnet) gets the default-path LEARN])
+
+dnl On an overlay switch the redirect can run on a different node than the
+dnl source port, so the redirect-path learn would land on the wrong node.
+dnl northd therefore also emits the per-LS priority-50 default-path LEARN in
+dnl ls_in_nf, recording the source port on its own ingress node.
+check ovn-nbctl ls-add sw1
+check ovn-nbctl lsp-add sw1 sw1-nf-p1
+check ovn-nbctl lsp-add sw1 sw1-nf-p2
+check ovn-nbctl set logical_switch_port sw1-nf-p1 \
+    options:receive_multicast=false options:lsp_learn_mac=false \
+    options:is-nf=true options:nf-linked-port=sw1-nf-p2
+check ovn-nbctl set logical_switch_port sw1-nf-p2 \
+    options:receive_multicast=false options:lsp_learn_mac=false \
+    options:is-nf=true options:nf-linked-port=sw1-nf-p1
+check ovn-nbctl nf-add nf2 103 sw1-nf-p1 sw1-nf-p2
+check ovn-nbctl nfg-add nfg2 203 inline nf2
+check ovn-nbctl acl-add sw1 from-lport 1234 'ip' allow-related nfg2
+check ovn-nbctl --wait=sb sync
+
+ovn-sbctl dump-flows sw1 > sw1flows
+AT_CAPTURE_FILE([sw1flows])
+
+AT_CHECK([grep 'ls_in_network_function' sw1flows | ovn_strip_lflows | \
+          grep nf_learn | grep 'priority=50' | sort], [0], [dnl
+  table=??(ls_in_network_function), priority=50   , match=(ip4 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = false); next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip6 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = true); next;)
+])
+
+AS_BOX([A second inline NFG on a to-lport ACL emits its own LEARN+LOOKUP])
+
+dnl Adding a second NF pair and attaching it via a to-lport ACL must yield:
+dnl  - additional priority-100 LEARN+redirect flows in ls_out_nf for that
+dnl    NFG (gated on the flag),
+dnl  - LOOKUP flows keyed on both of that NF's ports too.
+dnl Flag-set flows in ls_in_lookup_fdb are LS-wide and are not duplicated by
+dnl the second NFG.
+check ovn-nbctl lsp-add sw0 sw0-nf-p3
+check ovn-nbctl lsp-add sw0 sw0-nf-p4
+check ovn-nbctl set logical_switch_port sw0-nf-p3 \
+    options:receive_multicast=false options:lsp_learn_mac=false \
+    options:is-nf=true options:nf-linked-port=sw0-nf-p4
+check ovn-nbctl set logical_switch_port sw0-nf-p4 \
+    options:receive_multicast=false options:lsp_learn_mac=false \
+    options:is-nf=true options:nf-linked-port=sw0-nf-p3
+check ovn-nbctl nf-add nf1 102 sw0-nf-p3 sw0-nf-p4
+check ovn-nbctl nfg-add nfg1 202 inline nf1
+check ovn-nbctl acl-add sw0 to-lport 1234 'ip' allow-related nfg1
+check ovn-nbctl --wait=sb sync
+
+ovn-sbctl dump-flows sw0 > sw0flows
+
+AT_CHECK([grep 'ls_out_pre_acl' sw0flows | ovn_strip_lflows | \
+          grep -E 'sw0-nf-p[[13]]' | sort], [0], [dnl
+  table=??(ls_out_pre_acl     ), priority=115  , match=(inport == "sw0-nf-p1"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next(pipeline=egress, table=??);)
+  table=??(ls_out_pre_acl     ), priority=115  , match=(inport == "sw0-nf-p3"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next(pipeline=egress, table=??);)
+])
+AT_CHECK([grep 'ls_out_network_function' sw0flows | ovn_strip_lflows | \
+          grep nf_lookup | sort], [0], [dnl
+  table=??(ls_out_network_function), priority=2    , match=(inport == "sw0-nf-p2"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next;)
+  table=??(ls_out_network_function), priority=2    , match=(inport == "sw0-nf-p4"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next;)
+])
+
+AT_CHECK([grep 'ls_out_network_function' sw0flows | ovn_strip_lflows | \
+          grep nf_learn | sort], [0], [dnl
+  table=??(ls_out_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 102), action=(nf_learn_orig_src_port(ipv6 = false); outport = "sw0-nf-p4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
+  table=??(ls_out_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 102), action=(nf_learn_orig_src_port(ipv6 = true); outport = "sw0-nf-p4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
+])
+
+AS_BOX([Without any inline-mode NFG attached, no loop-prevention flows])
+
+check ovn-nbctl acl-del sw0
+check ovn-nbctl --wait=sb sync
+ovn-sbctl dump-flows sw0 > sw0flows
+
+AT_CHECK([grep -E 'nf_(learn|lookup)_orig_src_port' sw0flows | wc -l], [0], [0
+])
+AT_CHECK([grep -E 'reg8\[[24\]]' sw0flows | wc -l], [0], [0
+])
+
+dnl The ls_in_lookup_fdb flag-set flows persist even with no inline NFG
+dnl attached: they are per-port and harmless (nothing consumes the flag
+dnl without an inline NFG).
+AT_CHECK([grep 'ls_in_lookup_fdb' sw0flows | ovn_strip_lflows | \
+          grep inport_in_mc_unknown | wc -l], [0], [2
 ])
 
 OVN_CLEANUP_NORTHD
@@ -19986,16 +20222,23 @@ AT_CHECK(
   [grep -E 'ls_(in|out)_network_function' lflows | ovn_strip_lflows | sort], [0], [dnl
   table=??(ls_in_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_in_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "child-1"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "child-2"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(nf_learn_orig_src_port(ipv6 = false); outport = "child-1"; output;)
+  table=??(ls_in_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(nf_learn_orig_src_port(ipv6 = true); outport = "child-1"; output;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "child-1"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "child-2"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip4 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = false); next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip6 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = true); next;)
   table=??(ls_in_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 0 && ct_label.nf_id == 1), action=(outport = "child-1"; output;)
   table=??(ls_in_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(outport = "child-1"; output;)
   table=??(ls_out_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_out_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "child-1"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "child-2"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(nf_learn_orig_src_port(ipv6 = false); outport = "child-2"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
+  table=??(ls_out_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(nf_learn_orig_src_port(ipv6 = true); outport = "child-2"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "child-1"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "child-2"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=2    , match=(inport == "child-2"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next;)
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 0 && ct_label.nf_id == 1), action=(outport = "child-2"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(outport = "child-2"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
 ])
@@ -20027,16 +20270,23 @@ AT_CHECK(
   [grep -E 'ls_(in|out)_network_function' lflows | ovn_strip_lflows | sort], [0], [dnl
   table=??(ls_in_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_in_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "child-1"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "child-2"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(nf_learn_orig_src_port(ipv6 = false); outport = "child-1"; output;)
+  table=??(ls_in_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(nf_learn_orig_src_port(ipv6 = true); outport = "child-1"; output;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "child-1"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "child-2"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip4 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = false); next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip6 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = true); next;)
   table=??(ls_in_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 0 && ct_label.nf_id == 1), action=(outport = "child-1"; output;)
   table=??(ls_in_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(outport = "child-1"; output;)
   table=??(ls_out_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_out_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "child-1"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "child-2"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(nf_learn_orig_src_port(ipv6 = false); outport = "child-2"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
+  table=??(ls_out_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(nf_learn_orig_src_port(ipv6 = true); outport = "child-2"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "child-1"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "child-2"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=2    , match=(inport == "child-2"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next;)
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 0 && ct_label.nf_id == 1), action=(outport = "child-2"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 1), action=(outport = "child-2"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
 ])
@@ -20068,16 +20318,23 @@ AT_CHECK(
   [grep -E 'ls_(in|out)_network_function' lflows | ovn_strip_lflows | sort], [0], [dnl
   table=??(ls_in_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_in_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "child-3"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(inport == "child-4"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
-  table=??(ls_in_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 2), action=(nf_learn_orig_src_port(ipv6 = false); outport = "child-3"; output;)
+  table=??(ls_in_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 2), action=(nf_learn_orig_src_port(ipv6 = true); outport = "child-3"; output;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "child-3"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(inport == "child-4"), action=(reg5[[16..31]] = ct_label.tun_if_id; next;)
+  table=??(ls_in_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip4 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = false); next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip6 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = true); next;)
   table=??(ls_in_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 0 && ct_label.nf_id == 2), action=(outport = "child-3"; output;)
   table=??(ls_in_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 2), action=(outport = "child-3"; output;)
   table=??(ls_out_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_out_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "child-3"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(outport == "child-4"), action=(next;)
-  table=??(ls_out_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=100  , match=(ip4 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 2), action=(nf_learn_orig_src_port(ipv6 = false); outport = "child-4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
+  table=??(ls_out_network_function), priority=100  , match=(ip6 && flags.inport_in_mc_unknown == 1 && reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 2), action=(nf_learn_orig_src_port(ipv6 = true); outport = "child-4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "child-3"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(outport == "child-4"), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=2    , match=(inport == "child-4"), action=(reg8[[24]] = nf_lookup_orig_src_port(); next;)
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 0 && ct_label.nf_id == 2), action=(outport = "child-4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
   table=??(ls_out_network_function), priority=99   , match=(reg8[[21]] == 1 && reg8[[22]] == 1 && reg0[[22..29]] == 2), action=(outport = "child-4"; reg8[[23]] = 1; next(pipeline=ingress, table=??);)
 ])
@@ -20107,10 +20364,12 @@ AT_CHECK(
   [grep -E 'ls_(in|out)_network_function' lflows | ovn_strip_lflows | sort], [0], [dnl
   table=??(ls_in_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_in_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_in_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip4 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = false); next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip6 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = true); next;)
   table=??(ls_out_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_out_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_out_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
 ])
 
 AS_BOX([Configure NFG fallback method to fail-open])
@@ -20138,10 +20397,12 @@ AT_CHECK(
   [grep -E 'ls_(in|out)_network_function' lflows | ovn_strip_lflows | sort], [0], [dnl
   table=??(ls_in_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_in_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_in_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip4 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = false); next;)
+  table=??(ls_in_network_function), priority=50   , match=(ip6 && flags.inport_in_mc_unknown == 1 && !eth.mcast && reg8[[21]] == 0), action=(nf_learn_orig_src_port(ipv6 = true); next;)
   table=??(ls_out_network_function), priority=0    , match=(1), action=(next;)
   table=??(ls_out_network_function), priority=1    , match=(reg8[[21]] == 1), action=(drop;)
-  table=??(ls_out_network_function), priority=100  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
+  table=??(ls_out_network_function), priority=110  , match=(reg8[[21]] == 1 && eth.mcast), action=(next;)
 ])
 
 OVN_CLEANUP_NORTHD
@@ -20610,7 +20871,7 @@ AT_CHECK([ovn-sbctl dump-flows ls1 > ls1flows])
 AT_CAPTURE_FILE([ls1flows])
 
 AT_CHECK([grep "ls1-to-spine" ls1flows | ovn_strip_lflows | sort], [0], [dnl
-  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "ls1-to-spine"), action=(reg0[[11]] = lookup_fdb(inport, eth.src); next;)
+  table=??(ls_in_lookup_fdb   ), priority=100  , match=(inport == "ls1-to-spine"), action=(flags.inport_in_mc_unknown = 1; reg0[[11]] = lookup_fdb(inport, eth.src); next;)
   table=??(ls_in_pre_acl      ), priority=110  , match=(ip && inport == "ls1-to-spine"), action=(next;)
   table=??(ls_in_pre_lb       ), priority=110  , match=(ip && inport == "ls1-to-spine"), action=(next;)
   table=??(ls_in_put_fdb      ), priority=100  , match=(inport == "ls1-to-spine" && reg0[[11]] == 0), action=(put_fdb(inport, eth.src); next;)

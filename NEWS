@@ -33,6 +33,9 @@ Post v26.03.0
      The DHCP and unbound-router ARP/ND drop lflows for external
      ports were updated to key on the external LSP's inport
      accordingly.
+   - Fixed MAC flaps and L2 loops caused by inline Network_Function
+     redirection of unknown-unicast IP traffic, where the copy returning
+     from the NF could be re-flooded out of the original ingress port.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------

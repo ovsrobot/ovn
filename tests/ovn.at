@@ -33587,9 +33587,9 @@ AT_CHECK([grep "ls_in_lookup_fdb" sw0flows | ovn_strip_lflows], [0], [dnl
   table=??(ls_in_lookup_fdb   ), priority=0    , dnl
 match=(1), action=(next;)
   table=??(ls_in_lookup_fdb   ), priority=100  , dnl
-match=(inport == "sw0-p1"), action=(reg0[[11]] = lookup_fdb(inport, eth.src); next;)
+match=(inport == "sw0-p1"), action=(flags.inport_in_mc_unknown = 1; reg0[[11]] = lookup_fdb(inport, eth.src); next;)
   table=??(ls_in_lookup_fdb   ), priority=100  , dnl
-match=(inport == "sw0-p3"), action=(reg0[[11]] = lookup_fdb(inport, eth.src); next;)
+match=(inport == "sw0-p3"), action=(flags.inport_in_mc_unknown = 1; reg0[[11]] = lookup_fdb(inport, eth.src); next;)
 ])
 
 AT_CHECK([grep "ls_in_put_fdb" sw0flows | ovn_strip_lflows], [0], [dnl
@@ -44893,6 +44893,116 @@ check ovn-nbctl ls-del sw0
 check ovn-nbctl --wait=hv sync
 
 OVN_CLEANUP([hv1],[hv2],[hv3])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([Network function -- post-NF re-flood copy to source port is dropped])
+AT_KEYWORDS([ovn])
+ovn_start
+
+# Single-node, VLAN-backed (localnet) switch.  sw0-p1 and sw0-p2 carry
+# "unknown" addresses, so they flood unknown-unicast; a to-lport ACL redirects
+# traffic destined to sw0-p2 to the inline NF.
+#
+# sw0-p1 sends to an unknown destination MAC.  The flood copy to sw0-p2 is
+# redirected to the NF, where sw0-p1 is learned as the source port.  When the
+# NF returns the packet, the still-unknown MAC makes the switch re-flood; the
+# copy headed back out sw0-p1 is dropped by the loop-prevention, while sw0-p2
+# still receives it.
+
+check ovn-nbctl ls-add sw0
+check ovn-nbctl lsp-add sw0 sw0-p1 -- \
+    lsp-set-addresses sw0-p1 "f0:00:00:00:00:01 192.168.0.11" "unknown"
+check ovn-nbctl lsp-add sw0 sw0-p2 -- \
+    lsp-set-addresses sw0-p2 "f0:00:00:00:00:02 192.168.0.12" "unknown"
+for i in 1 2; do
+    check ovn-nbctl lsp-add sw0 sw0-nf-p$i -- \
+        lsp-set-addresses sw0-nf-p$i "f0:00:00:00:01:0$i"
+done
+check ovn-nbctl set logical_switch_port sw0-nf-p1 \
+    options:receive_multicast=false options:lsp_learn_mac=false \
+    options:is-nf=true options:nf-linked-port=sw0-nf-p2
+check ovn-nbctl set logical_switch_port sw0-nf-p2 \
+    options:receive_multicast=false options:lsp_learn_mac=false \
+    options:is-nf=true options:nf-linked-port=sw0-nf-p1
+check ovn-nbctl nf-add nf0 1 sw0-nf-p1 sw0-nf-p2
+check ovn-nbctl nfg-add nfg0 1 inline nf0
+check ovn-nbctl acl-add sw0 to-lport 1002 'outport == "sw0-p2" && ip4' \
+    allow-related nfg0
+
+# VLAN-backed: add a localnet port.
+check ovn-nbctl lsp-add-localnet-port sw0 ln0 phys
+check ovn-nbctl set logical_switch_port ln0 tag_request=100
+
+net_add n
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+ovn_attach n br-phys 192.168.1.1
+
+ovs-vsctl add-port br-int vif1 -- \
+    set interface vif1 external-ids:iface-id=sw0-p1 \
+    options:tx_pcap=hv1/vif1-tx.pcap options:rxq_pcap=hv1/vif1-rx.pcap
+ovs-vsctl add-port br-int vif2 -- \
+    set interface vif2 external-ids:iface-id=sw0-p2 \
+    options:tx_pcap=hv1/vif2-tx.pcap options:rxq_pcap=hv1/vif2-rx.pcap
+for i in 1 2; do
+    ovs-vsctl add-port br-int vif-nf$i -- \
+        set interface vif-nf$i external-ids:iface-id=sw0-nf-p$i \
+        options:tx_pcap=hv1/vif-nf$i-tx.pcap \
+        options:rxq_pcap=hv1/vif-nf$i-rx.pcap
+done
+
+OVN_POPULATE_ARP
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
+# Match the test packet in the pcaps (src IP 192.168.0.11 followed by dst IP
+# 192.168.0.12, consecutive only in an IP header).
+icmp_pkt_filter=c0a8000bc0a8000c
+
+# 1. sw0-p1 sends to an unknown destination MAC.  The flooded copy destined to
+#    sw0-p2 is redirected to the NF output port (sw0-nf-p2); the learn of the
+#    original source port (sw0-p1) happens on this redirect.
+packet="inport==\"sw0-p1\" && eth.src==f0:00:00:00:00:01 &&
+        eth.dst==00:00:00:00:00:99 && ip.ttl==64 && ip4.src==192.168.0.11 &&
+        ip4.dst==192.168.0.12 && icmp4.type==8 && icmp4.code==0"
+check as hv1 ovs-appctl -t ovn-controller inject-pkt "$packet"
+OVS_WAIT_UNTIL([
+    pkts=`$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif-nf2-tx.pcap | grep ${icmp_pkt_filter} -c`
+    test $pkts -ge 1
+])
+
+# 2. The NF returns the packet on its input port (sw0-nf-p1).  The destination
+#    MAC is still unknown, so the switch re-floods.  The copy headed back out
+#    sw0-p1 (the original ingress port) must be dropped by the loop-prevention;
+#    the sibling copy to sw0-p2 is delivered, confirming the re-flood happened.
+packet="inport==\"sw0-nf-p1\" && eth.src==f0:00:00:00:00:01 &&
+        eth.dst==00:00:00:00:00:99 && ip.ttl==64 && ip4.src==192.168.0.11 &&
+        ip4.dst==192.168.0.12 && icmp4.type==8 && icmp4.code==0"
+check as hv1 ovs-appctl -t ovn-controller inject-pkt "$packet"
+OVS_WAIT_UNTIL([
+    pkts=`$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif2-tx.pcap | grep ${icmp_pkt_filter} -c`
+    test $pkts -ge 1
+])
+
+# The loop-prevention drop flow (ls_out_check_port_sec, REGBIT_NF_LOOKUP_HIT,
+# rendered as reg8=0x1000000 -> drop) must have dropped exactly the one
+# looped-back copy.
+OVS_WAIT_UNTIL([
+    hits=`as hv1 ovs-ofctl dump-flows br-int | grep "reg8=0x1000000" | sed -n 's/.*n_packets=\([[0-9]]*\).*/\1/p'`
+    test 1 -eq $hits
+])
+
+# The source port must not receive the looped-back copy.
+AT_CHECK([
+    pkts=`$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif1-tx.pcap | grep ${icmp_pkt_filter} -c`
+    test 0 -eq $pkts
+])
+
+OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
 
