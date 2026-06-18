@@ -4637,6 +4637,189 @@ ovnact_lookup_fdb_free(struct ovnact_lookup_fdb *get_fdb OVS_UNUSED)
 }
 
 static void
+format_NF_LEARN_ORIG_SRC_PORT(const struct ovnact_nf_learn *nf_learn,
+                              struct ds *s)
+{
+    ds_put_format(s, "nf_learn_orig_src_port(ipv6 = %s);",
+                  nf_learn->ipv6 ? "true" : "false");
+}
+
+/* Adds a NXAST_LEARN spec matching the value of field 'id' (as it is in the
+ * packet that triggers the learn) on the same field of future packets. */
+static void
+nf_learn_put_match_field(struct ofpbuf *ofpacts, enum mf_field_id id)
+{
+    struct ofpact_learn_spec *ol_spec =
+        ofpbuf_put_zeros(ofpacts, sizeof *ol_spec);
+    ol_spec->dst.field = mf_from_id(id);
+    ol_spec->dst.ofs = 0;
+    ol_spec->dst.n_bits = ol_spec->dst.field->n_bits;
+    ol_spec->n_bits = ol_spec->dst.n_bits;
+    ol_spec->dst_type = NX_LEARN_DST_MATCH;
+    ol_spec->src_type = NX_LEARN_SRC_FIELD;
+    ol_spec->src.field = mf_from_id(id);
+}
+
+static void
+encode_NF_LEARN_ORIG_SRC_PORT(const struct ovnact_nf_learn *nf_learn,
+                              const struct ovnact_encode_params *ep,
+                              struct ofpbuf *ofpacts)
+{
+    size_t ol_offset = ofpacts->size;
+    struct ofpact_learn *ol = ofpact_put_LEARN(ofpacts);
+    struct match match = MATCH_CATCHALL_INITIALIZER;
+    struct ofpact_learn_spec *ol_spec;
+    unsigned int imm_bytes;
+    uint8_t *src_imm;
+
+    ol->flags = NX_LEARN_F_DELETE_LEARNED;
+    ol->idle_timeout = nf_learn->idle_timeout;     /* seconds. */
+    ol->hard_timeout = OFP_FLOW_PERMANENT;
+    ol->priority = OFP_DEFAULT_PRIORITY;
+    ol->table_id = OFTABLE_NF_ORIG_SRC_PORT_LEARN;
+    ol->cookie = htonll(ep->lflow_uuid.parts[0]);
+
+    /* Match on the logical datapath. */
+    nf_learn_put_match_field(ofpacts, MFF_METADATA);
+
+    /* Match on the same ETH type as the packet that created the flow. */
+    ol_spec = ofpbuf_put_zeros(ofpacts, sizeof *ol_spec);
+    ol_spec->dst.field = mf_from_id(MFF_ETH_TYPE);
+    ol_spec->dst.ofs = 0;
+    ol_spec->dst.n_bits = ol_spec->dst.field->n_bits;
+    ol_spec->n_bits = ol_spec->dst.n_bits;
+    ol_spec->dst_type = NX_LEARN_DST_MATCH;
+    ol_spec->src_type = NX_LEARN_SRC_IMMEDIATE;
+    union mf_value imm_eth_type = {
+        .be16 = nf_learn->ipv6 ? htons(ETH_TYPE_IPV6) : htons(ETH_TYPE_IP)
+    };
+    mf_write_subfield_value(&ol_spec->dst, &imm_eth_type, &match);
+    /* Push value last, as this may reallocate 'ol_spec'. */
+    imm_bytes = DIV_ROUND_UP(ol_spec->dst.n_bits, 8);
+    src_imm = ofpbuf_put_zeros(ofpacts, OFPACT_ALIGN(imm_bytes));
+    memcpy(src_imm, &imm_eth_type, imm_bytes);
+
+    /* Match on the IP source and destination addresses. */
+    nf_learn_put_match_field(ofpacts,
+                             nf_learn->ipv6 ? MFF_IPV6_SRC : MFF_IPV4_SRC);
+    nf_learn_put_match_field(ofpacts,
+                             nf_learn->ipv6 ? MFF_IPV6_DST : MFF_IPV4_DST);
+
+    /* Match future packets whose logical output port equals the logical
+     * input port of the packet that created this flow.  Such packets are
+     * being sent back out of the port they originally arrived on. */
+    ol_spec = ofpbuf_put_zeros(ofpacts, sizeof *ol_spec);
+    ol_spec->dst.field = mf_from_id(MFF_LOG_OUTPORT);
+    ol_spec->dst.ofs = 0;
+    ol_spec->dst.n_bits = ol_spec->dst.field->n_bits;
+    ol_spec->n_bits = ol_spec->dst.n_bits;
+    ol_spec->dst_type = NX_LEARN_DST_MATCH;
+    ol_spec->src_type = NX_LEARN_SRC_FIELD;
+    ol_spec->src.field = mf_from_id(MFF_LOG_INPORT);
+
+    /* Load the "lookup hit" flag into MFF_LOG_FLAGS of matching packets. */
+    ol_spec = ofpbuf_put_zeros(ofpacts, sizeof *ol_spec);
+    ol_spec->dst.field = mf_from_id(MFF_LOG_FLAGS);
+    ol_spec->dst.ofs = MLF_NF_LOOKUP_HIT_BIT;
+    ol_spec->dst.n_bits = 1;
+    ol_spec->n_bits = ol_spec->dst.n_bits;
+    ol_spec->dst_type = NX_LEARN_DST_LOAD;
+    ol_spec->src_type = NX_LEARN_SRC_IMMEDIATE;
+    union mf_value imm_hit = { .u8 = 1 };
+    mf_write_subfield_value(&ol_spec->dst, &imm_hit, &match);
+    /* Push value last, as this may reallocate 'ol_spec'. */
+    imm_bytes = DIV_ROUND_UP(ol_spec->dst.n_bits, 8);
+    src_imm = ofpbuf_put_zeros(ofpacts, OFPACT_ALIGN(imm_bytes));
+    memcpy(src_imm, &imm_hit, imm_bytes);
+
+    ol = ofpbuf_at_assert(ofpacts, ol_offset, sizeof *ol);
+    ofpact_finish_LEARN(ofpacts, &ol);
+}
+
+static void
+parse_nf_learn_orig_src_port(struct action_context *ctx,
+                             struct ovnact_nf_learn *nf_learn)
+{
+    nf_learn->idle_timeout = 30;       /* seconds. */
+
+    lexer_force_match(ctx->lexer, LEX_T_LPAREN);
+    if (!lexer_match_id(ctx->lexer, "ipv6")) {
+        lexer_syntax_error(ctx->lexer, "invalid parameter");
+        return;
+    }
+    if (!lexer_force_match(ctx->lexer, LEX_T_EQUALS)) {
+        lexer_syntax_error(ctx->lexer, "invalid parameter");
+        return;
+    }
+    if (lexer_match_id(ctx->lexer, "true")) {
+        nf_learn->ipv6 = true;
+    } else if (lexer_match_id(ctx->lexer, "false")) {
+        nf_learn->ipv6 = false;
+    } else {
+        lexer_syntax_error(ctx->lexer, "expecting true or false");
+        return;
+    }
+    lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+}
+
+static void
+ovnact_nf_learn_free(struct ovnact_nf_learn *nf_learn OVS_UNUSED)
+{
+}
+
+static void
+format_NF_LOOKUP_ORIG_SRC_PORT(const struct ovnact_nf_lookup *nf_lookup,
+                               struct ds *s)
+{
+    expr_field_format(&nf_lookup->dst, s);
+    ds_put_cstr(s, " = nf_lookup_orig_src_port();");
+}
+
+static void
+encode_NF_LOOKUP_ORIG_SRC_PORT(
+    const struct ovnact_nf_lookup *nf_lookup,
+    const struct ovnact_encode_params *ep OVS_UNUSED,
+    struct ofpbuf *ofpacts)
+{
+    struct mf_subfield dst = expr_resolve_field(&nf_lookup->dst);
+    ovs_assert(dst.field);
+
+    put_load(0, MFF_LOG_FLAGS, MLF_NF_LOOKUP_HIT_BIT, 1, ofpacts);
+    emit_resubmit(ofpacts, OFTABLE_NF_ORIG_SRC_PORT_LEARN);
+
+    struct ofpact_reg_move *orm = ofpact_put_REG_MOVE(ofpacts);
+    orm->dst = dst;
+    orm->src.field = mf_from_id(MFF_LOG_FLAGS);
+    orm->src.ofs = MLF_NF_LOOKUP_HIT_BIT;
+    orm->src.n_bits = 1;
+}
+
+static void
+parse_nf_lookup_orig_src_port(struct action_context *ctx,
+                              struct expr_field *dst,
+                              struct ovnact_nf_lookup *nf_lookup)
+{
+    lexer_get(ctx->lexer);  /* Skip nf_lookup_orig_src_port. */
+    lexer_get(ctx->lexer);  /* Skip '('. */
+
+    /* Validate that the destination is a 1-bit, modifiable field. */
+    char *error = expr_type_check(dst, 1, true, ctx->scope);
+    if (error) {
+        lexer_error(ctx->lexer, "%s", error);
+        free(error);
+        return;
+    }
+    nf_lookup->dst = *dst;
+
+    lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+}
+
+static void
+ovnact_nf_lookup_free(struct ovnact_nf_lookup *nf_lookup OVS_UNUSED)
+{
+}
+
+static void
 parse_check_in_port_sec(struct action_context *ctx,
                         const struct expr_field *dst,
                         struct ovnact_result *dl)
@@ -5897,6 +6080,10 @@ parse_set_action(struct action_context *ctx)
                    && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
             parse_lookup_fdb(
                 ctx, &lhs, ovnact_put_LOOKUP_FDB(ctx->ovnacts));
+        } else if (!strcmp(ctx->lexer->token.s, "nf_lookup_orig_src_port")
+                   && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
+            parse_nf_lookup_orig_src_port(
+                ctx, &lhs, ovnact_put_NF_LOOKUP_ORIG_SRC_PORT(ctx->ovnacts));
         } else if (!strcmp(ctx->lexer->token.s, "check_in_port_sec")
                    && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
             parse_check_in_port_sec(
@@ -6073,6 +6260,9 @@ parse_action(struct action_context *ctx)
         ovnact_put_FLOOD_REMOTE(ctx->ovnacts);
     } else if (lexer_match_id(ctx->lexer, "mirror")) {
         parse_MIRROR_action(ctx);
+    } else if (lexer_match_id(ctx->lexer, "nf_learn_orig_src_port")) {
+        parse_nf_learn_orig_src_port(
+            ctx, ovnact_put_NF_LEARN_ORIG_SRC_PORT(ctx->ovnacts));
     } else {
         lexer_syntax_error(ctx->lexer, "expecting action");
     }
