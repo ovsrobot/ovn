@@ -27,6 +27,7 @@
 #include "openvswitch/list.h"
 
 #include "lib/ovn-sb-idl.h"
+#include "lib/uuidset.h"
 
 #include "binding.h"
 #include "ha-chassis.h"
@@ -86,7 +87,7 @@ maintained_route_table_add(uint32_t table_id)
     hmap_insert(&_maintained_route_tables, &mrt->node, hash);
 }
 
-static void
+static struct route_entry *
 route_add_entry(struct hmap *routes,
                 const struct sbrec_learned_route *sb_route,
                 bool stale)
@@ -102,6 +103,7 @@ route_add_entry(struct hmap *routes,
     hash = hash_string(sb_route->ip_prefix, hash);
 
     hmap_insert(routes, &route_e->hmap_node, hash);
+    return route_e;
 }
 
 static struct route_entry *
@@ -144,28 +146,65 @@ sb_sync_learned_routes(const struct vector *learned_routes,
                        struct ovsdb_idl_txn *ovnsb_idl_txn,
                        struct ovsdb_idl_index *sbrec_port_binding_by_name,
                        struct ovsdb_idl_index *sbrec_learned_route_by_datapath,
-                       bool *sb_changes_pending)
+                       bool *sb_changes_pending,
+                       const struct sbrec_chassis *chassis)
 {
     struct hmap sync_routes = HMAP_INITIALIZER(&sync_routes);
     const struct sbrec_learned_route *sb_route;
-    struct route_entry *route_e;
+    struct route_entry *route_e = NULL;
+    struct uuidset lrp_with_dr_port_name =
+                                  UUIDSET_INITIALIZER(&lrp_with_dr_port_name);
 
     struct sbrec_learned_route *filter =
         sbrec_learned_route_index_init_row(sbrec_learned_route_by_datapath);
     sbrec_learned_route_index_set_datapath(filter, datapath);
     SBREC_LEARNED_ROUTE_FOR_EACH_EQUAL (sb_route, filter,
                                         sbrec_learned_route_by_datapath) {
+        const struct sbrec_port_binding *cr_pb =
+            lport_get_cr_port(sbrec_port_binding_by_name,
+                              sb_route->logical_port, NULL);
+        const char *dynamic_routing_port_name =
+            smap_get(&sb_route->logical_port->options,
+                     "dynamic-routing-port-name");
+        if (!dynamic_routing_port_name && cr_pb) {
+            dynamic_routing_port_name =
+                smap_get(&cr_pb->options, "dynamic-routing-port-name");
+        }
+
+        if (sb_route->logical_port->chassis == chassis ||
+            (cr_pb && cr_pb->chassis == chassis)) {
+            route_e = route_add_entry(&sync_routes, sb_route, false);
+            if (dynamic_routing_port_name) {
+                uuidset_insert(&lrp_with_dr_port_name,
+                               &sb_route->logical_port->header_.uuid);
+            }
+        }
+
         /* If the port is not local we don't care about it.
          * Some other ovn-controller will handle it.
          * We may not use smap_get since the value might be validly NULL. */
         if (!smap_get_node(bound_ports,
                            sb_route->logical_port->logical_port)) {
+            route_e = NULL;
+            continue;
+        }
+        if (route_e) {
+            route_e->stale = true;
             continue;
         }
         route_add_entry(&sync_routes, sb_route, true);
     }
     sbrec_learned_route_index_destroy_row(filter);
 
+    if (!uuidset_is_empty(&lrp_with_dr_port_name)) {
+        HMAP_FOR_EACH_SAFE (route_e, hmap_node, &sync_routes) {
+            if (!uuidset_find(&lrp_with_dr_port_name,
+                &route_e->sb_route->logical_port->header_.uuid)) {
+                route_e->stale = true;
+            }
+        }
+    }
+    uuidset_destroy(&lrp_with_dr_port_name);
     struct re_nl_received_route_node *learned_route;
     VECTOR_FOR_EACH_PTR (learned_routes, learned_route) {
         char *ip_prefix = normalize_v46_prefix(&learned_route->prefix,
@@ -363,7 +402,8 @@ route_exchange_run(const struct route_exchange_ctx_in *r_ctx_in,
                                        r_ctx_in->ovnsb_idl_txn,
                                        r_ctx_in->sbrec_port_binding_by_name,
                                        sbrec_learned_route_by_datapath,
-                                       &r_ctx_out->sb_changes_pending);
+                                       &r_ctx_out->sb_changes_pending,
+                                       r_ctx_in->chassis);
             }
             vector_push(r_ctx_out->route_table_watches, &arte->table_id);
             vector_destroy(&received_routes);
