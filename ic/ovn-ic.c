@@ -1035,7 +1035,7 @@ get_lrp_by_lrp_name(struct ic_context *ctx, const char *lrp_name)
 }
 
 static bool
-trp_is_remote(struct ic_context *ctx, const char *chassis_name)
+chassis_is_remote(struct ic_context *ctx, const char *chassis_name)
 {
     if (chassis_name) {
         const struct sbrec_chassis *chassis =
@@ -1257,7 +1257,7 @@ port_binding_run(struct ic_context *ctx)
         for (size_t i = 0; i < tr->n_ports; i++) {
             const struct icnbrec_transit_router_port *trp = tr->ports[i];
 
-            if (trp_is_remote(ctx, trp->chassis)) {
+            if (chassis_is_remote(ctx, trp->chassis)) {
                 isb_pb = shash_find_and_delete(&remote_pbs, trp->name);
             } else {
                 isb_pb = shash_find_and_delete(&local_pbs, trp->name);
