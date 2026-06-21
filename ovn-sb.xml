@@ -5578,6 +5578,25 @@ tcp.flags = RST;
       Announced mac address.
     </column>
 
+    <column name="type">
+      The origin of this binding, used by <code>ovn-controller</code> to decide
+      whether to advertise it based on the datapath's
+      <code>dynamic-routing-redistribute</code> tokens:
+      <ul>
+        <li>
+          <code>ip</code>: the address of a port attached to the
+          EVPN-enabled <code>OVN_Northbound.Logical_Switch</code> (a VIF or a
+          router port). Advertised when the <code>ip</code> token is set.
+        </li>
+        <li>
+          <code>nat</code>: the external IP/MAC of a distributed
+          <code>dnat_and_snat</code> NAT entry (a floating IP) whose
+          distributed gateway port is peered with this Logical Switch.
+          Advertised when the <code>nat</code> token is set.
+        </li>
+      </ul>
+    </column>
+
     <column name="external_ids">
       See <em>External IDs</em> at the beginning of this document.
     </column>
