@@ -10073,6 +10073,9 @@ ls_dhcp_relay_port(const struct ovn_datapath *od)
     return smap_get(&od->nbs->other_config, "dhcp_relay_port");
 }
 
+static const struct ipv4_netaddr *lrp_primary_ipv4_addr(
+    const struct ovn_port *op);
+
 static void
 build_lswitch_dhcp_relay_flows(struct ovn_port *op,
                                const struct hmap *ls_ports,
@@ -10112,6 +10115,12 @@ build_lswitch_dhcp_relay_flows(struct ovn_port *op,
         return;
     }
 
+    /* Use the LRP's primary IPv4 addr for the DHCP relay. */
+    const struct ipv4_netaddr *lrp_ipv4_addr = lrp_primary_ipv4_addr(rp);
+    if (!lrp_ipv4_addr) {
+        return;
+    }
+
     char *server_ip_str = NULL;
     uint16_t port;
     int addr_family;
@@ -10135,8 +10144,7 @@ build_lswitch_dhcp_relay_flows(struct ovn_port *op,
         "ip4.src == {0.0.0.0, %s/%u} && ip4.dst == 255.255.255.255 && "
         "udp.src == 68 && udp.dst == 67",
         op->json_key, op->lsp_addrs[0].ea_s,
-        rp->lrp_networks.ipv4_addrs[0].network_s,
-        rp->lrp_networks.ipv4_addrs[0].plen);
+        lrp_ipv4_addr->network_s, lrp_ipv4_addr->plen);
     ds_put_format(actions,
                   "eth.dst = %s; outport = %s; next; /* DHCP_RELAY_REQ */",
                   rp->lrp_networks.ea_s, sp->json_key);
@@ -16833,6 +16841,57 @@ build_dhcpv6_reply_flows_for_lrouter_port(
     }
 }
 
+/* Resolve the LRP's "primary" IPv4 address - the single representative
+ * IP used by features such as DHCP relay (giaddr).
+ *
+ * If 'options:primary_ipv4' is set, returns the entry from
+ * 'lrp_networks' whose address matches it.  If the option is unset,
+ * returns lrp_networks.ipv4_addrs[0] - the first address from
+ * 'networks' in OVSDB sort order (set members are sorted by strcmp()
+ * on their string form).
+ *
+ * Returns NULL when the port has no IPv4 address at all, or when
+ * 'options:primary_ipv4' is set but is not a valid IPv4 address or
+ * does not match any address on the port.  Callers must skip
+ * emitting flows that need a primary IPv4 in those cases.
+ */
+static const struct ipv4_netaddr *
+lrp_primary_ipv4_addr(const struct ovn_port *op)
+{
+    if (!op->lrp_networks.n_ipv4_addrs) {
+        return NULL;
+    }
+
+    const char *primary_ip = smap_get(&op->nbrp->options, "primary_ipv4");
+
+    if (!primary_ip || !primary_ip[0]) {
+        return &op->lrp_networks.ipv4_addrs[0];
+    }
+
+    ovs_be32 primary_ip4;
+    if (!ip_parse(primary_ip, &primary_ip4)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl,
+                     "Logical_Router_Port %s: options:primary_ipv4=%s is "
+                     "not a valid IPv4 address.",
+                     op->nbrp->name, primary_ip);
+        return NULL;
+    }
+
+    for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+        if (op->lrp_networks.ipv4_addrs[i].addr == primary_ip4) {
+            return &op->lrp_networks.ipv4_addrs[i];
+        }
+    }
+
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+    VLOG_WARN_RL(&rl,
+                 "Logical_Router_Port %s: options:primary_ipv4=%s does not "
+                 "match any address in 'networks'.",
+                 op->nbrp->name, primary_ip);
+    return NULL;
+}
+
 static void
 build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
                                         struct lflow_table *lflows,
@@ -16854,6 +16913,12 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
 
     struct nbrec_dhcp_relay *dhcp_relay = op->nbrp->dhcp_relay;
     if (!dhcp_relay->servers) {
+        return;
+    }
+
+    /* Use the LRP's primary IPv4 addr for the DHCP relay. */
+    const struct ipv4_netaddr *lrp_ipv4_addr = lrp_primary_ipv4_addr(op);
+    if (!lrp_ipv4_addr) {
         return;
     }
 
@@ -16880,14 +16945,12 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
         match, "inport == %s && "
         "ip4.src == {0.0.0.0, %s/%u} && ip4.dst == 255.255.255.255 && "
         "ip.frag == 0 && udp.src == 68 && udp.dst == 67",
-        op->json_key,
-        op->lrp_networks.ipv4_addrs[0].network_s,
-        op->lrp_networks.ipv4_addrs[0].plen);
+        op->json_key, lrp_ipv4_addr->network_s, lrp_ipv4_addr->plen);
     ds_put_format(actions,
                   REGBIT_DHCP_RELAY_REQ_CHK
                   " = dhcp_relay_req_chk(%s, %s);"
                   "next; /* DHCP_RELAY_REQ */",
-                  op->lrp_networks.ipv4_addrs[0].addr_s, server_ip_str);
+                  lrp_ipv4_addr->addr_s, server_ip_str);
 
     ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 110, ds_cstr(match),
                   ds_cstr(actions), lflow_ref,
@@ -16904,13 +16967,11 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
         "ip4.src == {0.0.0.0, %s/%u} && ip4.dst == 255.255.255.255 && "
         "udp.src == 68 && udp.dst == 67 && "
         REGBIT_DHCP_RELAY_REQ_CHK,
-        op->json_key,
-        op->lrp_networks.ipv4_addrs[0].network_s,
-        op->lrp_networks.ipv4_addrs[0].plen);
+        op->json_key, lrp_ipv4_addr->network_s, lrp_ipv4_addr->plen);
     ds_put_format(actions,
                   "ip4.src = %s; ip4.dst = %s; udp.src = 67; next; "
                   "/* DHCP_RELAY_REQ */",
-                  op->lrp_networks.ipv4_addrs[0].addr_s, server_ip_str);
+                  lrp_ipv4_addr->addr_s, server_ip_str);
 
     ovn_lflow_add(lflows, op->od, S_ROUTER_IN_DHCP_RELAY_REQ, 100,
                   ds_cstr(match), ds_cstr(actions), lflow_ref,
@@ -16924,9 +16985,7 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
         "ip4.src == {0.0.0.0, %s/%u} && ip4.dst == 255.255.255.255 && "
         "udp.src == 68 && udp.dst == 67 && "
         REGBIT_DHCP_RELAY_REQ_CHK" == 0",
-        op->json_key,
-        op->lrp_networks.ipv4_addrs[0].network_s,
-        op->lrp_networks.ipv4_addrs[0].plen);
+        op->json_key, lrp_ipv4_addr->network_s, lrp_ipv4_addr->plen);
     ds_put_format(actions, "drop; /* DHCP_RELAY_REQ */");
 
     ovn_lflow_add(lflows, op->od, S_ROUTER_IN_DHCP_RELAY_REQ, 1,
@@ -16939,7 +16998,7 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
     ds_put_format(
         match, "ip4.src == %s && ip4.dst == %s && "
         "ip.frag == 0 && udp.src == 67 && udp.dst == 67",
-        server_ip_str, op->lrp_networks.ipv4_addrs[0].addr_s);
+        server_ip_str, lrp_ipv4_addr->addr_s);
     ds_put_format(actions, "next; /* DHCP_RELAY_RESP */");
     ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 110,
                   ds_cstr(match), ds_cstr(actions), lflow_ref,
@@ -16951,12 +17010,12 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
     ds_put_format(
         match, "ip4.src == %s && ip4.dst == %s && "
         "udp.src == 67 && udp.dst == 67",
-        server_ip_str, op->lrp_networks.ipv4_addrs[0].addr_s);
+        server_ip_str, lrp_ipv4_addr->addr_s);
     ds_put_format(actions,
           REG_DHCP_RELAY_DIP_IPV4" = ip4.dst; "
           REGBIT_DHCP_RELAY_RESP_CHK
           " = dhcp_relay_resp_chk(%s, %s); next; /* DHCP_RELAY_RESP */",
-          op->lrp_networks.ipv4_addrs[0].addr_s, server_ip_str);
+          lrp_ipv4_addr->addr_s, server_ip_str);
 
     ovn_lflow_add(lflows, op->od, S_ROUTER_IN_DHCP_RELAY_RESP_CHK, 100,
                   ds_cstr(match), ds_cstr(actions), lflow_ref,
@@ -16974,11 +17033,11 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
         REG_DHCP_RELAY_DIP_IPV4" == %s && "
         "udp.src == 67 && udp.dst == 67 && "
         REGBIT_DHCP_RELAY_RESP_CHK,
-        server_ip_str, op->lrp_networks.ipv4_addrs[0].addr_s);
+        server_ip_str, lrp_ipv4_addr->addr_s);
     ds_put_format(actions,
                   "ip4.src = %s; udp.dst = 68; "
                   "outport = %s; output; /* DHCP_RELAY_RESP */",
-                  op->lrp_networks.ipv4_addrs[0].addr_s, op->json_key);
+                  lrp_ipv4_addr->addr_s, op->json_key);
     ovn_lflow_add(lflows, op->od, S_ROUTER_IN_DHCP_RELAY_RESP, 100,
                   ds_cstr(match), ds_cstr(actions), lflow_ref,
                   WITH_HINT(&op->nbrp->header_));
@@ -16990,7 +17049,7 @@ build_dhcp_relay_flows_for_lrouter_port(struct ovn_port *op,
                   REG_DHCP_RELAY_DIP_IPV4" == %s && "
                   "udp.src == 67 && udp.dst == 67 && "
                   REGBIT_DHCP_RELAY_RESP_CHK" == 0",
-                  server_ip_str, op->lrp_networks.ipv4_addrs[0].addr_s);
+                  server_ip_str, lrp_ipv4_addr->addr_s);
     ds_put_format(actions, "drop; /* DHCP_RELAY_RESP */");
     ovn_lflow_add(lflows, op->od, S_ROUTER_IN_DHCP_RELAY_RESP, 1,
                   ds_cstr(match), ds_cstr(actions), lflow_ref,
