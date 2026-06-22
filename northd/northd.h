@@ -110,6 +110,9 @@ ods_size(const struct ovn_datapaths *datapaths)
 struct ovn_datapath *
 ovn_datapath_find_by_key(struct hmap *datapaths, uint32_t dp_key);
 
+struct ovn_datapath *
+ovn_datapath_find_by_static_route(struct hmapx *, const struct uuid *);
+
 bool od_has_lb_vip(const struct ovn_datapath *od);
 
 /* List of routing and routing-related protocols which
@@ -159,6 +162,7 @@ enum northd_tracked_data_type {
     NORTHD_TRACKED_LS_ACLS  = (1 << 4),
     NORTHD_TRACKED_SWITCHES = (1 << 5),
     NORTHD_TRACKED_ROUTERS  = (1 << 6),
+    NORTHD_TRACKED_LR_ROUTES  = (1 << 7),
 };
 
 /* Track what's changed in the northd engine node.
@@ -175,6 +179,10 @@ struct northd_tracked_data {
     /* Tracked logical routers whose NATs have changed.
      * hmapx node is 'struct ovn_datapath *'. */
     struct hmapx trk_nat_lrs;
+
+    /* Tracked logical routers whose static routes have changed.
+     * hmapx node is 'struct ovn_datapath *'. */
+    struct hmapx trk_lrs_routes;
 
     /* Tracked logical switches whose load balancers have changed.
      * hmapx node is 'struct ovn_datapath *'. */
@@ -216,10 +224,23 @@ struct route_policy {
     uint32_t jump_chain_id;
 };
 
+struct route_tracked_data {
+    /* Contains references to group_ecmp_route_node. Each of the referenced
+     * datapaths contains at least one route. */
+    struct hmapx trk_crupdated_parsed_route;
+
+    /* Contains references to group_ecmp_route_node. Each of the referenced
+     * datapath previously had some routes. The datapath now no longer
+     * contains any route.*/
+    struct hmapx trk_deleted_parsed_route;
+};
+
 struct routes_data {
     struct hmap parsed_routes; /* Stores struct parsed_route. */
     struct simap route_tables;
     struct hmap bfd_active_connections;
+    bool tracked;
+    struct route_tracked_data trk_data;
 };
 
 struct route_policies_data {
@@ -897,6 +918,14 @@ struct parsed_route *parsed_route_add(
     const struct ovn_port *tracked_port,
     struct hmap *routes);
 
+struct  parsed_route * parsed_routes_add_static(
+    const struct ovn_datapath *od,
+    const struct hmap *lr_ports,
+    const struct nbrec_logical_router_static_route *route,
+    const struct hmap *bfd_connections,
+    struct hmap *routes, struct simap *route_tables,
+    struct hmap *bfd_active_connections);
+
 struct svc_monitors_map_data {
     const struct hmap *local_svc_monitors_map;
     const struct hmap *ic_learned_svc_monitors_map;
@@ -941,7 +970,7 @@ void build_parsed_routes(const struct ovn_datapath *, const struct hmap *,
 uint32_t get_route_table_id(struct simap *, const char *);
 void routes_init(struct routes_data *);
 void routes_destroy(struct routes_data *);
-
+void routes_clear_tracked(struct routes_data *);
 void bfd_init(struct bfd_data *);
 void bfd_destroy(struct bfd_data *);
 
@@ -967,6 +996,11 @@ void build_route_data_flows_for_lrouter(
     const struct ovn_datapath *od, struct lflow_table *lflows,
     const struct group_ecmp_datapath *route_node,
     const struct sset *bfd_ports);
+void build_arp_request_flows_for_lrouter(
+    const struct ovn_datapath *od, struct lflow_table *lflows,
+    struct ds *match, struct ds *actions,
+    const struct shash *meter_groups,
+    struct lflow_ref *lflow_ref);
 
 bool lflow_handle_northd_lr_changes(struct ovsdb_idl_txn *ovnsh_txn,
                                      struct tracked_dps *,
@@ -1052,6 +1086,11 @@ static inline bool
 northd_has_lr_nats_in_tracked_data(struct northd_tracked_data *trk_nd_changes)
 {
     return trk_nd_changes->type & NORTHD_TRACKED_LR_NATS;
+}
+static inline bool
+northd_has_lr_route_in_tracked_data(struct northd_tracked_data *trk_nd_changes)
+{
+    return trk_nd_changes->type & NORTHD_TRACKED_LR_ROUTES;
 }
 
 static inline bool
