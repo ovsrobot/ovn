@@ -2565,7 +2565,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- allows ACLs to match against vlan-transparent double tagged traffic L3 fields])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 for i in 1 2; do
@@ -2648,7 +2648,7 @@ OVN_FOR_EACH_NORTHD_FLOW_TUNNEL([
 AT_SETUP([3 HVs, 1 LS, 3 lports/HV])
 AT_KEYWORDS([ovnarp])
 AT_KEYWORDS([slowtest])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Create hypervisors hv[123].
@@ -3935,7 +3935,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([VLAN transparency, passthru=true, ARP responder disabled])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add net
@@ -4015,7 +4015,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([VLAN transparency, passthru=true, ND/NA responder disabled])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add net
@@ -4564,7 +4564,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([vtep: 3 HVs, 1 VIFs/HV, 1 GW, 1 LS])
 AT_KEYWORDS([vtep])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Configure the Northbound database
@@ -5065,7 +5065,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD_FLOW_TUNNEL([
 AT_SETUP([3 HVs, 3 LS, 3 lports/LS, 1 LR])
 AT_KEYWORDS([slowtest])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -5511,7 +5511,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD_FLOW_TUNNEL([
 AT_SETUP([IP relocation using GARP request])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -5772,7 +5772,7 @@ AT_CLEANUP
 # 3 hypervisors, one logical switch, 3 logical ports per hypervisor
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([portsecurity : 3 HVs, 1 LS, 3 lports/HV])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Create hypervisors hv[123].
@@ -6330,7 +6330,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([1 HV, 1 LS, 2 lport/LS, 1 LR])
 AT_KEYWORDS([router-admin-state])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -6440,7 +6440,7 @@ OVN_FOR_EACH_NORTHD([
 AT_SETUP([1 HV, 2 LSs, 1 lport/LS, 1 LR])
 AT_KEYWORDS([router-admin-state])
 TAG_UNSTABLE
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -6531,7 +6531,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([2 HVs, 3 LS, 1 lport/LS, 2 peer LRs, static routes])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -6731,7 +6731,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([2 HVs, 3 LRs connected via LS, static routes])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -7628,7 +7628,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([dhcpv6 : 1 HV, 2 LS, 5 LSPs])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 check ovn-nbctl ls-add ls1
@@ -7965,7 +7965,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([2 HVs, 2 LRs connected via LS, gateway router])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -8150,7 +8150,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([spine-leaf: 1 HV, 3 LSs, connected via spine switch])
 AT_KEYWORDS([spine leaf])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -8347,7 +8347,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([spine-leaf: 3 HVs, 3 LSs, connected via distributed spine switch])
 AT_KEYWORDS([spine leaf])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -8591,7 +8591,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([icmp_reply: 1 HVs, 2 LSs, 1 lport/LS, 1 LR])
 AT_KEYWORDS([router-icmp-reply])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -10243,7 +10243,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ARP/ND from localnet -- proxy reply on resident chassis only])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 dnl Create logical switch with localnet port.
@@ -12575,6 +12575,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([dns lookup : EDNS])
+CHECK_SCAPY
 OVN_CHECK_SCAPY_EDNS_CLIENT_SUBNET_SUPPORT()
 ovn_start
 
@@ -12868,6 +12869,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([4 HV, 3 LS, 2 LR, packet test with HA distributed router gateway port])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -13883,7 +13885,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([IPv6 ND Router Solicitation responder])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 AT_KEYWORDS([ovn-nd_ra])
 ovn_start
 
@@ -14391,7 +14393,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([localport suppress gARP])
 AT_SKIP_IF([test $HAVE_TCPDUMP = no])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -14456,7 +14458,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([localport doesn't suppress ARP directed to external port])
 AT_SKIP_IF([test $HAVE_TCPDUMP = no])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 
 ovn_start
 net_add n1
@@ -15342,7 +15344,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([allow IPv6 RA / NA / MLD by default])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 net_add n1
 sim_add hv1
@@ -16282,7 +16284,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([localnet connectivity with multiple requested-chassis])
 AT_KEYWORDS([multi-chassis])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -16671,7 +16673,7 @@ m4_define([MULTICHASSIS_PATH_MTU_DISCOVERY_TEST],
   [OVN_FOR_EACH_NORTHD([
    AT_SETUP([localnet connectivity with multiple requested-chassis, path mtu discovery (ip=$1, tunnel=$2, mtu=$3)])
    AT_KEYWORDS([multi-chassis])
-   AT_SKIP_IF([test $HAVE_SCAPY = no])
+   CHECK_SCAPY
 
    ovn_start
 
@@ -17007,7 +17009,7 @@ m4_define([ACTIVATION_STRATEGY_TEST],
     AT_SETUP([options:activation-strategy=$1 for logical port])
     AT_KEYWORDS([multi-chassis])
     AT_KEYWORDS([slowtest])
-    AT_SKIP_IF([test $HAVE_SCAPY = no])
+    CHECK_SCAPY
     ovn_start
 
     net_add n1
@@ -18145,7 +18147,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([IPv6 periodic gateway RA enabled for localnet adjacent switch ports])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -22746,7 +22748,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([IP packet buffering])
 AT_KEYWORDS([ip-buffering])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -23484,7 +23486,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([virtual ports])
 AT_KEYWORDS([virtual ports])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 send_nd_ns() {
@@ -26276,7 +26278,7 @@ DVR_N_S_PING([vxlan])
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ARP lookup before learning])
 AT_KEYWORDS([virtual ports])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 send_arp_reply() {
@@ -26626,7 +26628,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([Disabling RARP/GARP announcements from Router options])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -32142,7 +32144,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([multiple encap ips selection based on VIF's encap_ip - L2])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 net_add n1
 
@@ -32263,7 +32265,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([multiple encap ips selection based on VIF's encap_ip - L3])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 net_add n1
 
@@ -32405,7 +32407,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([multiple encap ips selection for localnet packets])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 net_add n1
 
@@ -36719,7 +36721,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([MAC binding aging])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -36978,7 +36980,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([MAC binding aging - port deletion])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -37072,7 +37074,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([MAC binding aging - persistence of the active entry])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -37200,7 +37202,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([MAC binding aging - probing])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 aging_th=10
@@ -37322,7 +37324,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([MAC binding aging - probing multi-subnet source IP])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 aging_th=10
@@ -37439,7 +37441,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([MAC binding aging - probing distributed GW router])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Check that during mac probing only the chassis that has currently claimed
@@ -37511,7 +37513,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([MAC binding aging - probing GW router Dynamic Neigh])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 send_imcp_echo_req() {
@@ -39534,7 +39536,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([FDB aging])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -39611,7 +39613,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([FDB aging - persistence of the active entry])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -39691,7 +39693,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([DNAT_SNAT and LB traffic])
 AT_KEYWORDS([dnat-snat-lb])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 test_ip_req_packet() {
@@ -40123,7 +40125,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([virtual port claim race condition])
 AT_KEYWORDS([virtual ports])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -40203,7 +40205,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([pod to pod with localnet_learn_fdb])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 
 # 10 VIFs, 5 per HV: vif11, vif12, vif13, vif14 and vif15 on hv1.
 # vif11 will exchange packets with vif21, vif12 w/ vif22 and so on.
@@ -41036,7 +41038,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([QoS packet marking])
 AT_KEYWORDS([ovn-qos-pkt-marking])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 check ovn-nbctl lr-add lr0
@@ -41799,7 +41801,7 @@ dnl don't match on IPv6 source and destination addresses for
 dnl simple switching.
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([IPv6 switching - megaflow check for IPv6 src/dst matches])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 check ovn-nbctl ls-add sw0
@@ -41965,7 +41967,7 @@ dnl This test checks that the megaflows translated by ovs-vswitchd don't
 dnl have extensive matches on external IP addresses for simple routing.
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([IPv4/v6 routing to external - megaflow check for src/dst matches])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 check ovn-nbctl ls-add sw0
@@ -42668,7 +42670,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([2 HVs, 2 LS, 1 lport/LS, 2 peer LRs, IPv4 over IPv6])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -42788,7 +42790,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([2 HVs, 2 LS, 1 lport/LS, LRs connected via LS, IPv4 over IPv6])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -42916,7 +42918,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([2 HVs, 2 LS, 1 lport/LS, LRs connected via LS, IPv4 over IPv6, static mac])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -43050,7 +43052,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([2 HVs, 2 LS, 1 lport/LS, LRs connected via LS, IPv4 over IPv6, dynamic])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -43180,7 +43182,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([2 HVs, 2 LS, 1 lport/LS, LRs connected via LS, IPv6 over IPv4, dynamic])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -43310,7 +43312,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([2 HVs, 2 LS, 1 lport/LS, LRs connected via LS, IPv4 over IPv6, ECMP])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -43453,7 +43455,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([2 HVs, 2 LS, 1 lport/LS, 2 peer LRs, IPv6 over IPv4])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 # Logical network:
@@ -43573,7 +43575,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([DNS reply packet with ACL to drop it])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 net_add n1
 sim_add hv1
@@ -44182,7 +44184,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([Load balancer hairpin flows])
 AT_KEYWORDS([lb])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -44260,7 +44262,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([lb_force_snat_ip=router_ip select correct network for snat])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 check ovn-nbctl lr-add lr
@@ -44340,7 +44342,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([virtual port claim postpone])
 AT_KEYWORDS([virtual ports])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -44437,6 +44439,7 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([virtual port - parent port re-create])
 AT_KEYWORDS([virtual ports])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -44909,7 +44912,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([Unicast ARP when proxy ARP is configured])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 check ovn-nbctl ls-add ls1
@@ -44983,7 +44986,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([Port security - VRRPv3 ARP/ND])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 net_add n1
 sim_add hv1
@@ -45994,7 +45997,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([Drop unknown eth type on router ports])
-AT_SKIP_IF([test $HAVE_SCAPY = no])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
@@ -46199,6 +46202,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([IPv4 over v6 Neigh solicitation test])
+CHECK_SCAPY
 ovn_start
 
 net_add n1
