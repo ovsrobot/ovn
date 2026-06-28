@@ -8,6 +8,7 @@ m4_define([_DUMP_DB_TABLES], [
     echo ======= >> $1
     ovn-sbctl list logical_flow >> $1
     ovn-sbctl list port_binding >> $1
+    ovn-sbctl list advertised_mac_binding >> $1
     ovn-sbctl list address_set >> $1
     ovn-sbctl list meter >> $1
     ovn-sbctl list meter_band >> $1
@@ -20443,6 +20444,66 @@ AS_BOX([Re-enabling redistribute=ip,nat restores both LRP and FIP])
 check ovn-nbctl --wait=sb set logical_switch ls-evpn other_config:dynamic-routing-redistribute=ip,nat
 check_row_count Advertised_MAC_Binding 1 ip=172.16.0.101 datapath=$ls_evpn_uuid mac='00\:11\:22\:33\:44\:66'
 check_row_count Advertised_MAC_Binding 2
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([LR EVPN Advertised_MAC_Binding sync - incremental NAT changes])
+ovn_start
+
+check ovn-sbctl chassis-add ch geneve 127.0.0.1
+
+dnl Same topology as the distributed NAT test: a tenant LS, a LR with a
+dnl distributed gateway port, and an EVPN-enabled provider LS (with the 'nat'
+dnl token) so that distributed floating IPs are advertised.
+check ovn-nbctl ls-add ls-tenant                                            \
+    -- lsp-add ls-tenant vm1                                                \
+    -- lsp-set-addresses vm1 "00:00:00:00:02:00 10.0.0.10"
+check ovn-nbctl ls-add ls-evpn                                              \
+    -- set logical_switch ls-evpn other_config:dynamic-routing-vni=10       \
+    -- set logical_switch ls-evpn other_config:dynamic-routing-redistribute=ip,nat
+check ovn-nbctl lsp-add ls-evpn ln-evpn                                     \
+    -- lsp-set-type ln-evpn localnet                                        \
+    -- lsp-set-addresses ln-evpn unknown                                    \
+    -- lsp-set-options ln-evpn network_name=phys
+check ovn-nbctl lr-add lr                                                   \
+    -- lrp-add lr lrp-int 00:00:00:00:01:01 10.0.0.1/24                     \
+    -- lrp-add lr lrp-ext 00:00:00:00:01:02 172.16.0.1/24                   \
+    -- lrp-set-gateway-chassis lrp-ext ch                                   \
+    -- lsp-add ls-tenant ls-tenant-lrp                                      \
+    -- lsp-set-type ls-tenant-lrp router                                    \
+    -- lsp-set-addresses ls-tenant-lrp 00:00:00:00:01:01                    \
+    -- lsp-set-options ls-tenant-lrp router-port=lrp-int                    \
+    -- lsp-add ls-evpn ls-evpn-lrp                                          \
+    -- lsp-set-type ls-evpn-lrp router                                      \
+    -- lsp-set-addresses ls-evpn-lrp 00:00:00:00:01:02                      \
+    -- lsp-set-options ls-evpn-lrp router-port=lrp-ext
+check ovn-nbctl --wait=sb sync
+
+ls_evpn_uuid=$(fetch_column Datapath_Binding _uuid external_ids:name=ls-evpn)
+check_row_count Advertised_MAC_Binding 1 ip=172.16.0.1 datapath=$ls_evpn_uuid
+
+AS_BOX([Adding a distributed floating IP is processed incrementally])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lr-nat-add lr dnat_and_snat 172.16.0.100 10.0.0.10 vm1 00:11:22:33:44:55
+check_row_count Advertised_MAC_Binding 1 ip=172.16.0.100 datapath=$ls_evpn_uuid mac='00\:11\:22\:33\:44\:55'
+check_row_count Advertised_MAC_Binding 2
+dnl The NAT lives on the router while the advertisement is attached to the
+dnl peer provider switch.  The router's tracked NAT change must drive a
+dnl recompute of the advertised MAC bindings, otherwise the floating IP would
+dnl never reach the SB.
+check_engine_compute advertised_mac_binding_sync recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Deleting a distributed floating IP is processed incrementally])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lr-nat-del lr dnat_and_snat 172.16.0.100
+check_row_count Advertised_MAC_Binding 0 ip=172.16.0.100
+check_row_count Advertised_MAC_Binding 1
+check_engine_compute advertised_mac_binding_sync recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
 OVN_CLEANUP_NORTHD
 AT_CLEANUP

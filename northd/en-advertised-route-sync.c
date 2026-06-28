@@ -1105,3 +1105,34 @@ northd_output_advertised_mac_binding_sync_handler(
 {
     return EN_HANDLED_UPDATED;
 }
+
+enum engine_input_handler_result
+advertised_mac_binding_sync_northd_change_handler(struct engine_node *node,
+                                                  void *data OVS_UNUSED)
+{
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    struct northd_tracked_data *trk_data = &northd_data->trk_data;
+
+    /* Without tracked data northd did a full recompute (for example a
+     * Logical_Switch 'other_config' change that toggles the EVPN settings),
+     * so the advertised set must be re-evaluated. */
+    if (!northd_has_tracked_data(trk_data)) {
+        return EN_UNHANDLED;
+    }
+
+    /* A created or deleted Logical_Switch may have EVPN redistribution
+     * enabled and contribute advertised MAC bindings. */
+    if (!hmapx_is_empty(&trk_data->trk_switches.crupdated) ||
+        !hmapx_is_empty(&trk_data->trk_switches.deleted)) {
+        return EN_UNHANDLED;
+    }
+
+    /* The distributed dnat_and_snat NAT entries (floating IPs) of a Logical
+     * Router are advertised on its peer provider Logical Switch, so a change
+     * to a router's NATs must re-evaluate the advertised MAC bindings. */
+    if (!hmapx_is_empty(&trk_data->trk_nat_lrs)) {
+        return EN_UNHANDLED;
+    }
+
+    return EN_HANDLED_UNCHANGED;
+}
