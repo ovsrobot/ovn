@@ -203,7 +203,9 @@ struct route_msg_handle_data {
     struct hmapx *routes_to_advertise;
     struct vector *learned_routes;
     struct vector *stale_routes;
-    const struct hmap *routes;
+    /* Vector of "const struct hmap *", each holding advertise_route_entry
+     * nodes for a datapath sharing this routing table. */
+    const struct vector *route_tables;
 };
 
 static void
@@ -260,11 +262,14 @@ handle_route_msg(const struct route_table_msg *msg,
     const struct advertise_route_entry re =
             advertise_route_from_route_data(rd);
     if (handle_data->routes_to_advertise) {
-        ar = advertise_route_find(re.priority, &re.addr, re.plen,
-                                  &re.nexthop, handle_data->routes);
-        if (ar) {
-            hmapx_find_and_delete(handle_data->routes_to_advertise, ar);
-            return;
+        const struct hmap *routes;
+        VECTOR_FOR_EACH (handle_data->route_tables, routes) {
+            ar = advertise_route_find(re.priority, &re.addr, re.plen,
+                                      &re.nexthop, routes);
+            if (ar) {
+                hmapx_find_and_delete(handle_data->routes_to_advertise, ar);
+                return;
+            }
         }
     }
 
@@ -319,7 +324,7 @@ re_nl_encode_nexthop(struct ofpbuf *request, bool dst_is_ipv4,
 }
 
 int
-re_nl_sync_routes(uint32_t table_id, const struct hmap *routes,
+re_nl_sync_routes(uint32_t table_id, const struct vector *route_tables,
                   struct vector *learned_routes)
 {
     struct hmapx routes_to_advertise = HMAPX_INITIALIZER(&routes_to_advertise);
@@ -327,15 +332,18 @@ re_nl_sync_routes(uint32_t table_id, const struct hmap *routes,
         VECTOR_EMPTY_INITIALIZER(struct advertise_route_entry);
     struct advertise_route_entry *ar;
 
-    HMAP_FOR_EACH (ar, node, routes) {
-        hmapx_add(&routes_to_advertise, ar);
+    const struct hmap *routes;
+    VECTOR_FOR_EACH (route_tables, routes) {
+        HMAP_FOR_EACH (ar, node, routes) {
+            hmapx_add(&routes_to_advertise, ar);
+        }
     }
 
-    /* Remove routes from the system that are not in the routes hmap and
-     * remove entries from routes hmap that match routes already installed
-     * in the system. */
+    /* Remove routes from the system that are not in any of the route tables
+     * and remove entries from routes_to_advertise that match routes already
+     * installed in the system. */
     struct route_msg_handle_data data = {
-        .routes = routes,
+        .route_tables = route_tables,
         .routes_to_advertise = &routes_to_advertise,
         .learned_routes = learned_routes,
         .stale_routes = &stale_routes,
