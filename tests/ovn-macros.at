@@ -1485,6 +1485,16 @@ wake_up_nb() {
   AT_CHECK([kill -CONT $(cat ovn-nb/ovsdb-server.pid)])
 }
 
+wait_and_get_ofport() {
+    local ofport
+    local condition=$1
+    OVS_WAIT_UNTIL([
+        ofport=$(ovs-vsctl --bare --columns ofport find Interface $condition)
+        echo "$condition port=$ofport" >&2
+        test -n "$ofport" && test "$ofport" -ge 0])
+    echo $ofport
+}
+
 trim_zeros() {
     sed 's/\(00\)\{1,\}$//'
 }
