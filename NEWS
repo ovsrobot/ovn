@@ -1,5 +1,13 @@
 Post v26.03.0
 -------------
+   - Logical_Router_Port: Added a new "options:primary_ipv4" key that
+     selects which of the port's IPv4 addresses is treated as the port's
+     "primary" address.  DHCP Relay uses it as the relay agent address
+     (giaddr) in relayed DHCP packets.  When unset, ovn-northd picks the
+     same address it picked before (whichever CIDR in "networks" sorts
+     first as a string), so existing deployments are unaffected;
+     deployments that need a specific address on a multi-IP port can
+     pin it via the new option.
    - Added Transit Switch port support with new ovn-ic-nbctl 'tsp-add',
      'tsp-del' and 'tsp-set-addr' commands.
    - Added ability to set any "ipsec_*" NB_Global option to configure the
