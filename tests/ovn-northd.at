@@ -11413,6 +11413,79 @@ OVN_CLEANUP_NORTHD
 AT_CLEANUP
 ])
 
+AT_SETUP([Tiered ACL default-allow fallback is gated by tier])
+AT_KEYWORDS([acl])
+
+dnl When tiered ACLs are in use, the priority-1 default-allow flow that
+dnl unblocks previously-blocked connections must not fire until the
+dnl tier loop reaches the highest configured tier; otherwise a drop ACL
+dnl at a higher tier would be bypassed for an already-blocked connection.
+
+ovn_start
+
+check ovn-nbctl ls-add ls
+check ovn-nbctl lsp-add ls lsp
+
+m4_define([UNBLOCK_FLOW], [ovn-sbctl lflow-list ls dnl
+  | grep -w $1 | grep 'ip && ct.est && ct_mark.blocked == 1' dnl
+  | ovn_strip_lflows | sed "s/\($1[[^)]]*\)/$1/"])
+
+# Baseline: no ACLs => no stateful flows at all in acl_eval, so no
+# priority-1 default-allow either.
+AT_CHECK([UNBLOCK_FLOW([ls_in_acl_eval])], [0], [])
+AT_CHECK([UNBLOCK_FLOW([ls_out_acl_eval])], [0], [])
+
+# Add a stateful, untiered ACL on each direction. The priority-1
+# default-allow appears with no tier guard.
+check ovn-nbctl --wait=sb acl-add ls from-lport 1000 "tcp" allow-related
+check ovn-nbctl --wait=sb acl-add ls to-lport   1000 "tcp" allow-related
+
+AT_CHECK([UNBLOCK_FLOW([ls_in_acl_eval])], [0], [dnl
+  table=??(ls_in_acl_eval), priority=1    , match=(ip && ct.est && ct_mark.blocked == 1), action=(reg8[[16]] = 1; next;)
+])
+AT_CHECK([UNBLOCK_FLOW([ls_out_acl_eval])], [0], [dnl
+  table=??(ls_out_acl_eval), priority=1    , match=(ip && ct.est && ct_mark.blocked == 1), action=(reg8[[16]] = 1; next;)
+])
+
+# Move both ACLs to tier 1. Each fallback flow should now be guarded
+# by REG_ACL_TIER == 1 so it only fires after the tier loop completes.
+in_uuid=$(ovn-nbctl --bare --columns _uuid find ACL direction=from-lport)
+out_uuid=$(ovn-nbctl --bare --columns _uuid find ACL direction=to-lport)
+check ovn-nbctl --wait=sb set ACL $in_uuid tier=1
+check ovn-nbctl --wait=sb set ACL $out_uuid tier=1
+
+AT_CHECK([UNBLOCK_FLOW([ls_in_acl_eval])], [0], [dnl
+  table=??(ls_in_acl_eval), priority=1    , match=(ip && ct.est && ct_mark.blocked == 1 && reg8[[30..31]] == 1), action=(reg8[[16]] = 1; next;)
+])
+AT_CHECK([UNBLOCK_FLOW([ls_out_acl_eval])], [0], [dnl
+  table=??(ls_out_acl_eval), priority=1    , match=(ip && ct.est && ct_mark.blocked == 1 && reg8[[30..31]] == 1), action=(reg8[[16]] = 1; next;)
+])
+
+# Move the ingress ACL to tier 3 while the egress ACL stays at tier 1.
+# The two stages should pick up their per-stage max independently.
+check ovn-nbctl --wait=sb set ACL $in_uuid tier=3
+
+AT_CHECK([UNBLOCK_FLOW([ls_in_acl_eval])], [0], [dnl
+  table=??(ls_in_acl_eval), priority=1    , match=(ip && ct.est && ct_mark.blocked == 1 && reg8[[30..31]] == 3), action=(reg8[[16]] = 1; next;)
+])
+AT_CHECK([UNBLOCK_FLOW([ls_out_acl_eval])], [0], [dnl
+  table=??(ls_out_acl_eval), priority=1    , match=(ip && ct.est && ct_mark.blocked == 1 && reg8[[30..31]] == 1), action=(reg8[[16]] = 1; next;)
+])
+
+# Drop both ACLs back to tier 0; the tier guard should disappear.
+check ovn-nbctl --wait=sb set ACL $in_uuid tier=0
+check ovn-nbctl --wait=sb set ACL $out_uuid tier=0
+
+AT_CHECK([UNBLOCK_FLOW([ls_in_acl_eval])], [0], [dnl
+  table=??(ls_in_acl_eval), priority=1    , match=(ip && ct.est && ct_mark.blocked == 1), action=(reg8[[16]] = 1; next;)
+])
+AT_CHECK([UNBLOCK_FLOW([ls_out_acl_eval])], [0], [dnl
+  table=??(ls_out_acl_eval), priority=1    , match=(ip && ct.est && ct_mark.blocked == 1), action=(reg8[[16]] = 1; next;)
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([ACL "pass" logical flows])
 AT_KEYWORDS([acl])
