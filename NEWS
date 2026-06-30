@@ -1,5 +1,9 @@
 Post v26.03.0
 -------------
+   - Added the "ic-route-ipv4-next-hop-ipv6" option to Logical_Router (and,
+     as an override, to Logical_Router_Port) to advertise a router's IPv4
+     routes through ovn-ic using the interconnect port's IPv6 address as next
+     hop ("IPv4 over IPv6").
    - Added Transit Switch port support with new ovn-ic-nbctl 'tsp-add',
      'tsp-del' and 'tsp-set-addr' commands.
    - Added ability to set any "ipsec_*" NB_Global option to configure the
