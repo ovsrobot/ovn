@@ -31,9 +31,12 @@ struct route_data;
 struct sbrec_chassis;
 struct sbrec_port_binding;
 struct sbrec_datapath_binding;
+struct sbrec_advertised_route;
 
 struct route_ctx_in {
     const struct sbrec_advertised_route_table *advertised_route_table;
+    const struct sbrec_service_monitor_table *service_monitor_table;
+    const struct sbrec_load_balancer_table *load_balancer_table;
     struct ovsdb_idl_index *sbrec_port_binding_by_name;
     const struct sbrec_chassis *chassis;
     const char *dynamic_routing_port_mapping;
@@ -58,6 +61,22 @@ struct route_ctx_out {
 
     /* Contains struct advertise_datapath_entry */
     struct hmap *announce_routes;
+
+    /* Contains struct advertised_route_status entries recorded by
+     * route_run() for publication to SB external_ids:status by
+     * route_exchange_run(). */
+    struct hmap *advertised_route_status;
+};
+
+/* Per-route advertisement decision recorded by route_run() so that
+ * route_exchange_run() (which holds a writable SB txn) can publish it
+ * to Advertised_Route.external_ids:status.  Only the chassis that
+ * owns the tracked_port records an entry.  Status may be stale until
+ * a new owner updates it after an ownership transition. */
+struct advertised_route_status {
+    struct hmap_node node;
+    const struct sbrec_advertised_route *route;
+    const char *status;
 };
 
 struct advertise_datapath_entry {
@@ -100,6 +119,7 @@ struct advertise_route_entry
 advertise_route_from_route_data(const struct route_data *);
 void route_run(struct route_ctx_in *, struct route_ctx_out *);
 void route_cleanup(struct hmap *announce_routes);
+void advertised_route_status_clear(struct hmap *statuses);
 uint32_t route_get_table_id(const struct sbrec_datapath_binding *);
 struct advertise_route_entry *
 advertise_route_find(unsigned int priority, const struct in6_addr *prefix,

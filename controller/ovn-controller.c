@@ -5264,6 +5264,11 @@ struct ed_type_route {
     /* Contains struct advertise_datapath_entry */
     struct hmap announce_routes;
 
+    /* Contains struct advertised_route_status recorded by route_run()
+     * and published to Advertised_Route.external_ids:status by
+     * route_exchange_run(). */
+    struct hmap advertised_route_status;
+
     struct ovsdb_idl *ovnsb_idl;
 };
 
@@ -5294,6 +5299,10 @@ en_route_run(struct engine_node *node, void *data)
 
     const struct sbrec_advertised_route_table *advertised_route_table =
         EN_OVSDB_GET(engine_get_input("SB_advertised_route", node));
+    const struct sbrec_service_monitor_table *service_monitor_table =
+        EN_OVSDB_GET(engine_get_input("SB_service_monitor", node));
+    const struct sbrec_load_balancer_table *load_balancer_table =
+        EN_OVSDB_GET(engine_get_input("SB_load_balancer", node));
 
     const struct ovsrec_open_vswitch *cfg
         = ovsrec_open_vswitch_table_first(ovs_table);
@@ -5302,6 +5311,8 @@ en_route_run(struct engine_node *node, void *data)
 
     struct route_ctx_in r_ctx_in = {
         .advertised_route_table = advertised_route_table,
+        .service_monitor_table = service_monitor_table,
+        .load_balancer_table = load_balancer_table,
         .sbrec_port_binding_by_name = sbrec_port_binding_by_name,
         .chassis = chassis,
         .dynamic_routing_port_mapping = dynamic_routing_port_mapping,
@@ -5315,9 +5326,11 @@ en_route_run(struct engine_node *node, void *data)
         .filtered_ports = &re_data->filtered_ports,
         .tracked_ports_remote = &re_data->tracked_ports_remote,
         .announce_routes = &re_data->announce_routes,
+        .advertised_route_status = &re_data->advertised_route_status,
     };
 
     route_cleanup(&re_data->announce_routes);
+    advertised_route_status_clear(&re_data->advertised_route_status);
     tracked_datapaths_clear(r_ctx_out.tracked_re_datapaths);
     sset_clear(r_ctx_out.tracked_ports_local);
     sset_clear(r_ctx_out.tracked_ports_remote);
@@ -5339,6 +5352,7 @@ en_route_init(struct engine_node *node OVS_UNUSED,
     sset_init(&data->tracked_ports_remote);
     sset_init(&data->filtered_ports);
     hmap_init(&data->announce_routes);
+    hmap_init(&data->advertised_route_status);
     data->ovnsb_idl = arg->sb_idl;
 
     return data;
@@ -5355,6 +5369,8 @@ en_route_cleanup(void *data)
     sset_destroy(&re_data->filtered_ports);
     route_cleanup(&re_data->announce_routes);
     hmap_destroy(&re_data->announce_routes);
+    advertised_route_status_clear(&re_data->advertised_route_status);
+    hmap_destroy(&re_data->advertised_route_status);
 }
 
 static enum engine_input_handler_result
@@ -5563,6 +5579,11 @@ route_sb_advertised_route_data_handler(struct engine_node *node, void *data)
             return EN_UNHANDLED;
         }
 
+        if (sbrec_advertised_route_is_updated(
+                sbrec_route, SBREC_ADVERTISED_ROUTE_COL_EXTERNAL_IDS)) {
+            return EN_UNHANDLED;
+        }
+
         if (sbrec_route->tracked_port) {
             const char *name = sbrec_route->tracked_port->logical_port;
             if (!(sset_contains(&re_data->tracked_ports_local, name) ||
@@ -5607,6 +5628,23 @@ route_sb_datapath_binding_handler(struct engine_node *node,
 
         if (sbrec_datapath_binding_is_updated(
                 dp, SBREC_DATAPATH_BINDING_COL_EXTERNAL_IDS)) {
+            return EN_UNHANDLED;
+        }
+    }
+
+    return EN_HANDLED_UNCHANGED;
+}
+
+static enum engine_input_handler_result
+route_sb_service_monitor_handler(struct engine_node *node,
+                                 void *data OVS_UNUSED)
+{
+    const struct sbrec_service_monitor_table *sm_table =
+        EN_OVSDB_GET(engine_get_input("SB_service_monitor", node));
+
+    const struct sbrec_service_monitor *sm;
+    SBREC_SERVICE_MONITOR_TABLE_FOR_EACH_TRACKED (sm, sm_table) {
+        if (sm->type && !strcmp(sm->type, "load-balancer")) {
             return EN_UNHANDLED;
         }
     }
@@ -5687,6 +5725,21 @@ en_route_exchange_run(struct engine_node *node, void *data)
     };
 
     route_exchange_run(&r_ctx_in, &r_ctx_out);
+
+    /* Publish per-route advertisement status to
+     * Advertised_Route.external_ids:status (write-on-change).
+     * Only the owner chassis records status entries. */
+    if (r_ctx_in.ovnsb_idl_txn) {
+        struct advertised_route_status *s;
+        HMAP_FOR_EACH (s, node, &route_data->advertised_route_status) {
+            const char *cur = smap_get(&s->route->external_ids, "status");
+            if (!cur || strcmp(cur, s->status)) {
+                sbrec_advertised_route_update_external_ids_setkey(
+                    s->route, "status", s->status);
+            }
+        }
+    }
+
     route_table_notify_update(&rt_notify->watches);
 
     re->sb_changes_pending = r_ctx_out.sb_changes_pending;
@@ -6862,7 +6915,8 @@ evpn_arp_vtep_binding_handler(struct engine_node *node, void *data OVS_UNUSED)
     SB_NODE(acl_id) \
     SB_NODE(advertised_route) \
     SB_NODE(learned_route) \
-    SB_NODE(advertised_mac_binding)
+    SB_NODE(advertised_mac_binding) \
+    SB_NODE(service_monitor)
 
 enum sb_engine_node {
 #define SB_NODE(NAME) SB_##NAME,
@@ -6995,6 +7049,9 @@ inc_proc_ovn_controller_init(
                      route_sb_advertised_route_data_handler);
     engine_add_input(&en_route, &en_sb_datapath_binding,
                      route_sb_datapath_binding_handler);
+    engine_add_input(&en_route, &en_sb_service_monitor,
+                     route_sb_service_monitor_handler);
+    engine_add_input(&en_route, &en_sb_load_balancer, NULL);
 
     engine_add_input(&en_route_exchange, &en_route, NULL);
     engine_add_input(&en_route_exchange, &en_sb_learned_route,
@@ -7578,8 +7635,6 @@ main(int argc, char *argv[])
     ovsdb_idl_omit(ovnsb_idl_loop.idl, &sbrec_ha_chassis_col_external_ids);
     ovsdb_idl_omit(ovnsb_idl_loop.idl,
                    &sbrec_ha_chassis_group_col_external_ids);
-    ovsdb_idl_omit(ovnsb_idl_loop.idl,
-                   &sbrec_advertised_route_col_external_ids);
     ovsdb_idl_omit(ovnsb_idl_loop.idl,
                    &sbrec_learned_route_col_external_ids);
     ovsdb_idl_omit(ovnsb_idl_loop.idl,
