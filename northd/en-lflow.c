@@ -310,12 +310,20 @@ lflow_group_ecmp_route_change_handler(struct engine_node *node,
     /* Now we handle created or updated route nodes. */
     struct hmapx *crupdated_datapath_routes =
         &group_ecmp_route_data->trk_data.crupdated_datapath_routes;
+    struct ds actions = DS_EMPTY_INITIALIZER;
+    struct ds match = DS_EMPTY_INITIALIZER;
     HMAPX_FOR_EACH (hmapx_node, crupdated_datapath_routes) {
         route_node = hmapx_node->data;
         lflow_ref_unlink_lflows(route_node->lflow_ref);
         build_route_data_flows_for_lrouter(
             route_node->od, lflow_data->lflow_table,
             route_node, lflow_input.bfd_ports);
+
+        build_arp_request_flows_for_lrouter(route_node->od,
+                                            lflow_data->lflow_table,
+                                            &match, &actions,
+                                            lflow_input.meter_groups,
+                                            route_node->lflow_ref);
 
         bool handled = lflow_ref_sync_lflows(
             route_node->lflow_ref, lflow_data->lflow_table,
@@ -324,10 +332,14 @@ lflow_group_ecmp_route_change_handler(struct engine_node *node,
             lflow_input.sbrec_logical_flow_table,
             lflow_input.sbrec_logical_dp_group_table);
         if (!handled) {
+            ds_destroy(&match);
+            ds_destroy(&actions);
             return EN_UNHANDLED;
         }
     }
 
+    ds_destroy(&match);
+    ds_destroy(&actions);
     return EN_HANDLED_UPDATED;
 }
 
