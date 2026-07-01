@@ -23,7 +23,11 @@
 #include "en-lr-stateful.h"
 #include "lb.h"
 #include "openvswitch/hmap.h"
+#include "openvswitch/vlog.h"
 #include "ovn-util.h"
+#include "util.h"
+
+VLOG_DEFINE_THIS_MODULE(en_advertised_route_sync);
 
 struct ar_entry {
     struct hmap_node hmap_node;
@@ -106,6 +110,8 @@ ar_entry_find(struct hmap *route_map,
                     tracked_port != route_e->tracked_port->sb) {
                 continue;
             }
+        } else if (route_e->tracked_port) {
+            continue;
         }
 
         return route_e;
@@ -205,6 +211,13 @@ add_redistribute_parsed_route(struct hmap *parsed_routes_out,
     /* Parse the prefix (the VIP/FIP). */
     struct in6_addr prefix;
     if (!ip46_parse(ip_address, &prefix)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "Failed to parse IP address '%s' for %s "
+                     "redistribute forwarding route on datapath %s",
+                     ip_address,
+                     source == ROUTE_SOURCE_LB ? "LB" : "NAT",
+                     advertising_od->nbr ? advertising_od->nbr->name
+                                         : "<unknown>");
         return;
     }
     bool is_v6 = !IN6_IS_ADDR_V4MAPPED(&prefix);
@@ -218,6 +231,13 @@ add_redistribute_parsed_route(struct hmap *parsed_routes_out,
         nexthop_s = tracked_port->lrp_networks.ipv6_addrs[0].addr_s;
     }
     if (!nexthop_s) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "No %s address on tracked port %s for %s "
+                     "redistribute forwarding route (prefix %s)",
+                     is_v6 ? "IPv6" : "IPv4",
+                     tracked_port->key,
+                     source == ROUTE_SOURCE_LB ? "LB" : "NAT",
+                     ip_address);
         return;
     }
 
@@ -258,7 +278,7 @@ add_redistribute_parsed_route(struct hmap *parsed_routes_out,
  * parsed_route on advertising_op->od for each NAT external IP whose
  * nexthop is available from tracked_port (i.e. a peer LRP). This is the
  * connected-neighbour redistribution case where the advertising LR
- * needs to forward to the peer's LR.*/
+ * needs to forward to the peer's LR. */
 static void
 build_nat_route_for_port(const struct ovn_port *advertising_op,
                          const struct lr_nat_record *lr_nat,
@@ -399,6 +419,90 @@ build_nat_connected_routes(
     }
 }
 
+/* For each LB attached to peer_lr_nbr, emit one Advertised_Route per
+ * (VIP IP, backend LSP) pair, plus one forwarding parsed_route per VIP.
+ * Multiple listeners sharing the same VIP IP and backend LSP are
+ * deduplicated by ar_entry_find on the (datapath, logical_port,
+ * ip_prefix, tracked_port) key. When no backend has an ip_port_mappings
+ * entry, one Advertised_Route covers the VIP with fallback_tracked_port
+ * in place of a per-backend LSP. The forwarding route is emitted once
+ * per VIP regardless of backend count: the data-plane forwarding
+ * decision is independent of which backend ends up serving the flow. */
+static void
+build_lb_lr_routes(const struct ovn_port *advertising_op,
+                   const struct ovn_port *fallback_tracked_port,
+                   const struct nbrec_logical_router *peer_lr_nbr,
+                   const struct hmap *lb_datapaths_map,
+                   const struct hmap *ls_ports,
+                   struct hmap *routes,
+                   struct hmap *parsed_routes_out)
+{
+    const struct ovn_datapath *advertising_od = advertising_op->od;
+
+    if (!peer_lr_nbr) {
+        return;
+    }
+
+    for (size_t i = 0; i < peer_lr_nbr->n_load_balancer; i++) {
+        const struct nbrec_load_balancer *nbrec_lb =
+            peer_lr_nbr->load_balancer[i];
+        if (!smap_get_bool(&nbrec_lb->options,
+                           "dynamic-routing-advertise", true)) {
+            continue;
+        }
+        const struct uuid *lb_uuid = &nbrec_lb->header_.uuid;
+        const struct ovn_lb_datapaths *lb_dps =
+            ovn_lb_datapaths_find(lb_datapaths_map, lb_uuid);
+        if (!lb_dps) {
+            continue;
+        }
+        const struct ovn_northd_lb *lb = lb_dps->lb;
+        for (size_t v = 0; v < lb->n_vips; v++) {
+            const struct ovn_lb_vip *vip = &lb->vips[v];
+            const struct ovn_northd_lb_vip *vip_nb = &lb->vips_nb[v];
+
+            if (parsed_routes_out) {
+                add_redistribute_parsed_route(
+                    parsed_routes_out, advertising_od, advertising_op,
+                    fallback_tracked_port, vip->vip_str, ROUTE_SOURCE_LB,
+                    &nbrec_lb->header_);
+            }
+
+            bool emitted_any = false;
+            for (size_t b = 0; b < vip_nb->n_backends; b++) {
+                const char *lsp_name = vip_nb->backends_nb[b].logical_port;
+                if (!lsp_name) {
+                    continue;
+                }
+                const struct ovn_port *backend_op =
+                    ovn_port_find(ls_ports, lsp_name);
+                if (!backend_op) {
+                    continue;
+                }
+                /* The SB unique index on (datapath, logical_port,
+                 * ip_prefix, tracked_port) means only one route per
+                 * (VIP IP, backend LSP) pair can exist. Skip if an
+                 * entry was already added by a previous listener
+                 * sharing the same VIP IP and backend. */
+                if (ar_entry_find(routes, advertising_od->sdp->sb_dp,
+                                  advertising_op->sb, vip->vip_str,
+                                  backend_op->sb)) {
+                    emitted_any = true;
+                    continue;
+                }
+                ar_entry_add(routes, advertising_od, advertising_op,
+                             vip->vip_str, backend_op, ROUTE_SOURCE_LB);
+                emitted_any = true;
+            }
+            if (!emitted_any) {
+                ar_entry_add(routes, advertising_od, advertising_op,
+                             vip->vip_str, fallback_tracked_port,
+                             ROUTE_SOURCE_LB);
+            }
+        }
+    }
+}
+
 /* Own-LR entry point used by the own-LR (gateway-router/DGP) path,
  * which doesn't currently route through a peer LR's LBs. Emits one
  * Advertised_Route per IP in lb_ips with tracked_port as-is.
@@ -445,7 +549,8 @@ build_lb_route_for_port(const struct ovn_port *advertising_op,
  * LB VIPs too.*/
 static void
 build_lb_connected_routes(const struct ovn_datapath *od,
-                          const struct lr_stateful_table *lr_stateful_table,
+                          const struct hmap *lb_datapaths_map,
+                          const struct hmap *ls_ports,
                           struct dynamic_routes_data *data)
 {
     const struct ovn_port *op;
@@ -463,13 +568,11 @@ build_lb_connected_routes(const struct ovn_datapath *od,
         /* Track the peer datapath for any changes. */
         dynamic_routes_track_od(data, peer_od);
 
-        const struct lr_stateful_record *lr_stateful_rec;
         /* This is directly connected LR peer. */
         if (peer_od->nbr) {
-            lr_stateful_rec = lr_stateful_table_find_by_uuid(
-                lr_stateful_table, peer_od->key);
-            build_lb_route_for_port(op, op->peer, lr_stateful_rec->lb_ips,
-                                    &data->routes, &data->parsed_routes);
+            build_lb_lr_routes(op, op->peer, peer_od->nbr,
+                               lb_datapaths_map, ls_ports,
+                               &data->routes, &data->parsed_routes);
             continue;
         }
 
@@ -482,11 +585,9 @@ build_lb_connected_routes(const struct ovn_datapath *od,
                  * function.*/
                 continue;
             }
-            lr_stateful_rec = lr_stateful_table_find_by_uuid(
-                lr_stateful_table, rp->peer->od->key);
-
-            build_lb_route_for_port(op, rp->peer, lr_stateful_rec->lb_ips,
-                                    &data->routes, &data->parsed_routes);
+            build_lb_lr_routes(op, rp->peer, rp->peer->od->nbr,
+                               lb_datapaths_map, ls_ports,
+                               &data->routes, &data->parsed_routes);
             /* Track the LR datapath on the other side of LS
              * for any changes. */
             dynamic_routes_track_od(data, rp->peer->od);
@@ -780,7 +881,8 @@ en_dynamic_routes_run(struct engine_node *node, void *data)
 
         build_lb_routes(od, lr_stateful_rec->lb_ips,
                         &dynamic_routes_data->routes);
-        build_lb_connected_routes(od, &lr_stateful_data->table,
+        build_lb_connected_routes(od, &northd_data->lb_datapaths_map,
+                                  &northd_data->ls_ports,
                                   dynamic_routes_data);
     }
 
@@ -989,9 +1091,6 @@ advertised_route_table_sync(
         if (ar_entry_find(&sync_routes, route_e->od->sdp->sb_dp,
                           route_e->op->sb,
                           route_e->ip_prefix, tracked_pb)) {
-            /* We could already have advertised route entry for LRP IP that
-             * corresponds to "snat" when "connected-as-host" is combined
-             * with "nat". Skip it. */
             continue;
         }
         ar_entry_add(&sync_routes, route_e->od, route_e->op,
@@ -1009,10 +1108,19 @@ advertised_route_table_sync(
             sbrec_advertised_route_delete(sb_route);
             continue;
         }
-
-        if (route_e->tracked_port && !sb_route->tracked_port) {
-            sbrec_advertised_route_set_tracked_port(
-                sb_route, route_e->tracked_port->sb);
+        /* Reconcile external_ids:source so the controller can reliably
+         * identify LB-derived rows.  This matters after upgrades (rows
+         * created before this marker existed) and when a non-LB route
+         * reuses a key previously held by an LB-derived row. */
+        const char *cur_source = smap_get(&sb_route->external_ids, "source");
+        if (route_e->source == ROUTE_SOURCE_LB) {
+            if (!cur_source || strcmp(cur_source, "lb")) {
+                sbrec_advertised_route_update_external_ids_setkey(
+                    sb_route, "source", "lb");
+            }
+        } else if (cur_source) {
+            sbrec_advertised_route_update_external_ids_delkey(
+                sb_route, "source");
         }
         hmap_remove(&sync_routes, &route_e->hmap_node);
         ar_entry_free(route_e);
@@ -1027,6 +1135,12 @@ advertised_route_table_sync(
         if (route_e->tracked_port && route_e->tracked_port->sb) {
             sbrec_advertised_route_set_tracked_port(sr,
                                                     route_e->tracked_port->sb);
+        }
+        if (route_e->source == ROUTE_SOURCE_LB) {
+            struct smap new_ids = SMAP_INITIALIZER(&new_ids);
+            smap_add(&new_ids, "source", "lb");
+            sbrec_advertised_route_set_external_ids(sr, &new_ids);
+            smap_destroy(&new_ids);
         }
         ar_entry_free(route_e);
     }
