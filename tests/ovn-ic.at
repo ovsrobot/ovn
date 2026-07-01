@@ -748,6 +748,9 @@ for i in 1 2; do
        az$i/ic/ovn-ic.log
 done
 
+# Make sure last az2 changes got handled by ic in az1
+check ovn-ic-nbctl --wait=sb sync
+
 for i in 1 2; do
     az=az$i
     ovn_as $az
@@ -4260,6 +4263,8 @@ check ovn-nbctl set load_balancer az2_lb1 ip_port_mappings:3.3.3.1=lport3_az2:3.
 check ovn-nbctl --wait=sb set load_balancer az2_lb1 ip_port_mappings:1.1.1.1=lport1_az1:1.1.1.9:az1
 
 check_row_count sb:Service_Monitor 2
+# Sync IC DB
+check ovn-ic-nbctl --wait=sb sync
 check_row_count ic-sb:Service_Monitor 3
 
 ovn_as az1
@@ -4297,6 +4302,7 @@ check ovn-nbctl lsp-add az3_ls1 lport6_az3
 check ovn-nbctl --wait=sb lsp-add az3_ls1 lport7_az3
 
 # Check there is one Service Monitor learned from az1.
+check ovn-ic-nbctl --wait=sb sync
 check_row_count sb:Service_Monitor 1
 
 check_column "5.5.5.1" sb:Service_Monitor ip logical_port=lport5_az3
@@ -4585,7 +4591,8 @@ AT_CHECK([ovn-ic-sbctl find Route nexthop="169.254.100.2" | grep external_ids], 
 external_ids        : {}
 ])
 
-AT_CHECK([ovn-nbctl lr-route-list lr1], [0], [dnl
+# We cannot run "ovn-ic-nbctl --wait=sb sync" due to fake az.
+OVS_WAIT_FOR_OUTPUT([ovn-nbctl lr-route-list lr1], [0], [dnl
 IPv4 Routes
 Route Table <main>:
             172.31.0.0/24             169.254.100.2 dst-ip (learned)
@@ -5483,6 +5490,10 @@ check ovn_as az2 ovn-nbctl lrp-add rt1 rtb-2 "00:01:60:15:b8:20" "169.254.100.34
 check ovn_as az2 ovn-nbctl --route-table=table1 --override-connected lr-route-add rt1 "172.31.0.0/24" "172.31.2.4"
 check ovn_as az2 ovn-nbctl --route-table=table1 --override-connected lr-route-add rt1 "172.31.1.0/24" "172.31.3.4"
 
+# Purposely use twice ovn-ic-nbctl --wait=sb sync.
+# First one guarantees ovn-ic-sb being updated; second one guarantees
+# updates to all azs.
+check ovn-ic-nbctl --wait=sb sync
 check ovn-ic-nbctl --wait=sb sync
 
 AT_CHECK([ovn_as az1 ovn-nbctl lr-route-list rt1], [0], [dnl
