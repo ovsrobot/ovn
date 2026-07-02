@@ -5465,8 +5465,9 @@ tcp.flags = RST;
       See <em>External IDs</em> at the beginning of this document.
 
       <p>
-        <code>ovn-northd</code> sets the following key on routes
-        derived from Load_Balancer VIPs:
+        The following keys are used by <code>ovn-northd</code> and
+        <code>ovn-controller</code> for Load_Balancer route gating
+        and observability:
       </p>
 
       <dl>
@@ -5476,6 +5477,26 @@ tcp.flags = RST;
           derived from Load_Balancer VIPs.  Absent on all other routes.
           <code>ovn-controller</code> uses this key to identify routes
           eligible for Service_Monitor-based gating.
+        </dd>
+
+        <dt><code>enabled</code></dt>
+        <dd>
+          Administrative enable flag.  When explicitly set to
+          <code>false</code>, <code>ovn-controller</code> skips
+          installing the route regardless of Service_Monitor health.
+          The default (key absent) is enabled.  Out-of-band writers
+          (e.g. an L7 health agent) may set this key to disable a route
+          ahead of the normal monitor-based withdrawal.
+        </dd>
+
+        <dt><code>status</code></dt>
+        <dd>
+          Advertisement decision recorded by the chassis that owns the
+          route's <code>tracked_port</code>.  Possible values:
+          <code>advertised</code>, <code>withdrawn-admin</code>,
+          <code>withdrawn-monitor</code>.  The key is written only by
+          the owner chassis.  It may be absent or stale when no chassis
+          currently owns the <code>tracked_port</code>.
         </dd>
       </dl>
     </column>
