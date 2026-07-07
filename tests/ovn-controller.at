@@ -3782,6 +3782,9 @@ check ovn-sbctl chassis-add hv2 geneve 192.168.0.12 \
 check ovn-sbctl chassis-add hv3 vxlan 192.168.0.14 \
     -- set chassis hv3 other_config:is-remote=true
 
+# Wait for tunnel to hv3 to be created.
+OVN_WAIT_REMOTE_OUTPUT_FLOWS(["hv1"],["hv3"])
+
 check ovn-nbctl --wait=hv sync
 
 chassis_cookie() {
