@@ -1,5 +1,7 @@
 Post v26.03.0
 -------------
+   - Fixed support for TTL expired. Use router port IP and MAC instead of dest
+     IP and MAC for ICMP Time exceeded response.
    - Load balancer health checks now "fail closed" for newly added backends:
      ovn-northd initializes a newly created Service_Monitor row to the
      "offline" state, so traffic is not forwarded to a backend until its first
