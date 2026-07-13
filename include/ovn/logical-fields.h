@@ -140,6 +140,7 @@ enum mff_log_flags_bits {
     MLF_PKT_SAMPLED_BIT = 23,
     MLF_RECIRC_BIT = 24,
     MLF_EVPN_LOOKUP_BIT = 25,
+    MLF_NF_LOOKUP_HIT_BIT = 26,
     MLF_NETWORK_ID_START_BIT = 28,
     MLF_NETWORK_ID_END_BIT = 31,
 };
@@ -218,6 +219,12 @@ enum mff_log_flags {
 
     /* Indicate that the lookup in the EVPN ARP table was successful. */
     MLF_EVPN_LOOKUP = (1 << MLF_EVPN_LOOKUP_BIT),
+
+    /* Indicate that the network function post-redirect lookup matched, i.e.
+     * the packet is being sent back out of the port it originally entered the
+     * logical switch on.  Used to drop such "loop-back" copies and avoid
+     * MAC flaps / L2 loops after network function redirection. */
+    MLF_NF_LOOKUP_HIT = (1 << MLF_NF_LOOKUP_HIT_BIT),
 
     /* Assign network ID to packet to choose correct network for snat when
      * lb_force_snat_ip=router_ip. */
