@@ -159,13 +159,23 @@ struct flow_based_tunnel {
 };
 
 
-void local_nonvif_data_run(const struct ovsrec_bridge *br_int,
-                           const struct sbrec_chassis *chassis,
-                           struct simap *patch_ofports,
-                           struct hmap *chassis_tunnels,
-                           struct flow_based_tunnel *flow_tunnels);
+/* Patch (localnet / L2 gateway) OVS ports.  These are consumed only by the
+ * physical flow output, so they are tracked in their own engine node to avoid
+ * invalidating the logical flow output on every patch port change. */
+void local_patch_ports_run(const struct ovsrec_bridge *br_int,
+                           struct simap *patch_ofports);
 
-bool local_nonvif_data_handle_ovs_iface_changes(
+bool local_patch_ports_handle_ovs_iface_changes(
+    const struct ovsrec_interface_table *);
+
+/* Tunnel OVS ports and the related chassis information.  These are consumed by
+ * both the physical and the logical flow output. */
+void local_tunnels_run(const struct ovsrec_bridge *br_int,
+                       const struct sbrec_chassis *chassis,
+                       struct hmap *chassis_tunnels,
+                       struct flow_based_tunnel *flow_tunnels);
+
+bool local_tunnels_handle_ovs_iface_changes(
     const struct ovsrec_interface_table *);
 
 struct chassis_tunnel *chassis_tunnel_find(const struct hmap *chassis_tunnels,

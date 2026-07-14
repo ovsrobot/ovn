@@ -452,14 +452,57 @@ tracked_datapaths_destroy(struct hmap *tracked_datapaths)
     hmap_destroy(tracked_datapaths);
 }
 
-/* Iterates the br_int ports and build the simap of patch to ofports
- * and chassis tunnels. */
+/* Iterates the br_int ports and builds the simap of patch port to ofport. */
 void
-local_nonvif_data_run(const struct ovsrec_bridge *br_int,
-                      const struct sbrec_chassis *chassis_rec,
-                      struct simap *patch_ofports,
-                      struct hmap *chassis_tunnels,
-                      struct flow_based_tunnel *flow_tunnels)
+local_patch_ports_run(const struct ovsrec_bridge *br_int,
+                      struct simap *patch_ofports)
+{
+    for (int i = 0; i < br_int->n_ports; i++) {
+        const struct ovsrec_port *port_rec = br_int->ports[i];
+        if (!strcmp(port_rec->name, br_int->name)) {
+            continue;
+        }
+
+        const char *localnet = smap_get(&port_rec->external_ids,
+                                        "ovn-localnet-port");
+        const char *l2gateway = smap_get(&port_rec->external_ids,
+                                        "ovn-l2gateway-port");
+        if (!localnet && !l2gateway) {
+            continue;
+        }
+
+        for (int j = 0; j < port_rec->n_interfaces; j++) {
+            const struct ovsrec_interface *iface_rec = port_rec->interfaces[j];
+
+            /* Get OpenFlow port number. */
+            if (!iface_rec->n_ofport) {
+                continue;
+            }
+            int64_t ofport = iface_rec->ofport[0];
+            if (ofport < 1 || ofport > ofp_to_u16(OFPP_MAX)) {
+                continue;
+            }
+
+            if (strcmp(iface_rec->type, "patch")) {
+                continue;
+            }
+            if (localnet) {
+                simap_put(patch_ofports, localnet, ofport);
+                break;
+            } else if (l2gateway) {
+                /* L2 gateway patch ports can be handled just like VIFs. */
+                simap_put(patch_ofports, l2gateway, ofport);
+                break;
+            }
+        }
+    }
+}
+
+void
+local_tunnels_run(const struct ovsrec_bridge *br_int,
+                  const struct sbrec_chassis *chassis_rec,
+                  struct hmap *chassis_tunnels,
+                  struct flow_based_tunnel *flow_tunnels)
 {
     for (int i = 0; i < br_int->n_ports; i++) {
         const struct ovsrec_port *port_rec = br_int->ports[i];
@@ -477,10 +520,9 @@ local_nonvif_data_run(const struct ovsrec_bridge *br_int,
 
         track_flow_based_tunnel(port_rec, chassis_rec, flow_tunnels);
 
-        const char *localnet = smap_get(&port_rec->external_ids,
-                                        "ovn-localnet-port");
-        const char *l2gateway = smap_get(&port_rec->external_ids,
-                                        "ovn-l2gateway-port");
+        if (!tunnel_id) {
+            continue;
+        }
 
         for (int j = 0; j < port_rec->n_interfaces; j++) {
             const struct ovsrec_interface *iface_rec = port_rec->interfaces[j];
@@ -494,67 +536,63 @@ local_nonvif_data_run(const struct ovsrec_bridge *br_int,
                 continue;
             }
 
-            bool is_patch = !strcmp(iface_rec->type, "patch");
-            if (is_patch && localnet) {
-                simap_put(patch_ofports, localnet, ofport);
-                break;
-            } else if (is_patch && l2gateway) {
-                /* L2 gateway patch ports can be handled just like VIFs. */
-                simap_put(patch_ofports, l2gateway, ofport);
-                break;
-            } else if (tunnel_id) {
-                enum chassis_tunnel_type tunnel_type;
-                if (!strcmp(iface_rec->type, "geneve")) {
-                    tunnel_type = GENEVE;
-                } else if (!strcmp(iface_rec->type, "vxlan")) {
-                    tunnel_type = VXLAN;
-                } else {
-                    continue;
-                }
-
-                /* We split the tunnel_id to get the chassis-id
-                 * and hash the tunnel list on the chassis-id. The
-                 * reason to use the chassis-id alone is because
-                 * there might be cases (multicast, gateway chassis)
-                 * where we need to tunnel to the chassis, but won't
-                 * have the encap-ip specifically.
-                 */
-                char *hash_id = NULL;
-                char *ip = NULL;
-
-                if (!encaps_tunnel_id_parse(tunnel_id, &hash_id, &ip, NULL)) {
-                    continue;
-                }
-                struct chassis_tunnel *tun = xmalloc(sizeof *tun);
-                hmap_insert(chassis_tunnels, &tun->hmap_node,
-                            hash_string(hash_id, 0));
-                tun->chassis_id = xstrdup(tunnel_id);
-                tun->ofport = u16_to_ofp(ofport);
-                tun->type = tunnel_type;
-                tun->is_ipv6 = ip ? addr_is_ipv6(ip) : false;
-                tun->is_ramp_tunnel = is_ramp_tunnel(&iface_rec->other_config);
-
-                free(hash_id);
-                free(ip);
-                break;
+            enum chassis_tunnel_type tunnel_type;
+            if (!strcmp(iface_rec->type, "geneve")) {
+                tunnel_type = GENEVE;
+            } else if (!strcmp(iface_rec->type, "vxlan")) {
+                tunnel_type = VXLAN;
+            } else {
+                continue;
             }
+
+            /* We split the tunnel_id to get the chassis-id
+             * and hash the tunnel list on the chassis-id. The
+             * reason to use the chassis-id alone is because
+             * there might be cases (multicast, gateway chassis)
+             * where we need to tunnel to the chassis, but won't
+             * have the encap-ip specifically.
+             */
+            char *hash_id = NULL;
+            char *ip = NULL;
+
+            if (!encaps_tunnel_id_parse(tunnel_id, &hash_id, &ip, NULL)) {
+                continue;
+            }
+            struct chassis_tunnel *tun = xmalloc(sizeof *tun);
+            hmap_insert(chassis_tunnels, &tun->hmap_node,
+                        hash_string(hash_id, 0));
+            tun->chassis_id = xstrdup(tunnel_id);
+            tun->ofport = u16_to_ofp(ofport);
+            tun->type = tunnel_type;
+            tun->is_ipv6 = ip ? addr_is_ipv6(ip) : false;
+            tun->is_ramp_tunnel = is_ramp_tunnel(&iface_rec->other_config);
+
+            free(hash_id);
+            free(ip);
+            break;
         }
     }
 }
 
-bool
-local_nonvif_data_handle_ovs_iface_changes(
-    const struct ovsrec_interface_table *iface_table)
+/* Returns false (i.e. a recompute is required) if any tracked OVS interface of
+ * one of the given 'types' had its ofport added, removed or changed. */
+static bool
+nonvif_iface_ofport_unchanged(const struct ovsrec_interface_table *iface_table,
+                              const char *const *types, size_t n_types)
 {
     const struct ovsrec_interface *iface_rec;
     OVSREC_INTERFACE_TABLE_FOR_EACH_TRACKED (iface_rec, iface_table) {
-        /* Check only patch ports or tunnels. */
-        if (strcmp(iface_rec->type, "geneve") &&
-            strcmp(iface_rec->type, "patch") &&
-            strcmp(iface_rec->type, "vxlan")) {
+        bool type_match = false;
+        for (size_t i = 0; i < n_types; i++) {
+            if (!strcmp(iface_rec->type, types[i])) {
+                type_match = true;
+                break;
+            }
+        }
+        if (!type_match) {
             continue;
         }
-        /* We are interested only in ofport changes for this handler. */
+        /* We are interested only in ofport changes for these handlers. */
         if (ovsrec_interface_is_new(iface_rec) ||
             ovsrec_interface_is_deleted(iface_rec) ||
             ovsrec_interface_is_updated(iface_rec,
@@ -564,6 +602,24 @@ local_nonvif_data_handle_ovs_iface_changes(
     }
 
     return true;
+}
+
+bool
+local_patch_ports_handle_ovs_iface_changes(
+    const struct ovsrec_interface_table *iface_table)
+{
+    static const char *const types[] = { "patch" };
+    return nonvif_iface_ofport_unchanged(iface_table, types,
+                                         ARRAY_SIZE(types));
+}
+
+bool
+local_tunnels_handle_ovs_iface_changes(
+    const struct ovsrec_interface_table *iface_table)
+{
+    static const char *const types[] = { "geneve", "vxlan" };
+    return nonvif_iface_ofport_unchanged(iface_table, types,
+                                         ARRAY_SIZE(types));
 }
 
 bool
