@@ -24759,6 +24759,87 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([distributed NAT gateway port scoping in ls_in_l2_lkup])
+AT_KEYWORDS([nat-gateway-port-l2-lkup])
+AT_KEYWORDS([gateway_port])
+ovn_start
+
+net_add n1
+
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+ovn_attach n1 br-phys 192.168.0.1
+check ovs-vsctl -- add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=sw1-vm \
+    ofport-request=1
+
+sim_add hv2
+as hv2
+check ovs-vsctl add-br br-phys
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+ovn_attach n1 br-phys 192.168.0.2
+check ovs-vsctl -- add-port br-int hv2-vif1 -- \
+    set interface hv2-vif1 external-ids:iface-id=sw2-vm \
+    ofport-request=1
+
+check ovn-nbctl ls-add sw1
+check ovn-nbctl lsp-add sw1 sw1-vm
+check ovn-nbctl lsp-set-addresses sw1-vm "00:00:00:00:01:10 10.0.1.10"
+
+check ovn-nbctl ls-add sw2
+check ovn-nbctl lsp-add sw2 sw2-vm
+check ovn-nbctl lsp-set-addresses sw2-vm "00:00:00:00:02:20 10.0.2.20"
+
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-sw1 00:00:00:aa:01:01 10.0.1.1/24
+check ovn-nbctl lsp-add-router-port sw1 sw1-lr0 lr0-sw1
+check ovn-nbctl lrp-add lr0 lr0-sw2 00:00:00:aa:02:02 10.0.2.1/24
+check ovn-nbctl lsp-add-router-port sw2 sw2-lr0 lr0-sw2
+
+check ovn-nbctl lrp-set-gateway-chassis lr0-sw1 hv1 10
+check ovn-nbctl lrp-set-gateway-chassis lr0-sw2 hv2 10
+
+check ovn-nbctl --gateway-port=lr0-sw1 \
+    lr-nat-add lr0 dnat_and_snat 192.0.2.11 10.0.1.10 sw1-vm 00:00:00:01:00:01
+check ovn-nbctl --gateway-port=lr0-sw2 \
+    lr-nat-add lr0 dnat_and_snat 192.0.2.22 10.0.2.20 sw2-vm 00:00:00:02:00:02
+
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
+ovn-sbctl dump-flows sw1 > sw1flows
+ovn-sbctl dump-flows sw2 > sw2flows
+AT_CAPTURE_FILE([sw1flows])
+AT_CAPTURE_FILE([sw2flows])
+
+# NAT MAC lookup flows should be present only on the logical switch whose
+# router port corresponds to the NAT's gateway_port.
+AT_CHECK([grep ls_in_l2_lkup sw1flows | \
+          grep 'priority=50' | \
+          grep -F 'eth.dst == 00:00:00:01:00:01 && is_chassis_resident("sw1-vm")' | \
+          grep -F 'outport = "sw1-lr0"; output;' | wc -l], [0], [1
+])
+AT_CHECK([grep ls_in_l2_lkup sw1flows | \
+          grep 'priority=50' | \
+          grep -F '00:00:00:02:00:02' | wc -l], [0], [0
+])
+AT_CHECK([grep ls_in_l2_lkup sw2flows | \
+          grep 'priority=50' | \
+          grep -F 'eth.dst == 00:00:00:02:00:02 && is_chassis_resident("sw2-vm")' | \
+          grep -F 'outport = "sw2-lr0"; output;' | wc -l], [0], [1
+])
+AT_CHECK([grep ls_in_l2_lkup sw2flows | \
+          grep 'priority=50' | \
+          grep -F '00:00:00:01:00:01' | wc -l], [0], [0
+])
+
+OVN_CLEANUP([hv1], [hv2])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([IGMP relay - distributed gateway port])
 AT_KEYWORDS([IP-multicast snoop relay])
 

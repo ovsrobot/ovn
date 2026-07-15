@@ -11570,7 +11570,9 @@ build_lswitch_ip_unicast_lookup_for_nats(
         const struct ovn_nat *nat =
             &lr_stateful_rec->lrnat_rec->nat_entries[i];
 
-        if (nat->type == DNAT_AND_SNAT && nat->nb->logical_port
+        if (nat->type == DNAT_AND_SNAT
+            && is_nat_gateway_port(nat->nb, op->peer)
+            && nat->nb->logical_port
             && nat->nb->external_mac
             && eth_addr_from_string(nat->nb->external_mac, &mac)) {
 
