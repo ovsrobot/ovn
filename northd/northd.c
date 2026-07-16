@@ -4262,13 +4262,35 @@ sync_pbs_for_northd_changed_ovn_ports(
     const struct lr_stateful_table *lr_stateful_table)
 {
     struct hmapx_node *hmapx_node;
+    struct ovn_port *op;
 
     HMAPX_FOR_EACH (hmapx_node, &trk_ovn_ports->created) {
-        sync_pb_for_lsp(hmapx_node->data, lr_stateful_table);
+        op = hmapx_node->data;
+        sync_pb_for_lsp(op, lr_stateful_table);
+        /* A newly created router port must set options:peer on its peer LRP's
+         * port binding. */
+        if (lsp_is_router(op->nbsp) && op->peer && op->peer->nbrp) {
+            sync_pb_for_lrp(op->peer, lr_stateful_table);
+        }
     }
 
     HMAPX_FOR_EACH (hmapx_node, &trk_ovn_ports->updated) {
-        sync_pb_for_lsp(hmapx_node->data, lr_stateful_table);
+        op = hmapx_node->data;
+        sync_pb_for_lsp(op, lr_stateful_table);
+        if (lsp_is_router(op->nbsp) && op->peer && op->peer->nbrp) {
+            sync_pb_for_lrp(op->peer, lr_stateful_table);
+        }
+    }
+
+    /* A deleted router port must clear options:peer on its (still existing)
+     * peer LRP's port binding.  ls_router_port_unwire_peer() already reset
+     * op->peer->peer to NULL, so sync_pb_for_lrp() will omit the peer
+     * option. */
+    HMAPX_FOR_EACH (hmapx_node, &trk_ovn_ports->deleted) {
+        op = hmapx_node->data;
+        if (lsp_is_router(op->nbsp) && op->peer && op->peer->nbrp) {
+            sync_pb_for_lrp(op->peer, lr_stateful_table);
+        }
     }
 }
 
@@ -4620,8 +4642,8 @@ destroy_northd_tracked_data(struct northd_data *nd)
 static bool
 lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *nbsp)
 {
-    /* Support only normal VIF and remote ports for now. */
-    if (nbsp->type[0] && !lsp_is_remote(nbsp)) {
+    /* Support only normal VIF, remote and router ports for now. */
+    if (nbsp->type[0] && !lsp_is_remote(nbsp) && !lsp_is_router(nbsp)) {
         return false;
     }
 
@@ -4664,6 +4686,176 @@ lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *nbsp)
     }
 
     return true;
+}
+
+/* A logical switch port of type "router" is not self-contained: in a full
+ * recompute join_logical_ports() wires a peer relationship to the logical
+ * router port (LRP) and populates aggregate datapath state (see
+ * ls_router_port_wire_peer()).  Several flows that toggle with the presence of
+ * such a port are owned by lflow_refs other than the port's own (the peer
+ * LRP's ref, the ls_stateful ref, the switch datapath ref, ...), which the
+ * incremental LSP path does not keep in sync.  Return true when any such
+ * dependency is present so the caller falls back to a full recompute.
+ *
+ * 'is_delete' is true when 'nbsp' is being removed (the port is still counted
+ * in od->router_ports at this point). */
+static bool
+router_lsp_needs_recompute(struct ovn_datapath *od,
+                           const struct nbrec_logical_switch_port *nbsp,
+                           const struct hmap *lr_ports, bool is_delete)
+{
+    /* arp_proxy adds proxy-arp admission flows owned by the peer LRP's
+     * lflow_ref and sets od->has_arp_proxy_port. */
+    if (smap_get(&nbsp->options, "arp_proxy")) {
+        return true;
+    }
+
+    /* Handle a single router port per switch for now.  With more than one
+     * router port the router ports generate inter-router-port
+     * ARP-resolve/routable flows for each other (owned by sibling refs) that
+     * this path does not regenerate. */
+    if (is_delete ? vector_len(&od->router_ports) > 1
+                  : !vector_is_empty(&od->router_ports)) {
+        return true;
+    }
+
+    /* Switch-level stateful/aggregate dependencies that live outside the
+     * port's own lflow_ref: ls_stateful skip-conntrack flows over
+     * od->router_ports, LB install set (od->ls_peers), and vtep hairpin flows
+     * owned by od->datapath_lflows. */
+    if (od->nbs->n_acls || od->nbs->n_load_balancer ||
+        od->nbs->n_load_balancer_group || od->has_vtep_lports) {
+        return true;
+    }
+
+    const char *peer_name = smap_get(&nbsp->options, "router-port");
+    if (!peer_name) {
+        /* No peer to wire; the port is inert. */
+        return false;
+    }
+
+    struct ovn_port *peer = ovn_port_find(lr_ports, peer_name);
+    if (!peer || !peer->nbrp) {
+        /* Peer LRP not present yet.  This matches join_logical_ports(), which
+         * leaves op->peer NULL and does not add the port to od->router_ports;
+         * the port is inert and can be processed incrementally. */
+        return false;
+    }
+
+    /* Bad LRP-to-LRP peering or a disabled LRP; let recompute deal with it. */
+    if (peer->nbrp->peer || !lrport_is_enabled(peer->nbrp)) {
+        return true;
+    }
+
+    /* Distributed gateway / gateway-router complexity: l3gateway and
+     * chassisredirect SB port types, GARP nat_addresses, cr_port. */
+    if (lrp_is_l3dgw(peer) || peer->cr_port ||
+        !vector_is_empty(&peer->od->l3dgw_ports) ||
+        peer->od->is_gw_router ||
+        smap_get(&peer->od->nbr->options, "chassis")) {
+        return true;
+    }
+
+    /* NAT, static routes, LBs and dynamic routing on the peer router pull in
+     * stateful/routable/advertised-route dependencies not tracked here. */
+    const struct nbrec_logical_router *nbr = peer->od->nbr;
+    if (nbr->n_nat || nbr->n_static_routes || nbr->n_load_balancer ||
+        nbr->n_load_balancer_group) {
+        return true;
+    }
+    if (peer->od->dynamic_routing ||
+        peer->od->dynamic_routing_redistribute != DRRM_NONE) {
+        return true;
+    }
+
+    /* IPv6 RA flows are owned by the peer LRP's lflow_ref and toggle with the
+     * peer's presence. */
+    if (!smap_is_empty(&peer->nbrp->ipv6_ra_configs)) {
+        return true;
+    }
+
+    /* mcast relay would flip od->mcast_info.sw.flood_relay, changing flows
+     * owned by od->datapath_lflows. */
+    if (peer->od->mcast_info.rtr.relay) {
+        return true;
+    }
+
+    return false;
+}
+
+/* Wire the peer relationship of a logical switch port 'op' of type "router",
+ * mirroring the router branch of join_logical_ports().  'op->od' must be set.
+ * Must run before the SB port binding is synced, as ovn_port_update_sbrec()
+ * consults op->peer. */
+static void
+ls_router_port_wire_peer(struct ovn_port *op, const struct hmap *lr_ports)
+{
+    const char *peer_name = smap_get(&op->nbsp->options, "router-port");
+    if (!peer_name) {
+        return;
+    }
+
+    struct ovn_port *peer = ovn_port_find(lr_ports, peer_name);
+    if (!peer || !peer->nbrp || peer->nbrp->peer) {
+        return;
+    }
+
+    vector_push(&op->od->router_ports, &op);
+    vector_push(&peer->od->ls_peers, &op->od);
+    peer->peer = op;
+    op->peer = peer;
+}
+
+/* Fill op->lsp_addrs for the "router" address of a router-type LSP from its
+ * peer LRP networks (skipped by parse_lsp_addrs()).  Must run after
+ * ls_port_init() and with op->peer set. */
+static void
+ls_router_port_add_peer_networks(struct ovn_port *op)
+{
+    for (size_t j = 0; j < op->nbsp->n_addresses; j++) {
+        if (!strcmp(op->nbsp->addresses[j], "router")) {
+            if (extract_lrp_networks(op->peer->nbrp,
+                                     &op->lsp_addrs[op->n_lsp_addrs])) {
+                op->n_lsp_addrs++;
+            }
+            break;
+        }
+    }
+}
+
+/* Tear down the peer relationship wired by ls_router_port_wire_peer() when a
+ * router-type LSP is deleted.  Keeps op->peer set so the SB port-binding sync
+ * node can still reach the peer LRP to clear its options:peer (deleted tracked
+ * ports are freed only at the end of the engine run). */
+static void
+ls_router_port_unwire_peer(struct ovn_port *op)
+{
+    struct ovn_port *peer = op->peer;
+    if (!peer) {
+        return;
+    }
+
+    struct ovn_port *rp;
+    size_t i = 0;
+    VECTOR_FOR_EACH (&op->od->router_ports, rp) {
+        if (rp == op) {
+            vector_remove(&op->od->router_ports, i, NULL);
+            break;
+        }
+        i++;
+    }
+
+    struct ovn_datapath *ls_od;
+    i = 0;
+    VECTOR_FOR_EACH (&peer->od->ls_peers, ls_od) {
+        if (ls_od == op->od) {
+            vector_remove(&peer->od->ls_peers, i, NULL);
+            break;
+        }
+        i++;
+    }
+
+    peer->peer = NULL;
 }
 
 static bool
@@ -4733,7 +4925,7 @@ ls_port_init(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
 static struct ovn_port *
 ls_port_create(struct ovsdb_idl_txn *ovnsb_txn, struct hmap *ls_ports,
                const char *key, const struct nbrec_logical_switch_port *nbsp,
-               struct ovn_datapath *od,
+               struct ovn_datapath *od, const struct hmap *lr_ports,
                const struct sbrec_mirror_table *sbrec_mirror_table,
                struct ovsdb_idl_index *sbrec_chassis_by_name,
                struct ovsdb_idl_index *sbrec_chassis_by_hostname,
@@ -4742,11 +4934,25 @@ ls_port_create(struct ovsdb_idl_txn *ovnsb_txn, struct hmap *ls_ports,
     struct ovn_port *op = ovn_port_create(ls_ports, key, nbsp, NULL,
                                           NULL);
     hmap_insert(&od->ports, &op->dp_node, hmap_node_hash(&op->key_node));
+
+    /* A router-type LSP must have its peer LRP wired before the SB port
+     * binding is synced by ls_port_init() (ovn_port_update_sbrec() consults
+     * op->peer).  op->od is normally set inside ls_port_init(); set it early
+     * so the peer wiring can use op->od->router_ports. */
+    if (lsp_is_router(nbsp)) {
+        op->od = od;
+        ls_router_port_wire_peer(op, lr_ports);
+    }
+
     if (!ls_port_init(op, ovnsb_txn, od, NULL, sbrec_mirror_table,
                       sbrec_chassis_by_name, sbrec_chassis_by_hostname,
                       sbrec_encap_by_ip)) {
         ovn_port_destroy(ls_ports, op);
         return NULL;
+    }
+
+    if (lsp_is_router(nbsp) && op->peer) {
+        ls_router_port_add_peer_networks(op);
     }
 
     return op;
@@ -4943,6 +5149,7 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
 
     bool ls_had_only_router_ports = (!vector_is_empty(&od->router_ports)
             && (vector_len(&od->router_ports) == hmap_count(&od->ports)));
+    bool router_ports_changed = false;
 
     struct ovs_list existing_virtual_ports;
     struct ovn_port *op;
@@ -4963,9 +5170,17 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 if (!lsp_can_be_inc_processed(new_nbsp)) {
                     goto fail;
                 }
+                if (lsp_is_router(new_nbsp) &&
+                    router_lsp_needs_recompute(od, new_nbsp, &nd->lr_ports,
+                                               false)) {
+                    /* This router port has a dependency on a connected router
+                     * that can't be handled incrementally.  Fall back to
+                     * recompute. */
+                    goto fail;
+                }
                 op = ls_port_create(ovnsb_idl_txn, &nd->ls_ports,
                                     new_nbsp->name, new_nbsp, od,
-                                    ni->sbrec_mirror_table,
+                                    &nd->lr_ports, ni->sbrec_mirror_table,
                                     ni->sbrec_chassis_by_name,
                                     ni->sbrec_chassis_by_hostname,
                                     ni->sbrec_encap_by_ip);
@@ -4973,9 +5188,30 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                     goto fail;
                 }
                 add_op_to_northd_tracked_ports(&trk_lsps->created, op);
+                if (lsp_is_router(new_nbsp) && op->peer) {
+                    /* A router port was added to od->router_ports; sibling
+                     * ports' ARP-resolve flows must be regenerated. */
+                    router_ports_changed = true;
+                }
             } else if (ls_port_has_changed(new_nbsp)) {
                 /* Existing port updated */
                 bool temp = false;
+                if (lsp_is_router(new_nbsp)) {
+                    /* The SB port binding type of a router port ("patch",
+                     * "l3gateway", ...) never matches its NB type ("router"),
+                     * so lsp_is_type_changed() can't be used here.  Re-wiring
+                     * the peer relationship on reinit is not supported, so
+                     * fall back to recompute on any change other than the "up"
+                     * column; an "up"-only change does not affect router-port
+                     * flows, so ignore it. */
+                    if (!op->lsp_can_be_inc_processed ||
+                        !lsp_can_be_inc_processed(new_nbsp) ||
+                        check_lsp_changes_other_than_up(new_nbsp)) {
+                        goto fail;
+                    }
+                    op->visited = true;
+                    continue;
+                }
                 if (lsp_is_type_changed(op->sb, new_nbsp, &temp) ||
                     !op->lsp_can_be_inc_processed ||
                     !lsp_can_be_inc_processed(new_nbsp)) {
@@ -5038,6 +5274,14 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             if (!op->lsp_can_be_inc_processed) {
                 goto fail;
             }
+            if (lsp_is_router(op->nbsp) &&
+                router_lsp_needs_recompute(od, op->nbsp, &nd->lr_ports,
+                                           true)) {
+                /* This router port has a dependency on a connected router that
+                 * can't be regenerated incrementally.  Fall back to
+                 * recompute. */
+                goto fail;
+            }
             if (sset_contains(&nd->svc_monitor_lsps, op->key)) {
                 /* This port was used for svc monitor, which may be
                  * impacted by this deletion. Fallback to recompute. */
@@ -5050,6 +5294,14 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                  * that a port is being deleted the conflict may be
                  * resolved; fall back to recompute. */
                 goto fail;
+            }
+            if (lsp_is_router(op->nbsp) && op->peer) {
+                /* Tear down the peer wiring and flag that sibling ports'
+                 * ARP-resolve flows must be regenerated.  op->peer is kept so
+                 * the SB port-binding sync node can clear the peer LRP's
+                 * options:peer. */
+                ls_router_port_unwire_peer(op);
+                router_ports_changed = true;
             }
             add_op_to_northd_tracked_ports(&trk_lsps->deleted, op);
             hmap_remove(&nd->ls_ports, &op->key_node);
@@ -5079,6 +5331,19 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
     if (ls_had_only_router_ports != ls_has_only_router_ports) {
         VECTOR_FOR_EACH (&od->router_ports, op) {
             add_op_to_northd_tracked_ports(&trk_lsps->updated, op);
+        }
+    }
+
+    /* Adding or removing a router port changes od->router_ports, on which the
+     * ARP-resolve flows of the sibling switch ports depend (see
+     * build_arp_resolve_flows_for_lsp()).  Re-track the existing sibling ports
+     * so the lflow engine regenerates their flows.  Newly created ports (in
+     * trk_lsps->created) already get their flows generated. */
+    if (router_ports_changed) {
+        HMAP_FOR_EACH (op, dp_node, &od->ports) {
+            if (!hmapx_contains(&trk_lsps->created, op)) {
+                add_op_to_northd_tracked_ports(&trk_lsps->updated, op);
+            }
         }
     }
 
@@ -20444,16 +20709,35 @@ lflow_handle_northd_port_changes(struct ovsdb_idl_txn *ovnsb_txn,
     struct hmapx_node *hmapx_node;
     struct ovn_port *op;
 
+    /* Logical switches whose set of router ports changed.  The per-switch
+     * ls_stateful lflow_ref contains skip-conntrack flows generated for each
+     * router port (see build_ls_stateful_rec_pre_lb()/_pre_acls()), so it must
+     * be regenerated when a router port is created or deleted. */
+    struct hmapx ls_stateful_regen = HMAPX_INITIALIZER(&ls_stateful_regen);
+
     HMAPX_FOR_EACH (hmapx_node, &trk_lsps->deleted) {
         op = hmapx_node->data;
         /* Make sure 'op' is an lsp and not lrp. */
         ovs_assert(op->nbsp);
+        if (lsp_is_router(op->nbsp) && op->peer) {
+            hmapx_add(&ls_stateful_regen, op->od);
+        }
         bool handled = lflow_ref_resync_flows(
             op->lflow_ref, lflows, ovnsb_txn, lflow_input->dps,
             lflow_input->ovn_internal_version_changed,
             lflow_input->sbrec_logical_flow_table,
             lflow_input->sbrec_logical_dp_group_table);
+        if (handled) {
+            /* Router ports also own flows on their stateful_lflow_ref (see
+             * build_lbnat_lflows_iterate_by_lsp()); clear those too. */
+            handled = lflow_ref_resync_flows(
+                op->stateful_lflow_ref, lflows, ovnsb_txn, lflow_input->dps,
+                lflow_input->ovn_internal_version_changed,
+                lflow_input->sbrec_logical_flow_table,
+                lflow_input->sbrec_logical_dp_group_table);
+        }
         if (!handled) {
+            hmapx_destroy(&ls_stateful_regen);
             return false;
         }
         /* No need to update SB multicast groups, thanks to weak
@@ -20501,6 +20785,7 @@ lflow_handle_northd_port_changes(struct ovsdb_idl_txn *ovnsb_txn,
         ds_destroy(&actions);
 
         if (!handled) {
+            hmapx_destroy(&ls_stateful_regen);
             return false;
         }
     }
@@ -20509,6 +20794,9 @@ lflow_handle_northd_port_changes(struct ovsdb_idl_txn *ovnsb_txn,
         op = hmapx_node->data;
         /* Make sure 'op' is an lsp and not lrp. */
         ovs_assert(op->nbsp);
+        if (lsp_is_router(op->nbsp) && op->peer) {
+            hmapx_add(&ls_stateful_regen, op->od);
+        }
 
         struct ds match = DS_EMPTY_INITIALIZER;
         struct ds actions = DS_EMPTY_INITIALIZER;
@@ -20542,11 +20830,46 @@ lflow_handle_northd_port_changes(struct ovsdb_idl_txn *ovnsb_txn,
         ds_destroy(&actions);
 
         if (!handled) {
+            hmapx_destroy(&ls_stateful_regen);
             return false;
         }
     }
 
-    return true;
+    /* Regenerate the ls_stateful lflows of switches whose set of router ports
+     * changed (the skip-conntrack flows for router ports are owned by the
+     * per-switch ls_stateful lflow_ref, not by the port). */
+    bool handled = true;
+    HMAPX_FOR_EACH (hmapx_node, &ls_stateful_regen) {
+        struct ovn_datapath *od = hmapx_node->data;
+        const struct ls_stateful_record *ls_stateful_rec =
+            ls_stateful_table_find(lflow_input->ls_stateful_table, od->nbs);
+        if (!ls_stateful_rec) {
+            continue;
+        }
+
+        lflow_ref_unlink_lflows(ls_stateful_rec->lflow_ref);
+        build_ls_stateful_flows(ls_stateful_rec, od,
+                                lflow_input->ls_port_groups,
+                                lflow_input->meter_groups,
+                                lflow_input->sampling_apps,
+                                lflow_input->features,
+                                lflows,
+                                lflow_input->sbrec_acl_id_table);
+        build_network_function(od, lflows, lflow_input->ls_port_groups,
+                               ls_stateful_rec->lflow_ref);
+        handled = lflow_ref_sync_lflows(
+            ls_stateful_rec->lflow_ref, lflows, ovnsb_txn,
+            lflow_input->dps,
+            lflow_input->ovn_internal_version_changed,
+            lflow_input->sbrec_logical_flow_table,
+            lflow_input->sbrec_logical_dp_group_table);
+        if (!handled) {
+            break;
+        }
+    }
+
+    hmapx_destroy(&ls_stateful_regen);
+    return handled;
 }
 
 bool

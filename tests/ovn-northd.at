@@ -12043,6 +12043,132 @@ ignored_dp=ls0
 AT_CLEANUP
 ])
 
+AT_SETUP([Router port incremental processing])
+AT_KEYWORDS([incremental processing])
+ovn_start
+
+check ovn-nbctl ls-add sw0
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24
+check ovn-nbctl --wait=sb lsp-add sw0 vif0 \
+    -- lsp-set-addresses vif0 "00:00:00:00:00:01 10.0.0.4"
+
+# Connecting the switch to the pre-existing LRP should be incrementally
+# processed (the Logical_Router row is untouched, so it is only a new LSP).
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-add-router-port sw0 sw0-lr0 lr0-sw0
+check_engine_compute northd incremental
+check_engine_compute lflow incremental
+
+# The peer relationship is reflected on both SB port bindings.
+AT_CHECK([ovn-sbctl get port_binding sw0-lr0 type], [0], [dnl
+patch
+])
+AT_CHECK([ovn-sbctl get port_binding sw0-lr0 options:peer], [0], [dnl
+lr0-sw0
+])
+AT_CHECK([ovn-sbctl get port_binding lr0-sw0 options:peer], [0], [dnl
+sw0-lr0
+])
+
+# The router port L2 lookup flow is present on the switch.
+AT_CHECK([ovn-sbctl dump-flows sw0 | grep ls_in_l2_lkup | grep sw0-lr0 \
+    | grep -c 'eth.dst == 00:00:00:00:ff:01'], [0], [1
+])
+
+# The sibling VIF's ARP-resolve flow was regenerated on the router pipeline
+# (it depends on sw0's set of router ports).
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve \
+    | grep 'reg0 == 10.0.0.4' | grep -c 'eth.dst = 00:00:00:00:00:01'], [0], [1
+])
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+# Disconnecting the switch from the router should be incrementally processed.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-del sw0-lr0
+check_engine_compute northd incremental
+check_engine_compute lflow incremental
+
+# The peer LRP port binding no longer references the deleted switch port.
+AT_CHECK([ovn-sbctl get port_binding lr0-sw0 options:peer], [1], [], [dnl
+ovn-sbctl: no key "peer" in Port_Binding record "lr0-sw0" column options
+])
+
+# The router port L2 lookup flow and the VIF's ARP-resolve flow are gone.
+AT_CHECK([ovn-sbctl dump-flows sw0 | grep ls_in_l2_lkup | grep -c sw0-lr0],
+    [1], [0
+])
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve \
+    | grep -c 'reg0 == 10.0.0.4'], [1], [0
+])
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+
+AT_SETUP([Router port incremental processing fallback with distributed gateway])
+AT_KEYWORDS([incremental processing])
+ovn_start
+
+check ovn-sbctl chassis-add gw1 geneve 127.0.0.1
+
+check ovn-nbctl ls-add sw0
+check ovn-nbctl lr-add lr0
+
+# Distributed gateway port on lr0.
+check ovn-nbctl ls-add public
+check ovn-nbctl lrp-add lr0 lr0-public 00:00:20:20:12:13 172.168.0.100/24
+check ovn-nbctl --wait=sb lsp-add-router-port public public-lr0 lr0-public
+check ovn-nbctl lsp-add-localnet-port public ln-public public
+check ovn-nbctl --wait=sb lrp-set-gateway-chassis lr0-public gw1 20
+
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24
+
+# Connecting a switch to a router that has a distributed gateway port must fall
+# back to recompute (l3gateway/chassisredirect SB types and GARP nat_addresses
+# depend on state outside the switch port's lflow_ref).
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-add-router-port sw0 sw0-lr0 lr0-sw0
+check_engine_compute northd recompute
+
+# Deleting it must also fall back to recompute.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-del sw0-lr0
+check_engine_compute northd recompute
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+
+AT_SETUP([Router port incremental processing fallback with dynamic routing])
+AT_KEYWORDS([incremental processing])
+ovn_start
+
+check ovn-nbctl ls-add sw0
+check ovn-nbctl lr-add lr0 \
+    -- set Logical_Router lr0 options:dynamic-routing=true
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24
+
+# Connecting a switch to a dynamic-routing router must fall back to recompute:
+# advertised/routable flows depend on state outside the switch port's
+# lflow_ref.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-add-router-port sw0 sw0-lr0 lr0-sw0
+check_engine_compute northd recompute
+
+# Deleting it must also fall back to recompute.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-del sw0-lr0
+check_engine_compute northd recompute
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([SB Port binding incremental processing])
 ovn_start
@@ -12085,17 +12211,16 @@ check ovn-nbctl --wait=sb sync
 check_recompute_counter 0 0
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
-# Test lsp of type router
+# Test lsp of type router.  This port has no "router-port" option, so it has no
+# peer LRP and is inert; both the NB logical switch port change and the
+# subsequent "up" change set by ovn-northd are now incrementally processed.
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 check ovn-nbctl --wait=sb lsp-add ls0 rp -- lsp-set-type rp router
-
-# northd engine recomputes twice. Both the times for handling NB logical switch port
-# changes and not because of SB port binding changes.  This is because ovn-northd
-# sets the "up" to true.
-check_recompute_counter 2 2
+check_recompute_counter 0 0
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
-# Set some options to 'rp'.  northd should only recompute once.
+# Set some options to 'rp'.  Updating a router port other than its "up" column
+# falls back to recompute (re-wiring the peer on reinit is not supported).
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 check ovn-nbctl --wait=sb lsp-set-options rp foo=bar
 check_recompute_counter 1 1
