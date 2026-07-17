@@ -4573,9 +4573,10 @@ or
       <column name="options" key="ic-route-filter-tag"
               type='{"type": "string"}'>
         <p>
-          This option expects a name of a filtered route-tag that's present
-          in the Logical Router Port. If set, it causes any route learned by
-          the Logical Router Port with the <code>route-tag</code> present in
+          This option expects a comma-separated list of filtered route-tags
+          that's present in the Logical Router Port. If set, it causes any
+          route learned by the Logical Router Port with a
+          <code>route-tag</code> matching one of the listed tags, present in
           the external_ids register of the advertised route entry in the
           <ref table="Route" db="OVN_IC_Southbound"/> table of the
           <ref db="OVN_IC_Southbound"/> database, will be filtered and not

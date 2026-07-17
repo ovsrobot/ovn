@@ -3299,6 +3299,29 @@ OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 192.168 |
 192.168.1.0/24 169.254.103.22
 ])
 
+# Filter using a comma-separated list of tags that includes vpc1.
+# The vpc1-tagged route (169.254.103.12) must be filtered out.
+ovn_as az1 ovn-nbctl set logical_router_port lrp-lr11-tspeer options:ic-route-filter-tag=vpc0,vpc1,vpc2
+
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 192.168 |
+             grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.0.0/24 169.254.101.2
+192.168.0.0/24 169.254.102.2
+192.168.1.0/24 169.254.103.22
+])
+
+# Change the filter to a list that does not include vpc1.
+# The vpc1-tagged route (169.254.103.12) must be learned again.
+ovn_as az1 ovn-nbctl set logical_router_port lrp-lr11-tspeer options:ic-route-filter-tag=vpc0,vpc2
+
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 192.168 |
+             grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.0.0/24 169.254.101.2
+192.168.0.0/24 169.254.102.2
+192.168.0.0/24 169.254.103.12
+192.168.1.0/24 169.254.103.22
+])
+
 OVN_CLEANUP_IC([az1], [az2])
 
 AT_CLEANUP
