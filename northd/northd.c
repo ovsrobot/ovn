@@ -1285,6 +1285,12 @@ lsp_is_localnet(const struct nbrec_logical_switch_port *nbsp)
 }
 
 static bool
+lsp_is_localport(const struct nbrec_logical_switch_port *nbsp)
+{
+    return !strcmp(nbsp->type, "localport");
+}
+
+static bool
 lsp_is_vtep(const struct nbrec_logical_switch_port *nbsp)
 {
     return !strcmp(nbsp->type, "vtep");
@@ -4620,8 +4626,8 @@ destroy_northd_tracked_data(struct northd_data *nd)
 static bool
 lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *nbsp)
 {
-    /* Support only normal VIF and remote ports for now. */
-    if (nbsp->type[0] && !lsp_is_remote(nbsp)) {
+    /* Support only normal VIF, remote and localport ports for now. */
+    if (nbsp->type[0] && !lsp_is_remote(nbsp) && !lsp_is_localport(nbsp)) {
         return false;
     }
 
