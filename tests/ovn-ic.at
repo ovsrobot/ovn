@@ -3299,6 +3299,51 @@ OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 192.168 |
 192.168.1.0/24 169.254.103.22
 ])
 
+# Allowlist: only learn tspeer routes tagged vpc1 on lrp-lr11-tspeer.
+# The tspeer route from lr22 (169.254.103.22) carries no tag and is thus
+# filtered by the strict allowlist. Routes learned through ts11/ts12 are
+# not affected as the option is set on the tspeer LRP only.
+ovn_as az1 ovn-nbctl set logical_router_port lrp-lr11-tspeer options:ic-route-filter-allow-tag=vpc1
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 192.168 |
+             grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.0.0/24 169.254.101.2
+192.168.0.0/24 169.254.102.2
+192.168.0.0/24 169.254.103.12
+])
+
+# Tag lr22's advertised route with vpc2 and allow a list of tags [vpc1,vpc2].
+# The previously untagged route is now tagged vpc2 and learned again.
+ovn_as az2 ovn-nbctl set logical_router_port lrp-lr22-tspeer options:ic-route-tag=vpc2
+ovn_as az1 ovn-nbctl set logical_router_port lrp-lr11-tspeer options:ic-route-filter-allow-tag=vpc1,vpc2
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 192.168 |
+             grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.0.0/24 169.254.101.2
+192.168.0.0/24 169.254.102.2
+192.168.0.0/24 169.254.103.12
+192.168.1.0/24 169.254.103.22
+])
+
+# Blocklist takes precedence over the allowlist: filtering vpc1 drops the
+# vpc1 tspeer route (169.254.103.12) even though vpc1 is in the allow list.
+ovn_as az1 ovn-nbctl set logical_router_port lrp-lr11-tspeer options:ic-route-filter-tag=vpc1
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 192.168 |
+             grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.0.0/24 169.254.101.2
+192.168.0.0/24 169.254.102.2
+192.168.1.0/24 169.254.103.22
+])
+
+# Remove both tag options: all routes are learned again.
+ovn_as az1 ovn-nbctl remove logical_router_port lrp-lr11-tspeer options ic-route-filter-allow-tag=vpc1,vpc2
+ovn_as az1 ovn-nbctl remove logical_router_port lrp-lr11-tspeer options ic-route-filter-tag=vpc1
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 192.168 |
+             grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.0.0/24 169.254.101.2
+192.168.0.0/24 169.254.102.2
+192.168.0.0/24 169.254.103.12
+192.168.1.0/24 169.254.103.22
+])
+
 OVN_CLEANUP_IC([az1], [az2])
 
 AT_CLEANUP
