@@ -1015,7 +1015,8 @@ build_datapaths(const struct ovn_synced_logical_switch_map *ls_map,
     ods_build_array_index(lr_datapaths);
 }
 
-static bool lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *);
+static bool lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *,
+                                     struct ovn_datapath *);
 
 /* This function returns true if 'op' is a chassis resident
  * derived port. False otherwise.
@@ -1113,11 +1114,12 @@ get_op_routable_addresses(struct ovn_port *op,
 static void
 ovn_port_set_nb(struct ovn_port *op,
                 const struct nbrec_logical_switch_port *nbsp,
-                const struct nbrec_logical_router_port *nbrp)
+                const struct nbrec_logical_router_port *nbrp,
+                struct ovn_datapath *od)
 {
     op->nbsp = nbsp;
     if (nbsp) {
-        op->lsp_can_be_inc_processed = lsp_can_be_inc_processed(nbsp);
+        op->lsp_can_be_inc_processed = lsp_can_be_inc_processed(nbsp, od);
     }
     op->nbrp = nbrp;
     init_mcast_port_info(&op->mcast_info, op->nbsp, op->nbrp);
@@ -1127,7 +1129,8 @@ static struct ovn_port *
 ovn_port_create(struct hmap *ports, const char *key,
                 const struct nbrec_logical_switch_port *nbsp,
                 const struct nbrec_logical_router_port *nbrp,
-                const struct sbrec_port_binding *sb)
+                const struct sbrec_port_binding *sb,
+                struct ovn_datapath *od)
 {
     struct ovn_port *op = xzalloc(sizeof *op);
 
@@ -1137,7 +1140,7 @@ ovn_port_create(struct hmap *ports, const char *key,
 
     op->key = xstrdup(key);
     op->sb = sb;
-    ovn_port_set_nb(op, nbsp, nbrp);
+    ovn_port_set_nb(op, nbsp, nbrp, od);
     op->primary_port = op->cr_port = NULL;
     hmap_insert(ports, &op->key_node, hash_string(op->key, 0));
     op->has_attached_lport_mirror = false;
@@ -1276,6 +1279,12 @@ static bool
 lsp_is_remote(const struct nbrec_logical_switch_port *nbsp)
 {
     return !strcmp(nbsp->type, "remote");
+}
+
+static bool
+lsp_is_virtual(const struct nbrec_logical_switch_port *nbsp)
+{
+    return !strcmp(nbsp->type, "virtual");
 }
 
 static bool
@@ -1587,10 +1596,10 @@ create_mirror_port(struct ovn_port *op, struct hmap *ports,
     }
 
     if (!mp) {
-        mp = ovn_port_create(ports, mp_name, op->nbsp, NULL, NULL);
+        mp = ovn_port_create(ports, mp_name, op->nbsp, NULL, NULL, op->od);
         ovs_list_push_back(nb_only, &mp->list);
     } else if (mp->sb) {
-        ovn_port_set_nb(mp, op->nbsp, NULL);
+        ovn_port_set_nb(mp, op->nbsp, NULL, op->od);
         ovs_list_remove(&mp->list);
         ovs_list_push_back(both_dbs, &mp->list);
     } else {
@@ -1650,10 +1659,10 @@ join_logical_ports_lsp(struct hmap *ports,
             sbrec_port_binding_delete(op->sb);
             ovn_port_destroy(ports, op);
             op = ovn_port_create(ports, name, nbsp,
-                                 NULL, NULL);
+                                 NULL, NULL, od);
             ovs_list_push_back(nb_only, &op->list);
         } else {
-            ovn_port_set_nb(op, nbsp, NULL);
+            ovn_port_set_nb(op, nbsp, NULL, op->od);
             ovs_list_remove(&op->list);
 
             uint32_t queue_id = smap_get_int(&op->sb->options,
@@ -1669,7 +1678,7 @@ join_logical_ports_lsp(struct hmap *ports,
             ovs_assert(!op->n_lsp_addrs && !op->lsp_has_port_sec);
         }
     } else {
-        op = ovn_port_create(ports, name, nbsp, NULL, NULL);
+        op = ovn_port_create(ports, name, nbsp, NULL, NULL, od);
         ovs_list_push_back(nb_only, &op->list);
     }
 
@@ -1723,7 +1732,7 @@ join_logical_ports_lrp(struct hmap *ports,
         destroy_lport_addresses(lrp_networks);
         return NULL;
     } else if (op && (!op->sb || op->sb->datapath == od->sdp->sb_dp)) {
-        ovn_port_set_nb(op, NULL, nbrp);
+        ovn_port_set_nb(op, NULL, nbrp, od);
         ovs_list_remove(&op->list);
         ovs_list_push_back(both, &op->list);
 
@@ -1732,7 +1741,7 @@ join_logical_ports_lrp(struct hmap *ports,
         ovs_assert(!op->lrp_networks.n_ipv4_addrs
                    && !op->lrp_networks.n_ipv6_addrs);
     } else {
-        op = ovn_port_create(ports, name, NULL, nbrp, NULL);
+        op = ovn_port_create(ports, name, NULL, nbrp, NULL, od);
         ovs_list_push_back(nb_only, &op->list);
     }
 
@@ -1796,12 +1805,12 @@ create_cr_port(struct ovn_port *op, struct hmap *ports,
 
     struct ovn_port *crp = ovn_port_find(ports, redirect_name);
     if (crp && crp->sb && crp->sb->datapath == op->od->sdp->sb_dp) {
-        ovn_port_set_nb(crp, op->nbsp, op->nbrp);
+        ovn_port_set_nb(crp, op->nbsp, op->nbrp, op->od);
         ovs_list_remove(&crp->list);
         ovs_list_push_back(both_dbs, &crp->list);
     } else {
         crp = ovn_port_create(ports, redirect_name,
-                              op->nbsp, op->nbrp, NULL);
+                              op->nbsp, op->nbrp, NULL, op->od);
         ovs_list_push_back(nb_only, &crp->list);
     }
 
@@ -1865,7 +1874,7 @@ join_logical_ports(const struct sbrec_port_binding_table *sbrec_pb_table,
     const struct sbrec_port_binding *sb;
     SBREC_PORT_BINDING_TABLE_FOR_EACH (sb, sbrec_pb_table) {
         struct ovn_port *op = ovn_port_create(ports, sb->logical_port,
-                                              NULL, NULL, sb);
+                                              NULL, NULL, sb, NULL);
         ovs_list_push_back(sb_only, &op->list);
     }
 
@@ -4614,14 +4623,62 @@ destroy_northd_tracked_data(struct northd_data *nd)
     hmapx_destroy(&trk_data->trk_routers.deleted);
 }
 
+/* A logical switch port of type "virtual" can have dependencies that live
+ * outside of its own 'lflow_ref' and that the incremental LSP path does not
+ * keep in sync.  When any such dependency is present on a logical router
+ * connected to the port's logical switch, this returns false and the caller
+ * must fall back to a full recompute.  The known dependencies are:
+ *
+ *  - A distributed NAT rule whose 'logical_port' is this virtual port.  It
+ *    adds a S_ROUTER_IN_GW_REDIRECT drop flow (see
+ *    build_lrouter_nat_defrag_and_lb()) owned by the router datapath's
+ *    'lflow_ref', not by the virtual port.
+ *
+ *  - Dynamic routing on the connected router.  Host routes for a virtual port
+ *    are advertised based on its SB 'virtual_parent' (i.e. once the port is
+ *    claimed, see publish_host_routes_for_virtual_ports()).  The claim reaches
+ *    northd as an "up"-only change on the NB port, which the incremental path
+ *    ignores, so the advertised-route engine would not be re-run. */
+static bool
+virtual_lsp_can_be_inc_processed(struct ovn_datapath *od, const char *lport)
+{
+    struct ovn_port *rp;
+    VECTOR_FOR_EACH (&od->router_ports, rp) {
+        struct ovn_port *lrp = rp->peer;
+        if (!lrp || !lrp->od || !lrp->od->nbr) {
+            continue;
+        }
+
+        if (lrp->od->dynamic_routing) {
+            return false;
+        }
+
+        const struct nbrec_logical_router *nbr = lrp->od->nbr;
+        for (size_t i = 0; i < nbr->n_nat; i++) {
+            const struct nbrec_nat *nat = nbr->nat[i];
+            if (nat->logical_port && !strcmp(nat->logical_port, lport) &&
+                is_nat_distributed(nat, lrp->od)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 /* Check if a changed LSP can be handled incrementally within the I-P engine
  * node en_northd.
  */
 static bool
-lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *nbsp)
+lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *nbsp,
+                         struct ovn_datapath *od)
 {
-    /* Support only normal VIF and remote ports for now. */
-    if (nbsp->type[0] && !lsp_is_remote(nbsp)) {
+    /* Support only normal VIF, remote and virtual ports for now. */
+    if (nbsp->type[0] && !lsp_is_remote(nbsp) && !lsp_is_virtual(nbsp)) {
+        return false;
+    }
+
+    if (lsp_is_virtual(nbsp) && od &&
+        !virtual_lsp_can_be_inc_processed(od, nbsp->name)) {
         return false;
     }
 
@@ -4740,7 +4797,7 @@ ls_port_create(struct ovsdb_idl_txn *ovnsb_txn, struct hmap *ls_ports,
                struct ovsdb_idl_index *sbrec_encap_by_ip)
 {
     struct ovn_port *op = ovn_port_create(ls_ports, key, nbsp, NULL,
-                                          NULL);
+                                          NULL, od);
     hmap_insert(&od->ports, &op->dp_node, hmap_node_hash(&op->key_node));
     if (!ls_port_init(op, ovnsb_txn, od, NULL, sbrec_mirror_table,
                       sbrec_chassis_by_name, sbrec_chassis_by_hostname,
@@ -4764,7 +4821,7 @@ ls_port_reinit(struct ovn_port *op, struct ovsdb_idl_txn *ovnsb_txn,
 {
     ovn_port_cleanup(op);
     op->sb = sb;
-    ovn_port_set_nb(op, nbsp, NULL);
+    ovn_port_set_nb(op, nbsp, NULL, od);
     op->primary_port = op->cr_port = NULL;
     return ls_port_init(op, ovnsb_txn, od, sb, sbrec_mirror_table,
                         sbrec_chassis_by_name, sbrec_chassis_by_hostname,
@@ -4960,7 +5017,7 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             op = ovn_port_find_in_datapath(od, new_nbsp);
 
             if (!op) {
-                if (!lsp_can_be_inc_processed(new_nbsp)) {
+                if (!lsp_can_be_inc_processed(new_nbsp, od)) {
                     goto fail;
                 }
                 op = ls_port_create(ovnsb_idl_txn, &nd->ls_ports,
@@ -4978,7 +5035,7 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 bool temp = false;
                 if (lsp_is_type_changed(op->sb, new_nbsp, &temp) ||
                     !op->lsp_can_be_inc_processed ||
-                    !lsp_can_be_inc_processed(new_nbsp)) {
+                    !lsp_can_be_inc_processed(new_nbsp, od)) {
                     goto fail;
                 }
                 const struct sbrec_port_binding *sb = op->sb;
@@ -5035,7 +5092,17 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
     /* Check for deleted ports */
     HMAP_FOR_EACH_SAFE (op, dp_node, &od->ports) {
         if (!op->visited) {
-            if (!op->lsp_can_be_inc_processed) {
+            /* Re-evaluate live rather than trusting only the cached
+             * 'lsp_can_be_inc_processed' flag: a virtual port's out-of-band
+             * dependencies (a distributed NAT referencing it, dynamic routing
+             * on a connected router) may have appeared after the port was
+             * created, in which case the cached flag is stale here.  The
+             * leading cached check short-circuits ports without an nbsp (the
+             * flag is only ever set to true when nbsp is non-NULL), so the
+             * live call never dereferences a NULL nbsp.  See
+             * virtual_lsp_can_be_inc_processed(). */
+            if (!op->lsp_can_be_inc_processed ||
+                !lsp_can_be_inc_processed(op->nbsp, op->od)) {
                 goto fail;
             }
             if (sset_contains(&nd->svc_monitor_lsps, op->key)) {
