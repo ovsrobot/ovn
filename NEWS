@@ -82,6 +82,12 @@ Post v26.03.0
      as an override, to Logical_Router_Port) to advertise a router's IPv4
      routes through ovn-ic using the interconnect port's IPv6 address as next
      hop ("IPv4 over IPv6").
+   - Added "ic-route-filter-allow-tag" option to the Logical_Router_Port
+     table, an allowlist counterpart to "ic-route-filter-tag": it accepts a
+     comma-separated list of route tags and only IC routes whose
+     "ic-route-tag" matches one of them are learned.  Untagged routes and
+     routes tagged otherwise are not learned; "ic-route-filter-tag" still
+     takes precedence over this allowlist.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
