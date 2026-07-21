@@ -28,6 +28,12 @@ en_service_monitor_run(struct engine_node *node OVS_UNUSED,
     const struct engine_context *eng_ctx = engine_get_context();
     struct ic_context *ctx = eng_ctx->client_ctx;
 
+    /* runned_az is resolved by the upstream en_az node.  Without an AZ there
+     * is nothing to sync (mirrors the previous main-loop gating). */
+    if (!ctx->runned_az) {
+        return EN_UNCHANGED;
+    }
+
     sync_service_monitor(ctx);
 
     return EN_UPDATED;

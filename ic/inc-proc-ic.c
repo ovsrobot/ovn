@@ -27,6 +27,7 @@
 #include "openvswitch/vlog.h"
 #include "inc-proc-ic.h"
 #include "en-ic.h"
+#include "en-az.h"
 #include "en-dp-enum.h"
 #include "en-gateway.h"
 #include "en-ts.h"
@@ -173,6 +174,7 @@ VLOG_DEFINE_THIS_MODULE(inc_proc_ic);
 
 /* Define engine nodes for other nodes. They should be defined as static to
  * avoid sparse errors. */
+static ENGINE_NODE(az);
 static ENGINE_NODE(dp_enum);
 static ENGINE_NODE(gateway);
 static ENGINE_NODE(ts);
@@ -215,6 +217,7 @@ void inc_proc_ic_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_dp_enum, &en_icnb_ic_nb_global, NULL);
 
     /* en_gateway: sync gateways/chassis between SB and IC-SB. */
+    engine_add_input(&en_gateway, &en_az, NULL);
     engine_add_input(&en_gateway, &en_icsb_availability_zone, NULL);
     engine_add_input(&en_gateway, &en_icsb_gateway, NULL);
     engine_add_input(&en_gateway, &en_icsb_encap, NULL);
@@ -222,6 +225,7 @@ void inc_proc_ic_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_gateway, &en_sb_encap, NULL);
 
     /* en_ts: sync transit switches to NB and IC-SB datapath bindings. */
+    engine_add_input(&en_ts, &en_az, NULL);
     engine_add_input(&en_ts, &en_dp_enum, NULL);
     engine_add_input(&en_ts, &en_icnb_ic_nb_global, NULL);
     engine_add_input(&en_ts, &en_icnb_transit_switch, NULL);
@@ -229,11 +233,13 @@ void inc_proc_ic_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_ts, &en_icsb_encap, NULL);
 
     /* en_tr: sync transit routers to NB and IC-SB datapath bindings. */
+    engine_add_input(&en_tr, &en_az, NULL);
     engine_add_input(&en_tr, &en_dp_enum, NULL);
     engine_add_input(&en_tr, &en_icnb_transit_router, NULL);
     engine_add_input(&en_tr, &en_nb_logical_router, NULL);
 
     /* en_port_binding: sync cross-AZ port bindings. */
+    engine_add_input(&en_port_binding, &en_az, NULL);
     engine_add_input(&en_port_binding, &en_icsb_availability_zone, NULL);
     engine_add_input(&en_port_binding, &en_icsb_port_binding, NULL);
     engine_add_input(&en_port_binding, &en_icnb_transit_switch, NULL);
@@ -247,6 +253,7 @@ void inc_proc_ic_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_port_binding, &en_sb_chassis, NULL);
 
     /* en_route: advertise/learn cross-AZ routes. */
+    engine_add_input(&en_route, &en_az, NULL);
     engine_add_input(&en_route, &en_icsb_availability_zone, NULL);
     engine_add_input(&en_route, &en_icsb_port_binding, NULL);
     engine_add_input(&en_route, &en_icsb_route, NULL);
@@ -262,6 +269,7 @@ void inc_proc_ic_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_route, &en_sb_learned_route, NULL);
 
     /* en_service_monitor: sync load-balancer health checks across AZs. */
+    engine_add_input(&en_service_monitor, &en_az, NULL);
     engine_add_input(&en_service_monitor, &en_icsb_availability_zone, NULL);
     engine_add_input(&en_service_monitor, &en_icsb_service_monitor, NULL);
     engine_add_input(&en_service_monitor, &en_sb_sb_global, NULL);

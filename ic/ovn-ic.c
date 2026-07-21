@@ -99,68 +99,6 @@ Options:\n\
     stream_usage("database", true, true, false);
 }
 
-static const struct icsbrec_availability_zone *
-az_run(struct ic_context *ctx)
-{
-    const struct nbrec_nb_global *nb_global =
-        nbrec_nb_global_first(ctx->ovnnb_idl);
-
-    if (!nb_global) {
-        VLOG_INFO("NB Global not exist.");
-        return NULL;
-    }
-
-    /* Update old AZ if name changes.  Note: if name changed when ovn-ic
-     * is not running, one has to manually delete/update the old AZ with:
-     * "ovn-ic-sbctl destroy avail <az>". */
-    static char *az_name;
-    const struct icsbrec_availability_zone *az;
-    if (ctx->ovnisb_unlocked_txn && az_name
-        && strcmp(az_name, nb_global->name)) {
-        ICSBREC_AVAILABILITY_ZONE_FOR_EACH (az, ctx->ovnisb_unlocked_idl) {
-            /* AZ name update locally need to update az in ISB. */
-            if (nb_global->name[0] && !strcmp(az->name, az_name)) {
-                icsbrec_availability_zone_set_name(az, nb_global->name);
-                break;
-            } else if (!nb_global->name[0] && !strcmp(az->name, az_name)) {
-                icsbrec_availability_zone_delete(az);
-                break;
-            }
-        }
-        free(az_name);
-        az_name = NULL;
-    }
-
-    if (!nb_global->name[0]) {
-        return NULL;
-    }
-
-    if (!az_name) {
-        az_name = xstrdup(nb_global->name);
-    }
-
-    if (ctx->ovnisb_unlocked_txn) {
-        ovsdb_idl_txn_add_comment(ctx->ovnisb_unlocked_txn, "AZ %s", az_name);
-    }
-
-    ICSBREC_AVAILABILITY_ZONE_FOR_EACH (az, ctx->ovnisb_unlocked_idl) {
-        if (!strcmp(az->name, az_name)) {
-            ctx->runned_az = az;
-            return az;
-        }
-    }
-
-    /* Create AZ in ISB */
-    if (ctx->ovnisb_unlocked_txn) {
-        VLOG_INFO("Register AZ %s to interconnection DB.", az_name);
-        az = icsbrec_availability_zone_insert(ctx->ovnisb_unlocked_txn);
-        icsbrec_availability_zone_set_name(az, az_name);
-        ctx->runned_az = az;
-        return az;
-    }
-    return NULL;
-}
-
 static uint32_t
 allocate_dp_key(struct hmap *dp_tnlids, bool vxlan_mode, const char *name)
 {
@@ -4248,6 +4186,17 @@ main(int argc, char *argv[])
                                   ovnisb_idl_loop.idl,
                                   ovnisb_unlocked_idl_loop.idl,
                                   ovninb_idl_loop.idl);
+
+        /* Postpone the next engine run by the length of the previous one, up
+         * to this interval, to coalesce bursts of change-driven runs.  A
+         * forced recompute (set_force_recompute) still runs immediately, so
+         * this only throttles the natural, incremental path. */
+        const struct icnbrec_ic_nb_global *ic_nb_global =
+            icnbrec_ic_nb_global_first(ovninb_idl_loop.idl);
+        eng_ctx.backoff_ms = ic_nb_global
+            ? smap_get_uint(&ic_nb_global->options,
+                            "ic-backoff-interval-ms", 0) : 0;
+
         memory_run();
         if (memory_should_report()) {
             struct simap usage = SIMAP_INITIALIZER(&usage);
@@ -4418,11 +4367,12 @@ main(int argc, char *argv[])
                 ovsdb_idl_has_ever_connected(ctx.ovnisb_unlocked_idl)) {
                 if (ctx.ovnnb_txn && ctx.ovnsb_txn && ctx.ovninb_txn &&
                     ctx.ovnisb_unlocked_txn && inc_proc_ic_can_run(&eng_ctx)) {
-                    ctx.runned_az = az_run(&ctx);
-                    VLOG_DBG("Availability zone: %s", ctx.runned_az ?
-                             ctx.runned_az->name : "not created yet.");
+                    /* The availability zone is now resolved by the en_az
+                     * engine node, which populates ctx.runned_az during the
+                     * run.  The subsystem nodes skip their work when there is
+                     * no AZ. */
+                    (void) inc_proc_ic_run(&ctx, &eng_ctx);
                     if (ctx.runned_az) {
-                        (void) inc_proc_ic_run(&ctx, &eng_ctx);
                         update_sequence_numbers(&ctx,
                                                 &ovnisb_unlocked_idl_loop);
                     }

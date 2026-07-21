@@ -29,6 +29,12 @@ en_tr_run(struct engine_node *node, void *data OVS_UNUSED)
     struct ic_context *ctx = eng_ctx->client_ctx;
     struct ed_type_dp_enum *dp = engine_get_input_data("dp_enum", node);
 
+    /* runned_az is resolved by the upstream en_az node.  Without an AZ there
+     * is nothing to sync (mirrors the previous main-loop gating). */
+    if (!ctx->runned_az) {
+        return EN_UNCHANGED;
+    }
+
     tr_run(ctx, &dp->dp_tnlids, &dp->isb_tr_dps);
 
     return EN_UPDATED;
