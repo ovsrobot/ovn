@@ -233,12 +233,20 @@ void inc_proc_ic_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_dp_enum, &en_icnb_ic_nb_global,
                      en_ic_nb_global_handler);
 
-    /* en_gateway: sync gateways/chassis between SB and IC-SB. */
+    /* en_gateway: sync gateways/chassis between SB and IC-SB.
+     *
+     * The availability zone is provided by en_az (which reports EN_UPDATED
+     * only when the AZ identity changes).  en_gateway does not read the
+     * Availability_Zone table itself - only gateway rows' availability_zone
+     * reference and ctx->runned_az - so it deliberately does not depend on
+     * en_icsb_availability_zone, whose rows also carry the frequently-bumped
+     * nb_ic_cfg sequence number. */
     engine_add_input(&en_gateway, &en_az, NULL);
-    engine_add_input(&en_gateway, &en_icsb_availability_zone, NULL);
-    engine_add_input(&en_gateway, &en_icsb_gateway, NULL);
+    engine_add_input(&en_gateway, &en_icsb_gateway,
+                     en_gateway_icsb_gateway_handler);
     engine_add_input(&en_gateway, &en_icsb_encap, NULL);
-    engine_add_input(&en_gateway, &en_sb_chassis, NULL);
+    engine_add_input(&en_gateway, &en_sb_chassis,
+                     en_gateway_sb_chassis_handler);
     engine_add_input(&en_gateway, &en_sb_encap, NULL);
 
     /* en_ts: sync transit switches to NB and IC-SB datapath bindings. */
