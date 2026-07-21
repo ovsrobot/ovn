@@ -63,12 +63,11 @@ enum ic_port_binding_type { IC_SWITCH_PORT, IC_ROUTER_PORT, IC_PORT_MAX };
 
 struct hmap;
 struct shash;
+struct icsbrec_datapath_binding;
 
-/* Per-subsystem entry points, invoked by the incremental-processing engine
- * nodes (see ic/en-*.c).  Each performs a full recompute of its subsystem and
- * may be invoked independently when its engine inputs change. */
-void enumerate_datapaths(struct ic_context *ctx, struct hmap *dp_tnlids,
-                         struct shash *isb_ts_dps, struct shash *isb_tr_dps);
+enum ic_datapath_type ic_dp_get_type(
+    const struct icsbrec_datapath_binding *isb_dp);
+
 void gateway_run(struct ic_context *ctx);
 void address_set_run(struct ic_context *ctx);
 void ts_run(struct ic_context *ctx, struct hmap *dp_tnlids,

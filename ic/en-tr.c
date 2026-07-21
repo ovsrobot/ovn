@@ -35,7 +35,13 @@ en_tr_run(struct engine_node *node, void *data OVS_UNUSED)
         return EN_UNCHANGED;
     }
 
-    tr_run(ctx, &dp->dp_tnlids, &dp->isb_tr_dps);
+    /* tr_run() destructively consumes the transit-router datapath shash, so
+     * pass it a copy to keep en_dp_enum's authoritative map intact.  The
+     * shared tunnel-key allocator (dp_tnlids) is passed directly. */
+    struct shash isb_tr_dps;
+    dp_enum_shash_clone(&isb_tr_dps, &dp->isb_tr_dps);
+    tr_run(ctx, &dp->dp_tnlids, &isb_tr_dps);
+    shash_destroy(&isb_tr_dps);
 
     return EN_UPDATED;
 }

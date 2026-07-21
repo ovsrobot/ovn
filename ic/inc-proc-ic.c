@@ -204,17 +204,34 @@ void inc_proc_ic_init(struct ovsdb_idl_loop *nb,
     /* en_dp_enum: enumerate IC-SB datapath bindings (tunnel-key allocator and
      * transit switch/router datapath maps shared by en_ts and en_tr).
      *
-     * en_ts and en_tr allocate datapath tunnel keys from the shared
-     * 'dp_tnlids' set owned by this node, mutating it during their run.  To
-     * keep that allocator correct, en_dp_enum must rebuild it from scratch in
-     * the same iteration as any allocation.  It therefore depends not only on
-     * the IC-SB datapath bindings themselves, but also on every input that can
-     * cause en_ts/en_tr to allocate a key: a new transit switch or router, or
-     * a change of vxlan_mode (which forces a tunnel-key refresh). */
-    engine_add_input(&en_dp_enum, &en_icsb_datapath_binding, NULL);
-    engine_add_input(&en_dp_enum, &en_icnb_transit_switch, NULL);
-    engine_add_input(&en_dp_enum, &en_icnb_transit_router, NULL);
-    engine_add_input(&en_dp_enum, &en_icnb_ic_nb_global, NULL);
+     * The node's state (dp_tnlids, isb_ts_dps, isb_tr_dps) is derived purely
+     * from the IC-SB Datapath_Binding rows and is maintained incrementally by
+     * the en_icsb_datapath_binding handler (insert/delete in place; a tunnel
+     * key/transit-switch/nb_ic_uuid modify falls back to a recompute).
+     *
+     * The IC-NB transit switch/router inputs are ordering dependencies only:
+     * en_ts and en_tr (downstream of en_dp_enum) allocate datapath tunnel keys
+     * from the shared 'dp_tnlids' set during their own scoped handlers.  That
+     * allocation needs no en_dp_enum rebuild - ovn_allocate_tnlid() reserves
+     * the key in the live 'dp_tnlids' immediately (so concurrent allocations
+     * in the same iteration cannot collide), ovn_add_tnlid() is idempotent
+     * (so the committed binding re-arriving as an insert is a no-op), and the
+     * binding's insert/delete is reconciled by the en_icsb_datapath_binding
+     * handler on a later iteration. A transit switch/router add or delete
+     * therefore does not require re-enumerating every datapath binding, so
+     * these edges use a no-op handler instead of forcing a full recompute
+     * - which matters at scale (tens of thousands of transit switches). The
+     * only IC-NB Global change that affects the allocator is vxlan_mode (a
+     * global tunnel-key refresh), which still forces a recompute via
+     * en_ic_nb_global_handler. */
+    engine_add_input(&en_dp_enum, &en_icsb_datapath_binding,
+                     en_dp_enum_icsb_datapath_binding_handler);
+    engine_add_input(&en_dp_enum, &en_icnb_transit_switch,
+                     engine_noop_handler);
+    engine_add_input(&en_dp_enum, &en_icnb_transit_router,
+                     engine_noop_handler);
+    engine_add_input(&en_dp_enum, &en_icnb_ic_nb_global,
+                     en_ic_nb_global_handler);
 
     /* en_gateway: sync gateways/chassis between SB and IC-SB. */
     engine_add_input(&en_gateway, &en_az, NULL);

@@ -109,7 +109,7 @@ allocate_dp_key(struct hmap *dp_tnlids, bool vxlan_mode, const char *name)
             &hint);
 }
 
-static enum ic_datapath_type
+enum ic_datapath_type
 ic_dp_get_type(const struct icsbrec_datapath_binding *isb_dp)
 {
     if (isb_dp->type && !strcmp(isb_dp->type, "transit-router")) {
@@ -127,25 +127,6 @@ ic_pb_get_type(const struct icsbrec_port_binding *isb_pb)
     }
 
     return IC_SWITCH_PORT;
-}
-
-void
-enumerate_datapaths(struct ic_context *ctx, struct hmap *dp_tnlids,
-                    struct shash *isb_ts_dps, struct shash *isb_tr_dps)
-{
-    const struct icsbrec_datapath_binding *isb_dp;
-    ICSBREC_DATAPATH_BINDING_FOR_EACH (isb_dp, ctx->ovnisb_idl) {
-        ovn_add_tnlid(dp_tnlids, isb_dp->tunnel_key);
-
-        enum ic_datapath_type dp_type = ic_dp_get_type(isb_dp);
-        if (dp_type == IC_ROUTER) {
-            char *uuid_str = uuid_to_string(isb_dp->nb_ic_uuid);
-            shash_add(isb_tr_dps, uuid_str, isb_dp);
-            free(uuid_str);
-        } else {
-            shash_add(isb_ts_dps, isb_dp->transit_switch, isb_dp);
-        }
-    }
 }
 
 /*

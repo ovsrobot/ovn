@@ -29,4 +29,19 @@ enum engine_node_state en_dp_enum_run(struct engine_node *node, void *data);
 void *en_dp_enum_init(struct engine_node *node, struct engine_arg *arg);
 void en_dp_enum_cleanup(void *data);
 
+enum engine_input_handler_result
+en_dp_enum_icsb_datapath_binding_handler(struct engine_node *node, void *data);
+
+/* Shared handler for the IC-NB Global input: ignores nb_ic_cfg/sb_ic_cfg
+ * sequence-number-only changes, recomputes on options (vxlan_mode) changes. */
+enum engine_input_handler_result
+en_ic_nb_global_handler(struct engine_node *node, void *data);
+
+/* Shallow-copies the datapath shash 'src' into 'dst' (initialized here).  The
+ * values (IDL row pointers) are shared, not duplicated.  en_ts and en_tr
+ * destructively consume their datapath shash (removing matched entries and
+ * deleting the leftovers' datapaths), so they must operate on a copy to keep
+ * en_dp_enum's authoritative maps intact across iterations. */
+void dp_enum_shash_clone(struct shash *dst, const struct shash *src);
+
 #endif /* EN_IC_DP_ENUM_H */
