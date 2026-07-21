@@ -64,6 +64,7 @@ enum ic_port_binding_type { IC_SWITCH_PORT, IC_ROUTER_PORT, IC_PORT_MAX };
 
 struct hmap;
 struct shash;
+struct sset;
 struct icsbrec_datapath_binding;
 struct sbrec_chassis_table;
 struct icsbrec_gateway_table;
@@ -96,7 +97,6 @@ void port_binding_collect_lsp_ts(const struct shash *lsp_ts_map,
                                  const struct nbrec_logical_switch_port *lsp,
                                  struct sset *ts_scope);
 
-void route_run(struct ic_context *ctx);
 void sync_service_monitor(struct ic_context *ctx);
 
 
