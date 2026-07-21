@@ -71,8 +71,6 @@ enum ic_datapath_type ic_dp_get_type(
     const struct icsbrec_datapath_binding *isb_dp);
 
 void address_set_run(struct ic_context *ctx);
-void tr_run(struct ic_context *ctx, struct hmap *dp_tnlids,
-            struct shash *isb_tr_dps);
 void port_binding_run(struct ic_context *ctx);
 
 struct sset;
@@ -89,7 +87,11 @@ void sync_service_monitor(struct ic_context *ctx);
 
 
 /* Shared IC helpers used by more than one engine node. */
+uint32_t
+allocate_dp_key(struct hmap *dp_tnlids, bool vxlan_mode, const char *name);
 const struct sbrec_chassis *
 find_sb_chassis(struct ic_context *ctx, const char *name);
+bool
+is_az_leader(struct ovsdb_idl_txn *txn);
 
 #endif /* OVN_IC_H */

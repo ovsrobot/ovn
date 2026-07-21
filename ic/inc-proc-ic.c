@@ -278,11 +278,24 @@ void inc_proc_ic_init(struct ovsdb_idl_loop *nb,
                      en_ts_nb_logical_switch_handler);
     engine_add_input(&en_ts, &en_icsb_encap, NULL);
 
-    /* en_tr: sync transit routers to NB and IC-SB datapath bindings. */
+    /* en_tr: sync transit routers to NB and IC-SB datapath bindings.
+     *
+     * Like en_ts, en_dp_enum is an ordering dependency only: en_tr reads its
+     * shared tunnel-key allocator (dp_tnlids) and transit-router datapath map
+     * (isb_tr_dps) live in en_tr_run(), so a datapath-binding change it
+     * reports - including transit-switch churn that does not concern en_tr,
+     * and the binding en_tr itself just created - must not force a full
+     * recompute; the edge therefore uses a no-op handler.  The real re-run
+     * trigger is the en_icsb_datapath_binding handler, which recomputes only
+     * for transit-router datapath bindings (en_dp_enum, being upstream, has
+     * already refreshed isb_tr_dps by then). */
     engine_add_input(&en_tr, &en_az, NULL);
-    engine_add_input(&en_tr, &en_dp_enum, NULL);
+    engine_add_input(&en_tr, &en_dp_enum, engine_noop_handler);
+    engine_add_input(&en_tr, &en_icsb_datapath_binding,
+                     en_tr_icsb_datapath_binding_handler);
     engine_add_input(&en_tr, &en_icnb_transit_router, NULL);
-    engine_add_input(&en_tr, &en_nb_logical_router, NULL);
+    engine_add_input(&en_tr, &en_nb_logical_router,
+                     en_tr_nb_logical_router_handler);
 
     /* en_port_binding: sync cross-AZ port bindings. */
     engine_add_input(&en_port_binding, &en_az, NULL);
