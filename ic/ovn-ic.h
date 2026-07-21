@@ -71,11 +71,19 @@ enum ic_datapath_type ic_dp_get_type(
     const struct icsbrec_datapath_binding *isb_dp);
 
 void address_set_run(struct ic_context *ctx);
-void ts_run(struct ic_context *ctx, struct hmap *dp_tnlids,
-            struct shash *isb_ts_dps);
 void tr_run(struct ic_context *ctx, struct hmap *dp_tnlids,
             struct shash *isb_tr_dps);
 void port_binding_run(struct ic_context *ctx);
+
+struct sset;
+
+/* Reconciles the transit switches named in 'ts_scope' (NULL reconciles every
+ * transit switch, equivalent to ts_run()).  'isb_ts_dps' is the transit-switch
+ * datapath map owned by the dp_enum engine node; it is consumed destructively
+ * only in the full (NULL scope) case, so a private copy must be passed there.
+ */
+void ts_sync_scope(struct ic_context *ctx, struct hmap *dp_tnlids,
+                   struct shash *isb_ts_dps, const struct sset *ts_scope);
 void route_run(struct ic_context *ctx);
 void sync_service_monitor(struct ic_context *ctx);
 

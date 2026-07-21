@@ -249,12 +249,33 @@ void inc_proc_ic_init(struct ovsdb_idl_loop *nb,
                      en_gateway_sb_chassis_handler);
     engine_add_input(&en_gateway, &en_sb_encap, NULL);
 
-    /* en_ts: sync transit switches to NB and IC-SB datapath bindings. */
+    /* en_ts: sync transit switches to NB and IC-SB datapath bindings.
+     *
+     * en_dp_enum is an ordering dependency only: it owns the shared tunnel-key
+     * allocator (dp_tnlids) and transit-switch datapath map, both maintained
+     * incrementally and read live by en_ts.  Because it recomputes en_ts's
+     * datapath map in place, the en_dp_enum edge itself must not force a full
+     * en_ts recompute, so it uses a no-op handler; the resulting IC-SB
+     * Datapath_Binding change is instead reacted to directly via
+     * en_icsb_datapath_binding below, which re-syncs only the affected transit
+     * switches. This matters at scale (tens of thousands of transit switches):
+     * the alternative NULL edge would recompute every transit switch on any
+     * datapath-binding change.
+     *
+     * en_icsb_datapath_binding drives the follow-up NB requested-tnl-key sync
+     * after a tunnel-key (re)assignment - notably the global refresh from an
+     * IC-NB vxlan_mode change (see en_ts_icsb_datapath_binding_handler).  It
+     * is ordered after en_dp_enum (which depends on the same table), so en_ts
+     * sees the freshly folded key. */
     engine_add_input(&en_ts, &en_az, NULL);
-    engine_add_input(&en_ts, &en_dp_enum, NULL);
-    engine_add_input(&en_ts, &en_icnb_ic_nb_global, NULL);
-    engine_add_input(&en_ts, &en_icnb_transit_switch, NULL);
-    engine_add_input(&en_ts, &en_nb_logical_switch, NULL);
+    engine_add_input(&en_ts, &en_dp_enum, engine_noop_handler);
+    engine_add_input(&en_ts, &en_icsb_datapath_binding,
+                     en_ts_icsb_datapath_binding_handler);
+    engine_add_input(&en_ts, &en_icnb_ic_nb_global, en_ic_nb_global_handler);
+    engine_add_input(&en_ts, &en_icnb_transit_switch,
+                     en_ts_icnb_transit_switch_handler);
+    engine_add_input(&en_ts, &en_nb_logical_switch,
+                     en_ts_nb_logical_switch_handler);
     engine_add_input(&en_ts, &en_icsb_encap, NULL);
 
     /* en_tr: sync transit routers to NB and IC-SB datapath bindings. */
