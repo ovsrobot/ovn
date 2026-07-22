@@ -9317,6 +9317,7 @@ AT_CHECK([cat lrflows | grep -e lr_in_lookup_neighbor -e lr_in_learn_neighbor | 
   table=??(lr_in_lookup_neighbor), priority=100  , match=(arp.op == 2), action=(reg9[[2]] = lookup_arp(inport, arp.spa, arp.sha); next;)
   table=??(lr_in_lookup_neighbor), priority=100  , match=(nd_na), action=(reg9[[2]] = lookup_nd(inport, nd.target, nd.tll); next;)
   table=??(lr_in_lookup_neighbor), priority=100  , match=(nd_ns), action=(reg9[[2]] = lookup_nd(inport, ip6.src, nd.sll); next;)
+  table=??(lr_in_lookup_neighbor), priority=105  , match=(nd_na && nd.tll == 0), action=(reg9[[2]] = lookup_nd(inport, nd.target, eth.src); next;)
 ])
 
 OVN_CLEANUP_NORTHD
