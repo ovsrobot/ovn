@@ -135,6 +135,19 @@ ovn_init_symtab(struct shash *symtab)
         free(name);
     }
 
+    /* EVPN L3 VNI.  Carries the L3 VNI of a learned (type-5) route from the
+     * logical router pipeline to the EVPN tunnel egress in the peer logical
+     * switch pipeline.  Backed by tun_id, which is not part of the generic
+     * logical register range (reg0..reg9) that is zeroed on the
+     * router-to-switch transition, so it survives to the egress.  tun_id is a
+     * 64-bit tunnel-metadata field available in every OVS version, so this
+     * needs no special register capability.  The low 24 bits hold the VNI
+     * (which is also what gets encapsulated on the wire) and bit 31 marks the
+     * VNI as valid.  Bit 31 is above the 24-bit tunnel-key range, so it is
+     * guaranteed 0 on a tunnel-received packet (whose ingress VNI only
+     * occupies tun_id[0..23]) and is only ever set by the route flow. */
+    expr_symtab_add_field(symtab, "evpn_l3_vni", MFF_TUN_ID, NULL, false);
+
     /* Flags used in logical to physical transformation. */
     expr_symtab_add_field(symtab, "flags", MFF_LOG_FLAGS, NULL, false);
     char flags_str[16];

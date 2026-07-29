@@ -878,6 +878,11 @@ struct parsed_route {
     const struct ovn_port *out_port;
     const struct ovn_port *tracked_port; /* May be NULL. */
     bool dynamic_routing_advertise;
+    /* EVPN L3 VNI for this route (e.g. a type-5 route learned with a
+     * different VNI than the local switch's dynamic-routing-vni).  Valid only
+     * if 'vni_present'. */
+    bool vni_present;
+    uint32_t vni;
 };
 
 struct parsed_route *parsed_route_clone(const struct parsed_route *);
@@ -901,6 +906,8 @@ struct parsed_route *parsed_route_add(
     bool override_connected,
     const struct sset *ecmp_selection_fields,
     enum route_source source,
+    bool vni_present,
+    uint32_t vni,
     bool dynamic_routing_advertise,
     const struct ovsdb_idl_row *source_hint,
     const struct ovn_port *tracked_port,
