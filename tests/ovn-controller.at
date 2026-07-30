@@ -1121,6 +1121,87 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller - patch and tunnel ofports tracked separately])
+AT_KEYWORDS([ovn-patch-port-data])
+
+ovn_start
+net_add n1
+
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+check ovs-vsctl add-br br-eth0
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=physnet1:br-eth0
+ovn_attach n1 br-phys 192.168.0.1
+
+sim_add hv2
+as hv2
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.2
+
+check ovn-nbctl ls-add ls0 \
+    -- lsp-add ls0 ln0 \
+    -- lsp-set-type ln0 localnet \
+    -- lsp-set-addresses ln0 unknown \
+    -- lsp-set-options ln0 network_name=physnet1 \
+    -- lsp-add ls0 lsp0 \
+    -- lsp-set-addresses lsp0 "00:00:00:00:00:01 10.0.0.1"
+
+as hv1
+check ovs-vsctl add-port br-int vif0 \
+    -- set Interface vif0 external_ids:iface-id=lsp0
+
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
+# The localnet port of a locally bound datapath gets its OVS patch ports and
+# the remote chassis gets its tunnel port.  Wait for both to settle before
+# looking at the engine statistics.
+OVS_WAIT_UNTIL([test 1 -le $(ovs-vsctl get Interface patch-br-int-to-ln0 \
+                             ofport)])
+OVS_WAIT_UNTIL([test 1 -le $(ovs-vsctl get Interface ovn-hv2-0 ofport)])
+
+# A patch ofport change must be handled by en_patch_port_data only.  The tunnel
+# data (en_non_vif_data), which is also consumed by the logical flow output,
+# must not be invalidated by it.
+check as hv1 ovn-appctl -t ovn-controller inc-engine/clear-stats
+check ovs-vsctl set Interface patch-br-int-to-ln0 ofport_request=4242
+OVS_WAIT_UNTIL([test 4242 = $(ovs-vsctl get Interface patch-br-int-to-ln0 \
+                              ofport)])
+OVS_WAIT_UNTIL([test 1 -le $(ovs-ofctl dump-flows br-int | \
+                             grep -c 'in_port=4242')])
+check_controller_engine_stats hv1 patch_port_data recompute nocompute
+check_controller_engine_stats hv1 non_vif_data norecompute compute
+check_controller_engine_stats hv1 pflow_output recompute nocompute
+check_controller_engine_stats hv1 runtime_data norecompute compute
+check_controller_engine_stats hv1 lflow_output norecompute nocompute
+
+# Conversely, a tunnel ofport change must be handled by en_non_vif_data only
+# and must leave en_patch_port_data alone.  Tunnel interfaces are
+# deliberately NOT recognized by binding_handle_ovs_interface_changes() (see
+# is_iface_patch()), because runtime_data's 'active_tunnels' (BFD-derived
+# reachability, used by ECMP/gateway-chassis logical flow selection) has no
+# incremental tracking of its own and is only ever recalculated on a full
+# recompute of runtime_data.  So a tunnel ofport change is still expected to
+# force a full recompute of both runtime_data and (transitively, since
+# en_lflow_output has no change handler for its en_non_vif_data input)
+# lflow_output.
+check as hv1 ovn-appctl -t ovn-controller inc-engine/clear-stats
+check ovs-vsctl set Interface ovn-hv2-0 ofport_request=4243
+OVS_WAIT_UNTIL([test 4243 = $(ovs-vsctl get Interface ovn-hv2-0 ofport)])
+OVS_WAIT_UNTIL([test 1 -le $(ovs-ofctl dump-flows br-int | \
+                             grep -c 'in_port=4243')])
+check_controller_engine_stats hv1 non_vif_data recompute nocompute
+check_controller_engine_stats hv1 patch_port_data norecompute compute
+check_controller_engine_stats hv1 pflow_output recompute nocompute
+check_controller_engine_stats hv1 runtime_data recompute nocompute
+check_controller_engine_stats hv1 lflow_output recompute nocompute
+
+OVN_CLEANUP([hv1], [hv2])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn-controller - localnet port change and chassisredirect bridged redirect])
 AT_KEYWORDS([ovn-localnet-cr-bridged])
 

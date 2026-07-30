@@ -3644,12 +3644,72 @@ en_dns_cache_cleanup(void *data OVS_UNUSED)
 }
 
 
-/* Engine node which is used to handle the Non VIF data like
- *   - OVS patch ports
- *   - Tunnel ports and the related chassis information.
+/* Engine node which handles the OVS patch ports (localnet / L2 gateway).
+ *
+ * Kept separate from the tunnel data (en_non_vif_data) because patch ofports
+ * are consumed only by the physical flow output.  Bundling them with the
+ * tunnel data would force a full recompute of the logical flow output (which
+ * has no handler for its non_vif_data input) on every patch port change, e.g.
+ * whenever a bridged/L2 logical port is bound or moved between chassis.
+ */
+struct ed_type_patch_port_data {
+    struct simap patch_ofports; /* simap of patch ovs ports. */
+};
+
+static void *
+en_patch_port_data_init(struct engine_node *node OVS_UNUSED,
+                        struct engine_arg *arg OVS_UNUSED)
+{
+    struct ed_type_patch_port_data *data = xzalloc(sizeof *data);
+    simap_init(&data->patch_ofports);
+    return data;
+}
+
+static void
+en_patch_port_data_cleanup(void *data OVS_UNUSED)
+{
+    struct ed_type_patch_port_data *ed_patch_port_data = data;
+    simap_destroy(&ed_patch_port_data->patch_ofports);
+}
+
+static enum engine_node_state
+en_patch_port_data_run(struct engine_node *node, void *data)
+{
+    struct ed_type_patch_port_data *ed_patch_port_data = data;
+    simap_destroy(&ed_patch_port_data->patch_ofports);
+    simap_init(&ed_patch_port_data->patch_ofports);
+
+    const struct ovsrec_open_vswitch_table *ovs_table =
+        EN_OVSDB_GET(engine_get_input("OVS_open_vswitch", node));
+    const struct ovsrec_bridge_table *bridge_table =
+        EN_OVSDB_GET(engine_get_input("OVS_bridge", node));
+
+    const struct ovsrec_bridge *br_int = get_br_int(bridge_table, ovs_table);
+    ovs_assert(br_int);
+
+    local_patch_ports_run(br_int, &ed_patch_port_data->patch_ofports);
+
+    return EN_UPDATED;
+}
+
+static enum engine_input_handler_result
+patch_port_data_ovs_iface_handler(struct engine_node *node,
+                                  void *data OVS_UNUSED)
+{
+    const struct ovsrec_interface_table *iface_table =
+        EN_OVSDB_GET(engine_get_input("OVS_interface", node));
+
+    if (local_patch_ports_handle_ovs_iface_changes(iface_table)) {
+        return EN_HANDLED_UNCHANGED;
+    } else {
+        return EN_UNHANDLED;
+    }
+}
+
+/* Engine node which handles the tunnel ports and the related chassis
+ * information.  Consumed by both the physical and the logical flow output.
  */
 struct ed_type_non_vif_data {
-    struct simap patch_ofports; /* simap of patch ovs ports. */
     struct hmap chassis_tunnels; /* hmap of 'struct chassis_tunnel' from the
                                   * tunnel OVS ports. */
     struct flow_based_tunnel flow_tunnels[TUNNEL_TYPE_MAX];
@@ -3663,7 +3723,6 @@ en_non_vif_data_init(struct engine_node *node OVS_UNUSED,
                      struct engine_arg *arg OVS_UNUSED)
 {
     struct ed_type_non_vif_data *data = xzalloc(sizeof *data);
-    simap_init(&data->patch_ofports);
     hmap_init(&data->chassis_tunnels);
     flow_based_tunnels_init(data->flow_tunnels);
     data->use_flow_based_tunnels = false;
@@ -3674,7 +3733,6 @@ static void
 en_non_vif_data_cleanup(void *data OVS_UNUSED)
 {
     struct ed_type_non_vif_data *ed_non_vif_data = data;
-    simap_destroy(&ed_non_vif_data->patch_ofports);
     chassis_tunnels_destroy(&ed_non_vif_data->chassis_tunnels);
     flow_based_tunnels_destroy(ed_non_vif_data->flow_tunnels);
 }
@@ -3683,11 +3741,9 @@ static enum engine_node_state
 en_non_vif_data_run(struct engine_node *node, void *data)
 {
     struct ed_type_non_vif_data *ed_non_vif_data = data;
-    simap_destroy(&ed_non_vif_data->patch_ofports);
     chassis_tunnels_destroy(&ed_non_vif_data->chassis_tunnels);
     flow_based_tunnels_destroy(ed_non_vif_data->flow_tunnels);
 
-    simap_init(&ed_non_vif_data->patch_ofports);
     hmap_init(&ed_non_vif_data->chassis_tunnels);
     flow_based_tunnels_init(ed_non_vif_data->flow_tunnels);
 
@@ -3712,10 +3768,9 @@ en_non_vif_data_run(struct engine_node *node, void *data)
     ed_non_vif_data->use_flow_based_tunnels =
         is_flow_based_tunnels_enabled(ovs_table, chassis);
 
-    local_nonvif_data_run(br_int, chassis,
-                          &ed_non_vif_data->patch_ofports,
-                          &ed_non_vif_data->chassis_tunnels,
-                          ed_non_vif_data->flow_tunnels);
+    local_tunnels_run(br_int, chassis,
+                      &ed_non_vif_data->chassis_tunnels,
+                      ed_non_vif_data->flow_tunnels);
 
     return EN_UPDATED;
 }
@@ -3726,7 +3781,7 @@ non_vif_data_ovs_iface_handler(struct engine_node *node, void *data OVS_UNUSED)
     const struct ovsrec_interface_table *iface_table =
         EN_OVSDB_GET(engine_get_input("OVS_interface", node));
 
-    if (local_nonvif_data_handle_ovs_iface_changes(iface_table)) {
+    if (local_tunnels_handle_ovs_iface_changes(iface_table)) {
         return EN_HANDLED_UNCHANGED;
     } else {
         return EN_UNHANDLED;
@@ -4747,6 +4802,9 @@ static void init_physical_ctx(struct engine_node *node,
     const struct ed_type_mff_ovn_geneve *ed_mff_ovn_geneve =
         engine_get_input_data("mff_ovn_geneve", node);
 
+    struct ed_type_patch_port_data *patch_port_data =
+        engine_get_input_data("patch_port_data", node);
+
     const struct ovsrec_interface_table *ovs_interface_table =
         EN_OVSDB_GET(engine_get_input("if_status_mgr", node));
 
@@ -4798,7 +4856,7 @@ static void init_physical_ctx(struct engine_node *node,
     p_ctx->ct_zones = ct_zones;
     p_ctx->mff_ovn_geneve = ed_mff_ovn_geneve->mff_ovn_geneve;
     p_ctx->local_bindings = &rt_data->lbinding_data.bindings;
-    p_ctx->patch_ofports = &non_vif_data->patch_ofports;
+    p_ctx->patch_ofports = &patch_port_data->patch_ofports;
     p_ctx->chassis_tunnels = &non_vif_data->chassis_tunnels;
     p_ctx->flow_tunnels = non_vif_data->flow_tunnels;
     p_ctx->use_flow_based_tunnels = non_vif_data->use_flow_based_tunnels;
@@ -6975,6 +7033,7 @@ static ENGINE_NODE(template_vars, CLEAR_TRACKED_DATA);
 static ENGINE_NODE(ct_zones, CLEAR_TRACKED_DATA, IS_VALID);
 static ENGINE_NODE(ovs_interface_shadow, CLEAR_TRACKED_DATA);
 static ENGINE_NODE(runtime_data, CLEAR_TRACKED_DATA, SB_WRITE);
+static ENGINE_NODE(patch_port_data);
 static ENGINE_NODE(non_vif_data);
 static ENGINE_NODE(mff_ovn_geneve);
 static ENGINE_NODE(ofctrl_is_connected);
@@ -7068,6 +7127,11 @@ inc_proc_ovn_controller_init(
     engine_add_input(&en_port_groups, &en_runtime_data,
                      port_groups_runtime_data_handler);
 
+    engine_add_input(&en_patch_port_data, &en_ovs_open_vswitch, NULL);
+    engine_add_input(&en_patch_port_data, &en_ovs_bridge, NULL);
+    engine_add_input(&en_patch_port_data, &en_ovs_interface,
+                     patch_port_data_ovs_iface_handler);
+
     engine_add_input(&en_non_vif_data, &en_ovs_open_vswitch, NULL);
     engine_add_input(&en_non_vif_data, &en_ovs_bridge, NULL);
     engine_add_input(&en_non_vif_data, &en_sb_chassis, NULL);
@@ -7083,6 +7147,8 @@ inc_proc_ovn_controller_init(
     /* Note: The order of inputs is important, all OVS interface changes must
      * be handled before any ct_zone changes.
      */
+    engine_add_input(&en_pflow_output, &en_patch_port_data,
+                     NULL);
     engine_add_input(&en_pflow_output, &en_non_vif_data,
                      NULL);
     engine_add_input(&en_pflow_output, &en_northd_options, NULL);

@@ -2706,6 +2706,30 @@ is_iface_vif(const struct ovsrec_interface *iface_rec)
     return true;
 }
 
+/* Patch (localnet / L2 gateway) ports are OVS interfaces that
+ * ovn-controller itself creates and manages.  They never carry an iface-id
+ * and are of no interest to port binding processing: their ofport changes
+ * are already tracked by the patch_port_data engine node.  Recognizing them
+ * here lets binding_handle_ovs_interface_changes() skip them instead of
+ * treating them as an unhandled change and forcing a full recompute of
+ * runtime_data (and, transitively, of lflow_output) on every patch port
+ * bind / migration.
+ *
+ * Tunnel (geneve/vxlan) interfaces are deliberately NOT included here even
+ * though their ofport changes are tracked by the non_vif_data engine node:
+ * runtime_data's 'active_tunnels' (BFD-derived tunnel reachability, used by
+ * ECMP/gateway-chassis logical flow selection) is only ever recalculated
+ * during a full recompute of runtime_data, and currently has no incremental
+ * tracking of its own (see the engine dependency table above
+ * en_runtime_data_run()).  Treating tunnel interface changes as "handled"
+ * here would silently stop refreshing 'active_tunnels' on BFD status
+ * changes. */
+static bool
+is_iface_patch(const struct ovsrec_interface *iface_rec)
+{
+    return iface_rec->type && !strcmp(iface_rec->type, "patch");
+}
+
 bool
 is_iface_in_int_bridge(const struct ovsrec_interface *iface,
                        const struct ovsrec_bridge *br_int)
@@ -2786,6 +2810,58 @@ ovs_interface_change_need_handle(const struct ovsrec_interface *iface_rec,
     return false;
 }
 
+/* A datapath can become local (added to 'b_ctx_out->local_datapaths' and
+ * marked TRACKED_RESOURCE_NEW in 'b_ctx_out->tracked_dp_bindings') from more
+ * than one incremental handler: e.g. a VIF getting claimed by
+ * binding_handle_ovs_interface_changes(), or a port_binding update handled
+ * by binding_handle_port_binding_changes().  'tracked_dp_bindings' is reset
+ * on every engine iteration, but sibling ports of the newly-local datapath
+ * (localnet/external/vtep/multichassis) may already be present in the SB
+ * IDL and therefore never show up again as their own tracked change.  So
+ * every incremental handler that can call add_local_datapath() for a
+ * previously-unknown datapath must run this catch-up scan afterwards,
+ * otherwise those sibling ports are silently never registered until the
+ * next full recompute. */
+static void
+catch_up_new_local_datapaths(struct binding_ctx_in *b_ctx_in,
+                             struct binding_ctx_out *b_ctx_out)
+{
+    struct shash bridge_mappings = SHASH_INITIALIZER(&bridge_mappings);
+    add_ovs_bridge_mappings(b_ctx_in->ovs_table, b_ctx_in->bridge_table,
+                            &bridge_mappings);
+
+    struct tracked_datapath *t_dp;
+    HMAP_FOR_EACH (t_dp, node, b_ctx_out->tracked_dp_bindings) {
+        if (t_dp->tracked_type != TRACKED_RESOURCE_NEW) {
+            continue;
+        }
+        struct sbrec_port_binding *target =
+            sbrec_port_binding_index_init_row(
+                b_ctx_in->sbrec_port_binding_by_datapath);
+        sbrec_port_binding_index_set_datapath(target, t_dp->dp);
+
+        const struct sbrec_port_binding *pb;
+        SBREC_PORT_BINDING_FOR_EACH_EQUAL (pb, target,
+            b_ctx_in->sbrec_port_binding_by_datapath) {
+            enum en_lport_type lport_type = get_lport_type(pb);
+            if (lport_type == LP_LOCALNET) {
+                consider_localnet_lport(pb, b_ctx_out);
+                update_ld_localnet_port(pb, &bridge_mappings,
+                                        b_ctx_out->local_datapaths);
+            } else if (lport_type == LP_EXTERNAL) {
+                update_ld_external_ports(pb, b_ctx_out->local_datapaths);
+            } else if (lport_type == LP_VTEP) {
+                update_ld_vtep_port(pb, b_ctx_out->local_datapaths);
+            } else if (pb->n_additional_chassis) {
+                update_ld_multichassis_ports(pb, b_ctx_out->local_datapaths);
+            }
+        }
+        sbrec_port_binding_index_destroy_row(target);
+    }
+
+    shash_destroy(&bridge_mappings);
+}
+
 /* Returns true if the ovs interface changes were handled successfully,
  * false otherwise.
  */
@@ -2824,6 +2900,10 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
         const char *old_iface_id = smap_get(b_ctx_out->local_iface_ids,
                                             iface_rec->name);
         if (!iface_id && !old_iface_id && !is_iface_vif(iface_rec)) {
+            if (is_iface_patch(iface_rec)) {
+                /* Not a port binding concern, handled elsewhere. */
+                continue;
+            }
             /* Right now we are not handling ovs_interface changes if the
              * interface doesn't have iface-id or didn't have it
              * previously. */
@@ -2902,6 +2982,12 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
                 break;
             }
         }
+    }
+
+    if (handled) {
+        /* consider_iface_claim() above may have called add_local_datapath()
+         * for a datapath that was not local before. */
+        catch_up_new_local_datapaths(b_ctx_in, b_ctx_out);
     }
 
     return handled;
@@ -3471,41 +3557,7 @@ delete_done:
         /* There may be new local datapaths added by the above handling, so go
          * through each port_binding of newly added local datapaths to update
          * related local_datapaths if needed. */
-        struct shash bridge_mappings =
-            SHASH_INITIALIZER(&bridge_mappings);
-        add_ovs_bridge_mappings(b_ctx_in->ovs_table,
-                                b_ctx_in->bridge_table,
-                                &bridge_mappings);
-        struct tracked_datapath *t_dp;
-        HMAP_FOR_EACH (t_dp, node, b_ctx_out->tracked_dp_bindings) {
-            if (t_dp->tracked_type != TRACKED_RESOURCE_NEW) {
-                continue;
-            }
-            struct sbrec_port_binding *target =
-                sbrec_port_binding_index_init_row(
-                    b_ctx_in->sbrec_port_binding_by_datapath);
-            sbrec_port_binding_index_set_datapath(target, t_dp->dp);
-
-            SBREC_PORT_BINDING_FOR_EACH_EQUAL (pb, target,
-                b_ctx_in->sbrec_port_binding_by_datapath) {
-                enum en_lport_type lport_type = get_lport_type(pb);
-                if (lport_type == LP_LOCALNET) {
-                    consider_localnet_lport(pb, b_ctx_out);
-                    update_ld_localnet_port(pb, &bridge_mappings,
-                                            b_ctx_out->local_datapaths);
-                } else if (lport_type == LP_EXTERNAL) {
-                    update_ld_external_ports(pb, b_ctx_out->local_datapaths);
-                } else if (lport_type == LP_VTEP) {
-                    update_ld_vtep_port(pb, b_ctx_out->local_datapaths);
-                } else if (pb->n_additional_chassis) {
-                    update_ld_multichassis_ports(pb,
-                                                 b_ctx_out->local_datapaths);
-                }
-            }
-            sbrec_port_binding_index_destroy_row(target);
-        }
-
-        shash_destroy(&bridge_mappings);
+        catch_up_new_local_datapaths(b_ctx_in, b_ctx_out);
     }
 
     return handled;
