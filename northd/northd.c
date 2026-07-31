@@ -14443,12 +14443,20 @@ build_lrouter_force_snat_flows(struct lflow_table *lflows,
                                const struct ovn_datapath *od,
                                const char *ip_version, const char *ip_addr,
                                const char *context,
+                               const struct ovn_port *l3dgw_port,
                                struct lflow_ref *lflow_ref)
 {
     struct ds match = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
     ds_put_format(&match, "ip%s && ip%s.dst == %s",
                   ip_version, ip_version, ip_addr);
+    if (l3dgw_port) {
+        /* Distributed router: only unSNAT on the chassis where the
+         * gateway port is resident. */
+        ds_put_format(&match, " && inport == %s && is_chassis_resident("
+                      "\"%s\")", l3dgw_port->json_key,
+                      l3dgw_port->cr_port->key);
+    }
     ovn_lflow_add(lflows, od, S_ROUTER_IN_UNSNAT, 110,
                   ds_cstr(&match), "ct_snat;", lflow_ref);
 
@@ -14458,6 +14466,14 @@ build_lrouter_force_snat_flows(struct lflow_table *lflows,
     ds_clear(&match);
     ds_put_format(&match, "flags.force_snat_for_%s == 1 && ip%s",
                   context, ip_version);
+    if (l3dgw_port) {
+        /* Distributed router: force SNAT is applied on the chassis
+         * where the gateway port is resident, consistent with how
+         * regular SNAT entries are handled for such routers. */
+        ds_put_format(&match, " && outport == %s && is_chassis_resident("
+                      "\"%s\")", l3dgw_port->json_key,
+                      l3dgw_port->cr_port->key);
+    }
     ds_put_format(&actions, "ct_snat(%s);", ip_addr);
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 100,
                   ds_cstr(&match), ds_cstr(&actions),
@@ -18836,24 +18852,43 @@ build_lrouter_nat_defrag_and_lb(
             if (lrnat_rec->dnat_force_snat_addrs.n_ipv4_addrs) {
                 build_lrouter_force_snat_flows(lflows, od, "4",
                     lrnat_rec->dnat_force_snat_addrs.ipv4_addrs[0].addr_s,
-                    "dnat", lflow_ref);
+                    "dnat", NULL, lflow_ref);
             }
             if (lrnat_rec->dnat_force_snat_addrs.n_ipv6_addrs) {
                 build_lrouter_force_snat_flows(lflows, od, "6",
                     lrnat_rec->dnat_force_snat_addrs.ipv6_addrs[0].addr_s,
-                    "dnat", lflow_ref);
+                    "dnat", NULL, lflow_ref);
             }
         }
         if (lb_force_snat_ip) {
             if (lrnat_rec->lb_force_snat_addrs.n_ipv4_addrs) {
                 build_lrouter_force_snat_flows(lflows, od, "4",
                     lrnat_rec->lb_force_snat_addrs.ipv4_addrs[0].addr_s, "lb",
-                    lflow_ref);
+                    NULL, lflow_ref);
             }
             if (lrnat_rec->lb_force_snat_addrs.n_ipv6_addrs) {
                 build_lrouter_force_snat_flows(lflows, od, "6",
                     lrnat_rec->lb_force_snat_addrs.ipv6_addrs[0].addr_s, "lb",
-                    lflow_ref);
+                    NULL, lflow_ref);
+            }
+        }
+    } else if (lb_force_snat_ip) {
+        /* Distributed routers with gateway ports: the load balancer DNAT
+         * and the corresponding force_snat_for_lb flag are already applied
+         * on the chassis where the gateway port is resident, so apply the
+         * force SNAT flows there as well.  Without these flows the flag is
+         * set but never consumed and the option is silently ignored. */
+        struct ovn_port *dgp;
+        VECTOR_FOR_EACH (&od->l3dgw_ports, dgp) {
+            if (lrnat_rec->lb_force_snat_addrs.n_ipv4_addrs) {
+                build_lrouter_force_snat_flows(lflows, od, "4",
+                    lrnat_rec->lb_force_snat_addrs.ipv4_addrs[0].addr_s, "lb",
+                    dgp, lflow_ref);
+            }
+            if (lrnat_rec->lb_force_snat_addrs.n_ipv6_addrs) {
+                build_lrouter_force_snat_flows(lflows, od, "6",
+                    lrnat_rec->lb_force_snat_addrs.ipv6_addrs[0].addr_s, "lb",
+                    dgp, lflow_ref);
             }
         }
     }

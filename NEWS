@@ -1,5 +1,9 @@
 Post v26.03.0
 -------------
+   - northd: options:lb_force_snat_ip configured with a set of IP addresses
+     is now honored on routers with distributed gateway ports.  Previously
+     the option was silently ignored on such routers, while the
+     corresponding force-SNAT flag was still set on load balanced traffic.
    - OVN Interconnection now supports advertising Address_Sets to remote
      availability zones.  Set options:ic-adv=true on an NB Address_Set to
      have ovn-ic publish it to the IC-SB database and import it into the
