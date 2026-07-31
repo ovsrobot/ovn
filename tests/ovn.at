@@ -46661,8 +46661,9 @@ check ovn-nbctl ls-add sw              \
     -- lsp-set-addresses sw-ln unknown \
     -- lsp-set-options sw-ln network_name=phys mcast_flood_reports=true
 
-check ovn-nbctl lsp-add sw sw-p1 \
-    -- lsp-set-addresses sw-p1 "00:00:00:00:00:10 10.0.0.10"
+check ovn-nbctl lsp-add sw sw-p1                             \
+    -- lsp-set-addresses sw-p1 "00:00:00:00:00:10 10.0.0.10" \
+    -- lsp-set-options sw-p1 disable_garp_rarp=true
 
 check ovn-nbctl lsp-add sw sw-ext   \
     -- lsp-set-type sw-ext external \
