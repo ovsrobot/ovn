@@ -1121,6 +1121,133 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller - patch and tunnel ofports tracked separately])
+AT_KEYWORDS([ovn-patch-port-data])
+
+ovn_start
+net_add n1
+
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+check ovs-vsctl add-br br-eth0
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=physnet1:br-eth0
+ovn_attach n1 br-phys 192.168.0.1
+
+sim_add hv2
+as hv2
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.2
+
+check ovn-nbctl ls-add ls0 \
+    -- lsp-add ls0 ln0 \
+    -- lsp-set-type ln0 localnet \
+    -- lsp-set-addresses ln0 unknown \
+    -- lsp-set-options ln0 network_name=physnet1 \
+    -- lsp-add ls0 lsp0 \
+    -- lsp-set-addresses lsp0 "00:00:00:00:00:01 10.0.0.1"
+
+as hv1
+check ovs-vsctl add-port br-int vif0 \
+    -- set Interface vif0 external_ids:iface-id=lsp0
+
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
+# Wait for the localnet patch port and the tunnel port to settle.
+OVS_WAIT_UNTIL([test 1 -le $(ovs-vsctl get Interface patch-br-int-to-ln0 \
+                             ofport)])
+OVS_WAIT_UNTIL([test 1 -le $(ovs-vsctl get Interface ovn-hv2-0 ofport)])
+
+# A patch ofport change must not invalidate en_non_vif_data (and hence
+# en_lflow_output).
+check as hv1 ovn-appctl -t ovn-controller inc-engine/clear-stats
+check ovs-vsctl set Interface patch-br-int-to-ln0 ofport_request=4242
+OVS_WAIT_UNTIL([test 4242 = $(ovs-vsctl get Interface patch-br-int-to-ln0 \
+                              ofport)])
+OVS_WAIT_UNTIL([test 1 -le $(ovs-ofctl dump-flows br-int | \
+                             grep -c 'in_port=4242')])
+check_controller_engine_stats hv1 patch_port_data recompute nocompute
+check_controller_engine_stats hv1 non_vif_data norecompute compute
+check_controller_engine_stats hv1 pflow_output recompute nocompute
+check_controller_engine_stats hv1 runtime_data norecompute compute
+check_controller_engine_stats hv1 lflow_output norecompute nocompute
+
+# Conversely, a tunnel ofport change must leave en_patch_port_data alone.  It
+# still recomputes runtime_data (and hence lflow_output), because tunnel
+# interfaces are not skipped by binding_handle_ovs_interface_changes().
+check as hv1 ovn-appctl -t ovn-controller inc-engine/clear-stats
+check ovs-vsctl set Interface ovn-hv2-0 ofport_request=4243
+OVS_WAIT_UNTIL([test 4243 = $(ovs-vsctl get Interface ovn-hv2-0 ofport)])
+OVS_WAIT_UNTIL([test 1 -le $(ovs-ofctl dump-flows br-int | \
+                             grep -c 'in_port=4243')])
+check_controller_engine_stats hv1 non_vif_data recompute nocompute
+check_controller_engine_stats hv1 patch_port_data norecompute compute
+check_controller_engine_stats hv1 pflow_output recompute nocompute
+check_controller_engine_stats hv1 runtime_data recompute nocompute
+check_controller_engine_stats hv1 lflow_output recompute nocompute
+
+OVN_CLEANUP([hv1], [hv2])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller - VIF backed by an OVS patch port])
+AT_KEYWORDS([ovn-patch-port-data])
+
+ovn_start
+net_add n1
+
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+check ovn-nbctl ls-add ls0 \
+    -- lsp-add ls0 lsp0 \
+    -- lsp-set-addresses lsp0 "00:00:00:00:00:01 10.0.0.1"
+
+# An OVS patch port created by the CMS carries an iface-id, so it must be
+# claimed, followed and released just like any other VIF.
+check ovs-vsctl add-br br-cms
+check ovs-vsctl add-port br-int lsp0-int \
+    -- set Interface lsp0-int type=patch options:peer=lsp0-cms \
+                              external_ids:iface-id=lsp0 \
+    -- add-port br-cms lsp0-cms \
+    -- set Interface lsp0-cms type=patch options:peer=lsp0-int
+
+wait_for_ports_up lsp0
+check ovn-nbctl --wait=hv sync
+
+# Physical flows for a VIF get their ofport from the local binding, so their
+# presence proves the interface was not skipped.
+OVS_WAIT_UNTIL([test 1 -le $(ovs-vsctl get Interface lsp0-int ofport)])
+ofport=$(ovs-vsctl get Interface lsp0-int ofport)
+OVS_WAIT_UNTIL([test 1 -le $(ovs-ofctl dump-flows br-int | \
+                             grep -c "in_port=$ofport")])
+
+# An ofport change of such an interface must be followed as well.
+check ovs-vsctl set Interface lsp0-int ofport_request=4242
+OVS_WAIT_UNTIL([test 4242 = $(ovs-vsctl get Interface lsp0-int ofport)])
+OVS_WAIT_UNTIL([test 1 -le $(ovs-ofctl dump-flows br-int | \
+                             grep -c 'in_port=4242')])
+
+# Clearing the iface-id must release the port binding.
+check ovs-vsctl remove Interface lsp0-int external_ids iface-id
+wait_column "" Port_Binding chassis logical_port=lsp0
+wait_row_count nb:Logical_Switch_Port 1 up=false name=lsp0
+
+# Setting it back must claim it again.
+check ovs-vsctl set Interface lsp0-int external_ids:iface-id=lsp0
+wait_for_ports_up lsp0
+OVS_WAIT_UNTIL([test 1 -le $(ovs-ofctl dump-flows br-int | \
+                             grep -c 'in_port=4242')])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn-controller - localnet port change and chassisredirect bridged redirect])
 AT_KEYWORDS([ovn-localnet-cr-bridged])
 
