@@ -1605,6 +1605,9 @@ load_logical_ingress_metadata(const struct sbrec_port_binding *binding,
         }
         put_load(encap_id, MFF_LOG_ENCAP_ID, 16, 16, ofpacts_p);
     }
+
+    /* Resubmit to OFTABLE_INPORT_IN_MC_UNKNOWN_LOOKUP table. */
+    put_resubmit(OFTABLE_INPORT_IN_MC_UNKNOWN_LOOKUP, ofpacts_p);
 }
 
 static bool
@@ -2924,6 +2927,27 @@ mc_ofctrl_add_flow(const struct sbrec_multicast_group *mc,
 }
 
 static void
+add_inport_to_mc_unknown_table(const struct sbrec_multicast_group *mc,
+                               const struct sbrec_port_binding *port,
+                               struct ovn_desired_flow_table *flow_table)
+{
+    struct match match = MATCH_CATCHALL_INITIALIZER;
+    match_inport_dp_and_port_keys(&match, mc->datapath->tunnel_key,
+                                  port->tunnel_key);
+
+    uint64_t ofpacts_stub[16];
+    struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(ofpacts_stub);
+    put_load(1, MFF_LOG_FLAGS, MLF_INPORT_IN_MC_UNKNOWN_BIT, 1, &ofpacts);
+
+    /* Install a flow in OFTABLE_INPORT_IN_MC_UNKNOWN_LOOKUP that sets
+     * MLF_INPORT_IN_MC_UNKNOWN flag for packets ingressing on 'port'. */
+    ofctrl_add_flow(flow_table, OFTABLE_INPORT_IN_MC_UNKNOWN_LOOKUP, 100,
+                    mc->header_.uuid.parts[0], &match, &ofpacts,
+                    &mc->header_.uuid);
+    ofpbuf_uninit(&ofpacts);
+}
+
+static void
 consider_mc_group(const struct physical_ctx *ctx,
                   const struct sbrec_multicast_group *mc,
                   struct ovn_desired_flow_table *flow_table)
@@ -3001,6 +3025,21 @@ consider_mc_group(const struct physical_ctx *ctx,
 
         const char *lport_name = (port->parent_port && *port->parent_port) ?
                                   port->parent_port : port->logical_port;
+
+        /* For MC_UNKNOWN local members, add a flow in
+         * OFTABLE_INPORT_IN_MC_UNKNOWN_LOOKUP table to set
+         * MLF_INPORT_IN_MC_UNKNOWN flag. */
+        if (mc->tunnel_key == OVN_MCAST_UNKNOWN_TUNNEL_KEY) {
+            bool is_local =
+                port == ldp->localnet_port
+                || ((port->chassis == ctx->chassis
+                     || is_additional_chassis(port, ctx->chassis))
+                    && local_binding_get_primary_pb(ctx->local_bindings,
+                                                    lport_name));
+            if (is_local) {
+                add_inport_to_mc_unknown_table(mc, port, flow_table);
+            }
+        }
 
         if (type == LP_PATCH) {
             if (ldp->is_transit_switch) {

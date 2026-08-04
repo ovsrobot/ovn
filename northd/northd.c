@@ -176,6 +176,9 @@ static bool vxlan_mode;
 #define REGBIT_NF_ENABLED         "reg8[21]"
 #define REGBIT_NF_ORIG_DIR        "reg8[22]"
 #define REGBIT_NF_EGRESS_LOOPBACK "reg8[23]"
+/* Set on a post-NF packet flowing back out its original ingress port;
+ * such packets are dropped. */
+#define REGBIT_NF_LOOKUP_HIT      "reg8[24]"
 /* Register to store the network function group id */
 #define REG_NF_GROUP_ID           "reg0[22..29]"
 /* REG_NF_ID overrides REG_NF_GROUP_ID in the pre_network_function stage. */
@@ -315,6 +318,8 @@ static const char *reg_ct_state[] = {
  * |    | REGBIT_NF_{ENABLED/ORIG_DIR/                 | G |                                   |
  * |    |            EGRESS_LOOPBACK}                  | 4 |                                   |
  * |    |       (>= ACL_EVAL* && <= NF*)               |   |                                   |
+ * |    | REGBIT_NF_LOOKUP_HIT                         |   |                                   |
+ * |    |     (>= OUT_PRE_ACL && <= OUT_CHECK_PORT_SEC)|   |                                   |
  * +----+----------------------------------------------+   +-----------------------------------+
  * | R9 |              OBS_POINT_ID_EST                |   |                                   |
  * |    |       (>= ACL_EVAL* && <= ACL_ACTION*)       |   |                                   |
@@ -19473,6 +19478,68 @@ network_function_configure_fail_open_flows(struct lflow_table *lflows,
 }
 
 static void
+build_nf_learn_orig_inport_flows(struct lflow_table *lflows,
+                                   const struct ovn_datapath *od,
+                                   const struct ovn_stage *stage,
+                                   uint16_t priority,
+                                   const char *match_suffix,
+                                   const char *action_suffix,
+                                   struct lflow_ref *lflow_ref)
+{
+    struct ds match = DS_EMPTY_INITIALIZER;
+    struct ds action = DS_EMPTY_INITIALIZER;
+
+    /* Emit IPv4 nf_learn_orig_inport() flows for flagged IP packets. */
+    ds_put_cstr(&match, "ip4 && flags.inport_in_mc_unknown == 1");
+    if (match_suffix) {
+        ds_put_format(&match, " && %s", match_suffix);
+    }
+    ds_put_format(&action, "nf_learn_orig_inport(ipv6 = false); %s",
+                  action_suffix);
+    ovn_lflow_add(lflows, od, stage, priority, ds_cstr(&match),
+                  ds_cstr(&action), lflow_ref);
+
+    ds_clear(&match);
+    ds_clear(&action);
+    /* Emit IPv6 nf_learn_orig_inport() flows for flagged IP packets. */
+    ds_put_cstr(&match, "ip6 && flags.inport_in_mc_unknown == 1");
+    if (match_suffix) {
+        ds_put_format(&match, " && %s", match_suffix);
+    }
+    ds_put_format(&action, "nf_learn_orig_inport(ipv6 = true); %s",
+                  action_suffix);
+    ovn_lflow_add(lflows, od, stage, priority, ds_cstr(&match),
+                  ds_cstr(&action), lflow_ref);
+
+    ds_destroy(&match);
+    ds_destroy(&action);
+}
+
+static void
+build_nf_lookup_orig_inport_flow(struct lflow_table *lflows,
+                                   const struct ovn_datapath *od,
+                                   const struct ovn_stage *stage,
+                                   uint16_t priority,
+                                   const struct ovn_port *port,
+                                   const char *action_suffix,
+                                   struct lflow_ref *lflow_ref)
+{
+    struct ds match = DS_EMPTY_INITIALIZER;
+    struct ds action = DS_EMPTY_INITIALIZER;
+
+    /* Prepend nf_lookup_orig_inport() action for packets entering on
+     * 'port'. */
+    ds_put_format(&match, "inport == %s", port->json_key);
+    ds_put_format(&action,
+                  REGBIT_NF_LOOKUP_HIT " = nf_lookup_orig_inport(); %s",
+                  action_suffix);
+    ovn_lflow_add(lflows, od, stage, priority, ds_cstr(&match),
+                  ds_cstr(&action), lflow_ref);
+    ds_destroy(&match);
+    ds_destroy(&action);
+}
+
+static void
 consider_network_function_inline(struct lflow_table *lflows,
                                  const struct ovn_datapath *od,
                                  struct nbrec_network_function_group *nfg,
@@ -19586,6 +19653,13 @@ consider_network_function_inline(struct lflow_table *lflows,
                   (uint8_t) nf->id);
     ovn_lflow_add(lflows, od, fwd_stage, 99, ds_cstr(&match),
                   ds_cstr(&action), lflow_ref);
+
+    /* Priority 100 in fwd_stage: same as the priority-99 redirect above,
+     * but learn the original inport first for flagged IP packets. */
+    build_nf_learn_orig_inport_flows(lflows, od, fwd_stage, 100,
+                                       ds_cstr(&match), ds_cstr(&action),
+                                       lflow_ref);
+
     ds_clear(&match);
     ds_clear(&action);
 
@@ -19623,53 +19697,57 @@ consider_network_function_inline(struct lflow_table *lflows,
     ds_clear(&match);
     ds_clear(&action);
 
-    /* Priority 100 flow in in_nf:
+    /* Priority 110 flow in in_nf:
      * Allow packets to go through if coming from network-function port as
      * we don't want the packets to be redirected again based on from-lport
      * match.
      */
     ds_put_format(&match, "inport == %s", input_port->json_key);
     ds_put_format(&action, REG_TUN_OFPORT" = ct_label.tun_if_id; next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 100,
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 110,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
 
     ds_put_format(&match, "inport == %s", output_port->json_key);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 100,
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 110,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
     ds_clear(&action);
 
-    /* Priority 100 flow in out_nf:
+    /* Priority 110 flow in out_nf:
      * Allow packets to go through if outport is network-function port as
      * we don't want the packets to be redirected again based on to-lport
      * match.
      */
     ds_put_format(&match, "outport == %s", input_port->json_key);
     ds_put_format(&action, "next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 100,
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 110,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
 
     ds_put_format(&match, "outport == %s", output_port->json_key);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 100,
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 110,
                   ds_cstr(&match), ds_cstr(&action), lflow_ref);
     ds_clear(&match);
     ds_clear(&action);
 
-    /* For packets redirected from egress pipleline to the NF, when they come
-     * out from the other NF port, we don't want to process them again through
-     * egress stages they already went through, especially not again through
-     * conntrack as these packets are already accounted for there. Hence we
-     * need to skip the initial pipeline stages for such packets and directly
-     * start from the NF table. The packets that fall under this category are
-     * the response packets from NF for from-lport ACLs and request packets
-     * received from NF for to-lport ACLs. */
-    ds_put_format(&match, "inport == %s", input_port->json_key);
+    /* Post-NF Processing: Resumes pipeline after ls_out_nf to bypass
+     * previously completed egress stages (e.g., conntrack). Uses priority
+     * 115 in out_pre_acl to take precedence over priority-110 conntrack
+     * skips, and calls nf_lookup_orig_inport() to identify loopback
+     * packets returning on their original inport. */
     ds_put_format(&action, "next(pipeline=egress, table=%d);",
-                  (ovn_stage_get_table(S_SWITCH_OUT_NF) + 1));
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110, ds_cstr(&match),
-                  ds_cstr(&action), lflow_ref);
+                  ovn_stage_get_table(S_SWITCH_OUT_NF) + 1);
+    build_nf_lookup_orig_inport_flow(lflows, od, S_SWITCH_OUT_PRE_ACL, 115,
+                                       input_port, ds_cstr(&action),
+                                       lflow_ref);
+    ds_clear(&action);
+
+    /* Priority 2 in out_nf (output_port): post-NF packet re-entering the
+     * egress pipeline; run the lookup here so ls_out_check_port_sec drops
+     * a loopback copy. */
+    build_nf_lookup_orig_inport_flow(lflows, od, S_SWITCH_OUT_NF, 2,
+                                       output_port, "next;", lflow_ref);
 
     /* Priority 120 flows in out_stateful:
      * If packet was received on a tunnel interface and being forwarded to a
@@ -19888,6 +19966,7 @@ build_network_function(const struct ovn_datapath *od,
 {
     unsigned long *nfg_ingress_bitmap = bitmap_allocate(MAX_OVN_NF_GROUP_IDS);
     unsigned long *nfg_egress_bitmap = bitmap_allocate(MAX_OVN_NF_GROUP_IDS);
+    bool has_nfg = false;
 
     /* This flow matches packets injected from out_nf stage -
      * after it sets the outport - back to in_l2_lkup stage. This rule must be
@@ -19915,14 +19994,15 @@ build_network_function(const struct ovn_datapath *od,
                   REGBIT_NF_ENABLED" == 1 && " REGBIT_NF_ORIG_DIR" == 1",
                   REG_NF_ID" = 0; next;", lflow_ref);
 
-    /* Ingress and Egress NF Table (Priority 100): ACL stage determined these
-     * packets should be redirected, but these are multicast/broadcast
-     * packets which can cause L2 loop if redirected to NF. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 100,
-                  REGBIT_NF_ENABLED" == 1 && eth.mcast",
+    /* Ingress and Egress NF Table (Priority 110): skip the NF redirect for
+     * multicast/broadcast packets marked by the ACL, which would otherwise
+     * cause an L2 loop.  Higher than the redirect/learn flows so they skip
+     * both. */
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_NF, 110,
+                  "eth.mcast",
                   "next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 100,
-                  REGBIT_NF_ENABLED" == 1 && eth.mcast",
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_NF, 110,
+                  "eth.mcast",
                   "next;", lflow_ref);
 
     /* Ingress and Egress NF Table (Priority 0): Packets are forwarded to
@@ -19956,6 +20036,7 @@ build_network_function(const struct ovn_datapath *od,
                 continue;
             }
             nfg_bitmap = bitmap_set1(nfg_bitmap, nfg_id);
+            has_nfg = true;
             consider_network_function(lflows, od, acl->network_function_group,
                                       ingress, lflow_ref);
         }
@@ -19981,6 +20062,7 @@ build_network_function(const struct ovn_datapath *od,
                         continue;
                     }
                     nfg_bitmap = bitmap_set1(nfg_bitmap, nfg_id);
+                    has_nfg = true;
                     consider_network_function(lflows, od,
                                               acl->network_function_group,
                                               ingress, lflow_ref);
@@ -19988,6 +20070,25 @@ build_network_function(const struct ovn_datapath *od,
             }
         }
     }
+
+    if (has_nfg) {
+        /* Drop the loopback copy flagged by nf_lookup_orig_inport(). */
+        ovn_lflow_add(lflows, od, S_SWITCH_OUT_CHECK_PORT_SEC, 110,
+                      REGBIT_NF_LOOKUP_HIT " == 1", debug_drop_action(),
+                      lflow_ref);
+
+        /* Overlay only: always learn the inport when the packet enters
+         * on an MC_unknown-member port, so a post-NF loopback copy can
+         * be detected and dropped when the destination port has NF
+         * redirection enabled. */
+        if (!ls_has_localnet_port(od)) {
+            build_nf_learn_orig_inport_flows(
+                lflows, od, S_SWITCH_IN_NF, 50,
+                REGBIT_NF_ENABLED" == 0",
+                "next;", lflow_ref);
+        }
+    }
+
     bitmap_free(nfg_ingress_bitmap);
     bitmap_free(nfg_egress_bitmap);
 }
