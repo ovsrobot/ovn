@@ -5400,6 +5400,9 @@ route_runtime_data_handler(struct engine_node *node, void *data)
      * 2. A route-exchange relevant port went form local to remote or the
      *    other way round.
      * 3. A tracked_port went from local to remote or the other way round.
+     * 4. A datapath became local or stopped being local.  Such a datapath
+     *    contributes peer ports to the router datapaths it is connected to,
+     *    so it can make a router start or stop taking part in route exchange.
      * */
     struct tracked_datapath *t_dp;
     HMAP_FOR_EACH (t_dp, node, &rt_data->tracked_dp_bindings) {
@@ -5407,6 +5410,12 @@ route_runtime_data_handler(struct engine_node *node, void *data)
             tracked_datapath_find(&re_data->tracked_route_datapaths, t_dp->dp);
 
         if (re_t_dp) {
+            /* XXX: Until we get I-P support for route exchange we need to
+             * request recompute. */
+            return EN_UNHANDLED;
+        }
+
+        if (t_dp->tracked_type != TRACKED_RESOURCE_UPDATED) {
             /* XXX: Until we get I-P support for route exchange we need to
              * request recompute. */
             return EN_UNHANDLED;
