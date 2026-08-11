@@ -2537,7 +2537,8 @@ sync_learned_routes(struct ic_context *ctx,
         nbrec_nb_global_first(ctx->ovnnb_idl);
     ovs_assert(nb_global);
 
-    const char *lrp_name, *ts_route_table, *route_tag_filter;
+    const char *lrp_name, *ts_route_table, *route_tag_filter,
+               *route_tag_allow;
     const struct icsbrec_port_binding *isb_pb;
     const struct nbrec_logical_router_port *lrp;
     VECTOR_FOR_EACH (&ic_lr->isb_pbs, isb_pb) {
@@ -2550,14 +2551,24 @@ sync_learned_routes(struct ic_context *ctx,
             ts_route_table = smap_get_def(&lrp->options, "route_table", "");
             route_tag_filter = smap_get_def(&lrp->options,
                                             "ic-route-filter-tag", "");
+            route_tag_allow = smap_get_def(&lrp->options,
+                                            "ic-route-allow-tag", "");
         } else {
             ts_route_table = "";
             route_tag_filter = "";
+            route_tag_allow = "";
         }
 
         /* The filter tag option accepts a comma-separated list of tags. */
         struct sset filter_tags = SSET_INITIALIZER(&filter_tags);
         sset_from_delimited_string(&filter_tags, route_tag_filter, ",");
+
+
+        /* Allowlist of route tags to learn. When non-empty, only routes
+         * whose "ic-route-tag" is in this set are learned; every other
+         * route (including untagged ones) is filtered out. */
+        struct sset allow_tag_set = SSET_INITIALIZER(&allow_tag_set);
+        sset_from_delimited_string(&allow_tag_set, route_tag_allow, ",");
 
         isb_route_key = icsbrec_route_index_init_row(ctx->icsbrec_route_by_ts);
         icsbrec_route_index_set_transit_switch(isb_route_key,
@@ -2588,6 +2599,18 @@ sync_learned_routes(struct ic_context *ctx,
                          isb_route->ip_prefix, isb_route->nexthop,
                          isb_route_tag, route_tag_filter);
                 continue;
+            }
+
+            if (!sset_is_empty(&allow_tag_set)) {
+                if (!isb_route_tag ||
+                    !sset_contains(&allow_tag_set, isb_route_tag)) {
+                    VLOG_DBG("Skip learning route %s -> %s as its route tag "
+                             "[%s] is not in the allow tag list [%s] of TS"
+                             "LRP ", isb_route->ip_prefix, isb_route->nexthop,
+                             isb_route_tag ? isb_route_tag : "(none)",
+                            route_tag_allow);
+                    continue;
+                }
             }
 
             if (isb_route->route_table[0] &&
@@ -2655,6 +2678,7 @@ sync_learned_routes(struct ic_context *ctx,
         }
         icsbrec_route_index_destroy_row(isb_route_key);
         sset_destroy(&filter_tags);
+        sset_destroy(&allow_tag_set);
     }
 
     /* Delete extra learned routes. */

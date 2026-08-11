@@ -4700,6 +4700,30 @@ or
         </p>
       </column>
 
+      <column name="options" key="ic-route-allow-tag"
+              type='{"type": "string"}'>
+        <p>
+          This option expects a comma-separated list of allowed route-tags,
+          for example <code>vpc1,vpc2</code>. When set on the Logical Router
+          Port, it acts as an allowlist for the route learning process: only
+          routes whose <code>ic-route-tag</code> (present in the
+          <code>external_ids</code> register of the advertised route entry in
+          the <ref table="Route" db="OVN_IC_Southbound"/> table of the
+          <ref db="OVN_IC_Southbound"/> database) matches one of the listed
+          tags are learned by the <code>ovn-ic</code> daemon. Every other
+          route, including routes that carry no <code>ic-route-tag</code> at
+          all, is filtered and not learned.
+        </p>
+
+        <p>
+          When both this option and <ref column="options"
+          key="ic-route-filter-tag"/> are set, the blocklist behaviour of
+          <ref column="options" key="ic-route-filter-tag"/> takes precedence:
+          a route whose tag matches the filter tag is skipped even if the
+          same tag is present in this allowlist.
+        </p>
+      </column>
+
       <column name="options" key="requested-chassis">
         <p>
           If set, identifies a specific chassis (by name or hostname) that

@@ -94,6 +94,10 @@ Post v26.03.0
    - Added a new "ovn-debug lflow-pipeline-oftable-start-list" command that
      prints the starting OpenFlow table number of the logical ingress and
      egress pipelines.
+   - Added "ic-route-allow-tag" option to the Logical_Router_Port
+     table, it accepts a comma-separated list of route tags and
+     only IC routes whose "ic-route-tag" matches one of them are learned.
+     "ic-route-filter-tag" takes precedence over it.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
