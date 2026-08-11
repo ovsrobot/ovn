@@ -2537,7 +2537,7 @@ sync_learned_routes(struct ic_context *ctx,
         nbrec_nb_global_first(ctx->ovnnb_idl);
     ovs_assert(nb_global);
 
-    const char *lrp_name, *ts_route_table, *route_filter_tag;
+    const char *lrp_name, *ts_route_table, *route_tag_filter;
     const struct icsbrec_port_binding *isb_pb;
     const struct nbrec_logical_router_port *lrp;
     VECTOR_FOR_EACH (&ic_lr->isb_pbs, isb_pb) {
@@ -2548,12 +2548,16 @@ sync_learned_routes(struct ic_context *ctx,
         lrp = get_lrp_by_lrp_name(ctx, lrp_name);
         if (lrp) {
             ts_route_table = smap_get_def(&lrp->options, "route_table", "");
-            route_filter_tag = smap_get_def(&lrp->options,
+            route_tag_filter = smap_get_def(&lrp->options,
                                             "ic-route-filter-tag", "");
         } else {
             ts_route_table = "";
-            route_filter_tag = "";
+            route_tag_filter = "";
         }
+
+        /* The filter tag option accepts a comma-separated list of tags. */
+        struct sset filter_tags = SSET_INITIALIZER(&filter_tags);
+        sset_from_delimited_string(&filter_tags, route_tag_filter, ",");
 
         isb_route_key = icsbrec_route_index_init_row(ctx->icsbrec_route_by_ts);
         icsbrec_route_index_set_transit_switch(isb_route_key,
@@ -2578,11 +2582,11 @@ sync_learned_routes(struct ic_context *ctx,
 
             const char *isb_route_tag = smap_get(&isb_route->external_ids,
                                                  "ic-route-tag");
-            if (isb_route_tag  && !strcmp(isb_route_tag, route_filter_tag)) {
+            if (isb_route_tag && sset_contains(&filter_tags, isb_route_tag)) {
                 VLOG_DBG("Skip learning route %s -> %s as its route tag "
-                         "[%s] is filtered by the filter tag [%s] of TS LRP ",
+                         "[%s] is filtered by the filter tags [%s] of TS LRP ",
                          isb_route->ip_prefix, isb_route->nexthop,
-                         isb_route_tag, route_filter_tag);
+                         isb_route_tag, route_tag_filter);
                 continue;
             }
 
@@ -2650,6 +2654,7 @@ sync_learned_routes(struct ic_context *ctx,
             }
         }
         icsbrec_route_index_destroy_row(isb_route_key);
+        sset_destroy(&filter_tags);
     }
 
     /* Delete extra learned routes. */
