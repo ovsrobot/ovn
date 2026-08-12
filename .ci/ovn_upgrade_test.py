@@ -15,6 +15,7 @@ from ovn_upgrade_utils import (
     ovn_upgrade_save_current_binaries,
     ovn_upgrade_extract_info,
     run_upgrade_workflow,
+    collect_logs,
     remove_upgrade_test_directory,
     UpgradeConfig
 )
@@ -45,6 +46,7 @@ def main():
     test_success = False
 
     def cleanup():
+        collect_logs(config)
         flags = os.environ.get('TESTSUITEFLAGS', '')
         if '-d' in flags or '--debug' in flags or not test_success:
             log(f"Keeping {config.path.upgrade_dir} for debugging")

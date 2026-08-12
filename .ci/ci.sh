@@ -52,8 +52,8 @@ function archive_logs() {
         cp -r $CONTAINER_WORKDIR/tests/system-*-testsuite.* \
         $log_dir || true \
         && \
-        cp -r $CONTAINER_WORKDIR/tests/upgrade-testsuite.* \
-        $log_dir || true \
+        cp -r $CONTAINER_WORKDIR/tests/upgrade-testsuite.dir/logs \
+        $log_dir/upgrade-testsuite.dir || true \
         && \
         chmod -R +r $log_dir \
         &&

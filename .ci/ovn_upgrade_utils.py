@@ -23,6 +23,7 @@ GIT_LOG = 'git.log'
 NEW_EGRESS = 'ovn-upgrade-new-log-egress.txt'
 M4_DEFINES = 'ovn-upgrade-oftable-m4-defines.txt'
 OFCTL_DEFINES = 'ovn-upgrade-ofctl-defines.h'
+LOGS_DIR = 'logs'
 
 
 @contextlib.contextmanager
@@ -42,6 +43,7 @@ class PathConfig:
     base_dir: Path      # Path for base branch i.e. from which we upgrade
     binaries_dir: Path  # Path for binaries from dst branch
     test_dir: Path      # Path for system tests run by upgrade tests.
+    logs_dir: Path      # Path for collected logs (for CI archiving).
 
 
 @dataclass
@@ -86,6 +88,7 @@ class UpgradeConfig:
             base_dir=base_dir,
             upgrade_dir=upgrade_dir,
             test_dir=base_dir / SYSTEM_TESTS_DIR,
+            logs_dir=upgrade_dir / LOGS_DIR,
         )
 
         file_obj = FileConfig(
@@ -657,6 +660,34 @@ def run_upgrade_workflow(config):
             return False
 
         return True
+
+
+def collect_logs(config):
+    """Collect relevant logs into upgrade-testsuite.dir/logs/.
+
+    Copies only the files needed for debugging (log files from
+    upgrade-testsuite.dir and test results from base-repo) so that
+    ci.sh can archive a single small directory instead of the entire
+    base-repo source tree.
+    """
+    logs_dir = config.path.logs_dir
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Collect log files from upgrade-testsuite.dir.
+    for pattern in ('*.log', '*.txt', '*.h'):
+        for f in config.path.upgrade_dir.glob(pattern):
+            shutil.copy2(f, logs_dir)
+
+    # Collect test results from base-repo (log + per-test dirs).
+    test_log = config.file.test_log
+    test_dir = config.path.test_dir
+    if test_log.exists():
+        shutil.copy2(test_log, logs_dir)
+    if test_dir.exists():
+        shutil.copytree(test_dir, logs_dir / test_dir.name,
+                        dirs_exist_ok=True)
+
+    log(f"Logs collected in {logs_dir}")
 
 
 def remove_upgrade_test_directory(config):
