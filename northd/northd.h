@@ -160,6 +160,7 @@ enum northd_tracked_data_type {
     NORTHD_TRACKED_SWITCHES = (1 << 5),
     NORTHD_TRACKED_ROUTERS  = (1 << 6),
     NORTHD_TRACKED_LR_ROUTES = (1 << 7),
+    NORTHD_TRACKED_LR_PORTS = (1 << 8),
 };
 
 /* Track what's changed in the northd engine node.
@@ -171,6 +172,10 @@ struct northd_tracked_data {
     struct tracked_dps trk_switches;
     struct tracked_dps trk_routers;
     struct tracked_ovn_ports trk_lsps;
+
+    /* Tracked created/updated/deleted logical router ports.
+     * hmapx node data is 'struct ovn_port *'. */
+    struct tracked_ovn_ports trk_lrps;
     struct tracked_lbs trk_lbs;
 
     /* Tracked logical routers whose NATs have changed.
@@ -914,6 +919,11 @@ struct parsed_route *parsed_routes_add_static(
     struct hmap *routes, struct simap *route_tables,
     struct hmap *bfd_active_connections);
 
+void parsed_routes_add_connected(const struct ovn_datapath *od,
+                                 const struct ovn_port *op,
+                                 struct hmap *routes,
+                                 struct hmapx *trk_crupdated);
+
 struct svc_monitors_map_data {
     const struct hmap *local_svc_monitors_map;
     const struct hmap *ic_learned_svc_monitors_map;
@@ -939,7 +949,8 @@ void ovnsb_db_run(struct ovsdb_idl_txn *ovnsb_txn,
 bool northd_handle_ls_changes(struct ovsdb_idl_txn *,
                               const struct northd_input *,
                               struct northd_data *);
-bool northd_handle_lr_changes(const struct northd_input *,
+bool northd_handle_lr_changes(struct ovsdb_idl_txn *,
+                              const struct northd_input *,
                               struct northd_data *);
 bool northd_handle_pgs_acl_changes(const struct northd_input *ni,
                                    struct northd_data *nd);
@@ -994,6 +1005,10 @@ bool lflow_handle_northd_port_changes(struct ovsdb_idl_txn *ovnsb_txn,
                                       struct tracked_ovn_ports *,
                                       struct lflow_input *,
                                       struct lflow_table *lflows);
+bool lflow_handle_northd_lrp_changes(struct ovsdb_idl_txn *ovnsb_txn,
+                                     struct tracked_ovn_ports *,
+                                     struct lflow_input *,
+                                     struct lflow_table *lflows);
 bool lflow_handle_northd_lb_changes(struct ovsdb_idl_txn *ovnsb_txn,
                                     struct tracked_lbs *,
                                     struct lflow_input *,
@@ -1045,6 +1060,10 @@ void sync_pbs_for_northd_changed_ovn_ports(
     struct tracked_ovn_ports *,
     const struct lr_stateful_table *);
 
+void sync_pbs_for_northd_changed_lrps(
+    struct tracked_ovn_ports *,
+    const struct lr_stateful_table *);
+
 void sync_pbs_for_lr_stateful_changes(
     const struct ovn_datapath *od,
     const struct lr_stateful_table *lr_stateful);
@@ -1064,6 +1083,12 @@ static inline bool
 northd_has_lsps_in_tracked_data(struct northd_tracked_data *trk_nd_changes)
 {
     return trk_nd_changes->type & NORTHD_TRACKED_PORTS;
+}
+
+static inline bool
+northd_has_lrps_in_tracked_data(struct northd_tracked_data *trk_nd_changes)
+{
+    return trk_nd_changes->type & NORTHD_TRACKED_LR_PORTS;
 }
 
 static inline bool

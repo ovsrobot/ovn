@@ -199,15 +199,17 @@ northd_nb_logical_router_handler(struct engine_node *node,
 {
     struct northd_data *nd = data;
     struct northd_input input_data;
+    const struct engine_context *eng_ctx = engine_get_context();
 
     northd_get_input_data(node, &input_data);
 
-    if (!northd_handle_lr_changes(&input_data, nd)) {
+    if (!northd_handle_lr_changes(eng_ctx->ovnsb_idl_txn, &input_data, nd)) {
         return EN_UNHANDLED;
     }
 
     if (northd_has_lr_nats_in_tracked_data(&nd->trk_data) ||
         northd_has_lrouters_in_tracked_data(&nd->trk_data) ||
+        northd_has_lrps_in_tracked_data(&nd->trk_data) ||
         northd_has_lr_route_in_tracked_data(&nd->trk_data)) {
         return EN_HANDLED_UPDATED;
     }
@@ -332,23 +334,61 @@ enum engine_input_handler_result
 routes_northd_change_handler(struct engine_node *node,
                              void *data OVS_UNUSED)
 {
+    struct routes_data *routes_data = data;
     struct northd_data *northd_data = engine_get_input_data("northd", node);
     if (!northd_has_tracked_data(&northd_data->trk_data)) {
         return EN_UNHANDLED;
     }
 
-    /* This node uses the below data from the en_northd engine node.
-     * See (lr_stateful_get_input_data())
-     *   1. northd_data->lr_datapaths
-     *   2. northd_data->lr_ports
-     *      This data gets updated when a logical router or logical router port
-     *      is created or deleted.
-     *      Northd engine node presently falls back to full recompute when
-     *      this happens and so does this node.
-     *      Note: When we add I-P to the created/deleted logical routers or
-     *      logical router ports, we need to revisit this handler.
-     *
-     */
+    /* This node uses northd_data->lr_datapaths and northd_data->lr_ports.
+     * Creating or deleting a regular logical router port changes the set of
+     * directly-connected routes; handle that incrementally.  Any other change
+     * to this data is either irrelevant to routes (e.g. a portless router
+     * create/delete has no connected routes) or already forced a full
+     * recompute by the northd node. */
+    struct tracked_ovn_ports *trk_lrps = &northd_data->trk_data.trk_lrps;
+    if (hmapx_is_empty(&trk_lrps->created) &&
+        hmapx_is_empty(&trk_lrps->updated) &&
+        hmapx_is_empty(&trk_lrps->deleted)) {
+        return EN_HANDLED_UNCHANGED;
+    }
+
+    /* LRP modifications are not incrementally processed by the northd node
+     * (they force a recompute), so trk_lrps->updated is always empty here. */
+    ovs_assert(hmapx_is_empty(&trk_lrps->updated));
+
+    routes_data->tracked = true;
+
+    struct hmapx_node *hmapx_node;
+    struct ovn_port *op;
+
+    /* Deleted LRPs: drop their connected routes.  An LRP with N networks has
+     * N connected routes that share the LRP's uuid as source hint, so loop
+     * until none remains. */
+    HMAPX_FOR_EACH (hmapx_node, &trk_lrps->deleted) {
+        op = hmapx_node->data;
+        struct parsed_route *pr;
+        while ((pr = parsed_route_lookup_by_source(
+                        ROUTE_SOURCE_CONNECTED, &op->nbrp->header_,
+                        &routes_data->parsed_routes))) {
+            hmap_remove(&routes_data->parsed_routes, &pr->key_node);
+            hmapx_add(&routes_data->trk_data.trk_deleted_parsed_route, pr);
+        }
+    }
+
+    /* Created LRPs: add their connected routes. */
+    HMAPX_FOR_EACH (hmapx_node, &trk_lrps->created) {
+        op = hmapx_node->data;
+        parsed_routes_add_connected(
+            op->od, op, &routes_data->parsed_routes,
+            &routes_data->trk_data.trk_crupdated_parsed_route);
+    }
+
+    if (!hmapx_is_empty(&routes_data->trk_data.trk_crupdated_parsed_route) ||
+        !hmapx_is_empty(&routes_data->trk_data.trk_deleted_parsed_route)) {
+        return EN_HANDLED_UPDATED;
+    }
+
     return EN_HANDLED_UNCHANGED;
 }
 

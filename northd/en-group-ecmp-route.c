@@ -180,11 +180,19 @@ unique_routes_destroy(struct hmap *unique_routes)
     hmap_destroy(unique_routes);
 }
 
-/* Remove the unique_routes_node from the group, and return the parsed_route
- * pointed by the removed node. */
+/* Remove a unique_routes_node from the group, and return the parsed_route
+ * pointed by the removed node.
+ *
+ * 'route->prefix'/plen/is_src_route/source/route_table_id are always matched.
+ * When 'exact' is true the output port is matched too: several routes can
+ * share the same prefix (e.g. the IPv6 link-local fe80::/64 connected route
+ * present on every router port) and differ only by their output port, so a
+ * deletion must target the specific route.  When 'exact' is false any route
+ * to the prefix is returned, which is what ECMP-group formation needs when a
+ * second next hop for an existing prefix is added. */
 static const struct parsed_route *
-unique_routes_remove(struct group_ecmp_datapath *gn,
-                     const struct parsed_route *route)
+unique_routes_remove__(struct group_ecmp_datapath *gn,
+                       const struct parsed_route *route, bool exact)
 {
     struct unique_routes_node *ur;
     HMAP_FOR_EACH_WITH_HASH (ur, hmap_node, route->hash, &gn->unique_routes) {
@@ -192,7 +200,8 @@ unique_routes_remove(struct group_ecmp_datapath *gn,
             route->plen == ur->route->plen &&
             route->is_src_route == ur->route->is_src_route &&
             route->source == ur->route->source &&
-            route->route_table_id == ur->route->route_table_id) {
+            route->route_table_id == ur->route->route_table_id &&
+            (!exact || route->out_port == ur->route->out_port)) {
             hmap_remove(&gn->unique_routes, &ur->hmap_node);
             const struct parsed_route *existed_route = ur->route;
             free(ur);
@@ -200,6 +209,13 @@ unique_routes_remove(struct group_ecmp_datapath *gn,
         }
     }
     return NULL;
+}
+
+static const struct parsed_route *
+unique_routes_remove(struct group_ecmp_datapath *gn,
+                     const struct parsed_route *route)
+{
+    return unique_routes_remove__(gn, route, false);
 }
 
 static void
@@ -415,7 +431,8 @@ handle_deleted_route(struct group_ecmp_route_data *data,
         return false;
     }
 
-    const struct parsed_route *existing = unique_routes_remove(node, pr);
+    const struct parsed_route *existing = unique_routes_remove__(node, pr,
+                                                                 true);
     if (!existing) {
         /* The route must be part of an ecmp group. */
         if (pr->source == ROUTE_SOURCE_CONNECTED) {

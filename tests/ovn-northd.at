@@ -12381,6 +12381,124 @@ CHECK_NO_CHANGE_AFTER_RECOMPUTE
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
 
+AT_SETUP([Logical router port incremental processing])
+AT_KEYWORDS([incremental processing])
+ovn_start
+
+check ovn-nbctl ls-add sw0
+check ovn-nbctl --wait=sb lr-add lr0
+
+# Adding a regular router port to a bare router (no peer switch port yet) is
+# incrementally processed.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24
+check_engine_compute northd incremental
+check_engine_compute lflow incremental
+
+# The router port's SB Port_Binding was created.
+AT_CHECK([ovn-sbctl get port_binding lr0-sw0 type], [0], [dnl
+patch
+])
+# The directly-connected route flow is present on the router.
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep -c 'ip4.dst == 10.0.0.0/24'], [0],
+    [1
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+# Adding a second regular router port is also incremental.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lrp-add lr0 lr0-sw1 00:00:00:00:ff:02 20.0.0.1/24
+check_engine_compute northd incremental
+check_engine_compute lflow incremental
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+# Deleting a router port is incrementally processed.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lrp-del lr0-sw1
+check_engine_compute northd incremental
+check_engine_compute lflow incremental
+AT_CHECK([ovn-sbctl find port_binding logical_port=lr0-sw1], [0], [])
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep -c 'ip4.dst == 20.0.0.0/24'], [1],
+    [0
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+
+AT_SETUP([Logical router port incremental processing - link-local routes])
+AT_KEYWORDS([incremental processing])
+ovn_start
+
+# Every router port gets an IPv6 link-local address, hence a connected route
+# for the fe80::/64 prefix.  Deleting one router port must remove that port's
+# route only, not another port's route to the same prefix.
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-p1 00:00:00:00:ff:01 10.0.0.1/24
+check ovn-nbctl lrp-add lr0 lr0-p2 00:00:00:00:ff:02 20.0.0.1/24
+check ovn-nbctl --wait=sb lrp-add lr0 lr0-p3 00:00:00:00:ff:03 30.0.0.1/24
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lrp-del lr0-p1
+check_engine_compute northd incremental
+check_engine_compute lflow incremental
+
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep lr_in_ip_routing | \
+    grep "ip6.dst == fe80::/64" | grep -o 'inport == "[[a-z0-9-]]*"' | sort],
+    [0], [dnl
+inport == "lr0-p2"
+inport == "lr0-p3"
+])
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+
+AT_SETUP([Logical router port incremental processing fallback cases])
+AT_KEYWORDS([incremental processing])
+ovn_start
+
+check ovn-sbctl chassis-add gw1 geneve 127.0.0.1
+
+# Adding a distributed gateway port falls back to recompute (cr-port).
+check ovn-nbctl --wait=sb lr-add lr0
+check ovn-nbctl ls-add public
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl lrp-add lr0 lr0-public 00:00:20:20:12:13 172.168.0.100/24
+check ovn-nbctl --wait=sb lrp-set-gateway-chassis lr0-public gw1 20
+check_engine_compute northd recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+# Adding a router port to a dynamic-routing router falls back to recompute.
+check ovn-nbctl --wait=sb lr-add lr1 \
+    -- set Logical_Router lr1 options:dynamic-routing=true
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lrp-add lr1 lr1-sw0 00:00:00:00:ff:11 10.1.0.1/24
+check_engine_compute northd recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+# Adding a router port whose peer "router" LSP already exists falls back to
+# recompute (wiring the peer from the LRP side is not supported).
+check ovn-nbctl --wait=sb lr-add lr2
+check ovn-nbctl ls-add sw2
+check ovn-nbctl lsp-add sw2 sw2-lr2
+check ovn-nbctl lsp-set-type sw2-lr2 router
+check ovn-nbctl --wait=sb lsp-set-options sw2-lr2 router-port=lr2-sw2
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lrp-add lr2 lr2-sw2 00:00:00:00:ff:21 10.2.0.1/24
+check_engine_compute northd recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+# Modifying an existing router port falls back to recompute.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set logical_router_port lr2-sw2 options:foo=bar
+check_engine_compute northd recompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([SB Port binding incremental processing])
 ovn_start
@@ -12450,13 +12568,14 @@ check ovn-nbctl --wait=sb lsp-set-options e1 foo=bar
 check_recompute_counter 1 1
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
-# Test lrp
+# Test lrp.  Adding a regular router port to a bare router with no peer switch
+# port is incrementally processed.
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 check ovn-nbctl --wait=sb lrp-add lr0 lrp 00:00:02:01:02:03 10.0.0.1/24
-check_recompute_counter 1 1
+check_recompute_counter 0 0
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
-# Set some options on 'lrp'.  northd should only recompute once.
+# Set some options on 'lrp'.  A router-port modification falls back to recompute.
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 check ovn-nbctl --wait=sb lrp-set-options lrp route_table=rtb-1
 check_recompute_counter 1 1
@@ -13816,18 +13935,13 @@ check_engine_stats lflow norecompute compute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
 check ovn-nbctl --wait=sb lr-add lr0
-# Adding a logical router port should result in recompute
+# Adding a regular logical router port to a bare router (no peer switch port
+# yet) is incrementally processed.
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 check ovn-nbctl --wait=sb lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24
-# for northd engine there will be both recompute and compute
-# first it will be recompute to handle lr0-sw0 and then a compute
-# for the SB port binding change.
-check_engine_stats northd recompute compute
-check_engine_stats lr_nat recompute nocompute
-check_engine_stats lr_stateful recompute nocompute
-check_engine_stats sync_to_sb_pb recompute nocompute
-check_engine_stats sync_to_sb_lb recompute nocompute
-check_engine_stats lflow recompute nocompute
+check_engine_compute northd incremental
+check_engine_compute lflow incremental
+check_engine_stats sync_to_sb_pb norecompute compute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 
 check ovn-nbctl lsp-add sw0 sw0-lr0
