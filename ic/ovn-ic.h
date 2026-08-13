@@ -65,11 +65,12 @@ struct shash;
 struct sset;
 struct icsbrec_availability_zone;
 struct icsbrec_datapath_binding;
+struct sbrec_chassis_table;
+struct icsbrec_gateway_table;
 
 enum ic_datapath_type ic_dp_get_type(
     const struct icsbrec_datapath_binding *isb_dp);
 
-void gateway_run(struct ic_context *ctx);
 void address_set_run(struct ic_context *ctx,
                      const struct icsbrec_availability_zone *runned_az);
 
@@ -93,6 +94,8 @@ void sync_service_monitor(struct ic_context *ctx);
 /* Shared IC helpers used by more than one engine node. */
 uint32_t
 allocate_dp_key(struct hmap *dp_tnlids, bool vxlan_mode, const char *name);
+const struct sbrec_chassis *
+find_sb_chassis(struct ic_context *ctx, const char *name);
 const struct nbrec_logical_switch *
 find_ts_in_nb(struct ic_context *ctx, char *ts_name);
 bool
