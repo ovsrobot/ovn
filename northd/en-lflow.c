@@ -236,6 +236,14 @@ lflow_ls_stateful_handler(struct engine_node *node, void *data)
         return EN_UNHANDLED;
     }
 
+    /* Switch datapaths created/updated in this run had their ls_stateful
+     * flows already handled by lflow_handle_northd_ls_changes(); pass northd's
+     * tracked switches so we don't reprocess them here. */
+    struct northd_data *northd_data = engine_get_input_data("northd", node);
+    const struct tracked_dps *trk_switches =
+        northd_has_lswitches_in_tracked_data(&northd_data->trk_data)
+        ? &northd_data->trk_data.trk_switches : NULL;
+
     const struct engine_context *eng_ctx = engine_get_context();
     struct lflow_data *lflow_data = data;
     struct lflow_input lflow_input;
@@ -243,6 +251,7 @@ lflow_ls_stateful_handler(struct engine_node *node, void *data)
     lflow_get_input_data(node, &lflow_input);
     if (!lflow_handle_ls_stateful_changes(eng_ctx->ovnsb_idl_txn,
                                           &ls_sful_data->trk_data,
+                                          trk_switches,
                                           &lflow_input,
                                           lflow_data->lflow_table)) {
         return EN_UNHANDLED;

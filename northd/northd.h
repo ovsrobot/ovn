@@ -1024,6 +1024,7 @@ bool lflow_handle_lr_stateful_changes(struct ovsdb_idl_txn *,
                                       struct lflow_table *lflows);
 bool lflow_handle_ls_stateful_changes(struct ovsdb_idl_txn *,
                                       struct ls_stateful_tracked_data *,
+                                      const struct tracked_dps *trk_switches,
                                       struct lflow_input *,
                                       struct lflow_table *lflows);
 bool northd_handle_sb_port_binding_changes(

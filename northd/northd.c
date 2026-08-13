@@ -22192,6 +22192,7 @@ exit:
 bool
 lflow_handle_ls_stateful_changes(struct ovsdb_idl_txn *ovnsb_txn,
                                 struct ls_stateful_tracked_data *trk_data,
+                                const struct tracked_dps *trk_switches,
                                 struct lflow_input *lflow_input,
                                 struct lflow_table *lflows)
 {
@@ -22204,6 +22205,15 @@ lflow_handle_ls_stateful_changes(struct ovsdb_idl_txn *ovnsb_txn,
                                         ls_stateful_rec->ls_index);
         ovs_assert(od->nbs && uuid_equals(&od->nbs->header_.uuid,
                                           &ls_stateful_rec->nbs_uuid));
+
+        /* Newly created/updated switch datapaths already had their
+         * ls_stateful flows built and synced by
+         * lflow_handle_northd_ls_changes() (which processes both the by_ls
+         * and ls_stateful refs together to keep shared datapath groups
+         * stable).  Skip them here to avoid rebuilding the same flows. */
+        if (trk_switches && hmapx_contains(&trk_switches->crupdated, od)) {
+            continue;
+        }
 
         lflow_ref_unlink_lflows(ls_stateful_rec->lflow_ref);
 
@@ -22222,6 +22232,17 @@ lflow_handle_ls_stateful_changes(struct ovsdb_idl_txn *ovnsb_txn,
      * those datapath groups within those flows over and over again. */
     HMAPX_FOR_EACH (hmapx_node, &trk_data->crupdated) {
         struct ls_stateful_record *ls_stateful_rec = hmapx_node->data;
+
+        /* Already synced by lflow_handle_northd_ls_changes() (see above). */
+        if (trk_switches) {
+            const struct ovn_datapath *od =
+                ovn_datapaths_find_by_index(lflow_input->ls_datapaths,
+                                            ls_stateful_rec->ls_index);
+            if (hmapx_contains(&trk_switches->crupdated, od)) {
+                continue;
+            }
+        }
+
         /* Sync the new flows to SB. */
         bool handled = lflow_ref_sync_lflows(
             ls_stateful_rec->lflow_ref, lflows, ovnsb_txn,
@@ -22234,6 +22255,10 @@ lflow_handle_ls_stateful_changes(struct ovsdb_idl_txn *ovnsb_txn,
         }
     }
 
+    /* No skip is needed for deleted records: an ls_stateful record is deleted
+     * only along with its switch datapath, so lflow_handle_northd_ls_changes()
+     * has already unlinked and synced its lflow_ref, and syncing destroys the
+     * unlinked ref nodes.  The resync below therefore walks an empty ref. */
     HMAPX_FOR_EACH (hmapx_node, &trk_data->deleted) {
         struct ls_stateful_record *ls_stateful_rec = hmapx_node->data;
 
