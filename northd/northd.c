@@ -1282,6 +1282,12 @@ lsp_is_remote(const struct nbrec_logical_switch_port *nbsp)
 }
 
 static bool
+lsp_is_virtual(const struct nbrec_logical_switch_port *nbsp)
+{
+    return !strcmp(nbsp->type, "virtual");
+}
+
+static bool
 lsp_is_localnet(const struct nbrec_logical_switch_port *nbsp)
 {
     return !strcmp(nbsp->type, "localnet");
@@ -4695,8 +4701,10 @@ destroy_northd_tracked_data(struct northd_data *nd)
 static bool
 lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *nbsp)
 {
-    /* Support only normal VIF, remote and localport ports for now. */
-    if (nbsp->type[0] && !lsp_is_remote(nbsp) && !lsp_is_localport(nbsp)) {
+    /* Support only normal VIF, remote, localport, and virtual ports for
+     * now. */
+    if (nbsp->type[0] && !lsp_is_remote(nbsp) && !lsp_is_localport(nbsp) &&
+        !lsp_is_virtual(nbsp)) {
         return false;
     }
 
@@ -4739,6 +4747,48 @@ lsp_can_be_inc_processed(const struct nbrec_logical_switch_port *nbsp)
     }
 
     return true;
+}
+
+/* A logical switch port of type "virtual" can have dependencies that live
+ * outside of its own 'lflow_ref' and that the incremental LSP path does not
+ * keep in sync.  When any such dependency is present on a logical router
+ * connected to the port's logical switch, the caller must fall back to a full
+ * recompute.  The known dependencies are:
+ *
+ *  - A distributed NAT rule whose 'logical_port' is this virtual port.  It
+ *    adds a S_ROUTER_IN_GW_REDIRECT drop flow (see
+ *    build_lrouter_nat_defrag_and_lb()) owned by the router datapath's
+ *    'lflow_ref', not by the virtual port.
+ *
+ *  - Dynamic routing on the connected router.  Host routes for a virtual port
+ *    are advertised based on its SB 'virtual_parent' (i.e. once the port is
+ *    claimed, see publish_host_routes_for_virtual_ports()).  The claim reaches
+ *    northd as an "up"-only change on the NB port, which the incremental path
+ *    ignores, so the advertised-route engine would not be re-run. */
+static bool
+virtual_lsp_needs_recompute(struct ovn_datapath *od, const char *lport)
+{
+    struct ovn_port *rp;
+    VECTOR_FOR_EACH (&od->router_ports, rp) {
+        struct ovn_port *lrp = rp->peer;
+        if (!lrp || !lrp->od || !lrp->od->nbr) {
+            continue;
+        }
+
+        if (lrp->od->dynamic_routing) {
+            return true;
+        }
+
+        const struct nbrec_logical_router *nbr = lrp->od->nbr;
+        for (size_t i = 0; i < nbr->n_nat; i++) {
+            const struct nbrec_nat *nat = nbr->nat[i];
+            if (nat->logical_port && !strcmp(nat->logical_port, lport) &&
+                is_nat_distributed(nat, lrp->od)) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 static bool
@@ -5038,6 +5088,13 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 if (!lsp_can_be_inc_processed(new_nbsp)) {
                     goto fail;
                 }
+                if (lsp_is_virtual(new_nbsp) &&
+                    virtual_lsp_needs_recompute(od, new_nbsp->name)) {
+                    /* The new virtual port has a dependency on a connected
+                     * router that can't be handled incrementally.  Fall back
+                     * to recompute. */
+                    goto fail;
+                }
                 op = ls_port_create(ovnsb_idl_txn, &nd->ls_ports,
                                     new_nbsp->name, new_nbsp, od,
                                     ni->sbrec_mirror_table,
@@ -5054,6 +5111,15 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 if (lsp_is_type_changed(op->sb, new_nbsp, &temp) ||
                     !op->lsp_can_be_inc_processed ||
                     !lsp_can_be_inc_processed(new_nbsp)) {
+                    goto fail;
+                }
+                if (lsp_is_virtual(new_nbsp) &&
+                    virtual_lsp_needs_recompute(od, new_nbsp->name)) {
+                    /* This virtual port has a dependency on a connected router
+                     * that can't be handled incrementally.  In particular a
+                     * claim (which reaches northd as an "up"-only change) must
+                     * re-run the advertised-route engine.  Fall back to
+                     * recompute. */
                     goto fail;
                 }
                 const struct sbrec_port_binding *sb = op->sb;
@@ -5111,6 +5177,13 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
     HMAP_FOR_EACH_SAFE (op, dp_node, &od->ports) {
         if (!op->visited) {
             if (!op->lsp_can_be_inc_processed) {
+                goto fail;
+            }
+            if (lsp_is_virtual(op->nbsp) &&
+                virtual_lsp_needs_recompute(op->od, op->key)) {
+                /* This virtual port has a dependency on a connected router
+                 * that can't be regenerated incrementally.  Fall back to
+                 * recompute. */
                 goto fail;
             }
             if (sset_contains(&nd->svc_monitor_lsps, op->key)) {
