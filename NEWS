@@ -97,6 +97,13 @@ Post v26.03.0
    - Added a new "ovn-debug lflow-pipeline-oftable-start-list" command that
      prints the starting OpenFlow table number of the logical ingress and
      egress pipelines.
+   - Added the "ic-route-learn-tag-rules" option to Logical_Router_Port to
+     filter the routes learned through the port by route tag.  It accepts
+     either "allow:<tags>", to learn only the routes tagged with one of the
+     comma-separated <tags>, or "block:<tags>", to learn every route but the
+     ones tagged with one of them.  It supports more than one route tag and
+     supersedes "ic-route-filter-tag", which is now deprecated and is ignored
+     when "ic-route-learn-tag-rules" is set.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
