@@ -94,6 +94,12 @@ Post v26.03.0
    - Added a new "ovn-debug lflow-pipeline-oftable-start-list" command that
      prints the starting OpenFlow table number of the logical ingress and
      egress pipelines.
+   - Added a new "options:ic-backoff-interval-ms" key to the IC_NB_Global
+     table.  It caps how long ovn-ic postpones the next run of its
+     incremental-processing engine after the previous one finished,
+     coalescing bursts of change-driven runs into fewer, larger runs.  It
+     defaults to 0, which keeps running as soon as there is work to do.  A
+     forced full recompute is never delayed.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
