@@ -4240,6 +4240,10 @@ pflow_output_get_debug(struct engine_node *node, struct physical_debug *debug)
     const struct sbrec_sb_global *sb_global =
         sbrec_sb_global_table_first(sb_global_table);
 
+    if (!sb_global) {
+        return;
+    }
+
     if (!debug) {
         return;
     }
