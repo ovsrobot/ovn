@@ -12075,6 +12075,135 @@ ignored_dp=ls0
 AT_CLEANUP
 ])
 
+AT_SETUP([Virtual port incremental processing])
+AT_KEYWORDS([incremental processing])
+ovn_start
+
+check ovn-nbctl ls-add sw0
+check ovn-nbctl --wait=sb lsp-add sw0 vif0 \
+    -- lsp-set-addresses vif0 "00:00:00:00:00:01 10.0.0.4"
+
+# Creating a virtual port should be incrementally processed.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-add sw0 vip0 \
+    -- lsp-set-type vip0 virtual \
+    -- set Logical_Switch_Port vip0 \
+        options:virtual-ip=10.0.0.10 options:virtual-parents=vif0
+check_engine_compute northd incremental
+check_engine_compute lflow incremental
+
+# The bind_vport flow for the virtual port is present.
+AT_CHECK([ovn-sbctl dump-flows sw0 | grep ls_in_arp_rsp | grep bind_vport \
+    | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_arp_rsp      ), priority=100  , match=(inport == "vif0" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("vip0", inport); next;)
+])
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+# Deleting a virtual port should be incrementally processed.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-del vip0
+check_engine_compute northd incremental
+check_engine_compute lflow incremental
+
+# The bind_vport flow for the virtual port is gone.
+AT_CHECK([ovn-sbctl dump-flows sw0 | grep ls_in_arp_rsp | grep bind_vport \
+    | ovn_strip_lflows], [0], [])
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+
+AT_SETUP([Virtual port incremental processing fallback with distributed NAT])
+AT_KEYWORDS([incremental processing])
+ovn_start
+
+check ovn-sbctl chassis-add gw1 geneve 127.0.0.1
+
+check ovn-nbctl ls-add sw0
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24
+check ovn-nbctl --wait=sb lsp-add-router-port sw0 sw0-lr0 lr0-sw0
+
+# Distributed gateway port so that dnat_and_snat NATs become distributed.
+check ovn-nbctl ls-add public
+check ovn-nbctl lrp-add lr0 lr0-public 00:00:20:20:12:13 172.168.0.100/24
+check ovn-nbctl --wait=sb lsp-add-router-port public public-lr0 lr0-public
+check ovn-nbctl lsp-add-localnet-port public ln-public public
+check ovn-nbctl --wait=sb lrp-set-gateway-chassis lr0-public gw1 20
+
+# Parent VIF and the virtual port.  No NAT references it yet, so creating it is
+# incrementally processed.
+check ovn-nbctl --wait=sb lsp-add sw0 vif0 \
+    -- lsp-set-addresses vif0 "00:00:20:20:12:01 10.0.0.4"
+check ovn-nbctl --wait=sb lsp-add sw0 vip0 \
+    -- lsp-set-type vip0 virtual \
+    -- set Logical_Switch_Port vip0 \
+        options:virtual-ip=10.0.0.5 options:virtual-parents=vif0
+
+# Distributed dnat_and_snat whose logical_port is the virtual port 'vip0'.
+# The router's S_ROUTER_IN_GW_REDIRECT drop flow for this NAT depends on
+# 'vip0' being a virtual port, but that flow is owned by the router datapath's
+# lflow_ref, not by 'vip0'.
+check ovn-nbctl --wait=sb lr-nat-add lr0 dnat_and_snat \
+    172.168.0.110 10.0.0.5 vip0 30:54:00:00:00:03
+
+# Deleting the virtual port must fall back to recompute.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-del vip0
+check_engine_compute northd recompute
+
+# Re-creating the virtual port (still referenced by the NAT) must also fall
+# back to recompute.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-add sw0 vip0 \
+    -- lsp-set-type vip0 virtual \
+    -- set Logical_Switch_Port vip0 \
+        options:virtual-ip=10.0.0.5 options:virtual-parents=vif0
+check_engine_compute northd recompute
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+
+AT_SETUP([Virtual port incremental processing fallback with dynamic routing])
+AT_KEYWORDS([incremental processing])
+ovn_start
+
+check ovn-nbctl ls-add sw0
+check ovn-nbctl lr-add lr0 \
+    -- set Logical_Router lr0 options:dynamic-routing=true
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24 \
+    -- set Logical_Router_Port lr0-sw0 \
+        options:dynamic-routing-redistribute=connected-as-host
+check ovn-nbctl --wait=sb lsp-add-router-port sw0 sw0-lr0 lr0-sw0
+
+check ovn-nbctl --wait=sb lsp-add sw0 vif0 \
+    -- lsp-set-addresses vif0 "00:00:00:00:00:01 10.0.0.4"
+
+# Creating a virtual port on a switch connected to a dynamic-routing router
+# must fall back to recompute: advertised host routes for virtual ports depend
+# on the SB "virtual_parent" (claim), which the incremental path does not
+# track.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-add sw0 vip0 \
+    -- lsp-set-type vip0 virtual \
+    -- set Logical_Switch_Port vip0 \
+        options:virtual-ip=10.0.0.5 options:virtual-parents=vif0
+check_engine_compute northd recompute
+
+# Deleting it must also fall back to recompute.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-del vip0
+check_engine_compute northd recompute
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+
 OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([SB Port binding incremental processing])
 ovn_start
