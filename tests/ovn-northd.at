@@ -11946,6 +11946,40 @@ check_recompute_counter 0 0 0 0 0 0
 
 CHECK_NO_CHANGE_AFTER_RECOMPUTE(1)
 
+dnl Localports should be incrementally processed
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-add ls0 lp0 \
+    -- lsp-set-type lp0 localport \
+    -- lsp-set-addresses lp0 "aa:aa:aa:00:00:30 192.168.0.30"
+check_recompute_counter 0 0 0 0 0 0
+
+# A localport gets an ARP responder reply flow regardless of its "up" state.
+AT_CHECK([ovn-sbctl dump-flows ls0 | grep ls_in_arp_rsp | \
+    grep 'arp.tpa == 192.168.0.30' | grep -c 'arp.op = 2'], [0], [1
+])
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb \
+    lsp-set-addresses lp0 "aa:aa:aa:00:00:31 192.168.0.31"
+check_recompute_counter 0 0 0 0 0 0
+
+AT_CHECK([ovn-sbctl dump-flows ls0 | grep ls_in_arp_rsp | \
+    grep 'arp.tpa == 192.168.0.31' | grep -c 'arp.op = 2'], [0], [1
+])
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lsp-del lp0
+check_recompute_counter 0 0 0 0 0 0
+
+AT_CHECK([ovn-sbctl dump-flows ls0 | grep ls_in_arp_rsp | \
+    grep -c 'arp.tpa == 192.168.0.30'], [1], [0
+])
+AT_CHECK([ovn-sbctl dump-flows ls0 | grep ls_in_arp_rsp | \
+    grep -c 'arp.tpa == 192.168.0.31'], [1], [0
+])
+
+CHECK_NO_CHANGE_AFTER_RECOMPUTE(1)
+
 check ovn-nbctl --wait=hv ls-del ls0
 
 OVN_CLEANUP([hv1])
