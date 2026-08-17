@@ -160,6 +160,17 @@ multicast_igmp_northd_handler(struct engine_node *node, void *data OVS_UNUSED)
         return EN_UNHANDLED;
     }
 
+    /* A created/deleted logical router port may join or leave the router's
+     * multicast groups; recompute this (cheap) node.  It does not force a
+     * recompute of the lflow node, which consumes multicast_igmp via its own
+     * incremental handler. */
+    struct tracked_ovn_ports *trk_lrps = &northd_data->trk_data.trk_lrps;
+    if (hmapx_count(&trk_lrps->created) ||
+        hmapx_count(&trk_lrps->updated) ||
+        hmapx_count(&trk_lrps->deleted)) {
+        return EN_UNHANDLED;
+    }
+
     /* This node uses the below data from the en_northd engine node.
      *      - northd_data->lr_datapaths
      *      - northd_data->ls_ports
