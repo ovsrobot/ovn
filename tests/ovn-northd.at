@@ -16419,6 +16419,53 @@ OVN_CLEANUP_NORTHD
 AT_CLEANUP
 ])
 
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Datapath count change with shared dp-group flow])
+AT_KEYWORDS([incremental processing])
+
+ovn_start
+
+# Two logical routers sharing the same load balancer produce an identical
+# "ct_lb_mark" flow on both router datapaths.  northd collapses those into a
+# single dp-group logical flow whose datapath-group bitmap length equals the
+# current number of logical-router datapaths.
+check ovn-nbctl lb-add lb0 10.0.0.100:80 192.168.1.10:8080,192.168.1.11:8080
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lr-lb-add lr0 lb0
+check ovn-nbctl lr-lb-add lr1 lb0
+check ovn-nbctl --wait=sb sync
+
+AT_CHECK([ovn-sbctl lflow-list | grep -c \
+"ct_lb_mark(backends=192.168.1.10:8080,192.168.1.11:8080)"], [0], [dnl
+2
+])
+
+# Incrementally create an (empty) logical router.  This grows the number of
+# logical-router datapaths, and hence the dp-group bitmap length used by the
+# shared load balancer flow, without recomputing the lflow engine node.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lr-add lr2
+check_engine_stats northd norecompute compute
+check_engine_stats lflow norecompute compute
+
+# Reprocess the load balancer.  This unlinks and re-links the shared flow's
+# ref nodes at the new (larger) datapath-group bitmap length.  Before the fix
+# this hit "assertion lrn->dpgrp_bitmap_len == dp_bitmap_len failed" and
+# aborted northd.
+check ovn-nbctl --wait=sb set load_balancer lb0 \
+    vips:'"10.0.0.101:80"'='"192.168.1.12:8080"'
+
+# northd must still be running and the shared flow must be intact.
+AT_CHECK([ovn-sbctl lflow-list | grep -c \
+"ct_lb_mark(backends=192.168.1.10:8080,192.168.1.11:8080)"], [0], [dnl
+2
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
 AT_SETUP([RBAC -- Recover builtin role and permissions])
 ovn_start
 

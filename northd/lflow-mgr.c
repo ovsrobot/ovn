@@ -773,19 +773,31 @@ lflow_table_add_lflow__(struct lflow_table *lflow_table,
             lrn->lflow = lflow;
             lrn->lflow_ref = lflow_ref;
             lrn->dpgrp_lflow = !sdp;
-            if (lrn->dpgrp_lflow) {
-                lrn->dpgrp_bitmap = bitmap_clone(dp_bitmap, dp_bitmap_len);
-                lrn->dpgrp_bitmap_len = dp_bitmap_len;
-            } else {
+            if (!lrn->dpgrp_lflow) {
                 lrn->dp_index = sdp->index;
             }
+            /* A dp group bitmap is recorded below, when the ref node is
+             * linked. */
             ovs_list_insert(&lflow->referenced_by, &lrn->ref_list_node);
             hmap_insert(&lflow_ref->lflow_ref_nodes, &lrn->ref_node, hash);
         }
 
         if (!lrn->linked) {
             if (lrn->dpgrp_lflow) {
-                ovs_assert(lrn->dpgrp_bitmap_len == dp_bitmap_len);
+                /* Record the datapath group whose refcounts are acquired
+                 * below, so that a subsequent unlink releases exactly those.
+                 * Both the bitmap contents (which datapaths share this flow)
+                 * and its length (the total number of datapaths of this type)
+                 * can change while this ref node is unlinked, e.g. because a
+                 * datapath was created or deleted by incremental processing.
+                 *
+                 * Re-clone unconditionally: neither is a reliable indicator
+                 * of the other.  sparse_array_len() is the highest used index
+                 * plus one, so deleting any but the last datapath leaves the
+                 * length unchanged while the contents change. */
+                bitmap_free(lrn->dpgrp_bitmap);
+                lrn->dpgrp_bitmap = bitmap_clone(dp_bitmap, dp_bitmap_len);
+                lrn->dpgrp_bitmap_len = dp_bitmap_len;
                 size_t index;
                 BITMAP_FOR_EACH_1 (index, dp_bitmap_len, dp_bitmap) {
                     /* Allocate a reference counter only if already used. */
