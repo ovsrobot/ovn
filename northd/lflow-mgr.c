@@ -1264,6 +1264,13 @@ sync_lflow_to_sb(struct ovn_lflow *lflow,
 
     if (pre_sync_dpg != lflow->dpg) {
         ovn_dp_group_use(lflow->dpg);
+        /* The lflow's dp group bitmap may have changed without the lflow
+         * being re-added (e.g. when it was only unlinked from one of its
+         * lflow_refs), in which case do_ovn_lflow_add() didn't get the
+         * chance to drop the reference to the previous dp group.  Drop it
+         * here, otherwise the dp group is leaked in 'dp_groups' with a
+         * dangling reference to an SB row that gets garbage collected. */
+        ovn_dp_group_release(dp_groups, pre_sync_dpg);
     }
 
     lflow->sync_state = LFLOW_SYNCED;
