@@ -65,6 +65,11 @@ Post v26.03.0
        "external_ids:dynamic-routing-port-mapping" for veth-based routing
        daemon integrations.  This feature is Linux-only and requires
        OVS version >= 4.0.
+     * EVPN-learned MAC bindings (Type-2 routes from FRR) are now stored
+       in the SB MAC_Binding table so they are distributed to all chassis.
+       Previously these bindings were local-only OpenFlow flows on the
+       chassis running FRR, causing MAC resolution failures for traffic
+       originating on other chassis.
    - Added "override-connected" option to Logical Router Static Routes to mark
      static routes as higher-priority than connected routes, which in turn led
      to changes in administrative distance for specific route types. Please see
