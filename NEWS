@@ -70,6 +70,11 @@ Post v26.03.0
        Previously these bindings were local-only OpenFlow flows on the
        chassis running FRR, causing MAC resolution failures for traffic
        originating on other chassis.
+     * Remove the "other_config:dynamic-routing-arp-prefer-local"
+       option from Logical Switches.  EVPN-learned MAC bindings are
+       now written to the SB MAC_Binding table and consumed at the
+       same priority as dynamic entries, making the preference option
+       obsolete.
    - Added "override-connected" option to Logical Router Static Routes to mark
      static routes as higher-priority than connected routes, which in turn led
      to changes in administrative distance for specific route types. Please see
