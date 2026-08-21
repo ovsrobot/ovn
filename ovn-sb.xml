@@ -2750,10 +2750,13 @@ tcp.flags = RST;
           </p>
         </dd>
 
-        <dt><code>commit_ecmp_nh(<var>ipv6</var>);</code></dt>
+        <dt><code>commit_ecmp_nh(ipv6 = <var>V</var>, proto = <var>P</var>);</code></dt>
         <dd>
           <p>
-              <b>Parameters</b>: IPv4/IPv6 traffic.
+              <b>Parameters</b>: <var>V</var> is <code>true</code>
+              for IPv6 traffic or <code>false</code> for IPv4.
+              <var>P</var> is the IP protocol: <code>tcp</code>,
+              <code>udp</code>, or <code>sctp</code>.
           </p>
 
           <p>
