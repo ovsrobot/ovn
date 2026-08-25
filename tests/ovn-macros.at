@@ -274,7 +274,9 @@ m4_define([CHECK_FLOWS_AFTER_RECOMPUTE], [
           check ovn-nbctl --wait=hv sync
       fi
       DUMP_FLOWS([$sbox], [flows-$hv-after])
-      diff flows-$hv-before flows-$hv-after > flow-diff
+      # Avoid learned flows i.e. flows w/ idle_timeout and no learn.
+      diff flows-$hv-before flows-$hv-after | grep "^[<>]" | awk '!/idle_timeout=/ || /learn/' > flow-diff
+
       AT_CHECK([wc -l < flow-diff], [0], [0
 ])
     fi
@@ -354,7 +356,8 @@ m4_define([CHECK_AFTER_RECOMPUTE], [
 ])
 
       # Compare and store flow differences before and after recompute
-      diff -u flows-$hv-before flows-$hv-after | grep "^+ \|^- " > flow-diff-$hv
+      # Avoid learned flows i.e. flows w/ idle_timeout and no learn.
+      diff -u flows-$hv-before flows-$hv-after | grep "^+ \|^- " | awk '!/idle_timeout=/ || /learn/' > flow-diff-$hv
       if [[ -n "$related_ports" ]]; then
         tag=$(ovn-sbctl --bare --columns tag list port_binding $related_ports)
         if [[ -n "$tag" ]]; then
