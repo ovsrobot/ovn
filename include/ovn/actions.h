@@ -125,9 +125,6 @@ struct collector_set_ids;
     OVNACT(LOOKUP_FDB,        ovnact_lookup_fdb)      \
     OVNACT(CHECK_IN_PORT_SEC,  ovnact_result)         \
     OVNACT(CHECK_OUT_PORT_SEC, ovnact_result)         \
-    OVNACT(COMMIT_ECMP_NH,    ovnact_commit_ecmp_nh)  \
-    OVNACT(CHK_ECMP_NH_MAC,   ovnact_result)          \
-    OVNACT(CHK_ECMP_NH,       ovnact_result)          \
     OVNACT(COMMIT_LB_AFF,     ovnact_commit_lb_aff)   \
     OVNACT(CHK_LB_AFF,        ovnact_result)          \
     OVNACT(SAMPLE,            ovnact_sample)          \
