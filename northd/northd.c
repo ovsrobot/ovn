@@ -17507,6 +17507,16 @@ build_ipv6_input_flows_for_lrouter_port(
         ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
                       ds_cstr(match), lrp_actions, lflow_ref,
                       WITH_HINT(&op->nbrp->header_));
+
+        /* ICMPv6 Redirect (type 137) addressed to the router's own IP.
+         * Same rationale as IPv4 (RFC 4861 s8). */
+        ds_clear(match);
+        ds_put_cstr(match, "ip6.dst == ");
+        op_put_v6_networks(match, op);
+        ds_put_cstr(match, " && icmp6 && icmp6.type == 137");
+        ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 95,
+                      ds_cstr(match), debug_drop_action(), lflow_ref,
+                      WITH_HINT(&op->nbrp->header_));
     }
 
     /* ND reply.  These flows reply to ND solicitations for the
@@ -17710,6 +17720,20 @@ build_lrouter_ipv4_ip_input(struct ovn_port *op,
                       "next; ";
         ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90, ds_cstr(match),
                       icmp_actions, lflow_ref, WITH_HINT(&op->nbrp->header_));
+
+        /* ICMP Redirect (type 5) addressed to the router's own IP.
+         * A router must not act on Redirects sent to it (RFC 1812;
+         * Linux accept_redirects defaults off when forwarding).  Drop
+         * here, before conntrack, so they are neither run through ct
+         * in the unsnat/dnat stages (which fails and spams the log)
+         * nor forwarded. */
+        ds_clear(match);
+        ds_put_cstr(match, "ip4.dst == ");
+        op_put_v4_networks(match, op, false);
+        ds_put_cstr(match, " && icmp4 && icmp4.type == 5");
+        ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 95,
+                      ds_cstr(match), debug_drop_action(), lflow_ref,
+                      WITH_HINT(&op->nbrp->header_));
     }
 
     /* BFD msg handling */

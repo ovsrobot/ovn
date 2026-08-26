@@ -1899,6 +1899,8 @@ AT_CHECK([grep "lr_in_ip_input" sbflows | grep 'ip.\.dst == {' | grep drop | ovn
   table=??(lr_in_ip_input     ), priority=60   , match=(ip4.dst == {192.168.0.1}), action=(drop;)
   table=??(lr_in_ip_input     ), priority=60   , match=(ip6.dst == {2000::1, fe80::200:ff:fe00:10}), action=(drop;)
   table=??(lr_in_ip_input     ), priority=60   , match=(ip6.dst == {fe80::200:ff:fe00:20}), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip4.dst == {10.10.0.1, 192.168.1.1} && icmp4 && icmp4.type == 5), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip6.dst == {2000::1, fe80::200:ff:fe00:10} && icmp6 && icmp6.type == 137), action=(drop;)
 ])
 
 # create SNAT with external IP equal to LRP's IP
@@ -1912,6 +1914,8 @@ AT_CHECK([grep "lr_in_ip_input" sbflows | grep 'ip.\.dst == {' | grep drop | ovn
   table=??(lr_in_ip_input     ), priority=60   , match=(ip4.dst == {10.10.0.1, 192.168.1.1}), action=(drop;)
   table=??(lr_in_ip_input     ), priority=60   , match=(ip6.dst == {2000::1, fe80::200:ff:fe00:10}), action=(drop;)
   table=??(lr_in_ip_input     ), priority=60   , match=(ip6.dst == {fe80::200:ff:fe00:20}), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip4.dst == {10.10.0.1, 192.168.1.1} && icmp4 && icmp4.type == 5), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip6.dst == {2000::1, fe80::200:ff:fe00:10} && icmp6 && icmp6.type == 137), action=(drop;)
 ])
 
 check ovn-nbctl lr-nat-del lr0
@@ -1929,6 +1933,8 @@ AT_CHECK([grep "lr_in_ip_input" sbflows | grep 'ip.\.dst == {' | grep drop | ovn
   table=??(lr_in_ip_input     ), priority=60   , match=(ip4.dst == {192.168.0.1}), action=(drop;)
   table=??(lr_in_ip_input     ), priority=60   , match=(ip6.dst == {fe80::200:ff:fe00:10}), action=(drop;)
   table=??(lr_in_ip_input     ), priority=60   , match=(ip6.dst == {fe80::200:ff:fe00:20}), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip4.dst == {10.10.0.1, 192.168.1.1} && icmp4 && icmp4.type == 5), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip6.dst == {2000::1, fe80::200:ff:fe00:10} && icmp6 && icmp6.type == 137), action=(drop;)
 ])
 
 check ovn-nbctl lr-nat-del lr0
@@ -1946,6 +1952,8 @@ AT_CHECK([grep "lr_in_ip_input" sbflows | grep 'ip.\.dst == {' | grep drop | ovn
   table=??(lr_in_ip_input     ), priority=60   , match=(ip4.dst == {192.168.0.1}), action=(drop;)
   table=??(lr_in_ip_input     ), priority=60   , match=(ip6.dst == {2000::1, fe80::200:ff:fe00:10}), action=(drop;)
   table=??(lr_in_ip_input     ), priority=60   , match=(ip6.dst == {fe80::200:ff:fe00:20}), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip4.dst == {10.10.0.1, 192.168.1.1} && icmp4 && icmp4.type == 5), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip6.dst == {2000::1, fe80::200:ff:fe00:10} && icmp6 && icmp6.type == 137), action=(drop;)
 ])
 
 check ovn-nbctl lb-del lb1
@@ -1963,6 +1971,8 @@ AT_CHECK([grep "lr_in_ip_input" sbflows | grep 'ip.\.dst == {' | grep drop | ovn
   table=??(lr_in_ip_input     ), priority=60   , match=(ip4.dst == {192.168.0.1}), action=(drop;)
   table=??(lr_in_ip_input     ), priority=60   , match=(ip6.dst == {fe80::200:ff:fe00:10}), action=(drop;)
   table=??(lr_in_ip_input     ), priority=60   , match=(ip6.dst == {fe80::200:ff:fe00:20}), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip4.dst == {10.10.0.1, 192.168.1.1} && icmp4 && icmp4.type == 5), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip6.dst == {2000::1, fe80::200:ff:fe00:10} && icmp6 && icmp6.type == 137), action=(drop;)
 ])
 
 OVN_CLEANUP_NORTHD
@@ -14839,6 +14849,12 @@ AT_CHECK([grep "lr_in_ip_input" lr0flows | ovn_strip_lflows], [0], [dnl
   table=??(lr_in_ip_input     ), priority=92   , match=(inport == "lr0-public" && arp.op == 1 && arp.tpa == 172.168.0.100 && is_chassis_resident("cr-lr0-public")), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
   table=??(lr_in_ip_input     ), priority=92   , match=(inport == "lr0-public" && arp.op == 1 && arp.tpa == 172.168.0.110 && is_chassis_resident("sw0-port1")), action=(eth.dst = eth.src; eth.src = 30:54:00:00:00:03; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = 30:54:00:00:00:03; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
   table=??(lr_in_ip_input     ), priority=92   , match=(inport == "lr0-public" && arp.op == 1 && arp.tpa == 172.168.0.120 && is_chassis_resident("cr-lr0-public")), action=(eth.dst = eth.src; eth.src = xreg0[[0..47]]; arp.op = 2; /* ARP reply */ arp.tha = arp.sha; arp.sha = xreg0[[0..47]]; arp.tpa <-> arp.spa; outport = inport; flags.loopback = 1; output;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip4.dst == 10.0.0.1 && icmp4 && icmp4.type == 5), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip4.dst == 172.168.0.10 && icmp4 && icmp4.type == 5), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip4.dst == 20.0.0.1 && icmp4 && icmp4.type == 5), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip6.dst == fe80::200:ff:fe00:ff01 && icmp6 && icmp6.type == 137), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip6.dst == fe80::200:ff:fe00:ff02 && icmp6 && icmp6.type == 137), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip6.dst == fe80::200:ff:fe00:ff03 && icmp6 && icmp6.type == 137), action=(drop;)
 ])
 
 AT_CHECK([grep "lr_in_unsnat" lr0flows | ovn_strip_lflows], [0], [dnl
@@ -15021,6 +15037,12 @@ AT_CHECK([grep "lr_in_ip_input" lr0flows | ovn_strip_lflows], [0], [dnl
   table=??(lr_in_ip_input     ), priority=90   , match=(ip6.dst == fe80::200:ff:fe00:ff01 && icmp6.type == 128 && icmp6.code == 0), action=(ip6.dst <-> ip6.src; ip.ttl = 255; icmp6.type = 129; flags.loopback = 1; next; )
   table=??(lr_in_ip_input     ), priority=90   , match=(ip6.dst == fe80::200:ff:fe00:ff02 && icmp6.type == 128 && icmp6.code == 0), action=(ip6.dst <-> ip6.src; ip.ttl = 255; icmp6.type = 129; flags.loopback = 1; next; )
   table=??(lr_in_ip_input     ), priority=90   , match=(ip6.dst == fe80::200:ff:fe00:ff03 && icmp6.type == 128 && icmp6.code == 0), action=(ip6.dst <-> ip6.src; ip.ttl = 255; icmp6.type = 129; flags.loopback = 1; next; )
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip4.dst == 10.0.0.1 && icmp4 && icmp4.type == 5), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip4.dst == 172.168.0.10 && icmp4 && icmp4.type == 5), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip4.dst == 20.0.0.1 && icmp4 && icmp4.type == 5), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip6.dst == fe80::200:ff:fe00:ff01 && icmp6 && icmp6.type == 137), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip6.dst == fe80::200:ff:fe00:ff02 && icmp6 && icmp6.type == 137), action=(drop;)
+  table=??(lr_in_ip_input     ), priority=95   , match=(ip6.dst == fe80::200:ff:fe00:ff03 && icmp6 && icmp6.type == 137), action=(drop;)
 ])
 
 AT_CHECK([grep "lr_in_unsnat" lr0flows | ovn_strip_lflows], [0], [dnl

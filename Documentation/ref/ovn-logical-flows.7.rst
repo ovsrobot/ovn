@@ -2377,6 +2377,15 @@ contains the following flows to implement very basic IP host functionality.
       flags.loopback = 1;
       next;
 
+- ICMP Redirect drop.  A router must not act on ICMP Redirect messages
+  addressed to it (RFC 1812 for IPv4; RFC 4861, section 8 for IPv6).  For
+  each IP address *A* owned by a router port, a priority-95 flow silently
+  drops ICMP Redirect packets destined to *A*.  For IPv4, the flow matches
+  ``ip4.dst == A && icmp4 && icmp4.type == 5``.  For IPv6, the flow matches
+  ``ip6.dst == A && icmp6 && icmp6.type == 137``.  These flows are installed
+  before the conntrack stages, so Redirect packets are neither run through
+  ``ct()`` (which would fail and log errors) nor forwarded.
+
 - Reply to ARP requests.
 
   These flows reply to ARP requests for the router's own IP address. The ARP
