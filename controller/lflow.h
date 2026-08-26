@@ -91,8 +91,9 @@ struct uuid;
 #define OFTABLE_CHK_IN_PORT_SEC            97
 #define OFTABLE_CHK_IN_PORT_SEC_ND         98
 #define OFTABLE_CHK_OUT_PORT_SEC           99
-#define OFTABLE_ECMP_NH_MAC               100
-#define OFTABLE_ECMP_NH                   101
+/* Gaps at 100 and 101. These used to be used for
+ * OFTABLE_ECMP_NH_MAC and OFTABLE_ECMP_NH
+ */
 #define OFTABLE_CHK_LB_AFFINITY           102
 #define OFTABLE_MAC_CACHE_USE             103
 #define OFTABLE_CT_ZONE_LOOKUP            104
