@@ -16,6 +16,8 @@
 
 #include <config.h>
 
+#include <errno.h>
+
 #include "pinctrl.h"
 
 #include "coverage.h"
@@ -172,6 +174,9 @@ static struct seq *pinctrl_handler_seq;
 static struct seq *pinctrl_main_seq;
 static uint64_t main_seq;
 
+/* Limit of tx packets can be queued on rconn.txq. */
+#define PINCTRL_QUEUE_TX_PKT_LIMIT 8192
+
 #define ARP_ND_DEF_MAX_TIMEOUT    16000
 
 static long long int arp_nd_max_timeout = ARP_ND_DEF_MAX_TIMEOUT;
@@ -182,6 +187,8 @@ static void *pinctrl_handler(void *arg);
 struct pinctrl {
     /* OpenFlow connection to the switch. */
     struct rconn *swconn;
+    /* Counts tx packets queued on swconn. */
+    struct rconn_packet_counter *tx_pending_counter;
     pthread_t pinctrl_thread;
     /* Latch to destroy the 'pinctrl_thread' */
     struct latch pinctrl_thread_exit;
@@ -397,6 +404,7 @@ COVERAGE_DEFINE(pinctrl_ring_full_put_fdb);
 COVERAGE_DEFINE(pinctrl_drop_buffered_packets_map);
 COVERAGE_DEFINE(pinctrl_drop_controller_event);
 COVERAGE_DEFINE(pinctrl_drop_put_vport_binding);
+COVERAGE_DEFINE(pinctrl_drop_rconn_overflow);
 COVERAGE_DEFINE(pinctrl_notify_main_thread);
 COVERAGE_DEFINE(pinctrl_notify_handler_thread);
 COVERAGE_DEFINE(pinctrl_total_pin_pkts);
@@ -580,6 +588,7 @@ pinctrl_init(void)
     bfd_monitor_init();
     init_fdb_entries();
     pinctrl.swconn = rconn_create(0, 0, DSCP_DEFAULT, 1 << OFP15_VERSION);
+    pinctrl.tx_pending_counter = rconn_packet_counter_create();
     pinctrl.mac_binding_can_timestamp = false;
     pinctrl_handler_seq = seq_create();
     pinctrl_main_seq = seq_create();
@@ -598,6 +607,15 @@ queue_msg(struct rconn *swconn, struct ofpbuf *msg)
 
     rconn_send(swconn, msg, NULL);
     return xid;
+}
+
+static void
+queue_msg_with_limit(struct rconn *swconn, struct ofpbuf *msg)
+{
+    if (rconn_send_with_limit(swconn, msg, pinctrl.tx_pending_counter,
+                              PINCTRL_QUEUE_TX_PKT_LIMIT) == EAGAIN) {
+        COVERAGE_INC(pinctrl_drop_rconn_overflow);
+    }
 }
 
 /* Sets up 'swconn', a newly (re)connected connection to a switch. */
@@ -639,7 +657,7 @@ enqueue_packet(struct rconn *swconn, enum ofp_version version,
 
     match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
     enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
-    queue_msg(swconn, ofputil_encode_packet_out(&po, proto));
+    queue_msg_with_limit(swconn, ofputil_encode_packet_out(&po, proto));
 }
 
 static void
@@ -751,7 +769,7 @@ pinctrl_forward_pkt(struct rconn *swconn, int64_t dp_key,
     };
     match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
     enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
-    queue_msg(swconn, ofputil_encode_packet_out(&po, proto));
+    queue_msg_with_limit(swconn, ofputil_encode_packet_out(&po, proto));
     ofpbuf_uninit(&ofpacts);
 }
 
@@ -1045,7 +1063,7 @@ pinctrl_parse_dhcpv6_advt(struct rconn *swconn, const struct flow *ip_flow,
     };
     match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
     enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
-    queue_msg(swconn, ofputil_encode_packet_out(&po, proto));
+    queue_msg_with_limit(swconn, ofputil_encode_packet_out(&po, proto));
     dp_packet_uninit(&packet);
     ofpbuf_uninit(&ofpacts);
 
@@ -2382,7 +2400,8 @@ exit:
         sv.u8_val = success;
         mf_write_subfield(&dst, &sv, &pin->flow_metadata);
     }
-    queue_msg(swconn, ofputil_encode_resume(pin, continuation, proto));
+    queue_msg_with_limit(swconn,
+                         ofputil_encode_resume(pin, continuation, proto));
     if (pkt_out_ptr) {
         dp_packet_uninit(pkt_out_ptr);
     }
@@ -2594,7 +2613,8 @@ exit:
         sv.u8_val = success;
         mf_write_subfield(&dst, &sv, &pin->flow_metadata);
     }
-    queue_msg(swconn, ofputil_encode_resume(pin, continuation, proto));
+    queue_msg_with_limit(swconn,
+                         ofputil_encode_resume(pin, continuation, proto));
     if (pkt_out_ptr) {
         dp_packet_uninit(pkt_out_ptr);
     }
@@ -2934,7 +2954,8 @@ exit:
         sv.u8_val = success;
         mf_write_subfield(&dst, &sv, &pin->flow_metadata);
     }
-    queue_msg(swconn, ofputil_encode_resume(pin, continuation, proto));
+    queue_msg_with_limit(swconn,
+                         ofputil_encode_resume(pin, continuation, proto));
     if (pkt_out_ptr) {
         dp_packet_uninit(pkt_out_ptr);
     }
@@ -3360,7 +3381,8 @@ exit:
         sv.u8_val = success;
         mf_write_subfield(&dst, &sv, &pin->flow_metadata);
     }
-    queue_msg(swconn, ofputil_encode_resume(pin, continuation, proto));
+    queue_msg_with_limit(swconn,
+                         ofputil_encode_resume(pin, continuation, proto));
     dp_packet_uninit(pkt_out_ptr);
 }
 
@@ -3740,7 +3762,8 @@ exit:
         set_from_ctrl_flag_in_pkt_metadata(pin);
 
     }
-    queue_msg(swconn, ofputil_encode_resume(pin, continuation, proto));
+    queue_msg_with_limit(swconn,
+                         ofputil_encode_resume(pin, continuation, proto));
     dp_packet_uninit(pkt_out_ptr);
 }
 
@@ -4781,6 +4804,7 @@ pinctrl_destroy(void)
     pthread_join(pinctrl.pinctrl_thread, NULL);
     latch_destroy(&pinctrl.pinctrl_thread_exit);
     rconn_destroy(pinctrl.swconn);
+    rconn_packet_counter_destroy(pinctrl.tx_pending_counter);
     destroy_send_arps_nds();
     destroy_ipv6_ras();
     destroy_ipv6_prefixd();
@@ -6691,7 +6715,8 @@ exit:
         sv.u8_val = success;
         mf_write_subfield(&dst, &sv, &pin->flow_metadata);
     }
-    queue_msg(swconn, ofputil_encode_resume(pin, continuation, proto));
+    queue_msg_with_limit(swconn,
+                         ofputil_encode_resume(pin, continuation, proto));
     dp_packet_uninit(pkt_out_ptr);
 }
 
@@ -6804,7 +6829,8 @@ pinctrl_handle_put_icmp4_inner_ip4_src(struct rconn *swconn,
     pin->packet_len = dp_packet_size(pkt_out);
 
 exit:
-    queue_msg(swconn, ofputil_encode_resume(pin, continuation, proto));
+    queue_msg_with_limit(swconn,
+                         ofputil_encode_resume(pin, continuation, proto));
     if (pkt_out) {
         dp_packet_delete(pkt_out);
     }
@@ -9029,7 +9055,7 @@ pinctrl_split_buf_action_handler(struct rconn *swconn, struct dp_packet *pkt,
     match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
     enum ofp_version version = rconn_get_version(swconn);
     enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
-    queue_msg(swconn, ofputil_encode_packet_out(&po, proto));
+    queue_msg_with_limit(swconn, ofputil_encode_packet_out(&po, proto));
 
     ofpbuf_uninit(&ofpacts);
 }
