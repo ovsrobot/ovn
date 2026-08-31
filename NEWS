@@ -120,6 +120,12 @@ OVN v26.09.0 - xxx xx xxxx
      filter the routes learned through the port by route tag.  This supersedes
      "ic-route-filter-tag", which is now deprecated and is ignored when
      "ic-route-learn-tag-rules" is set.
+   - Added a new "options:ic-backoff-interval-ms" key to the IC_NB_Global
+     table.  It caps how long ovn-ic postpones the next run of its
+     incremental-processing engine after the previous one finished,
+     coalescing bursts of change-driven runs into fewer, larger runs.  It
+     defaults to 0, which keeps running as soon as there is work to do.  A
+     forced full recompute is never delayed.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
