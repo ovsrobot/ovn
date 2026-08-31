@@ -120,6 +120,10 @@ OVN v26.09.0 - xxx xx xxxx
      filter the routes learned through the port by route tag.  This supersedes
      "ic-route-filter-tag", which is now deprecated and is ignored when
      "ic-route-learn-tag-rules" is set.
+   - Logical_Router_Port: Added a new
+     "options:dynamic-routing-advertise-prefixes" key that contains an
+     explicit list of prefixes to be advertised via this port.  If it is
+     set, only these prefixes will be announced.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
