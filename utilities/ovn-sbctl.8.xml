@@ -430,7 +430,7 @@
         </p>
       </dd>
 
-      <dt>[<code>--uuid</code>] <code>dump-flows</code> [<var>logical-datapath</var>]</dt>
+      <dt>[<code>--uuid</code>] [<code>--ovs</code>[<code>=<var>remote</var>]</code>] [<code>--stats</code>] [<code>--vflows</code>] <code>dump-flows</code> [<var>logical-datapath</var>] [<var>lflow</var>...]</dt>
       <dd>Alias for <code>lflow-list</code>.</dd>
 
       <dt><code>count-flows</code> [<var>logical-datapath</var>]</dt>
