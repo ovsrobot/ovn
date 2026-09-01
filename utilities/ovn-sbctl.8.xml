@@ -210,12 +210,12 @@
       <dd>
         Modifies the output format so that the output for each command is
         printed on a single line.  New-line characters that would otherwise
-        separate lines are printed as \fB\\n\fR, and any instances of \fB\\\fR
-        that would otherwise appear in the output are doubled.  Prints a blank
-        line for each command that has no output.  This option does not affect
-        the formatting of output from the <code>list</code> or
-        <code>find</code> commands; see <code>Table Formatting Options</code>
-        below.
+        separate lines are printed as <code>\n</code>, and any instances of
+        <code>\</code> that would otherwise appear in the output are doubled.
+        Prints a blank line for each command that has no output.
+        This option does not affect the formatting of output from the
+        <code>list</code> or <code>find</code> commands; see
+        <code>Table Formatting Options</code> below.
       </dd>
 
       <dt><code>--dry-run</code></dt>
