@@ -853,6 +853,10 @@ mac_binding_probe_stats_process_flow_stats(
         struct vector *stats_vec,
         struct ofputil_flow_stats *ofp_stats)
 {
+    if (!ofp_stats->packet_count) {
+        return;
+    }
+
     struct mac_cache_stats stats = (struct mac_cache_stats) {
         .idle_age_ms = ofp_stats->idle_age * 1000,
         .data.mb = (struct mac_binding_data) {

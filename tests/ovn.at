@@ -37353,11 +37353,12 @@ check ovn-nbctl                                                     \
     -- lrp-add lr lr-ls1 00:00:00:00:10:00 192.168.10.1/24          \
     -- lsp-add-router-port ls1 ls1-lr lr-ls1                        \
     -- lsp-add ls1 vif1                                             \
-    -- lsp-set-addresses vif1 "00:00:00:00:10:10 192.168.10.10"
+    -- lsp-set-addresses vif1 "unknown"
 
 check ovs-vsctl                                      \
     -- add-port br-int vif1                          \
-    -- set interface vif1 external-ids:iface-id=vif1
+    -- set interface vif1 external-ids:iface-id=vif1 \
+    options:tx_pcap=hv1/vif1-tx.pcap options:rxq_pcap=hv1/vif1-rx.pcap
 
 OVN_POPULATE_ARP
 wait_for_ports_up
@@ -37389,6 +37390,10 @@ check test "$now" = "$new_ts"
 dnl After waiting until the age threshold the entry should be deleted
 sleep 3
 check_row_count mac_binding 0 ip="192.168.10.20"
+
+dnl There shouldn't be any probe packet.
+check touch empty
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [empty])
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
@@ -37496,6 +37501,9 @@ send_na hv1 vif2 00:00:00:00:10:1b 00:00:00:00:20:00 fd12::64 fd12::1
 
 check_row_count mac_binding 1 mac=\"00:00:00:00:10:1a\" ip=\"fd11::64\"
 check_row_count mac_binding 1 mac=\"00:00:00:00:10:1b\" ip=\"fd12::64\"
+
+send_udp6 hv1 vif1 00:00:00:00:10:00 00:00:00:00:10:2a fd12::64 fd11::64
+send_udp6 hv1 vif2 00:00:00:00:20:00 00:00:00:00:10:2b fd11::64 fd12::64
 
 ts0=$(fetch_column Mac_Binding timestamp mac=\"00:00:00:00:10:1a\" ip=\"fd11::64\")
 uuid=$(fetch_column Mac_Binding _uuid mac=\"00:00:00:00:10:1a\" ip=\"fd11::64\")
@@ -37675,6 +37683,9 @@ wait_row_count mac_binding 1 ip="10.10.10.100" logical_port="lr-ls1"
 send_na hv1 vif1 00:00:00:00:10:1a 00:00:00:00:10:00 fd11::64 fd11::1
 wait_row_count mac_binding 1 ip=\"fd11::64\" logical_port=\"lr-ls1\"
 
+send_udp hv1 vif1 00:00:00:00:10:00 00:00:00:00:10:2a 10.10.10.100 42.42.42.100
+send_udp6 hv1 vif1 00:00:00:00:10:00 00:00:00:00:10:2a fd11::64 fd12::100
+
 # The first 2 probes are unicast (arp_attempts 0-1); the entry then falls
 # back to broadcast ARP / multicast NS.
 dump_arp 1 00:00:00:00:10:00 ff:ff:ff:ff:ff:ff 10.10.10.1 10.10.10.100 00:00:00:00:00:00 > expected_bcast
@@ -37793,6 +37804,7 @@ send_garp hv1 snoopvif 1 $ext_mac "ff:ff:ff:ff:ff:ff" $ext_ip $ext_ip
 
 # Wait for mac binding to be created
 wait_row_count mac_binding 1 ip="$ext_ip" logical_port="lr-ls"
+send_udp hv1 snoopvif $lrp_mac 00:00:00:00:00:1e $ext_ip 192.168.1.30
 
 # Wait for mac binding to be removed
 wait_row_count mac_binding 0 ip="$ext_ip" logical_port="lr-ls"
@@ -37897,6 +37909,8 @@ OVS_WAIT_UNTIL([$(ovs-ofctl dump-flows br-int table=OFTABLE_MAC_BINDING | \
                   sed 's/reg15=0x.,metadata=0x./reg15=<cleared>,metadata=<cleared>/g' | \
                   grep -q "reg0=0xc0a81402,reg15=<cleared>,metadata=<cleared> actions=mod_dl_dst:00:00:00:00:30:00")])
 
+send_imcp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
+
 # Wait until ovn-controller sends the ARP request.
 OVS_WAIT_UNTIL([test $(grep -c "Sending ARP/ND.*ip: 192.168.20.2" hv1/ovn-controller.log) -eq 1])
 send_imcp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
@@ -37915,6 +37929,8 @@ wait_row_count mac_binding 0 ip="192.168.20.2" logical_port="gw-join"
 
 send_icmp6_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:50:01 fd12::2 fd11::64
 wait_row_count mac_binding 1 mac=\"00:00:00:00:30:00\" ip=\"fd12::2\"
+
+send_icmp6_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:50:01 fd12::2 fd11::64
 
 # Wait until ovn-controller sends the NS request.
 OVS_WAIT_UNTIL([test $(grep -c "Sending ARP/ND.*ip: fd12::2" hv1/ovn-controller.log) -eq 1])
