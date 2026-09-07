@@ -194,9 +194,9 @@ m4_define([NETNS_START_DHCPD],
 #
 # Start a "persistent" UDP echo server within 'namespace', listening on 'port'
 # and echoing back any data it receives. 'ip-version' is either "4" or "6".
-# The server keeps running across multiple client connections (nc's "-k").
+# The server keeps running across multiple client connections (Ncat's "-k").
 #
-# nc's "-k" makes it fork child processes that keep the listening port open, so
+# Ncat's "-k" makes it fork child processes that keep the listening port open, so
 # killing only the parent leaves those children running and hangs the whole
 # test cleanup (especially on failures). This macro therefore installs a
 # cleanup hook that kills the child processes (pkill -P) before the parent.
@@ -209,7 +209,7 @@ m4_define([NETNS_START_DHCPD],
 # test.
 #
 m4_define([NETNS_START_UDP_ECHO],
-   [ip netns exec $1 nc -$2 -k -l -u -p $3 -d 0.1 -c 'cat' & echo $! > $4
+   [ip netns exec $1 ncat -$2 -k -l -u -p $3 -d 0.1 -c 'cat' & echo $! > $4
      echo "pkill -P \`cat $4\`; kill \`cat $4\`" >> cleanup
    ]
 )
@@ -498,8 +498,8 @@ m4_define([NS_CHECK_CONNECTIVITY__],
     check ovs-appctl revalidator/wait
 
     # Start a simple TCP and UDP echo server that replies with "ack <received_msg>".
-    NETNS_DAEMONIZE($ns_dst, [nc $proto -l -p 1235 -d 0.1 -c 'cat'], [nc-$ns_dst-$ip-tcp.pid])
-    NETNS_DAEMONIZE($ns_dst, [nc $proto -l -u -p 1234 -d 0.1 -c 'cat'], [nc-$ns_dst-$ip-udp.pid])
+    NETNS_DAEMONIZE($ns_dst, [ncat $proto -l -p 1235 -d 0.1 -c 'cat'], [nc-$ns_dst-$ip-tcp.pid])
+    NETNS_DAEMONIZE($ns_dst, [ncat $proto -l -u -p 1234 -d 0.1 -c 'cat'], [nc-$ns_dst-$ip-udp.pid])
 
     # Ensure that the destination NS can be pinged on the specified IP
     NS_CHECK_EXEC([$ns_src], [ping $proto -q -c 3 -i 0.3 -w 2 $ip | FORMAT_PING], \
@@ -508,12 +508,13 @@ m4_define([NS_CHECK_CONNECTIVITY__],
 ])
 
     # Exchange multiple messages over TCP and UDP to verify connectivity
-    # Note(mkalcok): Server replies are printed to file, because STDOUT is captured by the nc.
+    # Note(mkalcok): Server replies are printed to file, because Ncat captures
+    # STDOUT.
     :> ./tcp_data
     :> ./udp_data
 
-    NETNS_DAEMONIZE($ns_src, [nc $proto $ip 1235 -d 0.1 -c 'for i in $(seq 1 3); do echo "tcp_data $i"; read msg; echo "$msg" >>./tcp_data; done'], [nc_$ns_src-$ip-tcp.pid])
-    NETNS_DAEMONIZE($ns_src, [nc $proto -u $ip 1234 -d 0.1 -c 'for i in $(seq 1 3); do echo "udp_data $i"; read msg; echo "$msg" >>./udp_data; done'], [nc_$ns_src-$ip-udp.pid])
+    NETNS_DAEMONIZE($ns_src, [ncat $proto $ip 1235 -d 0.1 -c 'for i in $(seq 1 3); do echo "tcp_data $i"; read msg; echo "$msg" >>./tcp_data; done'], [nc_$ns_src-$ip-tcp.pid])
+    NETNS_DAEMONIZE($ns_src, [ncat $proto -u $ip 1234 -d 0.1 -c 'for i in $(seq 1 3); do echo "udp_data $i"; read msg; echo "$msg" >>./udp_data; done'], [nc_$ns_src-$ip-udp.pid])
 
     OVS_WAIT_FOR_OUTPUT([cat ./tcp_data],  [0], [dnl
 tcp_data 1
