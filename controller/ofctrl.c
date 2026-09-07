@@ -3061,16 +3061,6 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
                 mem_stats.oflow_update_usage -= ofctrl_flow_update_size(fup);
                 ovs_list_remove(&fup->list_node);
                 free(fup);
-            } else if (req_cfg == fup->req_cfg) {
-                /* This ofctrl_flow_update is for the same configuration as
-                 * 'req_cfg'.  Probably, some change to the physical topology
-                 * means that we had to revise the OpenFlow flow table even
-                 * though the logical topology did not change.  Update fp->xid,
-                 * so that we don't send a notification that we're up-to-date
-                 * until we're really caught up. */
-                VLOG_DBG("advanced xid target for req_cfg=%"PRId64, req_cfg);
-                fup->xid = xid_;
-                goto done;
             } else {
                 break;
             }
@@ -3082,7 +3072,6 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
         fup->xid = xid_;
         fup->req_cfg = req_cfg;
         mem_stats.oflow_update_usage += ofctrl_flow_update_size(fup);
-    done:;
     } else if (!ovs_list_is_empty(&flow_updates)) {
         /* Getting up-to-date with 'req_cfg' didn't require any extra flow
          * table changes, so whenever we get up-to-date with the most recent
