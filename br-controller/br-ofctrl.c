@@ -699,17 +699,6 @@ br_ofctrl_put(struct br_ofctrl *br_ofctrl, uint64_t req_cfg,
                           fup->req_cfg, req_cfg);
                 ovs_list_remove(&fup->list_node);
                 free(fup);
-            } else if (req_cfg == fup->req_cfg) {
-                /* This br_ofctrl_flow_update is for the same configuration as
-                 * 'req_cfg'.  Probably, some change to the physical topology
-                 * means that we had to revise the OpenFlow flow table even
-                 * though the logical topology did not change.  Update fp->xid,
-                 * so that we don't send a notification that we're up-to-date
-                 * until we're really caught up. */
-                VLOG_DBG("advanced xid target for req_cfg=%"PRId64, req_cfg);
-                fup->xid = xid_;
-
-                return;
             } else {
                 break;
             }
