@@ -20553,12 +20553,12 @@ check ovn-nbctl meter-add meter2 drop 20 kbps
 check ovn-nbctl --wait=sb sync
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 
-AS_BOX([ACL with log])
+AS_BOX([ACL with log only])
 check ovn-nbctl --wait=sb --log acl-add ls from-lport 100 tcp drop
 acl_id=$(fetch_column nb:Acl _uuid action=drop)
 check_engine_stats northd norecompute compute
-check_engine_stats lflow recompute nocompute
-check_engine_stats sync_meters recompute nocompute
+check_engine_stats lflow norecompute compute
+check_engine_stats sync_meters norecompute compute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 
@@ -20579,12 +20579,12 @@ check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 
 check ovn-nbctl --wait=sb acl-del ls
 check_engine_stats northd norecompute compute
-check_engine_stats lflow recompute nocompute
-check_engine_stats sync_meters recompute nocompute
+check_engine_stats lflow norecompute compute
+check_engine_stats sync_meters norecompute compute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 
-AS_BOX([ACL with meter])
+AS_BOX([ACL with log and meter])
 check ovn-nbctl --wait=sb --meter=meter1 acl-add ls from-lport 100 tcp drop
 acl_id=$(fetch_column nb:Acl _uuid action=drop)
 check_engine_stats northd norecompute compute
@@ -20611,6 +20611,24 @@ check ovn-nbctl --wait=sb acl-del ls
 check_engine_stats northd norecompute compute
 check_engine_stats lflow recompute nocompute
 check_engine_stats sync_meters recompute nocompute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+
+AS_BOX([ACL with meter])
+m1=$(fetch_column nb:Meter _uuid name=meter1)
+check_uuid ovn-nbctl --wait=sb --id=@id create ACL action=drop \
+    direction=from-lport match=tcp priority=1001 meter=$m1 \
+    -- set logical_switch ls acls=@id
+check_engine_stats northd norecompute compute
+check_engine_stats lflow norecompute compute
+check_engine_stats sync_meters norecompute compute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+
+check ovn-nbctl --wait=sb acl-del ls
+check_engine_stats northd norecompute compute
+check_engine_stats lflow norecompute compute
+check_engine_stats sync_meters norecompute compute
 CHECK_NO_CHANGE_AFTER_RECOMPUTE
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 
