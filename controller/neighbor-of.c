@@ -50,7 +50,6 @@ consider_neighbor_flow(const struct sbrec_port_binding *pb,
         match_set_dl_type(&mb_cache_use_match, htons(ETH_TYPE_IP));
         match_set_nw_src(&mb_cache_use_match, ip_addr);
 
-        match_set_arp_opcode_masked(&lookup_arp_for_stats_match, 2, 0xff);
         match_set_arp_spa_masked(&lookup_arp_for_stats_match, ip_addr,
                                  htonl(0xffffffff));
     } else {

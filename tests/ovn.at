@@ -37006,10 +37006,10 @@ port_key_1=$(printf "0x%x" $(as hv1 fetch_column port_binding tunnel_key logical
 dp_key_2=$(printf "0x%x" $(as hv1 fetch_column datapath tunnel_key external_ids:name=gw-2))
 port_key_2=$(printf "0x%x" $(as hv1 fetch_column port_binding tunnel_key logical_port=gw-2-public))
 
-table=" table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_1},metadata=${dp_key_1},dl_src=00:00:00:00:10:10,arp_spa=192.168.10.10,arp_op=2 actions=drop
- table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_1},metadata=${dp_key_1},dl_src=00:00:00:00:10:20,arp_spa=192.168.10.20,arp_op=2 actions=drop
- table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:10,arp_spa=192.168.10.10,arp_op=2 actions=drop
- table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:20,arp_spa=192.168.10.20,arp_op=2 actions=drop
+table=" table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_1},metadata=${dp_key_1},dl_src=00:00:00:00:10:10,arp_spa=192.168.10.10 actions=drop
+ table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_1},metadata=${dp_key_1},dl_src=00:00:00:00:10:20,arp_spa=192.168.10.20 actions=drop
+ table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:10,arp_spa=192.168.10.10 actions=drop
+ table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:20,arp_spa=192.168.10.20 actions=drop
  table=OFTABLE_MAC_CACHE_USE, priority=100,ip,reg14=${port_key_1},metadata=${dp_key_1},dl_src=00:00:00:00:10:10,nw_src=192.168.10.10 actions=drop
  table=OFTABLE_MAC_CACHE_USE, priority=100,ip,reg14=${port_key_1},metadata=${dp_key_1},dl_src=00:00:00:00:10:20,nw_src=192.168.10.20 actions=drop
  table=OFTABLE_MAC_CACHE_USE, priority=100,ip,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:10,nw_src=192.168.10.10 actions=drop
@@ -37058,8 +37058,8 @@ OVS_WAIT_UNTIL([
 ])
 
 AT_CHECK_UNQUOTED([as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_MAC_CACHE_USE --no-stats | strip_cookie | sort], [0], [dnl
- table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:10,arp_spa=192.168.10.10,arp_op=2 actions=drop
- table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:20,arp_spa=192.168.10.20,arp_op=2 actions=drop
+ table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:10,arp_spa=192.168.10.10 actions=drop
+ table=OFTABLE_MAC_CACHE_USE, priority=100,arp,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:20,arp_spa=192.168.10.20 actions=drop
  table=OFTABLE_MAC_CACHE_USE, priority=100,ip,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:10,nw_src=192.168.10.10 actions=drop
  table=OFTABLE_MAC_CACHE_USE, priority=100,ip,reg14=${port_key_2},metadata=${dp_key_2},dl_src=00:00:00:00:10:20,nw_src=192.168.10.20 actions=drop
 ])
@@ -37282,22 +37282,29 @@ ovn-appctl -t ovn-controller vlog/set mac_cache:file:dbg pinctrl:file:dbg
 check ovn-nbctl                                                     \
     -- ls-add ls1                                                   \
     -- ls-add ls2                                                   \
+    -- ls-add ls3                                                   \
     -- lr-add lr                                                    \
     -- set logical_router lr options:mac_binding_age_threshold=4    \
     -- lrp-add lr lr-ls1 00:00:00:00:10:00 192.168.10.1/24          \
     -- lrp-add lr lr-ls2 00:00:00:00:20:00 192.168.20.1/24          \
+    -- lrp-add lr lr-ls3 00:00:00:00:30:00 192.168.30.1/24          \
     -- lsp-add-router-port ls1 ls1-lr lr-ls1                        \
     -- lsp-add ls1 vif1                                             \
     -- lsp-set-addresses vif1 "00:00:00:00:10:10 192.168.10.10"     \
     -- lsp-add-router-port ls2 ls2-lr lr-ls2                        \
     -- lsp-add ls2 vif2                                             \
-    -- lsp-set-addresses vif2 "00:00:00:00:20:10 192.168.20.10"
+    -- lsp-set-addresses vif2 "00:00:00:00:20:10 192.168.20.10"     \
+    -- lsp-add-router-port ls3 ls3-lr lr-ls3                        \
+    -- lsp-add ls3 vif3                                             \
+    -- lsp-set-addresses vif3 "00:00:00:00:30:10 192.168.30.10"
 
 check ovs-vsctl                                      \
     -- add-port br-int vif1                          \
     -- set interface vif1 external-ids:iface-id=vif1 \
     -- add-port br-int vif2                          \
-    -- set interface vif2 external-ids:iface-id=vif2
+    -- set interface vif2 external-ids:iface-id=vif2 \
+    -- add-port br-int vif3                          \
+    -- set interface vif3 external-ids:iface-id=vif3
 
 OVN_POPULATE_ARP
 wait_for_ports_up
@@ -37314,23 +37321,32 @@ sleep 2
 send_garp hv1 vif1 2 00:00:00:00:10:10 ff:ff:ff:ff:ff:ff 192.168.10.10 192.168.10.10
 wait_row_count mac_binding 1 ip="192.168.10.10" logical_port="lr-ls1"
 
-uuid=$(fetch_column mac_binding _uuid ip="192.168.10.10" logical_port="lr-ls1")
+send_garp hv1 vif3 2 00:00:00:00:30:10 ff:ff:ff:ff:ff:ff 192.168.30.10 192.168.30.10
+wait_row_count mac_binding 1 ip="192.168.30.10" logical_port="lr-ls3"
+
+uuid_ls1=$(fetch_column mac_binding _uuid ip="192.168.10.10" logical_port="lr-ls1")
+uuid_ls3=$(fetch_column mac_binding _uuid ip="192.168.30.10" logical_port="lr-ls3")
 for i in $(seq 12); do
-    # Keep one entry alive by sending traffic that uses it.
+    # Keep two entries alive by sending traffic that uses them.
     send_udp hv1 vif1 00:00:00:00:10:00 00:00:00:00:10:10 192.168.20.10 192.168.10.10
+    send_garp hv1 vif3 1 00:00:00:00:30:10 ff:ff:ff:ff:ff:ff 192.168.30.10 192.168.20.100
     sleep 1
     # The entry must not expire.
     check_row_count mac_binding 1 ip="192.168.10.10" logical_port="lr-ls1"
+    check_row_count mac_binding 1 ip="192.168.30.10" logical_port="lr-ls3"
     as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_MAC_CACHE_USE
 done
 # Check that it's the same entry.
-uuid2=$(fetch_column mac_binding _uuid ip="192.168.10.10" logical_port="lr-ls1")
-check test "$uuid" = "$uuid2"
+uuid2_ls1=$(fetch_column mac_binding _uuid ip="192.168.10.10" logical_port="lr-ls1")
+uuid2_ls3=$(fetch_column mac_binding _uuid ip="192.168.30.10" logical_port="lr-ls3")
+check test "$uuid_ls1" = "$uuid2_ls1"
+check test "$uuid_ls3" = "$uuid2_ls3"
 
 # The other entry must have expired by now.
 check_row_count mac_binding 0 ip="192.168.20.10" logical_port="lr-ls2"
-# Wait for the alive one to expire as well.
+# Wait for the alive ones to expire as well.
 wait_row_count mac_binding 0 ip="192.168.10.10" logical_port="lr-ls1"
+wait_row_count mac_binding 0 ip="192.168.30.10" logical_port="lr-ls3"
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
