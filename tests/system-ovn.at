@@ -18643,10 +18643,10 @@ priority=100,icmp6,reg0=0x1720016,reg1=0,reg2=0,reg3=0x70,reg14=0x$rtr_port_key,
 
 AT_CHECK_UNQUOTED([ovs-ofctl dump-flows br-int table=OFTABLE_MAC_CACHE_USE | grep priority | \
                    awk '{print $[7], $[8]}' | sort], [0], [dnl
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,arp_spa=172.16.1.10,arp_op=2 actions=drop
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:50,arp_spa=172.16.1.50,arp_op=2 actions=drop
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:60,arp_spa=172.16.1.60,arp_op=2 actions=drop
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:70,arp_spa=172.16.1.70,arp_op=2 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,arp_spa=172.16.1.10 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:50,arp_spa=172.16.1.50 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:60,arp_spa=172.16.1.60 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:70,arp_spa=172.16.1.70 actions=drop
 priority=100,ip,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,nw_src=172.16.1.10 actions=drop
 priority=100,ip,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:50,nw_src=172.16.1.50 actions=drop
 priority=100,ip,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:60,nw_src=172.16.1.60 actions=drop
@@ -18840,7 +18840,7 @@ priority=100,arp,reg0=0xac10010a,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl
 
 AT_CHECK_UNQUOTED([ovs-ofctl dump-flows br-int table=OFTABLE_MAC_CACHE_USE | grep priority | \
                    awk '{print $[7], $[8]}' | sort], [0], [dnl
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,arp_spa=172.16.1.10,arp_op=2 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,arp_spa=172.16.1.10 actions=drop
 priority=100,ip,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,nw_src=172.16.1.10 actions=drop
 ])
 
@@ -19322,10 +19322,10 @@ priority=100,icmp6,reg0=0x1720016,reg1=0,reg2=0,reg3=0x70,reg14=0x$rtr_port_key,
 
 AT_CHECK_UNQUOTED([ovs-ofctl dump-flows br-int table=OFTABLE_MAC_CACHE_USE | grep priority | \
                    awk '{print $[7], $[8]}' | sort], [0], [dnl
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,arp_spa=172.16.1.10,arp_op=2 actions=drop
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:50,arp_spa=172.16.1.50,arp_op=2 actions=drop
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:60,arp_spa=172.16.1.60,arp_op=2 actions=drop
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:70,arp_spa=172.16.1.70,arp_op=2 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,arp_spa=172.16.1.10 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:50,arp_spa=172.16.1.50 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:60,arp_spa=172.16.1.60 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:70,arp_spa=172.16.1.70 actions=drop
 priority=100,ip,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,nw_src=172.16.1.10 actions=drop
 priority=100,ip,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:50,nw_src=172.16.1.50 actions=drop
 priority=100,ip,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:60,nw_src=172.16.1.60 actions=drop
@@ -19377,7 +19377,7 @@ priority=100,arp,reg0=0xac10010a,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl
 
 AT_CHECK_UNQUOTED([ovs-ofctl dump-flows br-int table=OFTABLE_MAC_CACHE_USE | grep priority | \
                    awk '{print $[7], $[8]}' | sort], [0], [dnl
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,arp_spa=172.16.1.10,arp_op=2 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,arp_spa=172.16.1.10 actions=drop
 priority=100,ip,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,nw_src=172.16.1.10 actions=drop
 ])
 
@@ -19898,10 +19898,10 @@ priority=100,icmp6,reg0=0x1720016,reg1=0,reg2=0,reg3=0x70,reg14=0x$rtr_port_key,
 
 AT_CHECK_UNQUOTED([ovs-ofctl dump-flows br-int table=OFTABLE_MAC_CACHE_USE | grep priority | \
                    awk '{print $[7], $[8]}' | sort], [0], [dnl
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,arp_spa=172.16.1.10,arp_op=2 actions=drop
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:50,arp_spa=172.16.1.50,arp_op=2 actions=drop
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:60,arp_spa=172.16.1.60,arp_op=2 actions=drop
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:70,arp_spa=172.16.1.70,arp_op=2 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,arp_spa=172.16.1.10 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:50,arp_spa=172.16.1.50 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:60,arp_spa=172.16.1.60 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:70,arp_spa=172.16.1.70 actions=drop
 priority=100,ip,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,nw_src=172.16.1.10 actions=drop
 priority=100,ip,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:50,nw_src=172.16.1.50 actions=drop
 priority=100,ip,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:10:60,nw_src=172.16.1.60 actions=drop
@@ -19953,7 +19953,7 @@ priority=100,arp,reg0=0xac10010a,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl
 
 AT_CHECK_UNQUOTED([ovs-ofctl dump-flows br-int table=OFTABLE_MAC_CACHE_USE | grep priority | \
                    awk '{print $[7], $[8]}' | sort], [0], [dnl
-priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,arp_spa=172.16.1.10,arp_op=2 actions=drop
+priority=100,arp,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,arp_spa=172.16.1.10 actions=drop
 priority=100,ip,reg14=0x$rtr_port_key,metadata=0x$rtr_dp_key,dl_src=f0:00:0f:16:01:10,nw_src=172.16.1.10 actions=drop
 ])
 
