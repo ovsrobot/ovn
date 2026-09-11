@@ -853,8 +853,14 @@ mac_binding_probe_stats_process_flow_stats(
         struct vector *stats_vec,
         struct ofputil_flow_stats *ofp_stats)
 {
+    if (!ofp_stats->packet_count) {
+        return;
+    }
+
     struct mac_cache_stats stats = (struct mac_cache_stats) {
-        .idle_age_ms = ofp_stats->idle_age * 1000,
+        .idle_age_ms = ofp_stats->idle_age >= 0
+               ? ofp_stats->idle_age * 1000
+               : 0,
         .data.mb = (struct mac_binding_data) {
             .cookie = ntohll(ofp_stats->cookie),
             /* The port_key must be zero to match
