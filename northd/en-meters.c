@@ -81,10 +81,13 @@ sync_meters_nb_acl_handler(struct engine_node *node, void *data OVS_UNUSED)
 
     const struct nbrec_acl *nb_acl;
     NBREC_ACL_TABLE_FOR_EACH_TRACKED (nb_acl, acl_table) {
-        /* New or deleted ACL with meter needs to be recomputed. */
-        if ((nbrec_acl_is_new(nb_acl) || nbrec_acl_is_deleted(nb_acl)) &&
-            (nb_acl->log || nb_acl->meter)) {
-            return EN_UNHANDLED;
+        /* New or deleted ACL with meter and log needs to be recomputed. */
+        if (nbrec_acl_is_new(nb_acl) || nbrec_acl_is_deleted(nb_acl)) {
+            if (nb_acl->log && nb_acl->meter) {
+                return EN_UNHANDLED;
+            }
+
+            continue;
         }
 
         /* Addition or removal of meter requires recompute. */
