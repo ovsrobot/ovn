@@ -1933,7 +1933,7 @@ determine_if_pkt_too_big(struct ovn_desired_flow_table *flow_table,
  * action for this flow in the future.
  */
 static void
-reply_imcp_error_if_pkt_too_big(struct ovn_desired_flow_table *flow_table,
+reply_icmp_error_if_pkt_too_big(struct ovn_desired_flow_table *flow_table,
                                 const struct sbrec_port_binding *binding,
                                 const struct sbrec_port_binding *mcp,
                                 uint16_t mtu, bool is_ipv6, int direction)
@@ -2100,13 +2100,13 @@ handle_pkt_too_big_for_ip_version(struct ovn_desired_flow_table *flow_table,
     /* ingress */
     determine_if_pkt_too_big(flow_table, binding, mcp, mtu, is_ipv6,
                              MFF_LOG_INPORT);
-    reply_imcp_error_if_pkt_too_big(flow_table, binding, mcp, mtu, is_ipv6,
+    reply_icmp_error_if_pkt_too_big(flow_table, binding, mcp, mtu, is_ipv6,
                                     MFF_LOG_INPORT);
 
     /* egress */
     determine_if_pkt_too_big(flow_table, binding, mcp, mtu, is_ipv6,
                              MFF_LOG_OUTPORT);
-    reply_imcp_error_if_pkt_too_big(flow_table, binding, mcp, mtu, is_ipv6,
+    reply_icmp_error_if_pkt_too_big(flow_table, binding, mcp, mtu, is_ipv6,
                                     MFF_LOG_OUTPORT);
 }
 

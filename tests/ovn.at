@@ -37846,7 +37846,7 @@ AT_SETUP([MAC binding aging - probing GW router Dynamic Neigh])
 CHECK_SCAPY
 ovn_start
 
-send_imcp_echo_req() {
+send_icmp_echo_req() {
     local hv=$1 dev=$2 hdst=$3 hsrc=$4 idst=$5 isrc=$6
     local packet=$(fmt_pkt "Ether(dst='${hdst}', src='${hsrc}')/ \
                             IP(dst='${idst}', src='${isrc}')/ICMP()")
@@ -37913,7 +37913,7 @@ send_garp hv1 public 2 00:00:00:00:10:1a ff:ff:ff:ff:ff:ff 192.168.10.100 192.16
 wait_row_count mac_binding 1 ip="192.168.10.100" logical_port="gw-public"
 
 # Send ICMP echo request to create entries in OFTABLE_MAC_BINDING.
-send_imcp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
+send_icmp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
 dump_icmp 00:00:00:00:10:1a 00:00:00:00:10:00 192.168.10.100 192.168.20.2 253 0 0 > expected
 OVN_CHECK_PACKETS_CONTAIN([hv1/public-tx.pcap], [expected])
 
@@ -37926,18 +37926,18 @@ OVS_WAIT_UNTIL([$(ovs-ofctl dump-flows br-int table=OFTABLE_MAC_BINDING | \
                   sed 's/reg15=0x.,metadata=0x./reg15=<cleared>,metadata=<cleared>/g' | \
                   grep -q "reg0=0xc0a81402,reg15=<cleared>,metadata=<cleared> actions=mod_dl_dst:00:00:00:00:30:00")])
 
-send_imcp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
+send_icmp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
 
 # Wait until ovn-controller sends the ARP request.
 OVS_WAIT_UNTIL([test $(grep -c "Sending ARP/ND.*ip: 192.168.20.2" hv1/ovn-controller.log) -eq 1])
-send_imcp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
+send_icmp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
 
 # Now drop ICMP echo reply in order to force OVN to arp the mac binding entry
 # for the distributed router lr.
 check ovn-nbctl --wait=hv acl-add join from-lport 1000 'inport == "join-lr" && icmp' drop
 
 sleep $((aging_th / 2))
-send_imcp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
+send_icmp_echo_req hv1 public 00:00:00:00:10:00 00:00:00:00:10:1a 192.168.20.2 192.168.10.100
 OVS_WAIT_UNTIL([test $(grep -c "Sending ARP/ND.*ip: 192.168.20.2" hv1/ovn-controller.log) -eq 2])
 
 check ovn-nbctl --wait=hv acl-del join
