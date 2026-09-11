@@ -347,12 +347,14 @@ void
 mac_binding_stats_process_flow_stats(struct vector *stats_vec,
                                      struct ofputil_flow_stats *ofp_stats)
 {
-    if (ofp_stats->idle_age == ofp_stats->duration_sec) {
+    if (!ofp_stats->packet_count) {
         return;
     }
 
     struct mac_cache_stats stats = (struct mac_cache_stats) {
-        .idle_age_ms = ofp_stats->idle_age * 1000,
+        .idle_age_ms = ofp_stats->idle_age >= 0
+                       ? ofp_stats->idle_age * 1000
+                       : 0,
         .data.mb = (struct mac_binding_data) {
             .cookie = ntohll(ofp_stats->cookie),
             /* The port_key must be zero to match
@@ -452,12 +454,14 @@ void
 fdb_stats_process_flow_stats(struct vector *stats_vec,
                              struct ofputil_flow_stats *ofp_stats)
 {
-    if (ofp_stats->idle_age == ofp_stats->duration_sec) {
+    if (!ofp_stats->packet_count) {
         return;
     }
 
     struct mac_cache_stats stats = (struct mac_cache_stats) {
-        .idle_age_ms = ofp_stats->idle_age * 1000,
+        .idle_age_ms = ofp_stats->idle_age >= 0
+                       ? ofp_stats->idle_age * 1000
+                       : 0,
         .data.fdb = (struct fdb_data) {
             .port_key = ofp_stats->match.flow.regs[MFF_LOG_INPORT - MFF_REG0],
             .dp_key = ntohll(ofp_stats->match.flow.metadata),
