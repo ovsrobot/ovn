@@ -37738,15 +37738,15 @@ dump_arp 1 00:00:00:00:10:00 00:00:00:00:10:1b 10.10.10.1 10.10.10.101 00:00:00:
 dump_ns 00:00:00:00:10:1b 00:00:00:00:10:00 fd11::65 fd11::1 fd11::65 > ucast_v6_65.pkt
 OVS_WAIT_UNTIL([test $($PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif1-tx.pcap | \
                 grep -Fc "$(cat ucast_v4_101.pkt)") -ge 2])
+# The neighbours answer, refreshing the rows in place (resetting arp_attempts).
+v4_ts=$(fetch_column Mac_Binding timestamp ip=10.10.10.101)
+send_garp hv1 vif1 2 00:00:00:00:10:1b 00:00:00:00:10:00 10.10.10.101 10.10.10.1
 OVS_WAIT_UNTIL([test $($PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif1-tx.pcap | \
                 grep -Fc "$(cat ucast_v6_65.pkt)") -ge 2])
-
-# The neighbours answer, refreshing the rows in place (resetting
-# arp_attempts).  Confirm the timestamps advanced.
-v4_ts=$(fetch_column Mac_Binding timestamp ip=10.10.10.101)
 v6_ts=$(fetch_column Mac_Binding timestamp ip=\"fd11::65\")
-send_garp hv1 vif1 2 00:00:00:00:10:1b 00:00:00:00:10:00 10.10.10.101 10.10.10.1
 send_na hv1 vif1 00:00:00:00:10:1b 00:00:00:00:10:00 fd11::65 fd11::1
+
+# Confirm the timestamps advanced.
 OVS_WAIT_UNTIL([test $(fetch_column Mac_Binding timestamp ip=10.10.10.101) -gt $v4_ts])
 OVS_WAIT_UNTIL([test $(fetch_column Mac_Binding timestamp ip=\"fd11::65\") -gt $v6_ts])
 
