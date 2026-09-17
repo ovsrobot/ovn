@@ -16805,6 +16805,79 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([ls_stateful lflow handling for created switches])
+AT_KEYWORDS([incremental processing])
+
+ovn_start
+
+# A pre-existing switch with an ACL.  It is not part of northd's tracked
+# switches, so its ls_stateful record is processed by
+# lflow_handle_ls_stateful_changes().
+check ovn-nbctl ls-add sw0
+check ovn-nbctl --wait=sb acl-add sw0 to-lport 1002 'ip4.src == 10.0.0.1' \
+    allow-related
+
+# Creating a switch together with an ACL: the switch is in northd's tracked
+# switches, so lflow_handle_northd_ls_changes() builds and syncs its
+# ls_stateful flows, and the ls_stateful handler skips the record instead of
+# building the very same flows a second time.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb ls-add sw1 \
+    -- acl-add sw1 to-lport 1002 'ip4.src == 10.0.0.2' allow-related
+check_engine_stats northd norecompute compute
+check_engine_stats ls_stateful norecompute compute
+check_engine_stats lflow norecompute compute
+AT_CHECK([ovn-sbctl dump-flows sw1 | grep ls_out_acl_eval | \
+    grep -c 'ip4.src == 10.0.0.2'], [0], [2
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+# The skip is per switch.  A single transaction that both creates a switch
+# with an ACL and adds an ACL to the pre-existing switch must skip only the
+# created one: sw0's record is still processed here.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb ls-add sw2 \
+    -- acl-add sw2 to-lport 1002 'ip4.src == 10.0.0.3' allow-related \
+    -- acl-add sw0 to-lport 1003 'ip4.src == 10.0.0.4' drop
+check_engine_stats ls_stateful norecompute compute
+check_engine_stats lflow norecompute compute
+AT_CHECK([ovn-sbctl dump-flows sw2 | grep ls_out_acl_eval | \
+    grep -c 'ip4.src == 10.0.0.3'], [0], [2
+])
+AT_CHECK([ovn-sbctl dump-flows sw0 | grep ls_out_acl_eval | \
+    grep -c 'ip4.src == 10.0.0.4'], [0], [2
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+# An ACL change on a switch northd did not track goes through the ls_stateful
+# handler unchanged.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb acl-del sw0 to-lport 1003 'ip4.src == 10.0.0.4'
+check_engine_stats ls_stateful norecompute compute
+check_engine_stats lflow norecompute compute
+AT_CHECK([ovn-sbctl dump-flows sw0 | grep -c 'ip4.src == 10.0.0.4'], [1], [0
+])
+AT_CHECK([ovn-sbctl dump-flows sw0 | grep ls_out_acl_eval | \
+    grep -c 'ip4.src == 10.0.0.1'], [0], [2
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+# Deleting a switch that has ACLs: its ls_stateful record is deleted along
+# with the datapath, whose lflow_ref lflow_handle_northd_ls_changes() has
+# already unlinked and synced, so the deleted-record path walks an empty ref.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb ls-del sw2
+check_engine_stats ls_stateful norecompute compute
+check_engine_stats lflow norecompute compute
+AT_CHECK([ovn-sbctl lflow-list | grep -c 'ip4.src == 10.0.0.3'], [1], [0
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([Datapath count change with shared dp-group flow])
 AT_KEYWORDS([incremental processing])
 
