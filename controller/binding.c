@@ -1585,6 +1585,14 @@ release_lport(const struct sbrec_port_binding *pb,
         if (!release_lport_main_chassis(pb, sb_readonly, if_mgr)) {
             return false;
         }
+        /* A port claimed by a previous ovn-controller instance is not
+         * tracked by if-status, which would otherwise set it down. */
+        if (!sb_readonly && pb->n_up && pb->up[0] &&
+            !if_status_mgr_iface_is_present(if_mgr, pb->logical_port)) {
+            bool up = false;
+            sbrec_port_binding_set_up(pb, &up, 1);
+            VLOG_INFO("Setting lport %s down in Southbound", pb->logical_port);
+        }
     } else if (is_additional_chassis(pb, chassis_rec)) {
         if (!release_lport_additional_chassis(pb, chassis_rec, sb_readonly)) {
             return false;
