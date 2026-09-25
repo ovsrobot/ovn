@@ -5682,7 +5682,16 @@ northd_handle_lr_changes(const struct northd_input *ni,
             goto fail;
         }
 
+        /* 'deleted_lr' is the copy of the row from before the deletion, so
+         * its port list can disagree with what northd actually built, in
+         * either direction: it reports ports this run never created (an
+         * LRP added and deleted along with its router in the same
+         * iteration), and it misses ports northd still has (an LRP removed
+         * in an earlier transaction of this same iteration).  Bail out on
+         * both, as the ports northd built can only be torn down by a
+         * recompute (see destroy_ports_for_datapath()). */
         if (deleted_lr->copp ||
+            !hmap_is_empty(&od->ports) ||
             deleted_lr->n_ports > 0 ||
             deleted_lr->n_policies > 0 ||
             deleted_lr->n_static_routes > 0) {
