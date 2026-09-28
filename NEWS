@@ -129,6 +129,11 @@ OVN v26.09.0 - xxx xx xxxx
      represent a logical router port (e.g. ovn-ic transit switch LSPs).
      Such ports are treated like type=router, including omission from
      _MC_flood_l2.
+   - Documented the "virtual gateway" setup, in which several ovn-controller
+     instances share one chassis name and one anycast encapsulation IP
+     reachable over the underlay through ECMP, so that they appear to OVN as
+     a single chassis. See Documentation/topics/virtual-gateway.rst for the
+     requirements and the restrictions.
 
 OVN v26.03.0 - xxx xx xxxx
 --------------------------
