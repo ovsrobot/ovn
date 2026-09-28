@@ -336,6 +336,13 @@ ls_stateful_table_find_(const struct ls_stateful_table *table,
     return NULL;
 }
 
+const struct ls_stateful_record *
+ls_stateful_table_find(const struct ls_stateful_table *table,
+                       const struct nbrec_logical_switch *nbs)
+{
+    return ls_stateful_table_find_(table, nbs);
+}
+
 static struct ls_stateful_record *
 ls_stateful_record_create(struct ls_stateful_table *table,
                           const struct ovn_datapath *od,
