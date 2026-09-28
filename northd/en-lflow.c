@@ -169,6 +169,13 @@ lflow_northd_handler(struct engine_node *node,
         return EN_UNHANDLED;
     }
 
+    if (!lflow_handle_northd_lrp_changes(eng_ctx->ovnsb_idl_txn,
+                                         &northd_data->trk_data.trk_lrps,
+                                         &lflow_input,
+                                         lflow_data->lflow_table)) {
+        return EN_UNHANDLED;
+    }
+
     if (!lflow_handle_northd_lb_changes(
             eng_ctx->ovnsb_idl_txn, &northd_data->trk_data.trk_lbs,
             &lflow_input, lflow_data->lflow_table)) {
