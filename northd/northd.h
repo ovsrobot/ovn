@@ -999,6 +999,11 @@ void build_route_data_flows_for_lrouter(
     const struct group_ecmp_datapath *route_node,
     const struct sset *bfd_ports);
 
+bool lflow_handle_northd_ls_changes(struct ovsdb_idl_txn *ovnsb_txn,
+                                    struct tracked_dps *,
+                                    struct ls_stateful_tracked_data *,
+                                    struct lflow_input *,
+                                    struct lflow_table *lflows);
 bool lflow_handle_northd_lr_changes(struct ovsdb_idl_txn *ovnsh_txn,
                                      struct tracked_dps *,
                                      struct lflow_input *,

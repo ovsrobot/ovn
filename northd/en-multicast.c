@@ -153,6 +153,15 @@ multicast_igmp_northd_handler(struct engine_node *node, void *data OVS_UNUSED)
         return EN_UNHANDLED;
     }
 
+    /* A created/deleted logical switch owns per-datapath multicast flood
+     * flows (build_mcast_flood_lswitch() via build_igmp_lflows()).  The lflow
+     * node now processes switch datapaths incrementally, so it no longer
+     * forces a full recompute; recompute this (cheap) node so its lflow_ref
+     * picks up (or drops) the switch's flood flows. */
+    if (northd_has_lswitches_in_tracked_data(&northd_data->trk_data)) {
+        return EN_UNHANDLED;
+    }
+
     struct tracked_ovn_ports *trk_lsps = &northd_data->trk_data.trk_lsps;
     if (hmapx_count(&trk_lsps->created) ||
         hmapx_count(&trk_lsps->updated) ||

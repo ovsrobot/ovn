@@ -145,15 +145,30 @@ lflow_northd_handler(struct engine_node *node,
         return EN_UNHANDLED;
     }
 
-    if (northd_has_lswitches_in_tracked_data(&northd_data->trk_data)) {
-        return EN_UNHANDLED;
-    }
-
     const struct engine_context *eng_ctx = engine_get_context();
     struct lflow_data *lflow_data = data;
 
     struct lflow_input lflow_input;
     lflow_get_input_data(node, &lflow_input);
+
+    /* The switch datapath handler also (re)builds the per-switch ls_stateful
+     * flows of created/deleted switches, coordinated with their
+     * datapath_lflows so that shared datapath groups are updated in place
+     * rather than churned.
+     * It therefore needs the ls_stateful tracked data. */
+    struct ed_type_ls_stateful *ls_stateful_data =
+        engine_get_input_data("ls_stateful", node);
+    struct ls_stateful_tracked_data *ls_sful_trk =
+        ls_stateful_has_tracked_data(&ls_stateful_data->trk_data)
+        ? &ls_stateful_data->trk_data : NULL;
+
+    if (!lflow_handle_northd_ls_changes(eng_ctx->ovnsb_idl_txn,
+                                        &northd_data->trk_data.trk_switches,
+                                        ls_sful_trk,
+                                        &lflow_input,
+                                        lflow_data->lflow_table)) {
+        return EN_UNHANDLED;
+    }
 
     if (!lflow_handle_northd_lr_changes(eng_ctx->ovnsb_idl_txn,
                                         &northd_data->trk_data.trk_routers,
