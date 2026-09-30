@@ -23831,6 +23831,72 @@ OVN_CLEANUP_NORTHD
 AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Static routes - ECMP ids stable across recompute])
+AT_KEYWORDS([ecmp])
+ovn_start
+
+check ovn-nbctl lr-add lr0
+for i in 1 2 3 4; do
+    check ovn-nbctl lrp-add lr0 lr0-sw$i 00:00:00:00:0$i:01 10.0.$i.1/24
+done
+check ovn-nbctl --wait=sb sync
+
+dnl Add the routes in "reverse" order, the ids must not depend on it.
+for p in 192.168.30.0/24 192.168.20.0/24 192.168.10.0/24; do
+    for i in 3 2 1; do
+        check ovn-nbctl --wait=sb --ecmp lr-route-add lr0 $p 10.0.$i.10
+    done
+done
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep -w lr_in_ip_routing | grep select | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_ip_routing   ), priority=1840 , match=(reg7 == 0 && ip4.dst == 192.168.10.0/24), action=(ip.ttl--; flags.loopback = 1; reg8[[0..15]] = 1; reg8[[16..31]] = select(1, 2, 3);)
+  table=??(lr_in_ip_routing   ), priority=1840 , match=(reg7 == 0 && ip4.dst == 192.168.20.0/24), action=(ip.ttl--; flags.loopback = 1; reg8[[0..15]] = 2; reg8[[16..31]] = select(1, 2, 3);)
+  table=??(lr_in_ip_routing   ), priority=1840 , match=(reg7 == 0 && ip4.dst == 192.168.30.0/24), action=(ip.ttl--; flags.loopback = 1; reg8[[0..15]] = 3; reg8[[16..31]] = select(1, 2, 3);)
+])
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep lr_in_ip_routing_ecmp | grep -F "reg8[[0..15]] == 1 &&" | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_ip_routing_ecmp), priority=100  , match=(reg8[[0..15]] == 1 && reg8[[16..31]] == 1), action=(reg0 = 10.0.1.10; reg5 = 10.0.1.1; eth.src = 00:00:00:00:01:01; outport = "lr0-sw1"; reg9[[9]] = 1; next;)
+  table=??(lr_in_ip_routing_ecmp), priority=100  , match=(reg8[[0..15]] == 1 && reg8[[16..31]] == 2), action=(reg0 = 10.0.2.10; reg5 = 10.0.2.1; eth.src = 00:00:00:00:02:01; outport = "lr0-sw2"; reg9[[9]] = 1; next;)
+  table=??(lr_in_ip_routing_ecmp), priority=100  , match=(reg8[[0..15]] == 1 && reg8[[16..31]] == 3), action=(reg0 = 10.0.3.10; reg5 = 10.0.3.1; eth.src = 00:00:00:00:03:01; outport = "lr0-sw3"; reg9[[9]] = 1; next;)
+])
+
+dnl Remove a member from the middle of a group with more than 2 members.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lr-route-del lr0 192.168.10.0/24 10.0.2.10
+check_engine_compute group_ecmp_route incremental
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+dnl Remove a whole group and then add a new one, group ids must stay unique.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lr-route-del lr0 192.168.20.0/24
+check ovn-nbctl --wait=sb --ecmp lr-route-add lr0 192.168.40.0/24 10.0.1.10
+check ovn-nbctl --wait=sb --ecmp lr-route-add lr0 192.168.40.0/24 10.0.4.10
+check_engine_compute group_ecmp_route incremental
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep -w lr_in_ip_routing | grep select | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_ip_routing   ), priority=1840 , match=(reg7 == 0 && ip4.dst == 192.168.10.0/24), action=(ip.ttl--; flags.loopback = 1; reg8[[0..15]] = 1; reg8[[16..31]] = select(1, 2);)
+  table=??(lr_in_ip_routing   ), priority=1840 , match=(reg7 == 0 && ip4.dst == 192.168.30.0/24), action=(ip.ttl--; flags.loopback = 1; reg8[[0..15]] = 2; reg8[[16..31]] = select(1, 2, 3);)
+  table=??(lr_in_ip_routing   ), priority=1840 , match=(reg7 == 0 && ip4.dst == 192.168.40.0/24), action=(ip.ttl--; flags.loopback = 1; reg8[[0..15]] = 3; reg8[[16..31]] = select(1, 2);)
+])
+
+dnl Once no member is a discard route anymore the group must stop dropping.
+route=$(ovn-nbctl --bare --columns _uuid find Logical_Router_Static_Route \
+        ip_prefix="192.168.30.0/24" nexthop="10.0.3.10")
+check ovn-nbctl --wait=sb set Logical_Router_Static_Route $route nexthop=discard
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep lr_in_ip_routing_ecmp | grep -c "drop;"], [0], [4
+])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set Logical_Router_Static_Route $route nexthop=10.0.3.10
+check_engine_compute group_ecmp_route incremental
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep lr_in_ip_routing_ecmp | grep -c "drop;"], [0], [1
+])
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([Static routes - ECMP with discard])
 ovn_start
 
