@@ -42,6 +42,10 @@ VLOG_DEFINE_THIS_MODULE(exchange);
 #define PRIORITY_DEFAULT 1000
 #define PRIORITY_LOCAL_BOUND 100
 
+/* Name of the Logical_Router_Port option asking ovn-controller to create and
+ * remove the VRF the routes of the Logical_Router are exchanged in. */
+#define OPT_MAINTAIN_VRF "dynamic-routing-maintain-vrf"
+
 /* Discover the veth peer interface name of 'iface' using the
  * status:peer_ifindex value that OVS populates for veth devices.
  *
@@ -111,14 +115,59 @@ route_is_distributed_lb(const struct sbrec_advertised_route *route)
                          OVN_AR_DISTRIBUTED_LB_ID, false);
 }
 
+/* Returns true if 'cr_pb' is a chassisredirect port whose routes are
+ * arbitrated by an HA chassis group.
+ *
+ * Every member of that group installs and advertises the port's routes; the
+ * standby members do so in a strictly higher priority band, so the fabric
+ * pre-computes a backup path (BGP PIC Edge) without ever preferring it over
+ * the active chassis. */
+static bool
+route_cr_port_is_ha(const struct sbrec_port_binding *cr_pb)
+{
+    return cr_pb && cr_pb->ha_chassis_group;
+}
+
+/* Returns true if this chassis advertises 'route'.
+ *
+ * '*is_standby', if non-NULL, receives whether this chassis advertises the
+ * route as a standby member of the advertising port's HA chassis group.  The
+ * locality of the advertising port is the only arbiter: the chassis the
+ * chassisredirect port is bound to is the active one, every other member of
+ * the group is a standby.  Both are derived from Port_Binding.chassis, so all
+ * members agree on the outcome even while their local BFD state differs. */
 static bool
 route_advertising_port_is_local(
     const struct sbrec_advertised_route *route,
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
-    const struct sbrec_chassis *chassis)
+    const struct sbrec_chassis *chassis,
+    bool *is_standby)
 {
-    return lport_is_local(sbrec_port_binding_by_name, chassis,
-                          route->logical_port->logical_port);
+    if (is_standby) {
+        *is_standby = false;
+    }
+
+    if (lport_is_local(sbrec_port_binding_by_name, chassis,
+                       route->logical_port->logical_port)) {
+        return true;
+    }
+
+    /* The advertising port is resident elsewhere.  It is still advertised
+     * from here if it is a distributed gateway port this chassis is a standby
+     * member of, so that the fabric pre-computes a backup path (BGP PIC
+     * Edge). */
+    const struct sbrec_port_binding *cr_pb =
+        lport_get_cr_port(sbrec_port_binding_by_name, route->logical_port,
+                          NULL);
+    if (!route_cr_port_is_ha(cr_pb) ||
+        !ha_chassis_group_contains(cr_pb->ha_chassis_group, chassis)) {
+        return false;
+    }
+
+    if (is_standby) {
+        *is_standby = true;
+    }
+    return true;
 }
 
 static bool
@@ -162,8 +211,8 @@ build_lb_route_gates(struct hmap *gates,
         if (!route->tracked_port || !route_has_health_checks(route)) {
             continue;
         }
-        if (!route_advertising_port_is_local(
-                route, sbrec_port_binding_by_name, chassis)) {
+        if (!route_advertising_port_is_local(route, sbrec_port_binding_by_name,
+                                             chassis, NULL)) {
             continue;
         }
 
@@ -410,6 +459,18 @@ route_exchange_find_port(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     if (dynamic_routing_port_name) {
         *dynamic_routing_port_name =
             smap_get(&cr_pb->options, "dynamic-routing-port-name");
+    }
+
+    /* Every member of the HA chassis group processes the port's routes, not
+     * just the resident one.  The active/standby distinction is expressed as
+     * a route priority in route_run(), so the standby's routes are advertised
+     * with a higher metric and the fabric can pre-compute a backup path.
+     *
+     * This is also what puts the VRF of a standby member in place before a
+     * failover rather than while traffic is already blackholed. */
+    if (route_cr_port_is_ha(cr_pb) &&
+        ha_chassis_group_contains(cr_pb->ha_chassis_group, chassis)) {
+        return route_exchange_relevant_port(cr_pb) ? cr_pb : NULL;
     }
 
     if (!lport_pb_is_chassis_resident(chassis, cr_pb)) {
@@ -676,9 +737,7 @@ route_run(struct route_ctx_in *r_ctx_in,
             }
 
             ad->maintain_vrf |=
-                smap_get_bool(&repb->options,
-                              "dynamic-routing-maintain-vrf",
-                              false);
+                smap_get_bool(&repb->options, OPT_MAINTAIN_VRF, false);
 
             const char *vrf_name = smap_get(&repb->options,
                                             "dynamic-routing-vrf-name");
@@ -757,9 +816,13 @@ route_run(struct route_ctx_in *r_ctx_in,
             continue;
         }
 
+        /* Set when the advertising port is a distributed gateway port that
+         * is resident on another chassis of an HA chassis group this chassis
+         * is a member of. */
+        bool is_standby;
         if (!route_advertising_port_is_local(
-                route, r_ctx_in->sbrec_port_binding_by_name,
-                r_ctx_in->chassis)) {
+                route, r_ctx_in->sbrec_port_binding_by_name, r_ctx_in->chassis,
+                &is_standby)) {
             sset_add(r_ctx_out->tracked_ports_remote,
                      route->logical_port->logical_port);
             continue;
@@ -791,6 +854,30 @@ route_run(struct route_ctx_in *r_ctx_in,
             if (!local_only_eligible) {
                 continue;
             }
+        }
+
+        /* Single site where the standby band is applied, once the base
+         * priority is final. Routes installed by a standby member of the HA
+         * chassis group land in a strictly higher priority band, which the
+         * routing daemon translates into a higher metric (and hence a higher
+         * BGP MED), so the fabric pre-computes the backup path without ever
+         * preferring it over the active chassis.
+         *
+         * PRIORITY_DEFAULT is the smallest band that preserves the invariant
+         * "every standby priority exceeds every active priority": the lowest
+         * standby priority is PRIORITY_LOCAL_BOUND + PRIORITY_DEFAULT, which
+         * is still above the highest active one, PRIORITY_DEFAULT. */
+        if (is_standby) {
+            unsigned int base = priority;
+
+            priority += PRIORITY_DEFAULT;
+
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
+            VLOG_DBG_RL(&rl,
+                        "Advertising route %s from standby chassis %s "
+                        "with priority %u (base priority %u)",
+                        route->ip_prefix, r_ctx_in->chassis->name, priority,
+                        base);
         }
 
         if (distributed_lb &&
