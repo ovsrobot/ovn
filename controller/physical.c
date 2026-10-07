@@ -2069,15 +2069,8 @@ get_tunnel_overhead(struct chassis_tunnel const *tun)
 static uint16_t
 get_effective_mtu(const struct sbrec_port_binding *mcp,
                   struct vector *remote_tunnels,
-                  const struct if_status_mgr *if_mgr)
+                  const struct physical_ctx *ctx)
 {
-    /* Use interface MTU as a base for calculation */
-    uint16_t iface_mtu = if_status_mgr_iface_get_mtu(if_mgr,
-                                                     mcp->logical_port);
-    if (!iface_mtu) {
-        return 0;
-    }
-
     /* Iterate over all peer tunnels and find the biggest tunnel overhead */
     uint16_t overhead = 0;
     const struct chassis_tunnel *tun;
@@ -2088,7 +2081,26 @@ get_effective_mtu(const struct sbrec_port_binding *mcp,
         return 0;
     }
 
-    return iface_mtu - overhead;
+    uint16_t mtu = ctx->tunnel_mtu;
+    /* Both IP versions use this limit.  Leave room for the minimum IPv6 MTU
+     * advertised by reply_icmp_error_if_pkt_too_big(), including Ethernet
+     * overhead.  Otherwise, PMTU discovery cannot converge and the generated
+     * ICMP errors can themselves exceed the limit and trigger more errors. */
+    uint16_t min_mtu = 1280 + overhead + ETHERNET_OVERHEAD;
+    if (mtu && mtu < min_mtu) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_WARN_RL(&rl, "Tunnel MTU %"PRIu16" is too small; minimum is "
+                     "%"PRIu16" for overhead %"PRIu16, mtu, min_mtu,
+                     overhead + ETHERNET_OVERHEAD);
+        mtu = 0;
+    }
+    if (!mtu) {
+        /* Preserve the VIF-based calculation when no usable tunnel MTU
+         * is configured. */
+        mtu = if_status_mgr_iface_get_mtu(ctx->if_mgr, mcp->logical_port);
+    }
+
+    return mtu ? mtu - overhead : 0;
 }
 
 static void
@@ -2115,14 +2127,33 @@ handle_pkt_too_big(struct ovn_desired_flow_table *flow_table,
                    struct vector *remote_tunnels,
                    const struct sbrec_port_binding *binding,
                    const struct sbrec_port_binding *mcp,
-                   const struct if_status_mgr *if_mgr)
+                   const struct physical_ctx *ctx)
 {
-    uint16_t mtu = get_effective_mtu(mcp, remote_tunnels, if_mgr);
+    uint16_t mtu = get_effective_mtu(mcp, remote_tunnels, ctx);
     if (!mtu) {
         return;
     }
     handle_pkt_too_big_for_ip_version(flow_table, binding, mcp, mtu, false);
     handle_pkt_too_big_for_ip_version(flow_table, binding, mcp, mtu, true);
+}
+
+/* Checks packet sizes for multichassis port 'mcp' based on the tunnel MTU,
+ * which unlike the VIF MTU is also known on chassis that do not host the
+ * port.  The checks match all of the port's traffic, whatever the peer, so
+ * use the largest overhead of all tunnels. */
+static void
+handle_multichassis_pkt_too_big(struct ovn_desired_flow_table *flow_table,
+                                const struct sbrec_port_binding *mcp,
+                                const struct physical_ctx *ctx)
+{
+    struct vector tuns =
+        VECTOR_EMPTY_INITIALIZER(const struct chassis_tunnel *);
+    const struct chassis_tunnel *tun;
+    HMAP_FOR_EACH (tun, hmap_node, ctx->chassis_tunnels) {
+        vector_push(&tuns, &tun);
+    }
+    handle_pkt_too_big(flow_table, &tuns, mcp, mcp, ctx);
+    vector_destroy(&tuns);
 }
 
 /* XXX: Need to support flow-based tunnel for this function. */
@@ -2176,7 +2207,11 @@ enforce_tunneling_for_multichassis_ports(
                         &binding->header_.uuid);
         ofpbuf_uninit(&ofpacts);
 
-        handle_pkt_too_big(flow_table, &tuns, binding, mcp, ctx->if_mgr);
+        /* With a tunnel MTU, consider_port_binding() checks packet sizes
+         * for each multichassis port. */
+        if (!ctx->tunnel_mtu) {
+            handle_pkt_too_big(flow_table, &tuns, binding, mcp, ctx);
+        }
     }
     vector_destroy(&tuns);
 }
@@ -2210,6 +2245,14 @@ consider_port_binding(const struct physical_ctx *ctx,
     struct local_datapath *ld;
     if (!(ld = get_local_datapath(ctx->local_datapaths, dp_key))) {
         return;
+    }
+
+    /* Switches with a localnet port tunnel the traffic of multichassis
+     * ports, also from chassis that do not host them.  With a tunnel MTU,
+     * all of these chassis check packet sizes. */
+    if (ctx->tunnel_mtu && binding->n_additional_chassis
+        && ld->localnet_port && !ctx->always_tunnel) {
+        handle_multichassis_pkt_too_big(flow_table, binding, ctx);
     }
 
     if (type == LP_VIF) {
