@@ -1945,7 +1945,7 @@ handle_svc_check(outport);
     encodes as push:NXM_NX_REG14[[]],push:NXM_NX_REG15[[]],pop:NXM_NX_REG14[[]],controller(userdata=00.00.00.12.00.00.00.00),pop:NXM_NX_REG14[[]]
 
 handle_svc_check();
-    Syntax error at `)' expecting field name.
+    encodes as controller(userdata=00.00.00.12.00.00.00.00)
 
 handle_svc_check(reg0);
     Cannot use numeric field reg0 where string field is required.
@@ -9318,6 +9318,8 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([nd_na ])
+AT_KEYWORDS([nd-responder])
+CHECK_SCAPY
 ovn_start
 
 #TODO: since patch port for IPv6 logical router port is not ready not,
@@ -9348,6 +9350,14 @@ check ovn-nbctl lsp-add lsw0 lp2
 check ovn-nbctl lsp-set-addresses lp2 "fa:16:3e:a1:f9:ae 192.168.0.4 fd81:ce49:a948:0:f816:3eff:fea1:f9ae"
 check ovn-nbctl lsp-set-port-security lp2 "fa:16:3e:a1:f9:ae 192.168.0.4 fd81:ce49:a948:0:f816:3eff:fea1:f9ae"
 
+# A router target exercises nd_na_router as well as the ordinary responder.
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-lsw0 fa:16:3e:00:00:01 fd81:ce49:a948:0::1/64
+check ovn-nbctl lsp-add lsw0 lsw0-lr0
+check ovn-nbctl lsp-set-type lsw0-lr0 router
+check ovn-nbctl lsp-set-addresses lsw0-lr0 router
+check ovn-nbctl lsp-set-options lsw0-lr0 router-port=lr0-lsw0
+
 # Add ACL rule for ICMPv6 on lsw0
 check ovn-nbctl acl-add lsw0 from-lport 1002 'ip6 && icmp6'  allow-related
 check ovn-nbctl acl-add lsw0 to-lport 1002 'outport == "lp1" && ip6 && icmp6'  allow-related
@@ -9372,6 +9382,42 @@ na_packet=fa163e940598fa163ea1f9ae86dd6000000000203afffd81ce49a9480000f8163efffe
 
 as hv1 ovs-appctl netdev-dummy/receive vif1 $ns_packet
 echo $na_packet >> 1.expected
+
+# Duplicate-address detection omits the source-link-layer option and uses ::.
+# The complete expected frame verifies multicast Ethernet/IP destinations,
+# Hop Limit 255, target-link-layer option, flags, and the ICMPv6 checksum.
+dad_ns=$(fmt_pkt "Ether(src='fa:16:3e:94:05:98', dst='33:33:ff:a1:f9:ae')/ \
+                   IPv6(src='::', dst='ff02::1:ffa1:f9ae', hlim=255)/ \
+                   ICMPv6ND_NS(tgt='fd81:ce49:a948:0:f816:3eff:fea1:f9ae')")
+dad_na=$(fmt_pkt "Ether(src='fa:16:3e:a1:f9:ae', dst='33:33:00:00:00:01')/ \
+                   IPv6(src='fd81:ce49:a948:0:f816:3eff:fea1:f9ae', dst='ff02::1', hlim=255)/ \
+                   ICMPv6ND_NA(tgt='fd81:ce49:a948:0:f816:3eff:fea1:f9ae', R=0, S=0, O=1)/ \
+                   ICMPv6NDOptDstLLAddr(lladdr='fa:16:3e:a1:f9:ae')")
+as hv1 ovs-appctl netdev-dummy/receive vif1 $dad_ns
+echo $dad_na >> 1.expected
+
+for spa in fd81:ce49:a948:0:f816:3eff:fe94:598 ::; do
+    if test "$spa" = ::; then
+        option=
+        dst=ff02::1
+        dst_mac=33:33:00:00:00:01
+        solicited=0
+    else
+        option="/ICMPv6NDOptSrcLLAddr(lladdr='fa:16:3e:94:05:98')"
+        dst=$spa
+        dst_mac=fa:16:3e:94:05:98
+        solicited=1
+    fi
+    router_ns=$(fmt_pkt "Ether(src='fa:16:3e:94:05:98', dst='33:33:ff:00:00:01')/ \
+                          IPv6(src='$spa', dst='ff02::1:ff00:1', hlim=255)/ \
+                          ICMPv6ND_NS(tgt='fd81:ce49:a948:0::1')$option")
+    router_na=$(fmt_pkt "Ether(src='fa:16:3e:00:00:01', dst='$dst_mac')/ \
+                          IPv6(src='fd81:ce49:a948:0::1', dst='$dst', hlim=255)/ \
+                          ICMPv6ND_NA(tgt='fd81:ce49:a948:0::1', R=1, S=$solicited, O=1)/ \
+                          ICMPv6NDOptDstLLAddr(lladdr='fa:16:3e:00:00:01')")
+    as hv1 ovs-appctl netdev-dummy/receive vif1 $router_ns
+    echo $router_na >> 1.expected
+done
 
 for i in 1 2; do
     OVN_CHECK_PACKETS([hv1/vif$i-tx.pcap], [$i.expected])

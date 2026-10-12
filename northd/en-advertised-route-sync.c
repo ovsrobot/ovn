@@ -1392,9 +1392,25 @@ build_advertised_mac_binding(const struct ovn_datapath *od, struct hmap *map)
                                        &op->peer->lrp_networks);
         }
 
-        if (!strcmp(op->nbsp->type, "")) { /* LSP */
-            advertised_mac_binding_add(map, od->sdp->sb_dp, op->sb,
-                                       op->lsp_addrs);
+        bool health_source = !strcmp(op->nbsp->type, "health-monitor");
+        if (health_source
+            && (!op->sb->chassis
+                || op->sb->chassis != op->sb->requested_chassis
+                || !smap_get_bool(&op->sb->chassis->other_config,
+                                   "lb-health-probe-evpn", false)
+                || !op->sb->n_up || !op->sb->up[0]
+                || op->sb->n_additional_chassis
+                || op->sb->n_requested_additional_chassis
+                || smap_get_bool(&op->sb->options,
+                                 "health-monitor-disabled", true))) {
+            continue;
+        }
+        /* Local endpoint. */
+        if (!strcmp(op->nbsp->type, "") || health_source) {
+            for (size_t i = 0; i < op->n_lsp_addrs; i++) {
+                advertised_mac_binding_add(map, od->sdp->sb_dp, op->sb,
+                                           &op->lsp_addrs[i]);
+            }
         }
     }
 }

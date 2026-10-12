@@ -18,6 +18,8 @@
 #include <stdio.h>
 
 #include "aging.h"
+#include "lib/inc-proc-eng.h"
+#include "openvswitch/poll-loop.h"
 #include "debug.h"
 #include "bitmap.h"
 #include "coverage.h"
@@ -75,6 +77,8 @@
 VLOG_DEFINE_THIS_MODULE(northd);
 
 static bool controller_event_en;
+static bool health_monitor_port_valid(const struct ovn_port *);
+static struct eth_addr evpn_health_reserved_mac;
 
 
 static bool check_lsp_is_up;
@@ -2877,6 +2881,10 @@ ovn_port_update_sbrec(struct ovsdb_idl_txn *ovnsb_txn,
             }
 
             smap_clone(&options, &op->nbsp->options);
+            if (!strcmp(op->nbsp->type, "health-monitor")) {
+                smap_replace(&options, "health-monitor-disabled",
+                             health_monitor_port_valid(op) ? "false" : "true");
+            }
 
             if (queue_id) {
                 if (ls_has_localnet_port(op->od)) {
@@ -3167,6 +3175,7 @@ struct service_monitor_info {
     struct hmap_node hmap_node;
     const struct sbrec_service_monitor *sbrec_mon;
     bool required;
+    bool evpn_eligible;
 };
 
 
@@ -3175,7 +3184,8 @@ monitor_info_matches(const struct service_monitor_info *mon_info,
                      const char *ip, const char *logical_port,
                      uint16_t service_port, const char *protocol)
 {
-    return (mon_info->sbrec_mon->port == service_port &&
+    return (!mon_info->sbrec_mon->probe_mode
+            && mon_info->sbrec_mon->port == service_port &&
             !strcmp(mon_info->sbrec_mon->ip, ip) &&
             !strcmp(mon_info->sbrec_mon->protocol, protocol) &&
             !strcmp(mon_info->sbrec_mon->logical_port, logical_port));
@@ -3422,6 +3432,555 @@ ovn_nf_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
     }
 }
 
+/* Runtime freshness is deliberately not persisted in SB.  A new northd must
+ * observe a completed check after its initial snapshot, and neither host's
+ * wall clock participates in eligibility. */
+struct evpn_health_observation {
+    struct hmap_node node;
+    struct uuid monitor;
+    struct uuid config;
+    struct uuid instance;
+    int64_t seqno;
+    int64_t deadline;
+    bool fresh;
+    bool seen;
+};
+
+struct evpn_health_waker {
+    struct hmap observations;
+};
+
+void *
+en_evpn_health_waker_init(struct engine_node *node OVS_UNUSED,
+                          struct engine_arg *arg OVS_UNUSED)
+{
+    struct evpn_health_waker *waker = xzalloc(sizeof *waker);
+    hmap_init(&waker->observations);
+    return waker;
+}
+
+enum engine_node_state
+en_evpn_health_waker_run(struct engine_node *node OVS_UNUSED, void *data)
+{
+    struct evpn_health_waker *waker = data;
+    int64_t now = time_msec();
+    bool expired = false;
+    struct evpn_health_observation *o;
+    HMAP_FOR_EACH (o, node, &waker->observations) {
+        if (!o->fresh) {
+            continue;
+        }
+        if (now >= o->deadline) {
+            o->fresh = false;
+            expired = true;
+        } else {
+            poll_timer_wait_until(o->deadline);
+        }
+    }
+    return expired ? EN_UPDATED : EN_UNCHANGED;
+}
+
+void
+en_evpn_health_waker_cleanup(void *data)
+{
+    struct evpn_health_waker *waker = data;
+    struct evpn_health_observation *o;
+    HMAP_FOR_EACH_POP (o, node, &waker->observations) {
+        free(o);
+    }
+    hmap_destroy(&waker->observations);
+}
+
+static bool
+evpn_health_observe(struct evpn_health_waker *waker,
+                    const struct sbrec_service_monitor *mon)
+{
+    struct evpn_health_observation *o = NULL, *entry;
+    uint32_t hash = uuid_hash(&mon->header_.uuid);
+    HMAP_FOR_EACH_WITH_HASH (entry, node, hash, &waker->observations) {
+        if (uuid_equals(&entry->monitor, &mon->header_.uuid)) {
+            o = entry;
+            break;
+        }
+    }
+    bool reset = !o;
+    if (!o) {
+        o = xzalloc(sizeof *o);
+        o->monitor = mon->header_.uuid;
+        hmap_insert(&waker->observations, &o->node, hash);
+    }
+    o->seen = true;
+    if (!mon->n_config_generation || !mon->n_controller_instance
+        || !mon->n_observed_generation
+        || !uuid_equals(mon->config_generation, mon->observed_generation)) {
+        o->fresh = false;
+        return false;
+    }
+    reset |= !uuid_equals(&o->config, mon->config_generation)
+             || !uuid_equals(&o->instance, mon->controller_instance)
+             || mon->check_seqno < o->seqno;
+    if (reset) {
+        o->config = *mon->config_generation;
+        o->instance = *mon->controller_instance;
+        o->seqno = mon->check_seqno;
+        o->fresh = false;
+    } else if (mon->check_seqno > o->seqno) {
+        o->seqno = mon->check_seqno;
+        int64_t stale = smap_get_int(&mon->options, "stale_timeout", 10);
+        o->deadline = time_msec() + stale * 1000;
+        o->fresh = true;
+    }
+    if (o->fresh && time_msec() < o->deadline) {
+        poll_timer_wait_until(o->deadline);
+        return true;
+    }
+    o->fresh = false;
+    return false;
+}
+
+static bool
+health_monitor_port_valid(const struct ovn_port *op)
+{
+    const struct nbrec_logical_switch_port *p = op->nbsp;
+    const char *owner = smap_get(&p->options, "requested-chassis");
+    enum neigh_redistribute_mode mode =
+        parse_neigh_dynamic_redistribute(&op->od->nbs->other_config);
+    bool valid = lsp_is_enabled(p) && op->od->has_evpn_vni
+           && nrm_mode_FDB_is_set(mode) && nrm_mode_IP_is_set(mode)
+           && owner && owner[0] && !strchr(owner, ',')
+           && !p->parent_name && !p->n_tag && !p->n_tag_request
+           && !p->n_health_checks
+           && !p->dhcpv4_options && !p->dhcpv6_options
+           && p->n_addresses == 1 && op->n_lsp_addrs == 1
+           && !eth_addr_is_zero(op->lsp_addrs[0].ea)
+           && !eth_addr_is_multicast(op->lsp_addrs[0].ea)
+           && !eth_addr_equals(op->lsp_addrs[0].ea, evpn_health_reserved_mac)
+           && (op->lsp_addrs[0].n_ipv4_addrs
+               || op->lsp_addrs[0].n_ipv6_addrs)
+           && p->n_port_security == 1
+           && !strcmp(p->port_security[0], p->addresses[0])
+           && smap_get_bool(&p->options, "dynamic-routing-advertise", true);
+    if (!valid) {
+        return false;
+    }
+    /* Catch conflicts visible in this deployment as well as the imported
+     * EVPN conflicts checked by the controller. Distributed reservations
+     * remain the CMS's responsibility. */
+    const struct ovn_port *other;
+    HMAP_FOR_EACH (other, dp_node, &op->od->ports) {
+        if (other == op) {
+            continue;
+        }
+        for (size_t i = 0; i < other->n_lsp_addrs; i++) {
+            const struct lport_addresses *a = &other->lsp_addrs[i];
+            if (eth_addr_equals(a->ea, op->lsp_addrs[0].ea)) {
+                return false;
+            }
+            for (size_t j = 0; j < op->lsp_addrs[0].n_ipv4_addrs; j++) {
+                if (lport_addresses_contains_ip(a, 1,
+                       op->lsp_addrs[0].ipv4_addrs[j].addr_s)) {
+                    return false;
+                }
+            }
+            for (size_t j = 0; j < op->lsp_addrs[0].n_ipv6_addrs; j++) {
+                if (lport_addresses_contains_ip(a, 1,
+                       op->lsp_addrs[0].ipv6_addrs[j].addr_s)) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+static bool
+evpn_health_address_valid(const char *s, struct in6_addr *ip)
+{
+    if (!ip46_parse(s, ip)) {
+        return false;
+    }
+    /* A mapped IPv6 spelling would make family-specific source selection
+     * ambiguous. Other equivalent IPv6 spellings are normalized in SB. */
+    bool valid = !IN6_IS_ADDR_V4MAPPED(ip) || !strchr(s, ':');
+    if (IN6_IS_ADDR_V4MAPPED(ip)) {
+        uint32_t v4 = ntohl(in6_addr_get_mapped_ipv4(ip));
+        valid &= (v4 >> 24) && (v4 >> 24) != 127 && (v4 >> 24) < 224
+                 && (v4 >> 16) != 0xa9fe;
+    } else {
+        valid &= !IN6_IS_ADDR_UNSPECIFIED(ip)
+                 && !IN6_IS_ADDR_MULTICAST(ip)
+                 && !IN6_IS_ADDR_LINKLOCAL(ip)
+                 && !IN6_IS_ADDR_LOOPBACK(ip);
+    }
+    return valid;
+}
+
+static bool
+evpn_health_same_subnet(const struct lport_addresses *a,
+                        const struct in6_addr *src,
+                        const struct in6_addr *dst)
+{
+    if (IN6_IS_ADDR_V4MAPPED(src)) {
+        ovs_be32 s = in6_addr_get_mapped_ipv4(src);
+        ovs_be32 d = in6_addr_get_mapped_ipv4(dst);
+        for (size_t i = 0; i < a->n_ipv4_addrs; i++) {
+            const struct ipv4_netaddr *n = &a->ipv4_addrs[i];
+            if (n->plen && n->plen < 32
+                && (s & n->mask) == n->network
+                && (d & n->mask) == n->network
+                && s != n->network && s != (n->network | ~n->mask)
+                && d != n->network && d != (n->network | ~n->mask)) {
+                return true;
+            }
+        }
+    } else {
+        for (size_t i = 0; i < a->n_ipv6_addrs; i++) {
+            const struct ipv6_netaddr *n = &a->ipv6_addrs[i];
+            struct in6_addr s = ipv6_addr_bitand(src, &n->mask);
+            struct in6_addr d = ipv6_addr_bitand(dst, &n->mask);
+            if (n->plen && n->plen < 128
+                && ipv6_addr_equals(&s, &n->network)
+                && ipv6_addr_equals(&d, &n->network)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static const char *
+evpn_health_validate(const struct ovn_lb_datapaths *lb_dps,
+                     const struct ovn_lb_backend *backend,
+                     const struct ovn_northd_lb_backend *backend_nb,
+                     const struct ovn_port *source,
+                     const struct hmap *all_lb_dps)
+{
+    const struct nbrec_load_balancer_health_check_endpoint *ep =
+        backend_nb->evpn_endpoint;
+    /* Detect shared row identity before returning context-specific errors.
+     * There is only one SB monitor for this UUID, so every attachment must
+     * converge on the same fail-closed diagnosis. */
+    const struct ovn_lb_datapaths *other;
+    HMAP_FOR_EACH (other, hmap_node, all_lb_dps) {
+        for (size_t i = 0; i < other->lb->n_vips; i++) {
+            const struct ovn_northd_lb_vip *vip = &other->lb->vips_nb[i];
+            for (size_t j = 0; j < vip->n_backends; j++) {
+                const struct ovn_northd_lb_backend *b = &vip->backends_nb[j];
+                if (b != backend_nb && b->evpn_endpoint == ep) {
+                    return "ambiguous-endpoint-identity";
+                }
+            }
+        }
+    }
+    if (backend_nb->evpn_error) {
+        return backend_nb->evpn_error;
+    }
+    if (strcmp(lb_dps->lb->proto, "tcp") || lb_dps->lb->is_distributed
+        || lb_dps->lb->template) {
+        return "unsupported-protocol-or-lb-mode";
+    }
+    if (!source || strcmp(source->nbsp->type, "health-monitor")
+        || !health_monitor_port_valid(source)) {
+        return "invalid-source-port";
+    }
+    struct in6_addr src, dst;
+    if (!evpn_health_address_valid(ep->source_ip, &src)
+        || !evpn_health_address_valid(ep->ip, &dst)
+        || IN6_IS_ADDR_V4MAPPED(&src) != IN6_IS_ADDR_V4MAPPED(&dst)
+        || ipv6_addr_equals(&src, &dst)
+        || !lport_addresses_contains_ip(source->lsp_addrs,
+                                         source->n_lsp_addrs, ep->source_ip)) {
+        return "invalid-source-address";
+    }
+    bool in_network = dynamic_bitmap_is_set(&lb_dps->nb_ls_map,
+                                             source->od->sdp->index);
+    bool in_subnet = evpn_health_same_subnet(source->lsp_addrs, &src, &dst);
+    const struct ovn_datapath *lb_router = NULL;
+    struct ovn_port *rp;
+    VECTOR_FOR_EACH (&source->od->router_ports, rp) {
+        if (!rp->peer) {
+            continue;
+        }
+        if (dynamic_bitmap_is_set(&lb_dps->nb_lr_map,
+                                  rp->peer->od->sdp->index)) {
+            in_network = true;
+            lb_router = rp->peer->od;
+        }
+        in_subnet |= evpn_health_same_subnet(&rp->peer->lrp_networks,
+                                              &src, &dst);
+    }
+    if (!in_network || dynamic_bitmap_count1(&lb_dps->nb_lr_map) > 1
+        || (dynamic_bitmap_count1(&lb_dps->nb_lr_map) && !lb_router)
+        || (!dynamic_bitmap_count1(&lb_dps->nb_lr_map)
+            && dynamic_bitmap_count1(&lb_dps->nb_ls_map) != 1)) {
+        return "unrelated-lb-attachment";
+    }
+    size_t index;
+    DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_ls_map) {
+        const struct ovn_datapath *od =
+            ovn_datapaths_find_by_index(source->od->datapaths, index);
+        if (od == source->od) {
+            continue;
+        }
+        bool related = false;
+        VECTOR_FOR_EACH (&od->router_ports, rp) {
+            related |= rp->peer && rp->peer->od == lb_router;
+        }
+        if (!related) {
+            return "unrelated-lb-attachment";
+        }
+    }
+    if (!in_subnet) {
+        return "backend-not-on-source-subnet";
+    }
+    HMAP_FOR_EACH (other, hmap_node, all_lb_dps) {
+        for (size_t i = 0; i < other->lb->n_vips; i++) {
+            const struct ovn_northd_lb_vip *vip = &other->lb->vips_nb[i];
+            for (size_t j = 0; j < vip->n_backends; j++) {
+                const struct ovn_northd_lb_backend *b = &vip->backends_nb[j];
+                const struct nbrec_load_balancer_health_check_endpoint *e =
+                    b->evpn_endpoint;
+                if (!e || b == backend_nb) {
+                    continue;
+                }
+                struct in6_addr other_src, other_dst;
+                if (e->source_port == ep->source_port
+                    && ip46_parse(e->source_ip, &other_src)
+                    && ip46_parse(e->ip, &other_dst)
+                    && ipv6_addr_equals(&other_src, &src)
+                    && ipv6_addr_equals(&other_dst, &backend->ip)
+                    && e->port == backend->port) {
+                    return "ambiguous-endpoint-identity";
+                }
+            }
+        }
+    }
+    const struct sbrec_port_binding *pb = source->sb;
+    const char *requested = smap_get(&source->nbsp->options,
+                                      "requested-chassis");
+    if (!pb || !pb->requested_chassis || pb->n_requested_additional_chassis
+        || pb->n_additional_chassis
+        || (strcmp(requested, pb->requested_chassis->name)
+            && strcmp(requested, pb->requested_chassis->hostname))) {
+        return "invalid-source-owner";
+    }
+    if (!smap_get_bool(&pb->requested_chassis->other_config,
+                       "lb-health-probe-evpn", false)) {
+        return "unsupported-owner";
+    }
+    return NULL;
+}
+
+static uint32_t
+evpn_health_monitor_hash(const struct uuid *id)
+{
+    return uuid_hash(id);
+}
+
+static struct service_monitor_info *
+get_evpn_service_mon(const struct hmap *map, const struct uuid *id)
+{
+    struct service_monitor_info *info;
+    HMAP_FOR_EACH_WITH_HASH (info, hmap_node, evpn_health_monitor_hash(id),
+                             map) {
+        if (info->sbrec_mon->probe_mode
+            && !strcmp(info->sbrec_mon->probe_mode, "evpn")
+            && info->sbrec_mon->n_endpoint_id
+            && uuid_equals(info->sbrec_mon->endpoint_id, id)) {
+            return info;
+        }
+    }
+    return NULL;
+}
+
+static bool
+evpn_health_timer_option_valid(const struct smap *options, const char *key,
+                               int64_t min, int64_t max)
+{
+    const char *value = smap_get(options, key);
+    long long n;
+    return !value || (str_to_llong(value, 10, &n) && n >= min && n <= max);
+}
+
+static void
+ovn_lb_evpn_svc_create(struct ovsdb_idl_txn *txn,
+                       const struct ovn_lb_datapaths *lb_dps,
+                       const struct ovn_northd_lb_vip *vip,
+                       const struct ovn_lb_backend *backend,
+                       const struct ovn_northd_lb_backend *backend_nb,
+                       struct hmap *ls_ports, struct hmap *monitors,
+                       const struct hmap *all_lb_dps,
+                       const struct svc_monitor_addresses *svc_addresses,
+                       struct evpn_health_waker *waker)
+{
+    const struct nbrec_load_balancer_health_check_endpoint *ep =
+        backend_nb->evpn_endpoint;
+    /* A reused endpoint is invalid, but its diagnostic monitor must still
+     * have one stable writer. Choose an attachment independently of hmap
+     * iteration order so repeated recomputes do not regenerate its config. */
+    const struct ovn_lb_datapaths *other;
+    HMAP_FOR_EACH (other, hmap_node, all_lb_dps) {
+        for (size_t i = 0; i < other->lb->n_vips; i++) {
+            const struct ovn_northd_lb_vip *other_vip = &other->lb->vips_nb[i];
+            for (size_t j = 0; j < other_vip->n_backends; j++) {
+                if (other_vip->backends_nb[j].evpn_endpoint != ep) {
+                    continue;
+                }
+                int cmp = uuid_compare_3way(&other->lb->nlb->header_.uuid,
+                                             &lb_dps->lb->nlb->header_.uuid);
+                if (cmp < 0 || (!cmp && uuid_compare_3way(
+                        &other_vip->lb_health_check->header_.uuid,
+                        &vip->lb_health_check->header_.uuid) < 0)) {
+                    return;
+                }
+            }
+        }
+    }
+    const struct ovn_port *source = ep->source_port
+        ? ovn_port_find(ls_ports, ep->source_port->name) : NULL;
+    const char *error = evpn_health_validate(lb_dps, backend, backend_nb,
+                                            source, all_lb_dps);
+    if (source && source->n_lsp_addrs
+        && eth_addr_equals(source->lsp_addrs[0].ea,
+                            svc_addresses->mac_ea_src)) {
+        error = "reserved-service-monitor-mac";
+    }
+    struct service_monitor_info *info = get_evpn_service_mon(monitors,
+                                                            &ep->header_.uuid);
+    if (info && info->required) {
+        /* A shared endpoint was already consumed during this build. It is
+         * invalid regardless of which LB attachment was visited first; do
+         * not overwrite its monitor context on every northd iteration. */
+        info->evpn_eligible = false;
+        return;
+    }
+    const struct sbrec_service_monitor *mon;
+    bool created = !info;
+    if (created) {
+        mon = sbrec_service_monitor_insert(txn);
+        sbrec_service_monitor_set_type(mon, "load-balancer");
+        sbrec_service_monitor_set_probe_mode(mon, "evpn");
+        sbrec_service_monitor_set_endpoint_id(mon, &ep->header_.uuid, 1);
+        sbrec_service_monitor_set_ip(mon, backend->ip_str);
+        sbrec_service_monitor_set_port(mon, backend->port);
+        sbrec_service_monitor_set_protocol(mon, "tcp");
+        info = xzalloc(sizeof *info);
+        info->sbrec_mon = mon;
+        hmap_insert(monitors, &info->hmap_node,
+                    evpn_health_monitor_hash(&ep->header_.uuid));
+    } else {
+        mon = info->sbrec_mon;
+    }
+    info->required = true;
+    struct smap options = SMAP_INITIALIZER(&options);
+    smap_clone(&options, &vip->lb_health_check->options);
+    int interval = smap_get_int(&options, "interval", 5);
+    int timeout = smap_get_int(&options, "timeout", 3);
+    int failures = smap_get_int(&options, "failure_count", 1);
+    int successes = smap_get_int(&options, "success_count", 1);
+    int64_t min_stale = (int64_t) interval + timeout
+                        + MAX(1, ((int64_t) interval + 9) / 10) + 1;
+    int64_t stale = smap_get_int(&options, "stale_timeout", 0);
+    if (!stale) {
+        stale = MAX(10, min_stale * 2);
+    }
+    if (!evpn_health_timer_option_valid(&options, "interval", 1, 3600)
+        || !evpn_health_timer_option_valid(&options, "timeout", 1, 3600)
+        || !evpn_health_timer_option_valid(&options, "failure_count", 1, 1000)
+        || !evpn_health_timer_option_valid(&options, "success_count", 1, 1000)
+        || !evpn_health_timer_option_valid(&options, "stale_timeout",
+                                            min_stale, INT_MAX / 1000)
+        || interval <= 0 || timeout <= 0 || failures <= 0 || successes <= 0
+        || stale < min_stale || stale > INT_MAX / 1000) {
+        error = "invalid-health-check-timers";
+    }
+    smap_replace(&options, "evpn-valid", error ? "false" : "true");
+    if (error) {
+        smap_replace(&options, "evpn-error", error);
+    } else {
+        smap_remove(&options, "evpn-error");
+    }
+    smap_replace_nocopy(&options, "stale_timeout",
+                         xasprintf("%"PRId64, stale));
+    const struct sbrec_port_binding *pb = source ? source->sb : NULL;
+    const struct sbrec_datapath_binding *dp = pb ? pb->datapath : NULL;
+    const char *owner = pb && pb->requested_chassis
+                        ? pb->requested_chassis->name : "";
+    const char *mac = source && source->n_lsp_addrs
+                      ? source->lsp_addrs[0].ea_s : "";
+    char normalized_src_ip[INET6_ADDRSTRLEN];
+    const char *source_ip = ep->source_ip;
+    struct in6_addr src;
+    if (ip46_parse(ep->source_ip, &src)) {
+        ovs_be32 src4 = in6_addr_get_mapped_ipv4(&src);
+        inet_ntop(IN6_IS_ADDR_V4MAPPED(&src) ? AF_INET : AF_INET6,
+                  IN6_IS_ADDR_V4MAPPED(&src) ? (const void *) &src4 : &src,
+                  normalized_src_ip, sizeof normalized_src_ip);
+        source_ip = normalized_src_ip;
+    }
+    struct smap ids = SMAP_INITIALIZER(&ids);
+    smap_add_format(&ids, "load-balancer", UUID_FMT,
+                     UUID_ARGS(&lb_dps->lb->nlb->header_.uuid));
+    smap_add_format(&ids, "health-check", UUID_FMT,
+                     UUID_ARGS(&vip->lb_health_check->header_.uuid));
+    smap_add(&ids, "vip", vip->lb_health_check->vip);
+    if (source) {
+        smap_add_format(&ids, "source-switch", UUID_FMT,
+                         UUID_ARGS(&source->od->nbs->header_.uuid));
+        smap_add(&ids, "source-owner", smap_get_def(&source->nbsp->options,
+                                                    "requested-chassis", ""));
+        smap_add(&ids, "source-vni", smap_get_def(
+            &source->od->nbs->other_config, "dynamic-routing-vni", ""));
+        if (source->nbsp->n_addresses == 1) {
+            smap_add(&ids, "source-addresses", source->nbsp->addresses[0]);
+        }
+    }
+    bool changed = created || !mon->n_config_generation
+                   || mon->datapath != dp || mon->source_port != pb
+                   || strcmp(mon->chassis_name, owner)
+                   || strcmp(mon->src_mac, mac)
+                   || strcmp(mon->src_ip, source_ip)
+                   || strcmp(mon->ip, backend->ip_str)
+                   || mon->port != backend->port
+                   || !smap_equal(&mon->options, &options)
+                   || !smap_equal(&mon->external_ids, &ids);
+    if (changed) {
+        struct uuid generation;
+        uuid_generate(&generation);
+        sbrec_service_monitor_set_config_generation(mon, &generation, 1);
+        sbrec_service_monitor_set_status(mon, error ? "error" : "offline");
+        sbrec_service_monitor_set_datapath(mon, dp);
+        sbrec_service_monitor_set_source_port(mon, pb);
+        sbrec_service_monitor_set_chassis_name(mon, owner);
+        sbrec_service_monitor_set_src_mac(mon, mac);
+        sbrec_service_monitor_set_src_ip(mon, source_ip);
+        sbrec_service_monitor_set_ip(mon, backend->ip_str);
+        sbrec_service_monitor_set_port(mon, backend->port);
+        sbrec_service_monitor_set_options(mon, &options);
+        sbrec_service_monitor_set_external_ids(mon, &ids);
+    }
+    info->evpn_eligible = !error && !changed
+        && pb && pb->chassis == pb->requested_chassis
+        && pb->n_up && pb->up[0]
+        && mon->status && !strcmp(mon->status, "online")
+        && mon->n_resolution_generation && mon->n_checked_resolution_generation
+        && uuid_equals(mon->resolution_generation,
+                        mon->checked_resolution_generation)
+        && evpn_health_observe(waker, mon);
+    /* Observe offline rows too, otherwise the first successful result would
+     * establish a baseline instead of advancing a completed-check sequence. */
+    if (!changed && !info->evpn_eligible) {
+        evpn_health_observe(waker, mon);
+    }
+    if (error) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "EVPN health endpoint "UUID_FMT": %s",
+                     UUID_ARGS(&ep->header_.uuid), error);
+    }
+    smap_destroy(&ids);
+    smap_destroy(&options);
+}
+
 static void
 ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                   const struct ovn_lb_datapaths *lb_dps,
@@ -3429,7 +3988,9 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                   struct hmap *ls_ports,
                   struct sset *svc_monitor_lsps,
                   struct hmap *local_svc_monitors_map,
-                  struct hmap *ic_learned_svc_monitors_map)
+                  struct hmap *ic_learned_svc_monitors_map,
+                  const struct hmap *all_lb_dps,
+                  struct evpn_health_waker *waker)
 {
     const struct ovn_northd_lb *lb = lb_dps->lb;
 
@@ -3451,6 +4012,13 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                 continue;
             }
 
+            if (backend_nb->evpn_endpoint) {
+                ovn_lb_evpn_svc_create(ovnsb_txn, lb_dps, lb_vip_nb,
+                                        backend, backend_nb, ls_ports,
+                                        local_svc_monitors_map, all_lb_dps,
+                                        svc_global_addresses, waker);
+                continue;
+            }
             sset_add(svc_monitor_lsps, backend_nb->logical_port);
             struct ovn_port *op = ovn_port_find(ls_ports,
                                                 backend_nb->logical_port);
@@ -3537,6 +4105,15 @@ backend_is_available(const struct ovn_northd_lb *lb,
                      const struct ovn_northd_lb_backend *backend_nb,
                      const struct svc_monitors_map_data *svc_mons_data)
 {
+    if (backend_nb->evpn_error) {
+        return false;
+    }
+    if (backend_nb->evpn_endpoint) {
+        const struct service_monitor_info *info = get_evpn_service_mon(
+            svc_mons_data->local_svc_monitors_map,
+            &backend_nb->evpn_endpoint->header_.uuid);
+        return info && info->evpn_eligible;
+    }
     char *protocol = lb->nlb->protocol;
     if (!protocol || !protocol[0]) {
         protocol = "tcp";
@@ -3590,7 +4167,8 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
                   ? "ct_lb_mark_local(backends="
                   : "ct_lb_mark(backends=");
 
-    if (lb_vip_nb->lb_health_check || lb->is_distributed) {
+    if (lb_vip_nb->lb_health_check || lb->is_distributed
+        || lb->evpn_config_invalid) {
         size_t i = 0;
         size_t n_active_backends = 0;
         const struct ovn_lb_backend *backend;
@@ -3601,6 +4179,9 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
 
             /* XXX: Remove these checks: by changing the iteration
              * only for selected backends. */
+            if (lb->evpn_config_invalid) {
+                continue;
+            }
             if (lb_vip_nb->lb_health_check &&
                 !backend_nb->health_check) {
                 continue;
@@ -3870,8 +4451,13 @@ build_svc_monitors_data(
     struct sset *svc_monitor_lsps,
     struct hmap *local_svc_monitors_map,
     struct hmap *ic_learned_svc_monitors_map,
-    struct hmapx *monitored_ports_map)
+    struct hmapx *monitored_ports_map,
+    struct evpn_health_waker *waker)
 {
+    struct evpn_health_observation *observation;
+    HMAP_FOR_EACH (observation, node, &waker->observations) {
+        observation->seen = false;
+    }
     const struct sbrec_service_monitor *sbrec_mon;
     struct sbrec_service_monitor *key =
         sbrec_service_monitor_index_init_row(
@@ -3884,6 +4470,11 @@ build_svc_monitors_data(
         uint32_t hash = sbrec_mon->port;
         hash = hash_string(sbrec_mon->ip, hash);
         hash = hash_string(sbrec_mon->logical_port, hash);
+        if (sbrec_mon->probe_mode && sbrec_mon->n_endpoint_id
+            && !strcmp(sbrec_mon->probe_mode, "evpn")) {
+            hash = evpn_health_monitor_hash(sbrec_mon->endpoint_id);
+            evpn_health_observe(waker, sbrec_mon);
+        }
         struct service_monitor_info *mon_info = xzalloc(sizeof *mon_info);
         mon_info->sbrec_mon = sbrec_mon;
         mon_info->required = false;
@@ -3900,7 +4491,7 @@ build_svc_monitors_data(
                           ls_ports,
                           svc_monitor_lsps,
                           local_svc_monitors_map,
-                          ic_learned_svc_monitors_map);
+                          ic_learned_svc_monitors_map, lb_dps_map, waker);
     }
 
     const struct nbrec_network_function *nbrec_nf;
@@ -3942,6 +4533,12 @@ build_svc_monitors_data(
             sbrec_service_monitor_delete(mon_info->sbrec_mon);
             hmap_remove(local_svc_monitors_map, &mon_info->hmap_node);
             free(mon_info);
+        }
+    }
+    HMAP_FOR_EACH_SAFE (observation, node, &waker->observations) {
+        if (!observation->seen) {
+            hmap_remove(&waker->observations, &observation->node);
+            free(observation);
         }
     }
 }
@@ -5019,6 +5616,23 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
         return true;
     }
 
+    /* Source reservations depend on every local port's addresses, not just
+     * the health-monitor row. A neighboring port's creation, deletion or
+     * address change must revalidate monitors and source advertisements as
+     * one transaction. The ordinary per-port update path cannot do that. */
+    for (size_t i = 0; i < changed_ls->n_ports; i++) {
+        if (!strcmp(changed_ls->ports[i]->type, "health-monitor")) {
+            return false;
+        }
+    }
+    const struct ovn_port *health_source;
+    HMAP_FOR_EACH (health_source, dp_node, &od->ports) {
+        if (health_source->sb
+            && !strcmp(health_source->sb->type, "health-monitor")) {
+            return false;
+        }
+    }
+
     bool ls_had_only_router_ports = (!vector_is_empty(&od->router_ports)
             && (vector_len(&od->router_ports) == hmap_count(&od->ports)));
 
@@ -5738,6 +6352,10 @@ northd_handle_sb_port_binding_changes(
         if (sbrec_port_binding_is_new(pb) &&
             sbrec_port_binding_is_deleted(pb)) {
             continue;
+        }
+
+        if (!strcmp(pb->type, "health-monitor")) {
+            return false;
         }
 
         bool is_lrp =
@@ -10950,6 +11568,10 @@ static void
 build_lswitch_arp_nd_local_resp_match(struct ds *match,
                                       const struct ovn_port *op)
 {
+    if (!strcmp(op->nbsp->type, "health-monitor")) {
+        ds_put_format(match, " && is_chassis_resident(%s)", op->json_key);
+        return;
+    }
     if (!ls_has_localnet_port(op->od)) {
         return;
     }
@@ -11059,9 +11681,17 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
          *  - port type is router or
          *  - port type is localport
          */
+        bool health_source = !strcmp(op->nbsp->type, "health-monitor");
+        if (health_source && (!health_monitor_port_valid(op)
+                || !op->sb->requested_chassis
+                || op->sb->chassis != op->sb->requested_chassis
+                || !smap_get_bool(&op->sb->requested_chassis->other_config,
+                                   "lb-health-probe-evpn", false))) {
+            return;
+        }
         if (check_lsp_is_up &&
             !lsp_is_up(op->nbsp) && !lsp_is_router(op->nbsp) &&
-            strcmp(op->nbsp->type, "localport")) {
+            strcmp(op->nbsp->type, "localport") && !health_source) {
             return;
         }
 
@@ -11090,7 +11720,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                  * unnecessary since the packets will hit the default
                  * "next" flow at priority 0.
                  */
-                if (op->od->has_arp_proxy_port) {
+                if (op->od->has_arp_proxy_port && !health_source) {
                     size_t match_len = match->length;
                     ds_put_format(match, " && eth.dst == %s",
                                   op->lsp_addrs[i].ea_s);
@@ -11099,6 +11729,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                                   WITH_HINT(&op->nbsp->header_));
                     ds_truncate(match, match_len);
                 }
+                size_t match_arp_base_len = match->length;
                 ds_put_cstr(match, " && eth.dst == ff:ff:ff:ff:ff:ff");
                 size_t match_arp_len = match->length;
                 build_lswitch_arp_nd_local_resp_match(match, op);
@@ -11139,6 +11770,25 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                               ds_cstr(match), "next;", op->lflow_ref,
                               WITH_IO_PORT(op->key),
                               WITH_HINT(&op->nbsp->header_));
+
+                if (health_source) {
+                    /* This endpoint has no interface to answer unicast
+                     * neighbor liveness probes. Its owning controller is
+                     * the responder, including during neighbor refresh. */
+                    ds_truncate(match, match_arp_base_len);
+                    ds_put_format(match, " && eth.dst == %s",
+                                  op->lsp_addrs[i].ea_s);
+                    build_lswitch_arp_nd_local_resp_match(match, op);
+                    ovn_lflow_add(lflows, op->od, S_SWITCH_IN_ARP_ND_RSP, 50,
+                                  ds_cstr(match), ds_cstr(actions),
+                                  op->lflow_ref,
+                                  WITH_HINT(&op->nbsp->header_));
+                    ds_put_format(match, " && inport == %s", op->json_key);
+                    ovn_lflow_add(lflows, op->od, S_SWITCH_IN_ARP_ND_RSP, 100,
+                                  ds_cstr(match), "next;", op->lflow_ref,
+                                  WITH_IO_PORT(op->key),
+                                  WITH_HINT(&op->nbsp->header_));
+                }
             }
 
             /* For ND solicitations:
@@ -11153,7 +11803,7 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
              *     its target as intended.
              */
             for (size_t j = 0; j < op->lsp_addrs[i].n_ipv6_addrs; j++) {
-                if (op->od->has_arp_proxy_port) {
+                if (op->od->has_arp_proxy_port && !health_source) {
                     ds_clear(match);
                     ds_put_format(match,
                                   "nd_ns && ip6.dst == %s && nd.target == %s",
@@ -11207,6 +11857,29 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
                               ds_cstr(match), "next;", op->lflow_ref,
                               WITH_IO_PORT(op->key),
                               WITH_HINT(&op->nbsp->header_));
+
+                if (health_source) {
+                    ds_clear(match);
+                    ds_put_format(match,
+                                  "nd_ns && ip6.dst == %s && nd.target == %s"
+                                  " && eth.dst == %s",
+                                  op->lsp_addrs[i].ipv6_addrs[j].addr_s,
+                                  op->lsp_addrs[i].ipv6_addrs[j].addr_s,
+                                  op->lsp_addrs[i].ea_s);
+                    build_lswitch_arp_nd_local_resp_match(match, op);
+                    ovn_lflow_add(lflows, op->od, S_SWITCH_IN_ARP_ND_RSP, 50,
+                                  ds_cstr(match), ds_cstr(actions),
+                                  op->lflow_ref,
+                                  WITH_CTRL_METER(copp_meter_get(
+                                      COPP_ND_NA, op->od->nbs->copp,
+                                      meter_groups)),
+                                  WITH_HINT(&op->nbsp->header_));
+                    ds_put_format(match, " && inport == %s", op->json_key);
+                    ovn_lflow_add(lflows, op->od, S_SWITCH_IN_ARP_ND_RSP, 100,
+                                  ds_cstr(match), "next;", op->lflow_ref,
+                                  WITH_IO_PORT(op->key),
+                                  WITH_HINT(&op->nbsp->header_));
+                }
             }
         }
     }
@@ -11413,7 +12086,7 @@ build_lswitch_arp_nd_local_svc_mon(const struct ovn_lb_datapaths *lb_dps,
             struct ovn_northd_lb_backend *backend_nb =
                 &lb_vip_nb->backends_nb[j];
 
-            if (!backend_nb->health_check) {
+            if (!backend_nb->health_check || backend_nb->evpn_endpoint) {
                 continue;
             }
 
@@ -11489,9 +12162,10 @@ build_lswitch_dhcp_options_and_response(struct ovn_port *op,
                                         const struct shash *meter_groups)
 {
     ovs_assert(op->nbsp);
-    if (!lsp_is_enabled(op->nbsp) || lsp_is_router(op->nbsp)) {
+    if (!lsp_is_enabled(op->nbsp) || lsp_is_router(op->nbsp)
+        || !strcmp(op->nbsp->type, "health-monitor")) {
         /* Don't add the DHCP flows if the port is not enabled or if the
-         * port is a router port. */
+         * port is a router or controller-owned health source. */
         return;
     }
 
@@ -11901,6 +12575,9 @@ build_lswitch_ip_unicast_lookup(struct ovn_port *op,
 
     bool lsp_clone_to_unknown = lsp_is_clone_to_unknown(op->nbsp);
     bool lsp_enabled = lsp_is_enabled(op->nbsp);
+    if (!strcmp(op->nbsp->type, "health-monitor")) {
+        lsp_enabled &= health_monitor_port_valid(op);
+    }
     const char *action = lsp_enabled
                          ? ((lsp_clone_to_unknown && op->od->has_unknown)
                          ? "clone {outport = %s; output; };"
@@ -20676,6 +21353,47 @@ build_lswitch_and_lrouter_iterate_by_lr(struct ovn_datapath *od,
                                od->datapath_lflows);
 }
 
+/* Replies are consumed only at final source delivery, after both ACL
+ * pipelines and egress port security. Preserve the real ingress EVPN port
+ * and source outport so pinctrl can validate tenant and selected path. */
+static void
+build_lswitch_health_monitor_delivery(struct ovn_port *op,
+                                      struct lflow_table *lflows,
+                                      const struct shash *meter_groups)
+{
+    if (strcmp(op->nbsp->type, "health-monitor")
+        || !health_monitor_port_valid(op)
+        || !op->sb->requested_chassis
+        || !smap_get_bool(&op->sb->requested_chassis->other_config,
+                           "lb-health-probe-evpn", false)) {
+        return;
+    }
+    const struct lport_addresses *a = op->lsp_addrs;
+    struct ds match = DS_EMPTY_INITIALIZER;
+    for (size_t family = 0; family < 2; family++) {
+        size_t n = family ? a->n_ipv6_addrs : a->n_ipv4_addrs;
+        for (size_t i = 0; i < n; i++) {
+            const char *ip = family ? a->ipv6_addrs[i].addr_s
+                                     : a->ipv4_addrs[i].addr_s;
+            ds_clear(&match);
+            ds_put_format(&match,
+                          "outport == %s && is_chassis_resident(%s) && "
+                          "eth.dst == %s && %s.dst == %s && tcp && "
+                          "tcp.flags == 0x010/0x010",
+                          op->json_key, op->json_key, a->ea_s,
+                          family ? "ip6" : "ip4", ip);
+            ovn_lflow_add(lflows, op->od, S_SWITCH_OUT_APPLY_PORT_SEC, 40,
+                          ds_cstr(&match), "handle_svc_check();",
+                          op->lflow_ref,
+                          WITH_CTRL_METER(copp_meter_get(COPP_SVC_MONITOR,
+                                                     op->od->nbs->copp,
+                                                     meter_groups)),
+                          WITH_HINT(&op->nbsp->header_));
+        }
+    }
+    ds_destroy(&match);
+}
+
 /* Helper function to combine all lflow generation which is iterated by logical
  * switch port.
  */
@@ -20697,6 +21415,7 @@ build_lswitch_and_lrouter_iterate_by_lsp(struct ovn_port *op,
     /* Build Logical Switch Flows. */
     build_mirror_lflows(op, ls_ports, lflows);
     build_lswitch_port_sec_op(op, lflows, actions, match);
+    build_lswitch_health_monitor_delivery(op, lflows, meter_groups);
     build_lswitch_learn_fdb_op(op, lflows, actions, match);
     build_lswitch_from_localnet_op(op, lflows, match);
     build_lswitch_arp_nd_responder_known_ips(op, lflows, ls_ports,
@@ -22167,6 +22886,7 @@ ovnnb_db_run(struct northd_input *input_data,
                                     false);
 
     vxlan_mode = input_data->vxlan_mode;
+    evpn_health_reserved_mac = input_data->svc_global_addresses->mac_ea_src;
 
     build_datapaths(input_data->synced_lses,
                     input_data->synced_lrs,
@@ -22197,7 +22917,7 @@ ovnnb_db_run(struct northd_input *input_data,
         input_data->nbrec_network_function_table,
         &data->svc_monitor_lsps, &data->local_svc_monitors_map,
         input_data->ic_learned_svc_monitors_map,
-        &data->monitored_ports_map);
+        &data->monitored_ports_map, input_data->evpn_health_waker);
     build_lb_count_dps(&data->lb_datapaths_map);
     build_network_function_active(
         input_data->nbrec_network_function_group_table,

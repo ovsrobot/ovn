@@ -6305,6 +6305,8 @@ en_neighbor_run(struct engine_node *node OVS_UNUSED, void *data)
         .sbrec_pb_by_key = sbrec_port_binding_by_key,
         .sbrec_fdb_by_dp_key = sbrec_fdb_by_dp_key,
         .chassis = chassis,
+        .if_mgr = ((struct controller_engine_ctx *)
+                   engine_get_context()->client_ctx)->if_mgr,
     };
 
     struct neighbor_ctx_out n_ctx_out = {
@@ -6313,10 +6315,16 @@ en_neighbor_run(struct engine_node *node OVS_UNUSED, void *data)
         .fdb_datapaths = &ne_data->fdb_datapaths,
     };
 
-    neighbor_cleanup(&ne_data->monitored_interfaces);
+    struct vector old_interfaces = ne_data->monitored_interfaces;
+    ne_data->monitored_interfaces = (struct vector)
+        VECTOR_EMPTY_INITIALIZER(struct neighbor_interface_monitor *);
     sset_clear(&ne_data->advertised_pbs);
     hmapx_clear(&ne_data->fdb_datapaths);
     neighbor_run(&n_ctx_in, &n_ctx_out);
+    neighbor_exchange_withdraw_removed(&old_interfaces,
+                                        &ne_data->monitored_interfaces);
+    neighbor_cleanup(&old_interfaces);
+    vector_destroy(&old_interfaces);
 
     return EN_UPDATED;
 }
@@ -6431,6 +6439,11 @@ neighbor_sb_port_binding_handler(struct engine_node *node, void *data)
 
     const struct sbrec_port_binding *pb;
     SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (pb, pb_table) {
+        if (get_lport_type(pb) == LP_HEALTH_MONITOR) {
+            /* Source advertisement follows ownership and the current
+             * flow acknowledgement, including enable/disable changes. */
+            return EN_UNHANDLED;
+        }
         if (sbrec_port_binding_is_new(pb) ||
             sbrec_port_binding_is_deleted(pb)) {
             /* The removal and addition is handled via runtime_data. */
@@ -6664,6 +6677,7 @@ static void
 en_neighbor_exchange_cleanup(void *data_)
 {
     struct ed_type_neighbor_exchange *data = data_;
+    neighbor_exchange_destroy();
     evpn_remote_vteps_clear(&data->remote_vteps);
     evpn_static_entries_clear(&data->static_fdbs);
     evpn_static_entries_clear(&data->static_arps);
@@ -8096,6 +8110,8 @@ main(int argc, char *argv[])
     unixctl_command_register("evpn/vtep-arp-list", "", 0, 0,
                              evpn_arp_list,
                              &earp_data->arps);
+    unixctl_command_register("lb/evpn-health-list", "", 0, 0,
+                             pinctrl_evpn_health_list, NULL);
 
     struct pending_pkt pending_pkt = { .conn = NULL };
     unixctl_command_register("inject-pkt", "MICROFLOW", 1, 1, inject_pkt,
@@ -8553,6 +8569,10 @@ main(int argc, char *argv[])
                                     &runtime_data->local_active_ports_ras,
                                     ovsrec_open_vswitch_table_get(
                                             ovs_idl_loop.idl),
+                                    &earp_data->arps,
+                                    &efdb_data->fdbs,
+                                    &eb_data->bindings,
+                                    if_mgr,
                                     ovnsb_idl_loop.cur_cfg);
                         stopwatch_stop(PINCTRL_RUN_STOPWATCH_NAME,
                                        time_msec());
@@ -8811,6 +8831,9 @@ loop_done:
     bool restart = exit_args.restart || !get_ovn_cleanup_on_exit(ovs_table);
     VLOG_INFO("Exiting ovn-controller, resource cleanup: %s",
               restart ? "False (--restart)" : "True");
+    /* Stop injections before withdrawing the owned source.  The pinctrl
+     * worker remains alive while the main thread completes cleanup. */
+    pinctrl_seqno_flush();
 
     /* It's time to exit.  Clean up the databases if we are not restarting */
     if (!restart) {
@@ -8846,7 +8869,22 @@ loop_done:
                    : NULL);
             /* Run all of the cleanup functions, even if one of them returns
              * false. We're done if all of them return true. */
+            struct ed_type_neighbor *source_ne_data =
+                engine_get_data(&en_neighbor);
+            bool source_cleanup_done = true;
+            const struct sbrec_port_binding *pb;
+            SBREC_PORT_BINDING_TABLE_FOR_EACH (pb, port_binding_table) {
+                if (source_ne_data && chassis && pb->chassis == chassis
+                    && get_lport_type(pb) == LP_HEALTH_MONITOR) {
+                    source_cleanup_done =
+                        !neighbor_exchange_withdraw_port(
+                            pb, &source_ne_data->monitored_interfaces)
+                        && source_cleanup_done;
+                }
+            }
             done = binding_cleanup(ovnsb_idl_txn, port_binding_table, chassis);
+            done = !neighbor_exchange_retry_withdrawals(NULL)
+                   && source_cleanup_done && done;
             done = chassis_cleanup(ovs_idl_txn, ovnsb_idl_txn, ovs_table,
                                    chassis, chassis_private) && done;
             done = encaps_cleanup(ovs_idl_txn, br_int) && done;

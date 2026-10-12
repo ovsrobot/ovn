@@ -1521,6 +1521,10 @@ release_lport_main_chassis(const struct sbrec_port_binding *pb,
                            bool sb_readonly,
                            struct if_status_mgr *if_mgr)
 {
+    if (get_lport_type(pb) == LP_HEALTH_MONITOR && !sb_readonly) {
+        bool up = false;
+        sbrec_port_binding_set_up(pb, &up, 1);
+    }
     if (pb->encap &&
         !pb_encap_managed_by_northd(pb)) {
         if (sb_readonly) {
@@ -2104,6 +2108,73 @@ consider_l3gw_lport(const struct sbrec_port_binding *pb,
     return consider_nonvif_lport_(pb, our_chassis, false, b_ctx_in, b_ctx_out);
 }
 
+/* Controller-owned sources have no OVS interface.  They nevertheless use the
+ * interface status manager so that their binding becomes up only after their
+ * logical and physical flows have been acknowledged. */
+static bool
+consider_health_monitor_lport(const struct sbrec_port_binding *pb,
+                              struct binding_ctx_in *b_ctx_in,
+                              struct binding_ctx_out *b_ctx_out)
+{
+    bool our_chassis = pb->requested_chassis == b_ctx_in->chassis_rec
+                       && !pb->n_requested_additional_chassis
+                       && !pb->n_additional_chassis
+                       && !smap_get_bool(&pb->options,
+                                         "health-monitor-disabled", false);
+    struct shash *binding_lports = &b_ctx_out->lbinding_data->lports;
+    struct binding_lport *b_lport = binding_lport_find(binding_lports,
+                                                      pb->logical_port);
+    if (!our_chassis) {
+        bool was_local = simap_find(b_ctx_out->local_lports, pb->logical_port)
+                         || pb->chassis == b_ctx_in->chassis_rec;
+        if (b_lport && !b_lport->lbinding) {
+            binding_lport_delete(binding_lports, b_lport);
+        }
+        remove_local_lports(pb->logical_port, b_ctx_out);
+        bool handled = consider_nonvif_lport_(pb, false, false,
+                                             b_ctx_in, b_ctx_out);
+        /* A source can be a datapath's only local attachment.  It has no
+         * subsequent OVS interface deletion to rebuild datapath residency. */
+        return handled && !was_local;
+    }
+
+    if (!b_lport) {
+        b_lport = binding_lport_create(pb, NULL, LP_HEALTH_MONITOR);
+        binding_lport_add(binding_lports, b_lport);
+    } else {
+        if (!ovs_list_is_empty(&b_lport->list_node)) {
+            ovs_list_remove(&b_lport->list_node);
+            ovs_list_init(&b_lport->list_node);
+        }
+        b_lport->lbinding = NULL;
+        b_lport->type = LP_HEALTH_MONITOR;
+    }
+    if (binding_lport_update_port_sec(b_lport, pb)
+        && b_ctx_out->tracked_dp_bindings) {
+        tracked_datapath_lport_add(pb, TRACKED_RESOURCE_UPDATED,
+                                   b_ctx_out->tracked_dp_bindings);
+    }
+
+    bool config_changed =
+        sbrec_port_binding_is_updated(pb, SBREC_PORT_BINDING_COL_MAC)
+        || sbrec_port_binding_is_updated(pb,
+                                         SBREC_PORT_BINDING_COL_PORT_SECURITY)
+        || sbrec_port_binding_is_updated(pb, SBREC_PORT_BINDING_COL_OPTIONS)
+        || sbrec_port_binding_is_updated(pb, SBREC_PORT_BINDING_COL_DATAPATH)
+        || sbrec_port_binding_is_updated(pb, SBREC_PORT_BINDING_COL_TYPE);
+    if (!if_status_mgr_iface_is_present(b_ctx_out->if_mgr, pb->logical_port)
+        || config_changed) {
+        /* Revalidate after controller restart as well as source changes.
+         * A persisted 'up' from the preceding incarnation is not flow
+         * proof. */
+        if_status_mgr_claim_iface(b_ctx_out->if_mgr, pb,
+                                  b_ctx_in->chassis_rec, NULL,
+                                  !b_ctx_in->ovnsb_idl_txn, CAN_BIND_AS_MAIN,
+                                  false, NULL);
+    }
+    return consider_nonvif_lport_(pb, true, false, b_ctx_in, b_ctx_out);
+}
+
 static void
 consider_localnet_lport(const struct sbrec_port_binding *pb,
                         struct binding_ctx_out *b_ctx_out)
@@ -2308,6 +2379,10 @@ binding_run(struct binding_ctx_in *b_ctx_in, struct binding_ctx_out *b_ctx_out)
             consider_localport(pb, b_ctx_in, b_ctx_out);
             break;
 
+        case LP_HEALTH_MONITOR:
+            consider_health_monitor_lport(pb, b_ctx_in, b_ctx_out);
+            break;
+
         case LP_VIF:
             consider_vif_lport(pb, b_ctx_in, b_ctx_out, NULL);
             if (pb->additional_chassis) {
@@ -2434,6 +2509,10 @@ binding_cleanup(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 sbrec_port_binding_set_encap(binding_rec, NULL);
             }
             sbrec_port_binding_set_chassis(binding_rec, NULL);
+            if (get_lport_type(binding_rec) == LP_HEALTH_MONITOR) {
+                bool up = false;
+                sbrec_port_binding_set_up(binding_rec, &up, 1);
+            }
             any_changes = true;
         }
         if (is_additional_chassis(binding_rec, chassis_rec)) {
@@ -2558,6 +2637,9 @@ consider_iface_claim(const struct ovsrec_interface *iface_rec,
     }
 
     enum en_lport_type lport_type = get_lport_type(pb);
+    if (lport_type == LP_HEALTH_MONITOR) {
+        return consider_health_monitor_lport(pb, b_ctx_in, b_ctx_out);
+    }
     if (lport_type == LP_LOCALPORT) {
         return consider_localport(pb, b_ctx_in, b_ctx_out);
     }
@@ -2690,7 +2772,13 @@ consider_iface_release(const struct ovsrec_interface *iface_rec,
         }
     }
 
-    remove_local_lports(iface_id, b_ctx_out);
+    const struct sbrec_port_binding *source = lport_lookup_by_name(
+        b_ctx_in->sbrec_port_binding_by_name, iface_id);
+    if (!source || get_lport_type(source) != LP_HEALTH_MONITOR
+        || source->requested_chassis != b_ctx_in->chassis_rec
+        || smap_get_bool(&source->options, "health-monitor-disabled", false)) {
+        remove_local_lports(iface_id, b_ctx_out);
+    }
     smap_remove(b_ctx_out->local_iface_ids, iface_rec->name);
 
     return true;
@@ -2913,6 +3001,15 @@ handle_deleted_lport(const struct sbrec_port_binding *pb,
                      struct binding_ctx_in *b_ctx_in,
                      struct binding_ctx_out *b_ctx_out)
 {
+    if (get_lport_type(pb) == LP_HEALTH_MONITOR) {
+        struct shash *lports = &b_ctx_out->lbinding_data->lports;
+        struct binding_lport *b_lport = binding_lport_find(lports,
+                                                          pb->logical_port);
+        if (b_lport) {
+            binding_lport_delete(lports, b_lport);
+        }
+        remove_local_lports(pb->logical_port, b_ctx_out);
+    }
     /* If the binding is local, remove it. */
     struct local_datapath *ld =
         get_local_datapath(b_ctx_out->local_datapaths,
@@ -3159,6 +3256,16 @@ handle_updated_port(struct binding_ctx_in *b_ctx_in,
     if (b_lport) {
         ovs_assert(b_lport->pb == pb);
 
+        if (b_lport->type == LP_HEALTH_MONITOR
+            && lport_type != LP_HEALTH_MONITOR && !b_lport->lbinding) {
+            /* The source's port-security binding has no external VIF.
+             * Rebuild it through the new port type's ordinary binding path. */
+            binding_lport_delete(&b_ctx_out->lbinding_data->lports, b_lport);
+            remove_local_lports(pb->logical_port, b_ctx_out);
+            b_lport = NULL;
+        }
+    }
+    if (b_lport) {
         if (b_lport->type != lport_type) {
             b_lport->type = lport_type;
         }
@@ -3192,6 +3299,10 @@ handle_updated_port(struct binding_ctx_in *b_ctx_in,
 
     case LP_LOCALPORT:
         handled = consider_localport(pb, b_ctx_in, b_ctx_out);
+        break;
+
+    case LP_HEALTH_MONITOR:
+        handled = consider_health_monitor_lport(pb, b_ctx_in, b_ctx_out);
         break;
 
     case LP_PATCH:
@@ -3319,6 +3430,7 @@ binding_handle_port_binding_changes(struct binding_ctx_in *b_ctx_in,
         SHASH_INITIALIZER(&deleted_other_pbs);
     const struct sbrec_port_binding *pb;
     bool handled = true;
+    bool local_source_deleted = false;
 
     SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (pb,
                                                b_ctx_in->port_binding_table) {
@@ -3330,6 +3442,11 @@ binding_handle_port_binding_changes(struct binding_ctx_in *b_ctx_in,
         delete_active_pb_ras_pd(pb, b_ctx_out->local_active_ports_ras);
 
         enum en_lport_type lport_type = get_lport_type(pb);
+        if (lport_type == LP_HEALTH_MONITOR
+            && (simap_find(b_ctx_out->local_lports, pb->logical_port)
+                || pb->chassis == b_ctx_in->chassis_rec)) {
+            local_source_deleted = true;
+        }
 
         struct binding_lport *b_lport =
             binding_lport_find(&b_ctx_out->lbinding_data->lports,
@@ -3419,7 +3536,7 @@ delete_done:
     shash_destroy(&deleted_localport_pbs);
     shash_destroy(&deleted_other_pbs);
 
-    if (!handled) {
+    if (!handled || local_source_deleted) {
         return false;
     }
 
@@ -3748,6 +3865,11 @@ port_binding_set_down(const struct sbrec_chassis *chassis_rec,
             sbrec_port_binding_table_get_for_uuid(pb_table, pb_uuid);
         if (!pb) {
             VLOG_DBG("port_binding already deleted for %s", iface_id);
+        } else if (get_lport_type(pb) == LP_HEALTH_MONITOR && pb->chassis
+                   && pb->chassis != chassis_rec) {
+            /* A queued release from an old owner must not mark down a
+             * controller source which has already moved to a new owner. */
+            return;
         } else if (pb->n_up && pb->up[0]) {
             bool up = false;
             sbrec_port_binding_set_up(pb, &up, 1);
@@ -3938,6 +4060,7 @@ binding_lport_check_and_cleanup(struct binding_lport *b_lport,
     case LP_EXTERNAL:
     case LP_LOCALNET:
     case LP_REMOTE:
+    case LP_HEALTH_MONITOR:
     case LP_UNKNOWN:
         cleanup_blport = true;
     }

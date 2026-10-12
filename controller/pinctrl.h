@@ -40,6 +40,8 @@ struct sbrec_bfd_table;
 struct sbrec_ecmp_nexthop_table;
 struct sbrec_port_binding;
 struct sbrec_mac_binding_table;
+struct unixctl_conn;
+struct if_status_mgr;
 
 void pinctrl_init(void);
 void pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
@@ -60,7 +62,13 @@ void pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                  const struct shash *local_active_ports_ipv6_pd,
                  const struct shash *local_active_ports_ras,
                  const struct ovsrec_open_vswitch_table *ovs_table,
+                 const struct hmap *evpn_arps,
+                 const struct hmap *evpn_fdbs,
+                 const struct hmap *evpn_bindings,
+                 const struct if_status_mgr *if_mgr,
                  int64_t cur_cfg);
+void pinctrl_evpn_health_list(struct unixctl_conn *, int,
+                             const char *argv[], void *);
 void pinctrl_wait(struct ovsdb_idl_txn *ovnsb_idl_txn);
 void pinctrl_destroy(void);
 void pinctrl_seqno_run(void);

@@ -4247,6 +4247,10 @@ parse_handle_svc_check(struct action_context *ctx OVS_UNUSED)
 
     struct ovnact_handle_svc_check *svc_chk =
         ovnact_put_HANDLE_SVC_CHECK(ctx->ovnacts);
+    if (lexer_match(ctx->lexer, LEX_T_RPAREN)) {
+        svc_chk->preserve_context = true;
+        return;
+    }
     action_parse_field(ctx, 0, false, &svc_chk->port);
     lexer_force_match(ctx->lexer, LEX_T_RPAREN);
 }
@@ -4256,7 +4260,9 @@ format_HANDLE_SVC_CHECK(const struct ovnact_handle_svc_check *svc_chk,
                         struct ds *s)
 {
     ds_put_cstr(s, "handle_svc_check(");
-    expr_field_format(&svc_chk->port, s);
+    if (!svc_chk->preserve_context) {
+        expr_field_format(&svc_chk->port, s);
+    }
     ds_put_cstr(s, ");");
 }
 
@@ -4265,6 +4271,11 @@ encode_HANDLE_SVC_CHECK(const struct ovnact_handle_svc_check *svc_chk,
                         const struct ovnact_encode_params *ep,
                         struct ofpbuf *ofpacts)
 {
+    if (svc_chk->preserve_context) {
+        encode_controller_op(ACTION_OPCODE_HANDLE_SVC_CHECK, ep->ctrl_meter_id,
+                             ofpacts);
+        return;
+    }
     const struct arg args[] = {
         { expr_resolve_field(&svc_chk->port), MFF_LOG_INPORT },
     };

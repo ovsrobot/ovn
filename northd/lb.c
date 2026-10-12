@@ -222,6 +222,58 @@ cleanup:
         free(port_name);
     }
 
+    /* A typed endpoint must never fall back to an unmonitored backend or
+     * to an ambiguous legacy mapping. Match parsed addresses so equivalent
+     * unbracketed IPv6 spellings refer to the same backend. */
+    if (lb_vip_nb->lb_health_check) {
+        const struct nbrec_load_balancer_health_check *hc =
+            lb_vip_nb->lb_health_check;
+        const char *vip_error = NULL;
+        for (size_t i = 0; i < hc->n_endpoints; i++) {
+            const struct nbrec_load_balancer_health_check_endpoint *ep =
+                hc->endpoints[i];
+            struct in6_addr ip;
+            if (!ip46_parse(ep->ip, &ip)) {
+                vip_error = "invalid-endpoint-address";
+                VLOG_WARN_RL(&rl, "Invalid EVPN health endpoint IP %s",
+                             ep->ip);
+                continue;
+            }
+            bool matched = false;
+            for (size_t j = 0; j < vector_len(&lb_vip->backends); j++) {
+                const struct ovn_lb_backend *backend =
+                    vector_get_ptr(&lb_vip->backends, j);
+                if (!ipv6_addr_equals(&ip, &backend->ip)
+                    || ep->port != backend->port) {
+                    continue;
+                }
+                matched = true;
+                struct ovn_northd_lb_backend *b = &lb_vip_nb->backends_nb[j];
+                if (b->evpn_endpoint) {
+                    b->evpn_error = "duplicate-endpoint";
+                } else {
+                    if (b->health_check) {
+                        b->evpn_error = "legacy-endpoint-conflict";
+                    }
+                    b->evpn_endpoint = ep;
+                    b->health_check = true;
+                }
+            }
+            if (!matched) {
+                vip_error = "endpoint-not-in-backend-set";
+                VLOG_WARN_RL(&rl, "EVPN health endpoint %s:%"PRId64
+                             " is not a backend of VIP %s", ep->ip, ep->port,
+                             hc->vip);
+            }
+        }
+        if (vip_error) {
+            /* A malformed explicit endpoint must not allow another monitor
+             * or static backend to mask a membership configuration error. */
+            for (size_t j = 0; j < lb_vip_nb->n_backends; j++) {
+                lb_vip_nb->backends_nb[j].evpn_error = vip_error;
+            }
+        }
+    }
     ds_destroy(&key);
 }
 
@@ -306,7 +358,12 @@ ovn_lb_get_health_check(const struct nbrec_load_balancer *nbrec_lb,
         return NULL;
     }
 
-    if (nbrec_lb->protocol && !strcmp(nbrec_lb->protocol, "sctp")) {
+    bool has_typed_endpoints = false;
+    for (size_t i = 0; i < nbrec_lb->n_health_check; i++) {
+        has_typed_endpoints |= nbrec_lb->health_check[i]->n_endpoints != 0;
+    }
+    if (!has_typed_endpoints && nbrec_lb->protocol
+        && !strcmp(nbrec_lb->protocol, "sctp")) {
         VLOG_WARN_RL(&rl,
                      "SCTP load balancers do not currently support "
                      "health checks. Not creating health checks for "
@@ -391,6 +448,26 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
 
     lb->is_distributed = smap_get_bool(&nbrec_lb->options, "distributed",
                                        false);
+    for (size_t i = 0; i < nbrec_lb->n_health_check; i++) {
+        const struct nbrec_load_balancer_health_check *hc =
+            nbrec_lb->health_check[i];
+        if (!hc->n_endpoints) {
+            continue;
+        }
+        bool invalid = template || lb->is_distributed
+                       || !smap_get(&nbrec_lb->vips, hc->vip);
+        for (size_t j = 0; j < nbrec_lb->n_health_check; j++) {
+            invalid |= j != i && !strcmp(nbrec_lb->health_check[j]->vip,
+                                         hc->vip);
+        }
+        if (invalid) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_WARN_RL(&rl, "Load balancer "UUID_FMT
+                         " has invalid EVPN health-check attachment or mode",
+                         UUID_ARGS(&nbrec_lb->header_.uuid));
+            lb->evpn_config_invalid = true;
+        }
+    }
 
     sset_init(&lb->ips_v4);
     sset_init(&lb->ips_v6);
@@ -549,6 +626,7 @@ ovn_northd_lb_cleanup(struct ovn_northd_lb *lb)
     free(lb->hairpin_snat_ip);
     lb->selection_fields = NULL;
     lb->health_checks = false;
+    lb->evpn_config_invalid = false;
 }
 
 void

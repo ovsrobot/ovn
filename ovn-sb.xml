@@ -5296,7 +5296,7 @@ tcp.flags = RST;
   <table name="Service_Monitor">
     <p>
       Each row in this table configures monitoring a service for its liveness.
-      The service can be an IPv4 TCP or UDP
+      The service can be an IPv4 or IPv6 TCP or UDP
       service. <code>ovn-controller</code> periodically sends out service
       monitor packets and updates the status of the service.
       If the service monitor is not local, then ovn-ic creates a record about
@@ -5319,6 +5319,34 @@ tcp.flags = RST;
       <column name="type">
         The type of the service. Supported values are "load-balancer",
         "network-function", and "logical-switch-port".
+      </column>
+
+      <column name="probe_mode">
+        Empty for existing local-VIF and IC service checks. The value
+        <code>evpn</code> requests locally executed IPv4/IPv6 TCP probes
+        through
+        a tenant switch. This mode uses <ref column="datapath"/> and
+        <ref column="source_port"/> instead of a backend VIF. The
+        <ref column="logical_port"/> is empty and <ref column="remote"/> and
+        <ref column="ic_learned"/> are false.
+      </column>
+      <column name="datapath">
+        Optional weak reference to the EVPN probe source switch. Missing or
+        deleted references invalidate monitoring and backend eligibility.
+      </column>
+      <column name="source_port">
+        Optional weak reference to the controller-owned health-monitor source.
+        It must belong to the probe datapath and be up on its sole requested
+        chassis. This is a source attachment, not a synthetic remote VIF.
+      </column>
+      <column name="endpoint_id">
+        Stable UUID of the Northbound typed endpoint. Together with source
+        context, protocol, backend tuple and configuration generation this
+        identifies an EVPN monitor without aliasing overlapping tenants.
+      </column>
+      <column name="config_generation">
+        Northd-owned configuration UUID. Changes to probe semantics, source
+        ownership or configuration validity invalidate previous results.
       </column>
 
       <column name="ip">
@@ -5403,6 +5431,17 @@ tcp.flags = RST;
         The number of failure checks after which the service is considered
         <code>offline</code>.
       </column>
+      <column name="options" key="stale_timeout"
+              type='{"type": "integer"}'>
+        Freshness deadline in seconds copied from the EVPN health check.
+      </column>
+      <column name="options" key="evpn-valid">
+        Northd-owned validity gate. The controller may probe only when this is
+        true. Invalid configuration stays excluded regardless of status.
+      </column>
+      <column name="options" key="evpn-error">
+        Northd's semantic configuration error, when evpn-valid is false.
+      </column>
     </group>
 
     <group title="Status Reporting">
@@ -5412,6 +5451,35 @@ tcp.flags = RST;
         status.
       </p>
       
+      <column name="observed_generation">
+        Configuration UUID used by the controller for its reported result.
+        It must match config_generation for eligibility.
+      </column>
+      <column name="controller_instance">
+        Controller process incarnation UUID. Northd requires a subsequently
+        advancing completed-check sequence after observing a new incarnation.
+      </column>
+      <column name="check_seqno">
+        Controller-owned sequence advancing on every completed check,
+        including failure and repeated unchanged status. Sequence resets are
+        treated as a new baseline; they cannot renew an old online result.
+      </column>
+      <column name="resolution_generation">
+        UUID identifying current source and EVPN forwarding resolution.
+        Changes invalidate outstanding checks and previous health results.
+      </column>
+      <column name="checked_resolution_generation">
+        Forwarding UUID used by the last completed check. Eligibility requires
+        matching resolution_generation as well as current source ownership.
+      </column>
+      <column name="details">
+        Bounded controller diagnostics, including a reason such as unresolved
+        IP/MAC, waiting for source/flows, source conflict, timeout or TCP
+        reset.
+        Diagnostic wall-clock times do not determine freshness. Northd's
+        configuration errors are separately preserved in options:evpn-error.
+      </column>
+
       <column name="status">
         <p>
           For TCP service, <code>ovn-controller</code> sends a SYN to the

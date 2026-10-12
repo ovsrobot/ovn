@@ -698,6 +698,7 @@ static const char *OVN_NB_LSP_TYPES[] = {
     "l2gateway",
     "localnet",
     "localport",
+    "health-monitor",
     "router",
     "switch",
     "vtep",
@@ -1315,6 +1316,8 @@ get_lport_type(const struct sbrec_port_binding *pb)
         return LP_LOCALNET;
     } else if (!strcmp(pb->type, "localport")) {
         return LP_LOCALPORT;
+    } else if (!strcmp(pb->type, "health-monitor")) {
+        return LP_HEALTH_MONITOR;
     } else if (!strcmp(pb->type, "l2gateway")) {
         return LP_L2GATEWAY;
     } else if (!strcmp(pb->type, "virtual")) {
@@ -1354,6 +1357,8 @@ get_lport_type_str(enum en_lport_type lport_type)
         return "LOCALNET";
     case LP_LOCALPORT:
         return "LOCALPORT";
+    case LP_HEALTH_MONITOR:
+        return "HEALTH_MONITOR";
     case LP_L2GATEWAY:
         return "L2GATEWAY";
     case LP_EXTERNAL:
@@ -1367,6 +1372,20 @@ get_lport_type_str(enum en_lport_type lport_type)
     }
 
     OVS_NOT_REACHED();
+}
+
+/* A health source has one explicit owner.  In particular, a residual chassis
+ * binding must not make a disabled or reassigned source usable.  'up' is set
+ * only after the owning controller has acknowledged its delivery flows. */
+bool
+health_monitor_port_is_ready(const struct sbrec_port_binding *pb,
+                             const struct sbrec_chassis *chassis)
+{
+    return pb && chassis && get_lport_type(pb) == LP_HEALTH_MONITOR
+           && pb->requested_chassis == chassis && pb->chassis == chassis
+           && !pb->n_requested_additional_chassis && !pb->n_additional_chassis
+           && !smap_get_bool(&pb->options, "health-monitor-disabled", false)
+           && pb->n_up && pb->up[0];
 }
 
 void

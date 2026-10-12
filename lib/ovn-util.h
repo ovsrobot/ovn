@@ -58,6 +58,7 @@ struct nbrec_logical_router;
 struct nbrec_logical_router_port;
 struct ovsrec_flow_sample_collector_set_table;
 struct sbrec_datapath_binding;
+struct sbrec_chassis;
 struct sbrec_logical_flow;
 struct sbrec_port_binding;
 struct smap;
@@ -449,6 +450,7 @@ enum en_lport_type {
     LP_L3GATEWAY,
     LP_LOCALNET,
     LP_LOCALPORT,
+    LP_HEALTH_MONITOR,
     LP_L2GATEWAY,
     LP_VTEP,
     LP_CHASSISREDIRECT,
@@ -459,6 +461,8 @@ enum en_lport_type {
 
 enum en_lport_type get_lport_type(const struct sbrec_port_binding *);
 char *get_lport_type_str(enum en_lport_type lport_type);
+bool health_monitor_port_is_ready(const struct sbrec_port_binding *,
+                                  const struct sbrec_chassis *);
 
 /* A wrapper that holds sorted arrays of strings. */
 struct sorted_array {

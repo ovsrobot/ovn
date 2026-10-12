@@ -2212,6 +2212,36 @@ consider_port_binding(const struct physical_ctx *ctx,
         return;
     }
 
+    if (type == LP_HEALTH_MONITOR
+        && binding->requested_chassis == ctx->chassis
+        && binding->chassis == ctx->chassis
+        && !binding->n_requested_additional_chassis
+        && !binding->n_additional_chassis
+        && !smap_get_bool(&binding->options, "health-monitor-disabled",
+                          false)) {
+        struct zone_ids zone_ids = get_zone_ids(binding, ctx->ct_zones);
+        put_local_common_flows(dp_key, binding, NULL, &zone_ids, &ctx->debug,
+                               ofpacts_p, flow_table);
+
+        /* Controller packet-outs enter the same ingress pipeline and CT zone
+         * as ordinary workload packets.  No MLF_LOCAL_ONLY or backend outport
+         * bypasses tenant policy. */
+        struct match source_match = MATCH_CATCHALL_INITIALIZER;
+        match_set_metadata(&source_match, htonll(dp_key));
+        match_set_reg(&source_match, MFF_LOG_INPORT - MFF_REG0, port_key);
+        ofpbuf_clear(ofpacts_p);
+        put_zones_ofpacts(&zone_ids, ofpacts_p);
+        put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, ofpacts_p);
+        ofctrl_add_flow(flow_table, OFTABLE_CT_ZONE_LOOKUP, 100,
+                        binding->header_.uuid.parts[0], &source_match,
+                        ofpacts_p, &binding->header_.uuid);
+
+        /* Metered health replies are consumed by handle_svc_check() in the
+         * final logical delivery stage, after egress ACLs and port security.
+         * Other output to this source has no physical recipient and drops. */
+        return;
+    }
+
     if (type == LP_VIF) {
         /* Table 104, priority 100.
          * ========================
@@ -2390,6 +2420,10 @@ consider_port_binding(const struct physical_ctx *ctx,
         if (ofport && binding->tag) {
             tag = *binding->tag;
         }
+    } else if (type == LP_HEALTH_MONITOR) {
+        /* The source is owned by another controller, or is not enabled.  An
+         * unrelated OVS interface with its iface-id cannot claim delivery. */
+        ofport = 0;
     } else {
         ofport = local_binding_get_lport_ofport(ctx->local_bindings,
                                                 binding->logical_port);

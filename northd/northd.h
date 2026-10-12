@@ -33,7 +33,15 @@
 #include "datapath-sync.h"
 #include "sparse-array.h"
 
+struct evpn_health_waker;
+struct engine_node;
+struct engine_arg;
+void *en_evpn_health_waker_init(struct engine_node *, struct engine_arg *);
+enum engine_node_state en_evpn_health_waker_run(struct engine_node *, void *);
+void en_evpn_health_waker_cleanup(void *);
+
 struct northd_input {
+    struct evpn_health_waker *evpn_health_waker;
     /* Northbound table references */
     const struct nbrec_static_mac_binding_table
         *nbrec_static_mac_binding_table;

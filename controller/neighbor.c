@@ -25,6 +25,7 @@
 #include "ovn-sb-idl.h"
 
 #include "neighbor.h"
+#include "if-status.h"
 
 VLOG_DEFINE_THIS_MODULE(neighbor);
 
@@ -217,6 +218,13 @@ neighbor_is_relevant_port_updated(struct ovsdb_idl_index *sbrec_pb_by_name,
         return true;
     }
 
+    if (get_lport_type(lport->pb) == LP_HEALTH_MONITOR) {
+        /* Binding readiness and ownership changes withdraw or restore a
+         * controller source's generic MAC/IP advertisements. */
+        return sset_contains(advertised_pbs, lport->pb->logical_port)
+               || health_monitor_port_is_ready(lport->pb, chassis);
+    }
+
     if (lport->tracked_type != TRACKED_RESOURCE_NEW) {
         return false;
     }
@@ -286,6 +294,13 @@ neighbor_collect_mac_to_advertise(const struct neighbor_ctx_in *n_ctx_in,
             neighbor_get_relevant_port_binding(n_ctx_in->sbrec_pb_by_name,
                                                dp_pb);
         if (!lport_pb_is_chassis_resident(n_ctx_in->chassis, pb)) {
+            continue;
+        }
+        if (get_lport_type(pb) == LP_HEALTH_MONITOR
+            && (!health_monitor_port_is_ready(pb, n_ctx_in->chassis)
+                || !n_ctx_in->if_mgr
+                || !if_status_is_port_ready(n_ctx_in->if_mgr,
+                                             pb->logical_port))) {
             continue;
         }
 
@@ -404,6 +419,13 @@ neighbor_collect_advertised_mac_bindings(
         if (!lport_pb_is_chassis_resident(n_ctx_in->chassis, pb)) {
             continue;
         }
+        if (get_lport_type(pb) == LP_HEALTH_MONITOR
+            && (!health_monitor_port_is_ready(pb, n_ctx_in->chassis)
+                || !n_ctx_in->if_mgr
+                || !if_status_is_port_ready(n_ctx_in->if_mgr,
+                                             pb->logical_port))) {
+            continue;
+        }
 
         struct in6_addr ip;
         if (!ip46_parse(adv_mb->ip, &ip)) {
@@ -447,7 +469,8 @@ neighbor_get_relevant_port_binding(struct ovsdb_idl_index *sbrec_pb_by_name,
                                    const struct sbrec_port_binding *pb)
 {
     enum en_lport_type type = get_lport_type(pb);
-    if (type == LP_VIF || type == LP_VIRTUAL || type == LP_CONTAINER) {
+    if (type == LP_VIF || type == LP_VIRTUAL || type == LP_CONTAINER
+        || type == LP_HEALTH_MONITOR) {
         return pb;
     }
 

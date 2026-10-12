@@ -57,6 +57,8 @@ void if_status_mgr_get_memory_usage(struct if_status_mgr *mgr,
                                     struct simap *usage);
 bool if_status_mgr_iface_is_present(struct if_status_mgr *mgr,
                                     const char *iface_id);
+bool if_status_is_port_ready(const struct if_status_mgr *,
+                             const char *iface_id);
 bool if_status_handle_claims(struct if_status_mgr *mgr,
                              struct local_binding_data *binding_data,
                              const struct sbrec_chassis *chassis_rec,

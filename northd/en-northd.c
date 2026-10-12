@@ -39,6 +39,8 @@ static void
 northd_get_input_data(struct engine_node *node,
                       struct northd_input *input_data)
 {
+    input_data->evpn_health_waker =
+        engine_get_input_data("evpn_health_waker", node);
     input_data->nbrec_mirror_by_type_and_sink =
         engine_ovsdb_node_get_index(
             engine_get_input("NB_mirror", node),

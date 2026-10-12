@@ -14,6 +14,7 @@
  */
 
 #include <config.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <linux/if_ether.h>
 #include <linux/rtnetlink.h>
@@ -48,10 +49,10 @@ static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
 /* Inspired from route_table_dump_one_table() in OVS. */
 typedef void ne_table_handle_msg_callback(const struct ne_table_msg *,
                                           void *aux);
-static void ne_table_dump_one_ifindex(unsigned char address_family,
-                                      int32_t if_index,
-                                      ne_table_handle_msg_callback *,
-                                      void *aux);
+static int ne_table_dump_one_ifindex(unsigned char address_family,
+                                     int32_t if_index,
+                                     ne_table_handle_msg_callback *,
+                                     void *aux);
 struct ne_msg_handle_data {
     /* Stores 'struct advertise_neighbor_entry'. */
     struct hmapx *neighbors_to_advertise;
@@ -67,6 +68,7 @@ struct ne_msg_handle_data {
 };
 
 static void handle_ne_msg(const struct ne_table_msg *, void *data);
+static void handle_ne_withdraw(const struct ne_table_msg *, void *data);
 
 static int ne_table_parse__(struct ofpbuf *, size_t ofs,
                             const struct nlmsghdr *,
@@ -111,7 +113,12 @@ ne_nl_sync_neigh(uint8_t family, int32_t if_index,
         .stale_neighbors = &stale_neighbors,
         .neighbors = neighbors,
     };
-    ne_table_dump_one_ifindex(family, if_index, handle_ne_msg, &data);
+    ret = ne_table_dump_one_ifindex(family, if_index, handle_ne_msg, &data);
+    if (ret) {
+        hmapx_destroy(&neighbors_to_advertise);
+        vector_destroy(&stale_neighbors);
+        return ret;
+    }
 
     /* Add any remaining neighbors in the neighbors_to_advertise hmapx to the
      * system table. */
@@ -168,6 +175,43 @@ ne_nl_sync_neigh(uint8_t family, int32_t if_index,
     return ret;
 }
 
+/* Withdraw only entries in the preceding desired set, after checking their
+ * actual kernel ownership.  In particular, permanent and externally learned
+ * entries on the same interface must survive source and datapath teardown. */
+int
+ne_nl_withdraw_neigh(uint8_t family, int32_t if_index,
+                     const struct hmap *neighbors)
+{
+    struct vector stale_neighbors =
+        VECTOR_EMPTY_INITIALIZER(struct ne_nl_received_neigh);
+    struct ne_msg_handle_data data = {
+        .stale_neighbors = &stale_neighbors,
+        .neighbors = neighbors,
+    };
+    int ret = ne_table_dump_one_ifindex(family, if_index, handle_ne_withdraw,
+                                       &data);
+    if (ret) {
+        vector_destroy(&stale_neighbors);
+        return ret;
+    }
+    const struct ne_nl_received_neigh *ne;
+    VECTOR_FOR_EACH_PTR (&stale_neighbors, ne) {
+        int err = ne_nl_del_neigh(ne->if_index, ne->family, &ne->lladdr,
+                                  &ne->addr, ne->port, ne->vlan);
+        if (err && err != ENOENT) {
+            VLOG_WARN_RL(&rl, "Withdraw neigh ifindex=%"PRId32
+                              " eth="ETH_ADDR_FMT" failed: %s",
+                         if_index, ETH_ADDR_ARGS(ne->lladdr),
+                         ovs_strerror(err));
+            if (!ret) {
+                ret = err;
+            }
+        }
+    }
+    vector_destroy(&stale_neighbors);
+    return ret;
+}
+
 /* OVN expects all static entries added on this ifindex to be OVN-owned.
  * Everything else must be learnt. */
 bool
@@ -219,7 +263,7 @@ ne_is_valid_static_arp(struct ne_nl_received_neigh *ne)
            ne->state & NUD_NOARP && ne->flags & NTF_EXT_LEARNED;
 }
 
-static void
+static int
 ne_table_dump_one_ifindex(unsigned char address_family, int32_t if_index,
                           ne_table_handle_msg_callback *handle_msg_cb,
                           void *aux)
@@ -261,7 +305,7 @@ ne_table_dump_one_ifindex(unsigned char address_family, int32_t if_index,
         }
     }
     ofpbuf_uninit(&buf);
-    nl_dump_done(&dump);
+    return nl_dump_done(&dump);
 }
 
 static int
@@ -405,6 +449,18 @@ handle_ne_msg(const struct ne_table_msg *msg, void *data)
 
     /* Store the entry for deletion. */
     if (handle_data->stale_neighbors) {
+        vector_push(handle_data->stale_neighbors, nd);
+    }
+}
+
+static void
+handle_ne_withdraw(const struct ne_table_msg *msg, void *data)
+{
+    struct ne_msg_handle_data *handle_data = data;
+    const struct ne_nl_received_neigh *nd = &msg->nd;
+    if (!nd->vlan && !nd->port && ne_is_ovn_owned(nd)
+        && advertise_neigh_find(handle_data->neighbors, nd->lladdr,
+                                 &nd->addr)) {
         vector_push(handle_data->stale_neighbors, nd);
     }
 }

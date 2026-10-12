@@ -65,6 +65,8 @@ static unixctl_cb_func chassis_features_list;
     NB_NODE(port_group) \
     NB_NODE(load_balancer) \
     NB_NODE(load_balancer_group) \
+    NB_NODE(load_balancer_health_check) \
+    NB_NODE(load_balancer_health_check_endpoint) \
     NB_NODE(acl) \
     NB_NODE(logical_router) \
     NB_NODE(mirror) \
@@ -159,6 +161,7 @@ enum sb_engine_node {
 /* Define engine nodes for other nodes. They should be defined as static to
  * avoid sparse errors. */
 static ENGINE_NODE(northd, CLEAR_TRACKED_DATA, SB_WRITE);
+static ENGINE_NODE(evpn_health_waker);
 static ENGINE_NODE(sync_from_sb, SB_WRITE);
 static ENGINE_NODE(sampling_app);
 static ENGINE_NODE(lflow, CLEAR_TRACKED_DATA);
@@ -243,6 +246,9 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
 
     engine_add_input(&en_lb_data, &en_nb_load_balancer,
                      lb_data_load_balancer_handler);
+    engine_add_input(&en_lb_data, &en_nb_load_balancer_health_check, NULL);
+    engine_add_input(&en_lb_data, &en_nb_load_balancer_health_check_endpoint,
+                     NULL);
     engine_add_input(&en_lb_data, &en_nb_load_balancer_group,
                      lb_data_load_balancer_group_handler);
     engine_add_input(&en_lb_data, &en_datapath_synced_logical_switch,
@@ -253,6 +259,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_ic_learned_svc_monitors,
                      &en_sb_service_monitor, NULL);
 
+    engine_add_input(&en_northd, &en_evpn_health_waker, NULL);
     engine_add_input(&en_northd, &en_nb_mirror, NULL);
     engine_add_input(&en_northd, &en_nb_mirror_rule, NULL);
     engine_add_input(&en_northd, &en_nb_static_mac_binding, NULL);

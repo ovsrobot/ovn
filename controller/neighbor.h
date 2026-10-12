@@ -33,6 +33,7 @@
 #endif
 
 struct tracked_lport;
+struct if_status_mgr;
 
 enum neighbor_family {
     NEIGH_AF_INET = AF_INET,
@@ -54,6 +55,7 @@ struct neighbor_ctx_in {
     /* Index for FDB by dp_key. */
     struct ovsdb_idl_index *sbrec_fdb_by_dp_key;
     const struct sbrec_chassis *chassis;
+    const struct if_status_mgr *if_mgr;
 };
 
 struct neighbor_ctx_out {

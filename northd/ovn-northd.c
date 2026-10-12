@@ -118,7 +118,8 @@ static const char *rbac_mac_binding_update[] =
 static const char *rbac_svc_monitor_auth[] =
     {"chassis_name"};
 static const char *rbac_svc_monitor_auth_update[] =
-    {"status"};
+    {"status", "observed_generation", "check_seqno", "controller_instance",
+     "resolution_generation", "checked_resolution_generation", "details"};
 static const char *rbac_igmp_group_auth[] =
     {"chassis_name"};
 static const char *rbac_igmp_group_update[] =
@@ -908,6 +909,7 @@ main(int argc, char *argv[])
         &nbrec_ha_chassis_group_col_external_ids,
         &nbrec_load_balancer_col_external_ids,
         &nbrec_load_balancer_health_check_col_external_ids,
+        &nbrec_load_balancer_health_check_endpoint_col_external_ids,
         &nbrec_logical_router_policy_col_external_ids,
         &nbrec_logical_router_static_route_col_external_ids,
         &nbrec_meter_col_external_ids,

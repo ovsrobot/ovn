@@ -209,6 +209,7 @@ struct ovs_iface {
     uint16_t mtu;           /* Extracted from OVS interface.mtu field. */
     enum can_bind bind_type;/* CAN_BIND_AS_MAIN or CAN_BIND_AS_ADDITIONAL */
     bool is_vif;            /* Vifs, container or virtual ports */
+    bool wait_for_flows;    /* Controller sources without an OVS interface. */
 };
 
 static uint64_t ifaces_usage;
@@ -328,11 +329,19 @@ if_status_mgr_claim_iface(struct if_status_mgr *mgr,
     const char *iface_id = pb->logical_port;
     struct ovs_iface *iface = shash_find_data(&mgr->ifaces, iface_id);
 
+    if (iface && iface->name && get_lport_type(pb) == LP_HEALTH_MONITOR) {
+        /* A VIF may be converted to a controller source.  Its old OVS
+         * interface must no longer control the source's lifetime or satisfy
+         * the source's flow acknowledgement. */
+        ovs_iface_destroy(mgr, iface);
+        iface = NULL;
+    }
     if (!iface) {
         iface = ovs_iface_create(mgr, iface_id, iface_rec, OIF_CLAIMED);
     }
     iface->bind_type = bind_type;
     iface->is_vif = is_vif;
+    iface->wait_for_flows = get_lport_type(pb) == LP_HEALTH_MONITOR;
 
     memcpy(&iface->pb_uuid, &pb->header_.uuid, sizeof(iface->pb_uuid));
     if (parent_pb) {
@@ -369,12 +378,26 @@ if_status_mgr_claim_iface(struct if_status_mgr *mgr,
         OVS_NOT_REACHED();
         break;
     }
+    if (iface->wait_for_flows && !sb_readonly
+        && iface->state != OIF_INSTALLED && iface->state != OIF_MARK_UP) {
+        bool up = false;
+        sbrec_port_binding_set_up(pb, &up, 1);
+    }
 }
 
 bool
 if_status_mgr_iface_is_present(struct if_status_mgr *mgr, const char *iface_id)
 {
     return !!shash_find_data(&mgr->ifaces, iface_id);
+}
+
+bool
+if_status_is_port_ready(const struct if_status_mgr *mgr, const char *iface_id)
+{
+    const struct ovs_iface *iface = shash_find_data(&mgr->ifaces, iface_id);
+    return iface && (iface->state == OIF_INSTALLED
+                     || (iface->wait_for_flows
+                         && iface->state == OIF_MARK_UP));
 }
 
 bool
@@ -436,9 +459,10 @@ if_status_mgr_delete_iface(struct if_status_mgr *mgr, const char *iface_id,
         return;
     }
 
-    if (iface_rec && strcmp(iface->name, iface_rec->name)) {
+    if (iface_rec && (!iface->name || strcmp(iface->name, iface_rec->name))) {
         VLOG_DBG("Interface %s not deleted as port %s bound to %s",
-                 iface_rec->name, iface_id, iface->name);
+                 iface_rec->name, iface_id,
+                 iface->name ? iface->name : "controller");
         return;
     }
 
@@ -561,7 +585,7 @@ if_status_mgr_update(struct if_status_mgr *mgr,
         struct ovs_iface *iface = node->data;
         if (iface->is_vif) {
             if (!local_bindings_pb_chassis_is_set(bindings, iface->id,
-                chassis_rec)) {
+                                                  chassis_rec)) {
                 if (!sb_readonly) {
                     long long int now = time_msec();
                     const struct sbrec_port_binding *pb =
@@ -621,8 +645,12 @@ if_status_mgr_update(struct if_status_mgr *mgr,
     if (!sb_readonly) {
         HMAPX_FOR_EACH_SAFE (node, &mgr->ifaces_per_state[OIF_INSTALL_FLOWS]) {
             struct ovs_iface *iface = node->data;
-            if (!local_bindings_pb_chassis_is_set(bindings, iface->id,
-                chassis_rec)) {
+            bool chassis_set = iface->is_vif
+                ? local_bindings_pb_chassis_is_set(bindings, iface->id,
+                                                    chassis_rec)
+                : port_binding_pb_chassis_is_set(chassis_rec, pb_table,
+                                                 &iface->pb_uuid);
+            if (!chassis_set) {
                 long long int now = time_msec();
                 const struct sbrec_port_binding *pb =
                     sbrec_port_binding_table_get_for_uuid(pb_table,
@@ -631,8 +659,13 @@ if_status_mgr_update(struct if_status_mgr *mgr,
                                                get_postponed_ports())) {
                     continue;
                 }
-                local_binding_set_pb(bindings, iface->id, chassis_rec,
-                                     NULL, true, iface->bind_type);
+                if (iface->is_vif) {
+                    local_binding_set_pb(bindings, iface->id, chassis_rec,
+                                         NULL, true, iface->bind_type);
+                } else {
+                    port_binding_set_pb(chassis_rec, pb_table, iface->id,
+                                        &iface->pb_uuid, iface->bind_type);
+                }
             }
         }
     }
@@ -646,7 +679,7 @@ if_status_mgr_update(struct if_status_mgr *mgr,
             /* No need to update pb->chassis as already done
              * in if_status_handle_claims or if_status_mgr_claim_iface
              */
-            if (iface->is_vif) {
+            if (iface->is_vif || iface->wait_for_flows) {
                 ovs_iface_set_state(mgr, iface, OIF_WAITING_SB_COND);
             } else {
                 ovs_iface_set_state(mgr, iface, OIF_MARK_UP);
@@ -732,7 +765,7 @@ if_status_mgr_remove_ovn_installed(struct if_status_mgr *mgr,
     const char *iface_id = smap_get(&iface_rec->external_ids, "iface-id");
     if (iface_id) {
         struct ovs_iface *iface = shash_find_data(&mgr->ifaces, iface_id);
-        if (iface && iface->state == OIF_MARK_UP) {
+        if (iface && iface->is_vif && iface->state == OIF_MARK_UP) {
             ovs_iface_set_state(mgr, iface, OIF_UNINSTALLED);
         }
     }
@@ -829,7 +862,7 @@ if_status_mgr_iface_update(const struct if_status_mgr *mgr,
     }
     uint16_t mtu = get_iface_mtu(iface_rec);
     struct ovs_iface *iface = shash_find_data(&mgr->ifaces, iface_id);
-    if (iface && iface->mtu != mtu) {
+    if (iface && !iface->wait_for_flows && iface->mtu != mtu) {
         iface->mtu = mtu;
         return true;
     }
@@ -929,8 +962,18 @@ if_status_mgr_update_bindings(struct if_status_mgr *mgr,
     HMAPX_FOR_EACH (node, &mgr->ifaces_per_state[OIF_INSTALL_FLOWS]) {
         struct ovs_iface *iface = node->data;
 
-        local_binding_set_down(bindings, iface->id, chassis_rec,
-                               sb_readonly, ovs_readonly);
+        if (iface->is_vif) {
+            local_binding_set_down(bindings, iface->id, chassis_rec,
+                                   sb_readonly, ovs_readonly);
+        } else if (!sb_readonly) {
+            const struct sbrec_port_binding *pb =
+                sbrec_port_binding_table_get_for_uuid(pb_table,
+                                                       &iface->pb_uuid);
+            if (pb && pb->chassis == chassis_rec) {
+                bool up = false;
+                sbrec_port_binding_set_up(pb, &up, 1);
+            }
+        }
     }
 
     /* Notify the binding module to remove "ovn-installed" for all bindings
@@ -1005,4 +1048,3 @@ if_status_is_port_claimed(const struct if_status_mgr *mgr,
         return true;
     }
 }
-

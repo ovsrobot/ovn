@@ -25,6 +25,7 @@
 
 struct nbrec_load_balancer;
 struct nbrec_load_balancer_group;
+struct nbrec_load_balancer_health_check_endpoint;
 struct ovn_datapath;
 
 enum lb_neighbor_responder_mode {
@@ -75,6 +76,8 @@ struct ovn_northd_lb {
 
     /* Indicates if the load balancer has health checks configured. */
     bool health_checks;
+    /* New-mode configuration errors must not revert to static selection. */
+    bool evpn_config_invalid;
 
     /* Indicates if distributed option is enabled for load balancer. */
     bool is_distributed;
@@ -94,6 +97,9 @@ struct ovn_northd_lb_vip {
 };
 
 struct ovn_northd_lb_backend {
+    /* Typed EVPN configuration takes precedence, including when invalid. */
+    const struct nbrec_load_balancer_health_check_endpoint *evpn_endpoint;
+    const char *evpn_error;
     bool health_check;
      /* Set to true if port does not locate in local AZ. */
     bool remote_backend;

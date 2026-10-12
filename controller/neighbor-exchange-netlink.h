@@ -53,6 +53,8 @@ struct ne_table_msg {
 int ne_nl_sync_neigh(uint8_t family, int32_t if_index,
                      const struct hmap *neighbors,
                      struct vector *learned_neighbors);
+int ne_nl_withdraw_neigh(uint8_t family, int32_t if_index,
+                         const struct hmap *neighbors);
 
 bool ne_is_ovn_owned(const struct ne_nl_received_neigh *nd);
 bool ne_is_valid_remote_vtep(struct ne_nl_received_neigh *ne);

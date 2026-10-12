@@ -29,6 +29,33 @@ neighbor_exchange_status_run(void)
     return 0;
 }
 
+int
+neighbor_exchange_withdraw_removed(
+    const struct vector *old_interfaces OVS_UNUSED,
+    const struct vector *new_interfaces OVS_UNUSED)
+{
+    return 0;
+}
+
+int
+neighbor_exchange_withdraw_port(const struct sbrec_port_binding *pb OVS_UNUSED,
+                                const struct vector *interfaces OVS_UNUSED)
+{
+    return 0;
+}
+
+int
+neighbor_exchange_retry_withdrawals(
+    const struct vector *current_interfaces OVS_UNUSED)
+{
+    return 0;
+}
+
+void
+neighbor_exchange_destroy(void)
+{
+}
+
 void
 evpn_remote_vteps_clear(struct hmap *remote_vteps OVS_UNUSED)
 {

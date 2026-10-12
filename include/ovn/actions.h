@@ -479,6 +479,7 @@ struct ovnact_bind_vport {
 struct ovnact_handle_svc_check {
     struct ovnact ovnact;
     struct expr_field port;     /* Logical port name. */
+    bool preserve_context;     /* Keep logical ingress and source outport. */
 };
 
 /* OVNACT_FWD_GROUP. */

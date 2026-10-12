@@ -14,6 +14,7 @@
  */
 
 #include <config.h>
+#include <errno.h>
 
 #include <linux/neighbour.h>
 
@@ -24,6 +25,8 @@
 #include "openvswitch/poll-loop.h"
 #include "openvswitch/vlog.h"
 #include "ovn-util.h"
+#include "ovn-sb-idl.h"
+#include "timeval.h"
 #include "packets.h"
 #include "vec.h"
 #include "unixctl.h"
@@ -49,6 +52,11 @@ static uint32_t evpn_static_entry_hash(const struct eth_addr *mac,
 
 /* Last neighbor_exchange netlink operation. */
 static int neighbor_exchange_nl_status;
+static struct vector pending_withdrawals =
+    VECTOR_EMPTY_INITIALIZER(struct neighbor_interface_monitor *);
+static long long withdrawal_retry_at;
+static int withdrawal_error;
+#define NEIGHBOR_WITHDRAW_RETRY_MS 1000
 
 #define CLEAR_NEIGHBOR_EXCHANGE_NL_STATUS() \
     do {                                    \
@@ -65,6 +73,246 @@ static int neighbor_exchange_nl_status;
         }                                          \
     } while (0)
 
+/* Withdraw a precise subset of the preceding advertised state.  Resolving
+ * the name again prevents an old cached ifindex from deleting state on a
+ * newly created, unrelated interface which reused that index. */
+static int
+withdraw_announcements(const struct neighbor_interface_monitor *nim,
+                       const struct hmap *neighbors)
+{
+    if (hmap_is_empty(neighbors)) {
+        return 0;
+    }
+    int32_t if_index = if_nametoindex(nim->if_name);
+    if (if_index) {
+        return ne_nl_withdraw_neigh(nim->family, if_index, neighbors);
+    }
+    return errno == ENODEV || errno == ENXIO || errno == ENOENT ? 0 : errno;
+}
+
+static void
+copy_announcement(struct hmap *neighbors,
+                   const struct advertise_neighbor_entry *an)
+{
+    struct advertise_neighbor_entry *copy = xmemdup(an, sizeof *an);
+    hmap_insert(neighbors, &copy->node,
+                 advertise_neigh_hash(&copy->lladdr, &copy->addr));
+}
+
+static void
+clear_announcements(struct hmap *neighbors)
+{
+    struct advertise_neighbor_entry *an;
+    HMAP_FOR_EACH_POP (an, node, neighbors) {
+        free(an);
+    }
+    hmap_destroy(neighbors);
+}
+
+static void
+queue_withdrawal(const struct neighbor_interface_monitor *nim,
+                 const struct hmap *neighbors, int error)
+{
+    struct neighbor_interface_monitor *pending = NULL;
+    struct neighbor_interface_monitor *candidate;
+    VECTOR_FOR_EACH (&pending_withdrawals, candidate) {
+        if (candidate->family == nim->family
+            && !strcmp(candidate->if_name, nim->if_name)) {
+            pending = candidate;
+            break;
+        }
+    }
+    if (!pending) {
+        pending = xzalloc(sizeof *pending);
+        pending->family = nim->family;
+        pending->type = nim->type;
+        pending->vni = nim->vni;
+        ovs_strlcpy(pending->if_name, nim->if_name, sizeof pending->if_name);
+        hmap_init(&pending->announced_neighbors);
+        vector_push(&pending_withdrawals, &pending);
+    }
+    const struct advertise_neighbor_entry *an;
+    HMAP_FOR_EACH (an, node, neighbors) {
+        if (!advertise_neigh_find(&pending->announced_neighbors, an->lladdr,
+                                  &an->addr)) {
+            copy_announcement(&pending->announced_neighbors, an);
+        }
+    }
+    if (!withdrawal_error) {
+        withdrawal_error = error;
+        withdrawal_retry_at = time_msec() + NEIGHBOR_WITHDRAW_RETRY_MS;
+    }
+    poll_timer_wait_until(withdrawal_retry_at);
+}
+
+/* Keep immutable ownership tuples across engine cache replacement.  A
+ * restored source cancels its preceding failed withdrawal; a NULL current
+ * set is used during shutdown, when all queued withdrawals must complete. */
+int
+neighbor_exchange_retry_withdrawals(const struct vector *current_interfaces)
+{
+    if (vector_is_empty(&pending_withdrawals)) {
+        withdrawal_error = 0;
+        return 0;
+    }
+    if (time_msec() < withdrawal_retry_at) {
+        poll_timer_wait_until(withdrawal_retry_at);
+        return withdrawal_error;
+    }
+
+    int ret = 0;
+    for (size_t i = 0; i < vector_len(&pending_withdrawals);) {
+        struct neighbor_interface_monitor *pending =
+            vector_get(&pending_withdrawals, i,
+                        struct neighbor_interface_monitor *);
+        if (current_interfaces) {
+            const struct neighbor_interface_monitor *current;
+            VECTOR_FOR_EACH (current_interfaces, current) {
+                if (pending->family != current->family
+                    || strcmp(pending->if_name, current->if_name)) {
+                    continue;
+                }
+                struct advertise_neighbor_entry *an;
+                HMAP_FOR_EACH_SAFE (an, node, &pending->announced_neighbors) {
+                    if (advertise_neigh_find(&current->announced_neighbors,
+                                             an->lladdr, &an->addr)) {
+                        hmap_remove(&pending->announced_neighbors, &an->node);
+                        free(an);
+                    }
+                }
+            }
+        }
+        int err = withdraw_announcements(pending,
+                                          &pending->announced_neighbors);
+        if (!err) {
+            clear_announcements(&pending->announced_neighbors);
+            free(pending);
+            vector_remove_fast(&pending_withdrawals, i, NULL);
+        } else {
+            if (!ret) {
+                ret = err;
+            }
+            i++;
+        }
+    }
+    withdrawal_error = ret;
+    if (ret) {
+        withdrawal_retry_at = time_msec() + NEIGHBOR_WITHDRAW_RETRY_MS;
+        poll_timer_wait_until(withdrawal_retry_at);
+    }
+    return ret;
+}
+
+void
+neighbor_exchange_destroy(void)
+{
+    struct neighbor_interface_monitor *pending;
+    VECTOR_FOR_EACH (&pending_withdrawals, pending) {
+        clear_announcements(&pending->announced_neighbors);
+        free(pending);
+    }
+    vector_destroy(&pending_withdrawals);
+    withdrawal_error = 0;
+}
+
+/* Reconcile removed interfaces as well as ordinary updates.  Their absence
+ * from the new monitored set otherwise prevents the normal sync from
+ * withdrawing their old announcements. */
+int
+neighbor_exchange_withdraw_removed(const struct vector *old_interfaces,
+                                   const struct vector *new_interfaces)
+{
+    int ret = 0;
+    const struct neighbor_interface_monitor *old;
+    VECTOR_FOR_EACH (old_interfaces, old) {
+        const struct hmap *keep = NULL;
+        const struct neighbor_interface_monitor *new;
+        VECTOR_FOR_EACH (new_interfaces, new) {
+            if (old->family == new->family
+                && !strcmp(old->if_name, new->if_name)) {
+                keep = &new->announced_neighbors;
+                break;
+            }
+        }
+
+        struct hmap withdrawn = HMAP_INITIALIZER(&withdrawn);
+        const struct advertise_neighbor_entry *an;
+        HMAP_FOR_EACH (an, node, &old->announced_neighbors) {
+            if (!keep || !advertise_neigh_find(keep, an->lladdr, &an->addr)) {
+                copy_announcement(&withdrawn, an);
+            }
+        }
+        int err = withdraw_announcements(old, &withdrawn);
+        if (err) {
+            queue_withdrawal(old, &withdrawn, err);
+        }
+        if (!ret) {
+            ret = err;
+        }
+        clear_announcements(&withdrawn);
+    }
+    return ret;
+}
+
+/* Used before releasing a controller-owned source at graceful shutdown.
+ * Only configured MAC/IP tuples in this datapath's advertised desired set
+ * are candidates, and netlink verifies actual OVN ownership before
+ * deleting. */
+int
+neighbor_exchange_withdraw_port(const struct sbrec_port_binding *pb,
+                                const struct vector *interfaces)
+{
+    int64_t vni = ovn_smap_get_llong(&pb->datapath->external_ids,
+                                     "dynamic-routing-vni", -1);
+    if (!ovn_is_valid_vni(vni)) {
+        return 0;
+    }
+
+    int ret = 0;
+    for (size_t i = 0; i < pb->n_mac; i++) {
+        struct lport_addresses addresses;
+        if (!extract_lsp_addresses(pb->mac[i], &addresses)) {
+            continue;
+        }
+        const struct neighbor_interface_monitor *nim;
+        VECTOR_FOR_EACH (interfaces, nim) {
+            if (nim->vni != vni) {
+                continue;
+            }
+            struct hmap withdrawn = HMAP_INITIALIZER(&withdrawn);
+            const struct advertise_neighbor_entry *an;
+            HMAP_FOR_EACH (an, node, &nim->announced_neighbors) {
+                if (!eth_addr_equals(an->lladdr, addresses.ea)) {
+                    continue;
+                }
+                bool ours = ipv6_is_zero(&an->addr);
+                for (size_t j = 0; !ours && j < addresses.n_ipv4_addrs; j++) {
+                    ours = IN6_IS_ADDR_V4MAPPED(&an->addr)
+                           && in6_addr_get_mapped_ipv4(&an->addr)
+                              == addresses.ipv4_addrs[j].addr;
+                }
+                for (size_t j = 0; !ours && j < addresses.n_ipv6_addrs; j++) {
+                    ours = ipv6_addr_equals(&an->addr,
+                                            &addresses.ipv6_addrs[j].addr);
+                }
+                if (ours) {
+                    copy_announcement(&withdrawn, an);
+                }
+            }
+            int err = withdraw_announcements(nim, &withdrawn);
+            if (err) {
+                queue_withdrawal(nim, &withdrawn, err);
+            }
+            if (!ret) {
+                ret = err;
+            }
+            clear_announcements(&withdrawn);
+        }
+        destroy_lport_addresses(&addresses);
+    }
+    return ret;
+}
+
 void
 neighbor_exchange_run(const struct neighbor_exchange_ctx_in *n_ctx_in,
                       struct neighbor_exchange_ctx_out *n_ctx_out)
@@ -79,6 +327,7 @@ neighbor_exchange_run(const struct neighbor_exchange_ctx_in *n_ctx_in,
     sset_destroy(&if_names);
 
     CLEAR_NEIGHBOR_EXCHANGE_NL_STATUS();
+    neighbor_exchange_retry_withdrawals(n_ctx_in->monitored_interfaces);
     VECTOR_FOR_EACH (n_ctx_in->monitored_interfaces, nim) {
         int32_t if_index = host_if_monitor_ifname_toindex(nim->if_name);
 
@@ -143,6 +392,12 @@ neighbor_exchange_run(const struct neighbor_exchange_ctx_in *n_ctx_in,
 int
 neighbor_exchange_status_run(void)
 {
+    if (!vector_is_empty(&pending_withdrawals)) {
+        if (time_msec() >= withdrawal_retry_at) {
+            return withdrawal_error;
+        }
+        poll_timer_wait_until(withdrawal_retry_at);
+    }
     return neighbor_exchange_nl_status;
 }
 

@@ -17,6 +17,10 @@
 #include <config.h>
 
 #include "pinctrl.h"
+#include "evpn-arp.h"
+#include "evpn-binding.h"
+#include "evpn-fdb.h"
+#include "if-status.h"
 
 #include "coverage.h"
 #include "csum.h"
@@ -60,6 +64,7 @@
 #include "socket-util.h"
 #include "seq.h"
 #include "timeval.h"
+#include "unixctl.h"
 #include "vswitch-idl.h"
 #include "lflow.h"
 #include "ip-mcast.h"
@@ -332,7 +337,9 @@ static void sync_svc_monitors(
     struct ovsdb_idl_txn *ovnsb_idl_txn,
     const struct sbrec_service_monitor_table *svc_mon_table,
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
-    const struct sbrec_chassis *our_chassis)
+    const struct sbrec_chassis *our_chassis,
+    const struct hmap *evpn_arps, const struct hmap *evpn_fdbs,
+    const struct hmap *evpn_bindings, const struct if_status_mgr *if_mgr)
     OVS_REQUIRES(pinctrl_mutex);
 static void svc_monitors_run(struct rconn *swconn,
                              long long int *svc_monitors_next_run_time)
@@ -4220,6 +4227,10 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             const struct shash *local_active_ports_ipv6_pd,
             const struct shash *local_active_ports_ras,
             const struct ovsrec_open_vswitch_table *ovs_table,
+            const struct hmap *evpn_arps,
+            const struct hmap *evpn_fdbs,
+            const struct hmap *evpn_bindings,
+            const struct if_status_mgr *if_mgr,
             int64_t cur_cfg)
 {
     ovs_mutex_lock(&pinctrl_mutex);
@@ -4241,7 +4252,7 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                   sbrec_igmp_groups,
                   sbrec_ip_multicast_opts);
     sync_svc_monitors(ovnsb_idl_txn, svc_mon_table, sbrec_port_binding_by_name,
-                      chassis);
+                      chassis, evpn_arps, evpn_fdbs, evpn_bindings, if_mgr);
     bfd_monitor_run(ovnsb_idl_txn, bfd_table, sbrec_port_binding_by_name,
                     chassis);
     run_activated_ports(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
@@ -6549,14 +6560,21 @@ pinctrl_handle_nd_na(struct rconn *swconn, const struct flow *ip_flow,
     struct dp_packet packet;
     dp_packet_use_stub(&packet, packet_stub, sizeof packet_stub);
 
-    /* These flags are not exactly correct.  Look at section 7.2.4
-     * of RFC 4861. */
     uint32_t rso_flags = ND_RSO_SOLICITED | ND_RSO_OVERRIDE;
+    struct in6_addr dst_ip = ip_flow->ipv6_src;
+    struct eth_addr dst_mac = ip_flow->dl_src;
+    /* A DAD solicitation has no source address.  RFC 4861 section 7.2.4
+     * requires an all-nodes multicast reply with Solicited clear. */
+    if (ipv6_addr_equals(&ip_flow->ipv6_src, &in6addr_any)) {
+        dst_ip = in6addr_all_hosts;
+        dst_mac = (struct eth_addr) ETH_ADDR_C(33,33,00,00,00,01);
+        rso_flags &= ~ND_RSO_SOLICITED;
+    }
     if (is_router) {
         rso_flags |= ND_RSO_ROUTER;
     }
-    compose_nd_na(&packet, ip_flow->dl_dst, ip_flow->dl_src,
-                  &ip_flow->nd_target, &ip_flow->ipv6_src,
+    compose_nd_na(&packet, ip_flow->dl_dst, dst_mac,
+                  &ip_flow->nd_target, &dst_ip,
                   htonl(rso_flags));
 
     /* Reload previous packet metadata and set actions from userdata. */
@@ -7159,6 +7177,14 @@ enum svc_monitor_type {
     SVC_MON_TYPE_LSP,
 };
 
+struct svc_monitor_path {
+    struct uuid flow_uuid;
+    struct in6_addr remote_ip;
+    uint32_t binding_key;
+    ofp_port_t tunnel_ofport;
+    uint16_t weight;
+};
+
 /* Service monitor health checks. */
 struct svc_monitor {
     struct hmap_node hmap_node;
@@ -7220,10 +7246,25 @@ struct svc_monitor {
     uint64_t flows_seqno;
 
     bool delete;
+    /* EVPN snapshots contain no pointers into the incremental engine. */
+    bool evpn;
+    bool resolved;
+    struct uuid monitor_uuid;
+    struct uuid config_generation;
+    struct uuid resolution_generation;
+    struct uuid ip_binding_generation;
+    struct uuid mac_binding_generation;
+    struct svc_monitor_path *reply_bindings;
+    size_t n_reply_bindings;
+    int64_t check_seqno;
+    bool check_valid;
+    uint64_t rejected_replies;
+    const char *reason;
 };
 
 static struct hmap svc_monitors_map;
 static struct ovs_list svc_monitors;
+static struct uuid svc_monitor_instance;
 
 /* ofctrl_seqno type used to learn when the flows are installed for new
  * service monitors, and the last requested and acked values.  Accessed
@@ -7237,6 +7278,7 @@ init_svc_monitors(void)
 {
     hmap_init(&svc_monitors_map);
     ovs_list_init(&svc_monitors);
+    uuid_generate(&svc_monitor_instance);
     svc_mon_seqno_type = ofctrl_seqno_add_type();
 }
 
@@ -7252,6 +7294,7 @@ destroy_svc_monitors(void)
 
     LIST_FOR_EACH_POP (svc, list_node, &svc_monitors) {
         smap_destroy(&svc->options);
+        free(svc->reply_bindings);
         free(svc);
     }
 }
@@ -7265,7 +7308,7 @@ pinctrl_find_svc_monitor(uint32_t dp_key, uint32_t port_key,
 {
     struct svc_monitor *svc;
     HMAP_FOR_EACH_WITH_HASH (svc, hmap_node, hash, &svc_monitors_map) {
-        if (svc->dp_key == dp_key
+        if (!svc->evpn && svc->dp_key == dp_key
             && svc->port_key == port_key
             && svc->proto_port == port
             && IN6_ARE_ADDR_EQUAL(&svc->ip, ip_key)
@@ -7326,11 +7369,246 @@ svc_monitor_type_allows_proto(enum svc_monitor_type type,
     return false;
 }
 
+static int
+svc_monitor_path_compare(const void *a_, const void *b_)
+{
+    const struct svc_monitor_path *a = a_, *b = b_;
+    return a->binding_key < b->binding_key ? -1
+           : a->binding_key != b->binding_key;
+}
+
+/* Main-thread resolution copied while pinctrl_mutex is held.  The worker
+ * never dereferences engine or IDL-owned objects. */
+static bool
+sync_evpn_svc_monitor(const struct sbrec_service_monitor *sb,
+                      const struct sbrec_chassis *chassis,
+                      const struct hmap *arps, const struct hmap *fdbs,
+                      const struct hmap *bindings,
+                      const struct if_status_mgr *if_mgr)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    if (!chassis || strcmp(sb->chassis_name, chassis->name)
+        || !smap_get_bool(&sb->options, "evpn-valid", false)
+        || !sb->datapath || !sb->source_port
+        || !sb->n_config_generation || strcmp(sb->protocol, "tcp")) {
+        return false;
+    }
+
+    struct in6_addr ip, src_ip;
+    ovs_be32 ip4, src_ip4;
+    bool is_ip4 = ip_parse(sb->ip, &ip4);
+    bool src_is_ip4 = ip_parse(sb->src_ip, &src_ip4);
+    if (is_ip4 != src_is_ip4) {
+        return false;
+    }
+    if (is_ip4) {
+        ip = in6_addr_mapped_ipv4(ip4);
+        src_ip = in6_addr_mapped_ipv4(src_ip4);
+    } else if (!ipv6_parse(sb->ip, &ip) || !ipv6_parse(sb->src_ip, &src_ip)) {
+        return false;
+    }
+    struct eth_addr src_mac;
+    if (!eth_addr_from_string(sb->src_mac, &src_mac)) {
+        return false;
+    }
+
+    uint32_t dp_key = sb->datapath->tunnel_key;
+    uint32_t port_key = sb->source_port->tunnel_key;
+    uint32_t hash = hash_bytes(&ip, sizeof ip,
+                               hash_3words(dp_key, port_key, sb->port));
+    struct svc_monitor *mon = NULL, *candidate;
+    HMAP_FOR_EACH_WITH_HASH (candidate, hmap_node, hash, &svc_monitors_map) {
+        if (candidate->evpn
+            && uuid_equals(&candidate->monitor_uuid, &sb->header_.uuid)) {
+            mon = candidate;
+            break;
+        }
+    }
+    bool changed = false;
+    if (!mon) {
+        /* Bound worker state and the number of simultaneously reserved
+         * tuples.  Legacy monitors are never rejected by this limit. */
+        if (hmap_count(&svc_monitors_map) >= 4096) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+            VLOG_WARN_RL(&rl, "EVPN health monitor capacity exhausted");
+            return false;
+        }
+        mon = xzalloc(sizeof *mon);
+        mon->evpn = true;
+        mon->monitor_uuid = sb->header_.uuid;
+        mon->dp_key = dp_key;
+        mon->port_key = port_key;
+        mon->proto_port = sb->port;
+        mon->protocol = SVC_MON_PROTO_TCP;
+        mon->type = SVC_MON_TYPE_LB;
+        mon->ip = ip;
+        mon->is_ip6 = !is_ip4;
+        mon->reason = "waiting-for-source";
+        smap_init(&mon->options);
+        hmap_insert(&svc_monitors_map, &mon->hmap_node, hash);
+        ovs_list_push_back(&svc_monitors, &mon->list_node);
+        changed = true;
+    }
+    mon->sb_svc_mon = sb;
+    mon->delete = false;
+
+    const char *reason = "unresolved-ip";
+    bool source_ready = health_monitor_port_is_ready(sb->source_port, chassis)
+                        && if_status_is_port_ready(
+                               if_mgr, sb->source_port->logical_port)
+                        && sb->source_port->datapath == sb->datapath;
+    const struct evpn_arp *arp, *endpoint = NULL;
+    bool source_conflict = false;
+    HMAP_FOR_EACH (arp, hmap_node, arps) {
+        if (!arp->ldp || arp->ldp->datapath->tunnel_key != dp_key) {
+            continue;
+        }
+        if (IN6_ARE_ADDR_EQUAL(&arp->ip, &src_ip)
+            || eth_addr_equals(arp->mac, src_mac)) {
+            source_conflict = true;
+        }
+        if (IN6_ARE_ADDR_EQUAL(&arp->ip, &ip)) {
+            endpoint = arp;
+        }
+    }
+    const struct evpn_fdb *source_fdb;
+    HMAP_FOR_EACH (source_fdb, hmap_node, fdbs) {
+        if (source_fdb->dp_key == dp_key
+            && eth_addr_equals(source_fdb->mac, src_mac)) {
+            source_conflict = true;
+        }
+    }
+    struct svc_monitor_path *paths = NULL;
+    size_t n_paths = 0;
+    struct uuid ip_generation = UUID_ZERO, mac_generation = UUID_ZERO;
+    struct eth_addr dst_mac = eth_addr_zero;
+    if (!source_ready) {
+        reason = "waiting-for-source";
+    } else if (source_conflict) {
+        reason = "source-conflict";
+    } else if (endpoint) {
+        ip_generation = endpoint->flow_uuid;
+        dst_mac = endpoint->mac;
+        reason = "unresolved-mac";
+        const struct evpn_fdb *fdb;
+        HMAP_FOR_EACH (fdb, hmap_node, fdbs) {
+            if (fdb->dp_key != dp_key || fdb->vni != endpoint->vni
+                || !eth_addr_equals(fdb->mac, dst_mac)) {
+                continue;
+            }
+            size_t n = vector_len(&fdb->paths);
+            mac_generation = fdb->flow_uuid;
+            paths = xzalloc(n * sizeof *paths);
+            for (size_t i = 0; i < n; i++) {
+                struct evpn_fdb_path path = vector_get(&fdb->paths, i,
+                                                       struct evpn_fdb_path);
+                const struct evpn_binding *binding;
+                HMAP_FOR_EACH (binding, hmap_node, bindings) {
+                    if (binding->binding_key == path.binding_key
+                        && binding->dp_key == dp_key
+                        && binding->vni == endpoint->vni
+                        && binding->tunnel_ofport != OFPP_NONE
+                        && binding->tunnel_ofport != 0) {
+                        paths[n_paths].flow_uuid = binding->flow_uuid;
+                        paths[n_paths].remote_ip = binding->remote_ip;
+                        paths[n_paths].binding_key = path.binding_key;
+                        paths[n_paths].tunnel_ofport = binding->tunnel_ofport;
+                        paths[n_paths++].weight = path.weight;
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+    }
+    if (n_paths > 1) {
+        qsort(paths, n_paths, sizeof *paths, svc_monitor_path_compare);
+    }
+    bool resolved = n_paths != 0;
+    bool config_changed =
+        !uuid_equals(&mon->config_generation, &sb->config_generation[0])
+        || !IN6_ARE_ADDR_EQUAL(&mon->src_ip, &src_ip)
+        || !eth_addr_equals(mon->src_mac, src_mac)
+        || !smap_equal(&mon->options, &sb->options);
+    bool resolution_changed = mon->resolved != resolved
+        || !uuid_equals(&mon->ip_binding_generation, &ip_generation)
+        || !uuid_equals(&mon->mac_binding_generation, &mac_generation)
+        || !eth_addr_equals(mon->ea, dst_mac)
+        || mon->n_reply_bindings != n_paths
+        || (n_paths && memcmp(mon->reply_bindings, paths,
+                             n_paths * sizeof *paths));
+    if (config_changed || resolution_changed || changed) {
+        mon->config_generation = sb->config_generation[0];
+        uuid_generate(&mon->resolution_generation);
+        mon->state = SVC_MON_S_WAIT_FLOWS;
+        mon->flows_seqno = 0;
+        mon->status = SVC_MON_ST_OFFLINE;
+        mon->n_success = mon->n_failures = 0;
+        mon->tp_src = 0;
+        mon->check_valid = false;
+        mon->reason = resolved ? "waiting-for-flows" : reason;
+        changed = true;
+    } else if (!resolved) {
+        mon->reason = reason;
+    }
+    mon->src_ip = src_ip;
+    mon->src_mac = src_mac;
+    mon->ea = dst_mac;
+    mon->ip_binding_generation = ip_generation;
+    mon->mac_binding_generation = mac_generation;
+    mon->resolved = resolved;
+    free(mon->reply_bindings);
+    mon->reply_bindings = paths;
+    mon->n_reply_bindings = n_paths;
+    if (config_changed) {
+        smap_destroy(&mon->options);
+        smap_clone(&mon->options, &sb->options);
+        mon->interval = MAX(1, smap_get_int(&mon->options, "interval", 5))
+                        * 1000;
+        mon->svc_timeout = MAX(1, smap_get_int(&mon->options, "timeout", 3))
+                           * 1000;
+        mon->success_count = MAX(1, smap_get_int(&mon->options,
+                                                "success_count", 1));
+        mon->failure_count = MAX(1, smap_get_int(&mon->options,
+                                                "failure_count", 1));
+    }
+    return changed;
+}
+
+static void
+evpn_svc_monitor_report(struct svc_monitor *mon)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    const struct sbrec_service_monitor *sb = mon->sb_svc_mon;
+    sbrec_service_monitor_set_controller_instance(sb, &svc_monitor_instance,
+                                                 1);
+    sbrec_service_monitor_set_observed_generation(sb, &mon->config_generation,
+                                                  1);
+    sbrec_service_monitor_set_resolution_generation(
+        sb, &mon->resolution_generation, 1);
+    /* Clearing the checked generation invalidates every old successful
+     * result before the next completed observation. */
+    sbrec_service_monitor_set_checked_resolution_generation(
+        sb, mon->check_valid ? &mon->resolution_generation : NULL,
+        mon->check_valid ? 1 : 0);
+    sbrec_service_monitor_set_check_seqno(sb, mon->check_seqno);
+    struct smap details = SMAP_INITIALIZER(&details);
+    smap_add(&details, "reason", mon->reason);
+    smap_add_format(&details, "rejected-replies", "%"PRIu64,
+                    mon->rejected_replies);
+    smap_add_format(&details, "paths", "%"PRIuSIZE, mon->n_reply_bindings);
+    sbrec_service_monitor_set_details(sb, &details);
+    smap_destroy(&details);
+}
+
 static void
 sync_svc_monitors(struct ovsdb_idl_txn *ovnsb_idl_txn,
                   const struct sbrec_service_monitor_table *svc_mon_table,
                   struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                  const struct sbrec_chassis *our_chassis)
+                  const struct sbrec_chassis *our_chassis,
+                  const struct hmap *evpn_arps, const struct hmap *evpn_fdbs,
+                  const struct hmap *evpn_bindings,
+                  const struct if_status_mgr *if_mgr)
     OVS_REQUIRES(pinctrl_mutex)
 {
     bool changed = false;
@@ -7342,6 +7620,13 @@ sync_svc_monitors(struct ovsdb_idl_txn *ovnsb_idl_txn,
 
     const struct sbrec_service_monitor *sb_svc_mon;
     SBREC_SERVICE_MONITOR_TABLE_FOR_EACH (sb_svc_mon, svc_mon_table) {
+        if (sb_svc_mon->probe_mode
+            && !strcmp(sb_svc_mon->probe_mode, "evpn")) {
+            changed |= sync_evpn_svc_monitor(sb_svc_mon, our_chassis,
+                                             evpn_arps, evpn_fdbs,
+                                             evpn_bindings, if_mgr);
+            continue;
+        }
         const struct sbrec_port_binding *pb
             = lport_lookup_by_name(sbrec_port_binding_by_name,
                                    sb_svc_mon->logical_port);
@@ -7508,9 +7793,13 @@ sync_svc_monitors(struct ovsdb_idl_txn *ovnsb_idl_txn,
             hmap_remove(&svc_monitors_map, &svc_mon->hmap_node);
             ovs_list_remove(&svc_mon->list_node);
             smap_destroy(&svc_mon->options);
+            free(svc_mon->reply_bindings);
             free(svc_mon);
             changed = true;
         } else if (ovnsb_idl_txn) {
+            if (svc_mon->evpn) {
+                evpn_svc_monitor_report(svc_mon);
+            }
             /* Update the status of the service monitor. */
             if (svc_mon->status != SVC_MON_ST_UNKNOWN) {
                 if (svc_mon->status == SVC_MON_ST_ONLINE) {
@@ -7532,7 +7821,8 @@ sync_svc_monitors(struct ovsdb_idl_txn *ovnsb_idl_txn,
      * iteration, so the request is acked once those flows are installed. */
     bool requested = false;
     LIST_FOR_EACH (svc_mon, list_node, &svc_monitors) {
-        if (svc_mon->state == SVC_MON_S_WAIT_FLOWS && !svc_mon->flows_seqno) {
+        if (svc_mon->state == SVC_MON_S_WAIT_FLOWS && !svc_mon->flows_seqno
+            && (!svc_mon->evpn || svc_mon->resolved)) {
             if (!requested) {
                 ofctrl_seqno_update_create(svc_mon_seqno_type,
                                            ++svc_mon_seqno_requested);
@@ -7569,6 +7859,9 @@ pinctrl_seqno_run(void)
         if (svc_mon->state == SVC_MON_S_WAIT_FLOWS && svc_mon->flows_seqno
             && svc_mon->flows_seqno <= last_acked) {
             svc_mon->state = SVC_MON_S_INIT;
+            if (svc_mon->evpn) {
+                svc_mon->reason = "ready";
+            }
             changed = true;
         }
     }
@@ -7587,6 +7880,15 @@ pinctrl_seqno_flush(void)
     struct svc_monitor *svc_mon;
     ovs_mutex_lock(&pinctrl_mutex);
     LIST_FOR_EACH (svc_mon, list_node, &svc_monitors) {
+        if (svc_mon->evpn) {
+            svc_mon->state = SVC_MON_S_WAIT_FLOWS;
+            svc_mon->status = SVC_MON_ST_OFFLINE;
+            svc_mon->check_valid = false;
+            svc_mon->n_success = svc_mon->n_failures = 0;
+            uuid_generate(&svc_mon->resolution_generation);
+            svc_mon->reason = "waiting-for-flows";
+            notify_pinctrl_main();
+        }
         if (svc_mon->state == SVC_MON_S_WAIT_FLOWS) {
             svc_mon->flows_seqno = 0;
         }
@@ -8344,11 +8646,16 @@ svc_monitor_send_tcp_health_check__(struct rconn *swconn,
     struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(ofpacts_stub);
     enum ofp_version version = rconn_get_version(swconn);
     put_load(svc_mon->dp_key, MFF_LOG_DATAPATH, 0, 64, &ofpacts);
-    put_load(svc_mon->port_key, MFF_LOG_OUTPORT, 0, 32, &ofpacts);
-    put_load(1, MFF_LOG_FLAGS, MLF_LOCAL_ONLY, 1, &ofpacts);
+    if (svc_mon->evpn) {
+        put_load(svc_mon->port_key, MFF_LOG_INPORT, 0, 32, &ofpacts);
+    } else {
+        put_load(svc_mon->port_key, MFF_LOG_OUTPORT, 0, 32, &ofpacts);
+        put_load(1, MFF_LOG_FLAGS, MLF_LOCAL_ONLY, 1, &ofpacts);
+    }
     struct ofpact_resubmit *resubmit = ofpact_put_RESUBMIT(&ofpacts);
     resubmit->in_port = OFPP_CONTROLLER;
-    resubmit->table_id = OFTABLE_LOCAL_OUTPUT;
+    resubmit->table_id = svc_mon->evpn
+                        ? OFTABLE_CT_ZONE_LOOKUP : OFTABLE_LOCAL_OUTPUT;
 
     struct ofputil_packet_out po = {
         .packet = dp_packet_data(&packet),
@@ -8507,7 +8814,32 @@ svc_monitor_send_health_check(struct rconn *swconn,
         svc_monitor_send_icmp_health_check__(swconn, svc_mon);
     } else if (svc_mon->protocol == SVC_MON_PROTO_TCP) {
         svc_mon->seq_no = random_uint32();
-        svc_mon->tp_src = htons(get_random_src_port());
+        /* Keep simultaneous EVPN probes from sharing a source tuple.
+         * Sequence validation additionally separates later reuse. */
+        uint16_t source_port = get_random_src_port();
+        for (size_t attempt = 0; ; attempt++) {
+            ovs_assert(attempt <= 4096);
+            svc_mon->tp_src = htons(source_port);
+            bool collision = false;
+            if (svc_mon->evpn) {
+                const struct svc_monitor *other;
+                LIST_FOR_EACH (other, list_node, &svc_monitors) {
+                    if (other != svc_mon && other->evpn
+                        && other->dp_key == svc_mon->dp_key
+                        && other->port_key == svc_mon->port_key
+                        && IN6_ARE_ADDR_EQUAL(&other->src_ip, &svc_mon->src_ip)
+                        && other->state == SVC_MON_S_WAITING
+                        && other->tp_src == svc_mon->tp_src) {
+                        collision = true;
+                        break;
+                    }
+                }
+            }
+            if (!collision) {
+                break;
+            }
+            source_port = source_port == UINT16_MAX ? 1024 : source_port + 1;
+        }
         svc_monitor_send_tcp_health_check__(swconn, svc_mon,
                                             TCP_SYN,
                                             htonl(svc_mon->seq_no), htonl(0),
@@ -8523,6 +8855,34 @@ svc_monitor_send_health_check(struct rconn *swconn,
     svc_mon->state = SVC_MON_S_WAITING;
 }
 
+static long long int
+svc_monitor_next_send(const struct svc_monitor *mon)
+{
+    /* Keep legacy scheduling intact.  A small positive jitter spreads
+     * fabric probes configured together without shortening the interval. */
+    return time_msec() + mon->interval
+           + (mon->evpn ? random_range(MAX(1, mon->interval / 10)) : 0);
+}
+
+static void
+evpn_svc_monitor_completed(struct svc_monitor *mon, const char *reason,
+                           bool success)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    if (!mon->evpn) {
+        return;
+    }
+    mon->check_seqno++;
+    mon->check_valid = true;
+    mon->reason = reason;
+    if (success) {
+        mon->n_failures = 0;
+    } else {
+        mon->n_success = 0;
+    }
+    notify_pinctrl_main();
+}
+
 static void
 svc_monitors_run(struct rconn *swconn,
                  long long int *svc_monitors_next_run_time)
@@ -8531,6 +8891,9 @@ svc_monitors_run(struct rconn *swconn,
     *svc_monitors_next_run_time = LLONG_MAX;
     struct svc_monitor *svc_mon;
     LIST_FOR_EACH (svc_mon, list_node, &svc_monitors) {
+        if (svc_mon->evpn && !svc_mon->resolved) {
+            continue;
+        }
         char ip_[INET6_ADDRSTRLEN + 1];
         memset(ip_, 0, INET6_ADDRSTRLEN + 1);
         ipv6_string_mapped(ip_, &svc_mon->ip);
@@ -8550,7 +8913,7 @@ svc_monitors_run(struct rconn *swconn,
 
         case SVC_MON_S_WAITING:
             if (current_time >= svc_mon->wait_time) {
-                svc_mon->next_send_time = current_time + svc_mon->interval;
+                svc_mon->next_send_time = svc_monitor_next_send(svc_mon);
                 next_run_time = svc_mon->next_send_time;
                 if (svc_mon->protocol ==  SVC_MON_PROTO_UDP) {
                     svc_mon->n_success++;
@@ -8558,6 +8921,7 @@ svc_monitors_run(struct rconn *swconn,
                     goto online;
                 } else {
                     svc_mon->n_failures++;
+                    evpn_svc_monitor_completed(svc_mon, "timeout", false);
                     svc_mon->state = SVC_MON_S_OFFLINE;
                     goto offline;
                 }
@@ -8669,7 +9033,10 @@ pinctrl_handle_tcp_svc_check(struct rconn *swconn,
 {
     struct tcp_header *th = dp_packet_l4(pkt_in);
 
-    if (!th || svc_mon->state == SVC_MON_S_WAIT_FLOWS) {
+    if (!th || dp_packet_l4_size(pkt_in) < TCP_HEADER_LEN
+        || svc_mon->state == SVC_MON_S_WAIT_FLOWS
+        || (svc_mon->evpn && (svc_mon->state != SVC_MON_S_WAITING
+                             || time_msec() >= svc_mon->wait_time))) {
         return false;
     }
 
@@ -8684,9 +9051,11 @@ pinctrl_handle_tcp_svc_check(struct rconn *swconn,
     }
 
     /* Check for SYN flag and Ack flag. */
-    if ((TCP_FLAGS(th->tcp_ctl) & (TCP_SYN | TCP_ACK))
-         == (TCP_SYN | TCP_ACK)) {
+    uint16_t flags = TCP_FLAGS(th->tcp_ctl);
+    if ((flags & (TCP_SYN | TCP_ACK)) == (TCP_SYN | TCP_ACK)
+        && (!svc_mon->evpn || !(flags & (TCP_RST | TCP_FIN)))) {
         svc_mon->n_success++;
+        evpn_svc_monitor_completed(svc_mon, "tcp-success", true);
         svc_mon->state = SVC_MON_S_ONLINE;
 
         /* Send RST packet. */
@@ -8694,21 +9063,118 @@ pinctrl_handle_tcp_svc_check(struct rconn *swconn,
                                             htonl(tcp_ack),
                                             htonl(0), th->tcp_dst);
         /* Calculate next_send_time. */
-        svc_mon->next_send_time = time_msec() + svc_mon->interval;
+        svc_mon->next_send_time = svc_monitor_next_send(svc_mon);
         return true;
     }
 
     /* Check if RST flag is set. */
     if (TCP_FLAGS(th->tcp_ctl) & TCP_RST) {
         svc_mon->n_failures++;
+        evpn_svc_monitor_completed(svc_mon, "tcp-reset", false);
         svc_mon->state = SVC_MON_S_OFFLINE;
 
         /* Calculate next_send_time. */
-        svc_mon->next_send_time = time_msec() + svc_mon->interval;
+        svc_mon->next_send_time = svc_monitor_next_send(svc_mon);
         return false;
     }
 
     return false;
+}
+
+static bool
+pinctrl_handle_evpn_svc_check(struct rconn *swconn,
+                              struct dp_packet *packet,
+                              const struct match *md,
+                              const struct in6_addr *ip,
+                              const struct in6_addr *dst_ip,
+                              uint16_t backend_port)
+    OVS_REQUIRES(pinctrl_mutex)
+{
+    uint32_t dp = ntohll(md->flow.metadata);
+    uint32_t source = md->flow.regs[MFF_LOG_OUTPORT - MFF_REG0];
+    uint32_t ingress = md->flow.regs[MFF_LOG_INPORT - MFF_REG0];
+    uint32_t hash = hash_bytes(ip, sizeof *ip,
+                               hash_3words(dp, source, backend_port));
+    struct svc_monitor *mon;
+    HMAP_FOR_EACH_WITH_HASH (mon, hmap_node, hash, &svc_monitors_map) {
+        if (!mon->evpn || mon->dp_key != dp || mon->port_key != source
+            || mon->proto_port != backend_port
+            || !IN6_ARE_ADDR_EQUAL(&mon->ip, ip)) {
+            continue;
+        }
+        const struct eth_header *eth = dp_packet_eth(packet);
+        const struct tcp_header *tcp = dp_packet_l4(packet);
+        bool path_ok = false;
+        for (size_t i = 0; i < mon->n_reply_bindings; i++) {
+            path_ok |= mon->reply_bindings[i].binding_key == ingress;
+        }
+        if (!mon->resolved || !path_ok
+            || mon->state != SVC_MON_S_WAITING
+            || time_msec() >= mon->wait_time
+            || !IN6_ARE_ADDR_EQUAL(&mon->src_ip, dst_ip)
+            || !eth_addr_equals(eth->eth_src, mon->ea)
+            || !eth_addr_equals(eth->eth_dst, mon->src_mac)
+            || !tcp || dp_packet_l4_size(packet) < TCP_HEADER_LEN
+            || TCP_OFFSET(tcp->tcp_ctl) * 4 < TCP_HEADER_LEN
+            || TCP_OFFSET(tcp->tcp_ctl) * 4 > dp_packet_l4_size(packet)
+            || tcp->tcp_dst != mon->tp_src
+            || ntohl(get_16aligned_be32(&tcp->tcp_ack)) != mon->seq_no + 1) {
+            mon->rejected_replies++;
+            return true;
+        }
+        uint32_t sum = mon->is_ip6
+                       ? packet_csum_pseudoheader6(dp_packet_l3(packet))
+                       : packet_csum_pseudoheader(dp_packet_l3(packet));
+        if (csum_finish(csum_continue(sum, tcp,
+                                      dp_packet_l4_size(packet)))) {
+            mon->rejected_replies++;
+            return true;
+        }
+        uint16_t flags = TCP_FLAGS(tcp->tcp_ctl);
+        if (!((flags & (TCP_SYN | TCP_ACK | TCP_RST | TCP_FIN))
+               == (TCP_SYN | TCP_ACK)
+              || (flags & (TCP_SYN | TCP_ACK | TCP_RST | TCP_FIN))
+                 == (TCP_RST | TCP_ACK))) {
+            mon->rejected_replies++;
+            return true;
+        }
+        pinctrl_handle_tcp_svc_check(swconn, packet, mon);
+        return true;
+    }
+    return false;
+}
+
+void
+pinctrl_evpn_health_list(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                         const char *argv[] OVS_UNUSED, void *aux OVS_UNUSED)
+{
+    struct ds output = DS_EMPTY_INITIALIZER;
+    ovs_mutex_lock(&pinctrl_mutex);
+    const struct svc_monitor *mon;
+    LIST_FOR_EACH (mon, list_node, &svc_monitors) {
+        if (!mon->evpn) {
+            continue;
+        }
+        char ip[INET6_ADDRSTRLEN + 1], src[INET6_ADDRSTRLEN + 1];
+        ipv6_string_mapped(ip, &mon->ip);
+        ipv6_string_mapped(src, &mon->src_ip);
+        ds_put_format(&output, UUID_FMT" dp=%"PRIu32" source-port=%"PRIu32
+                       " source=%s backend=%s:%"PRIu32" status=%s"
+                       " reason=%s checks=%"PRId64" rejected=%"PRIu64
+                       " paths=%"PRIuSIZE" pending=%s config="UUID_FMT
+                       " resolution="UUID_FMT"\n",
+                       UUID_ARGS(&mon->monitor_uuid), mon->dp_key,
+                       mon->port_key, src, ip, mon->proto_port,
+                       mon->status == SVC_MON_ST_ONLINE ? "online" : "offline",
+                       mon->reason, mon->check_seqno, mon->rejected_replies,
+                       mon->n_reply_bindings,
+                       mon->state == SVC_MON_S_WAITING ? "true" : "false",
+                       UUID_ARGS(&mon->config_generation),
+                       UUID_ARGS(&mon->resolution_generation));
+    }
+    ovs_mutex_unlock(&pinctrl_mutex);
+    unixctl_command_reply(conn, ds_cstr(&output));
+    ds_destroy(&output);
 }
 
 static void
@@ -8754,6 +9220,11 @@ pinctrl_handle_svc_check(struct rconn *swconn, const struct flow *ip_flow,
 
 
     if (ip_proto == IPPROTO_TCP) {
+        if (pinctrl_handle_evpn_svc_check(swconn, pkt_in, md, &ip_addr,
+                                         &dst_ip_addr,
+                                         ntohs(ip_flow->tp_src))) {
+            return;
+        }
         uint32_t hash =
             hash_bytes(&ip_addr, sizeof ip_addr,
                        hash_3words(dp_key, port_key, ntohs(ip_flow->tp_src)));

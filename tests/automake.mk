@@ -25,6 +25,7 @@ COMMON_MACROS_AT = \
 
 TESTSUITE_AT = \
 	tests/testsuite.at \
+	tests/evpn-health-checks.at \
 	tests/checkpatch.at \
 	tests/network-functions.at \
 	tests/ovn.at \

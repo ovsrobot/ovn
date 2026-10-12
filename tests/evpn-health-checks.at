@@ -1,0 +1,420 @@
+AT_BANNER([EVPN load balancer health checks])
+
+dnl Configuration fixtures deliberately have no destination VIF.  Runtime
+dnl monitor results are not forged here; the fabric tests exercise real TCP.
+m4_define([EVPN_HEALTH_CONFIG], [
+ovn_start
+check ovn-nbctl ls-add tenant
+check ovn-nbctl set Logical_Switch tenant \
+    other_config:dynamic-routing-vni=10100 \
+    other_config:dynamic-routing-redistribute=fdb,ip
+check ovn-nbctl lr-add router
+check ovn-nbctl lrp-add router router-tenant 02:00:00:00:01:01 \
+    10.0.0.1/24 2001:db8::1/64
+check ovn-nbctl lsp-add-router-port tenant tenant-router router-tenant
+check ovn-nbctl lsp-add tenant probe
+check ovn-nbctl set Logical_Switch_Port probe type=health-monitor \
+    options:requested-chassis=owner \
+    addresses='"02:aa:ff:00:00:01 10.0.0.250 2001:db8::250"' \
+    port_security='"02:aa:ff:00:00:01 10.0.0.250 2001:db8::250"'
+check ovn-sbctl chassis-add owner vxlan 192.0.2.1
+check ovn-sbctl set Chassis owner other_config:lb-health-probe-evpn=true
+check ovn-nbctl lb-add lb4 192.0.2.100:80 10.0.0.12:8080 tcp
+check ovn-nbctl lb-add lb6 '[[2001:db8:ffff::100]]:80' '[[2001:db8::12]]:8080' tcp
+check ovn-nbctl ls-lb-add tenant lb4
+check ovn-nbctl ls-lb-add tenant lb6
+probe_uuid=$(ovn-nbctl get Logical_Switch_Port probe _uuid)
+AT_CHECK([ovn-nbctl -- --id=@ep create Load_Balancer_Health_Check_Endpoint \
+    ip=10.0.0.12 port=8080 mode=evpn source_port=$probe_uuid source_ip=10.0.0.250 \
+    -- --id=@hc create Load_Balancer_Health_Check vip='"192.0.2.100:80"' \
+    endpoints=@ep options:interval=1 options:timeout=1 \
+    options:failure_count=1 options:success_count=1 options:stale_timeout=4 \
+    -- set Load_Balancer lb4 health_check=@hc], [0], [ignore])
+AT_CHECK([ovn-nbctl -- --id=@ep create Load_Balancer_Health_Check_Endpoint \
+    ip='"2001:db8::12"' port=8080 mode=evpn source_port=$probe_uuid source_ip='"2001:db8::250"' \
+    -- --id=@hc create Load_Balancer_Health_Check vip='"[[2001:db8:ffff::100]]:80"' \
+    endpoints=@ep options:interval=1 options:timeout=1 \
+    options:failure_count=1 options:success_count=1 options:stale_timeout=4 \
+    -- set Load_Balancer lb6 health_check=@hc], [0], [ignore])
+check ovn-nbctl --wait=sb sync
+wait_row_count Service_Monitor 2 probe_mode=evpn
+ep4=$(ovn-nbctl --bare --columns=_uuid find Load_Balancer_Health_Check_Endpoint ip=10.0.0.12)
+ep6=$(ovn-nbctl --bare --columns=_uuid find Load_Balancer_Health_Check_Endpoint ip='"2001:db8::12"')
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([EVPN health checks - dual-stack fail-closed configuration])
+AT_KEYWORDS([health evpn])
+EVPN_HEALTH_CONFIG
+
+dnl Neither backend has a logical port in this database.
+wait_row_count nb:Logical_Switch_Port 2
+wait_row_count Service_Monitor 2 logical_port='""' remote=false ic_learned=false
+wait_row_count Service_Monitor 2 status=offline
+wait_row_count Service_Monitor 2 chassis_name=owner
+AT_CHECK([ovn-sbctl --bare --columns=src_ip list Service_Monitor | sed '/^$/d' | sort], [0], [dnl
+10.0.0.250
+2001:db8::250
+])
+AT_CHECK([ovn-sbctl lflow-list | grep 'ct_lb.*10.0.0.12:8080'], [1], [])
+AT_CHECK([ovn-sbctl lflow-list | grep 'ct_lb.*2001:db8::12.*8080'], [1], [])
+AT_CHECK([ovn-nbctl get Load_Balancer lb4 vips], [0], [dnl
+{"192.0.2.100:80"="10.0.0.12:8080"}
+])
+
+dnl A new owner must explicitly support this mode.
+check ovn-sbctl remove Chassis owner other_config lb-health-probe-evpn
+wait_row_count Service_Monitor 2 status=error options:evpn-error=unsupported-owner
+check ovn-sbctl set Chassis owner other_config:lb-health-probe-evpn=true
+wait_row_count Service_Monitor 2 status=offline options:evpn-valid=true
+
+dnl Weak source references do not keep an infrastructure port alive.
+check ovn-nbctl --wait=sb lsp-del probe
+wait_row_count nb:Logical_Switch_Port 1
+wait_row_count nb:Load_Balancer_Health_Check_Endpoint 2 source_port='[[]]'
+wait_row_count Service_Monitor 2 status=error options:evpn-error=invalid-source-port
+AT_CHECK([ovn-sbctl lflow-list | grep 'ct_lb.*10.0.0.12:8080'], [1], [])
+
+dnl Non-root endpoints are collected with their health checks.
+check ovn-nbctl --wait=sb clear Load_Balancer lb4 health_check
+check ovn-nbctl --wait=sb clear Load_Balancer lb6 health_check
+wait_row_count nb:Load_Balancer_Health_Check 0
+wait_row_count nb:Load_Balancer_Health_Check_Endpoint 0
+wait_row_count Service_Monitor 0
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([EVPN health checks - semantic validation])
+AT_KEYWORDS([health evpn])
+EVPN_HEALTH_CONFIG
+
+check ovn-nbctl --wait=sb set Load_Balancer_Health_Check_Endpoint $ep4 source_ip='"2001:db8::250"'
+wait_row_count Service_Monitor 1 ip=10.0.0.12 status=error options:evpn-error=invalid-source-address
+check ovn-nbctl --wait=sb set Load_Balancer_Health_Check_Endpoint $ep4 source_ip=10.0.0.249
+wait_row_count Service_Monitor 1 ip=10.0.0.12 status=error options:evpn-error=invalid-source-address
+check ovn-nbctl --wait=sb set Load_Balancer_Health_Check_Endpoint $ep4 source_ip=10.0.0.250
+wait_row_count Service_Monitor 1 ip=10.0.0.12 status=offline options:evpn-valid=true
+
+check ovn-nbctl --wait=sb set Logical_Switch_Port probe port_security='"02:aa:ff:00:00:01 10.0.0.249"'
+wait_row_count Service_Monitor 2 status=error options:evpn-error=invalid-source-port
+check ovn-nbctl --wait=sb set Logical_Switch_Port probe \
+    port_security='"02:aa:ff:00:00:01 10.0.0.250 2001:db8::250"'
+wait_row_count Service_Monitor 2 status=offline options:evpn-valid=true
+
+check ovn-nbctl --wait=sb set Logical_Switch_Port probe options:requested-chassis='"owner,other"'
+wait_row_count Service_Monitor 2 status=error options:evpn-error=invalid-source-port
+check ovn-nbctl --wait=sb set Logical_Switch_Port probe options:requested-chassis=owner
+wait_row_count Service_Monitor 2 status=offline options:evpn-valid=true
+
+check ovn-nbctl --wait=sb set Logical_Router_Port router-tenant \
+    networks='"10.0.1.1/24","2001:db8:1::1/64"'
+wait_row_count Service_Monitor 2 status=error options:evpn-error=backend-not-on-source-subnet
+check ovn-nbctl --wait=sb set Logical_Router_Port router-tenant \
+    networks='"10.0.0.1/24","2001:db8::1/64"'
+wait_row_count Service_Monitor 2 status=offline options:evpn-valid=true
+
+check ovn-nbctl lsp-add tenant conflicting-source
+check ovn-nbctl --wait=sb set Logical_Switch_Port conflicting-source addresses='"02:aa:ff:00:00:02 10.0.0.250"'
+wait_row_count Service_Monitor 2 status=error options:evpn-error=invalid-source-port
+check ovn-nbctl --wait=sb lsp-del conflicting-source
+wait_row_count Service_Monitor 2 status=offline options:evpn-valid=true
+
+dnl The shared legacy monitor MAC cannot become a unicast EVPN source.
+check ovn-nbctl set NB_Global . options:svc_monitor_mac=02:aa:fe:00:00:01
+check ovn-nbctl --wait=sb set Logical_Switch_Port probe \
+    addresses='"02:aa:fe:00:00:01 10.0.0.250 2001:db8::250"' \
+    port_security='"02:aa:fe:00:00:01 10.0.0.250 2001:db8::250"'
+wait_row_count Port_Binding 1 logical_port=probe options:health-monitor-disabled=true
+wait_row_count Service_Monitor 2 status=error options:evpn-error=reserved-service-monitor-mac
+check ovn-nbctl --wait=sb set Logical_Switch_Port probe \
+    addresses='"02:aa:ff:00:00:01 10.0.0.250 2001:db8::250"' \
+    port_security='"02:aa:ff:00:00:01 10.0.0.250 2001:db8::250"'
+wait_row_count Port_Binding 1 logical_port=probe options:health-monitor-disabled=false
+wait_row_count Service_Monitor 2 status=offline options:evpn-valid=true
+
+check ovn-nbctl --wait=sb set Load_Balancer lb4 ip_port_mappings:10.0.0.12='"probe:10.0.0.250"'
+wait_row_count Service_Monitor 1 probe_mode=evpn ip=10.0.0.12 status=error options:evpn-error=legacy-endpoint-conflict
+check ovn-nbctl --wait=sb clear Load_Balancer lb4 ip_port_mappings
+wait_row_count Service_Monitor 1 probe_mode=evpn ip=10.0.0.12 status=offline options:evpn-valid=true
+
+check ovn-nbctl --wait=sb set Load_Balancer lb4 protocol=udp
+wait_row_count Service_Monitor 1 probe_mode=evpn ip=10.0.0.12 status=error options:evpn-error=unsupported-protocol-or-lb-mode
+check ovn-nbctl --wait=sb set Load_Balancer lb4 protocol=tcp
+wait_row_count Service_Monitor 1 probe_mode=evpn ip=10.0.0.12 status=offline options:evpn-valid=true
+
+check ovn-nbctl --wait=sb set Load_Balancer_Health_Check '192.0.2.100:80' options:stale_timeout=1
+wait_row_count Service_Monitor 1 ip=10.0.0.12 status=error options:evpn-error=invalid-health-check-timers
+check ovn-nbctl --wait=sb set Load_Balancer_Health_Check '192.0.2.100:80' options:stale_timeout=4
+wait_row_count Service_Monitor 1 ip=10.0.0.12 status=offline options:evpn-valid=true
+
+dnl A typo in the typed endpoint must not turn its desired backend static.
+check ovn-nbctl --wait=sb set Load_Balancer_Health_Check_Endpoint $ep4 port=8081
+AT_CHECK([ovn-sbctl lflow-list | grep 'ct_lb.*10.0.0.12:8080'], [1], [])
+check ovn-nbctl --wait=sb set Load_Balancer_Health_Check_Endpoint $ep4 port=8080
+wait_row_count Service_Monitor 1 ip=10.0.0.12 status=offline options:evpn-valid=true
+
+dnl Reusing an endpoint row across LB contexts is invalid but must converge.
+check ovn-nbctl lb-add conflicting-lb 192.0.2.100:80 10.0.0.12:8080 tcp
+check ovn-nbctl ls-lb-add tenant conflicting-lb
+hc4=$(ovn-nbctl --bare --columns=health_check find Load_Balancer name=lb4)
+check ovn-nbctl --wait=sb set Load_Balancer conflicting-lb health_check=$hc4
+wait_row_count Service_Monitor 1 ip=10.0.0.12 status=error options:evpn-error=ambiguous-endpoint-identity
+generation_before=$(ovn-sbctl --bare --columns=config_generation find Service_Monitor ip=10.0.0.12)
+check ovn-nbctl --wait=sb sync
+AT_CHECK([test "$generation_before" = "$(ovn-sbctl --bare --columns=config_generation find Service_Monitor ip=10.0.0.12)"], [0], [])
+check ovn-nbctl --wait=sb lb-del conflicting-lb
+wait_row_count Service_Monitor 1 ip=10.0.0.12 status=offline options:evpn-valid=true
+
+check ovn-nbctl --wait=sb set Load_Balancer_Health_Check_Endpoint $ep6 \
+    source_ip='"2001:0DB8:0000:0000:0000:0000:0000:0250"'
+wait_row_count Service_Monitor 1 ip='"2001:db8::12"' src_ip='"2001:db8::250"' options:evpn-valid=true
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([EVPN health checks - overlapping tenant identities])
+AT_KEYWORDS([health evpn])
+EVPN_HEALTH_CONFIG
+
+dnl Reuse both source and backend addresses, including the source MAC, in a
+dnl second tenant datapath.  Endpoint identity and source port remain distinct.
+check ovn-nbctl ls-add tenant2
+check ovn-nbctl set Logical_Switch tenant2 \
+    other_config:dynamic-routing-vni=20100 \
+    other_config:dynamic-routing-redistribute=fdb,ip
+check ovn-nbctl lr-add router2
+check ovn-nbctl lrp-add router2 router2-tenant2 02:00:00:00:02:01 \
+    10.0.0.1/24 2001:db8::1/64
+check ovn-nbctl lsp-add-router-port tenant2 tenant2-router router2-tenant2
+check ovn-nbctl lsp-add tenant2 probe2
+check ovn-nbctl set Logical_Switch_Port probe2 type=health-monitor \
+    options:requested-chassis=owner \
+    addresses='"02:aa:ff:00:00:01 10.0.0.250 2001:db8::250"' \
+    port_security='"02:aa:ff:00:00:01 10.0.0.250 2001:db8::250"'
+probe2_uuid=$(ovn-nbctl get Logical_Switch_Port probe2 _uuid)
+check ovn-nbctl lb-add lb2 192.0.2.100:80 10.0.0.12:8080 tcp
+check ovn-nbctl ls-lb-add tenant2 lb2
+AT_CHECK([ovn-nbctl -- --id=@ep create Load_Balancer_Health_Check_Endpoint \
+    ip=10.0.0.12 port=8080 mode=evpn source_port=$probe2_uuid source_ip=10.0.0.250 \
+    -- --id=@hc create Load_Balancer_Health_Check vip='"192.0.2.100:80"' \
+    endpoints=@ep options:interval=1 options:timeout=1 \
+    options:failure_count=1 options:success_count=1 options:stale_timeout=4 \
+    -- set Load_Balancer lb2 health_check=@hc], [0], [ignore])
+check ovn-nbctl --wait=sb sync
+wait_row_count Service_Monitor 3 probe_mode=evpn status=offline options:evpn-valid=true
+AT_CHECK([ovn-sbctl --bare --columns=datapath find Service_Monitor ip=10.0.0.12 | sed '/^$/d' | sort -u | wc -l], [0], [2
+])
+AT_CHECK([ovn-sbctl --bare --columns=source_port find Service_Monitor ip=10.0.0.12 | sed '/^$/d' | sort -u | wc -l], [0], [2
+])
+AT_CHECK([ovn-sbctl --bare --columns=endpoint_id list Service_Monitor | sed '/^$/d' | sort -u | wc -l], [0], [3
+])
+
+check ovn-nbctl --wait=sb set Logical_Switch_Port probe enabled=false
+wait_row_count Service_Monitor 2 source_port!=$probe2_uuid status=error
+wait_row_count Service_Monitor 1 ip=10.0.0.12 options:evpn-valid=true status=offline
+check ovn-nbctl --wait=sb set Logical_Switch_Port probe enabled=true
+wait_row_count Service_Monitor 3 probe_mode=evpn status=offline options:evpn-valid=true
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([EVPN health checks - controller-owned source lifecycle])
+AT_KEYWORDS([health evpn])
+ovn_start
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.0.2.1
+sim_add hv2
+as hv2
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.0.2.2
+check ovs-vsctl add-port br-int wrong-owner -- set Interface wrong-owner \
+    external_ids:iface-id=probe
+
+check ovn-nbctl ls-add tenant
+check ovn-nbctl set Logical_Switch tenant \
+    other_config:dynamic-routing-vni=10100 \
+    other_config:dynamic-routing-redistribute=fdb,ip \
+    other_config:dynamic-routing-bridge-ifname=hc-br \
+    other_config:dynamic-routing-vxlan-ifname=hc-vxlan \
+    other_config:dynamic-routing-advertise-ifname=hc-adv
+check ovn-nbctl lsp-add tenant probe
+check ovn-nbctl --wait=hv set Logical_Switch_Port probe type=health-monitor \
+    options:requested-chassis=hv1 \
+    addresses='"02:aa:ff:00:00:01 10.0.0.250 2001:db8::250"' \
+    port_security='"02:aa:ff:00:00:01 10.0.0.250 2001:db8::250"'
+wait_row_count nb:Logical_Switch_Port 1 name=probe up=true
+owner_uuid=$(ovn-sbctl get Chassis hv1 _uuid)
+wait_column "$owner_uuid" Port_Binding chassis logical_port=probe
+wait_row_count Port_Binding 1 logical_port=probe additional_chassis='[[]]' up=true
+dnl The requested owner needs no OVS interface for its source.
+AT_CHECK([as hv1 ovs-vsctl --bare --columns=name find Interface external_ids:iface-id=probe], [0], [])
+AT_CHECK([ovn-sbctl lflow-list | grep -c 'handle_svc_check();'], [0], [2
+])
+check as hv2 ovs-vsctl del-port br-int wrong-owner
+check ovn-nbctl --wait=hv sync
+wait_row_count nb:Logical_Switch_Port 1 name=probe up=true
+wait_column "$owner_uuid" Port_Binding chassis logical_port=probe
+
+check ovn-nbctl --wait=hv set Logical_Switch_Port probe enabled=false
+wait_row_count nb:Logical_Switch_Port 1 name=probe up=false
+wait_row_count Port_Binding 1 logical_port=probe chassis='[[]]'
+check ovn-nbctl --wait=hv set Logical_Switch_Port probe enabled=true
+wait_row_count nb:Logical_Switch_Port 1 name=probe up=true
+wait_column "$owner_uuid" Port_Binding chassis logical_port=probe
+
+check ovn-nbctl --wait=hv lsp-del probe
+wait_row_count Port_Binding 0 logical_port=probe
+OVN_CLEANUP([hv1], [hv2])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([EVPN health checks - completed observation freshness])
+AT_KEYWORDS([health evpn])
+EVPN_HEALTH_CONFIG
+
+dnl This is a northd unit fixture for SB result semantics, not a live probe
+dnl qualification.  The isolated fabric suite never writes runtime results.
+check ovn-sbctl lsp-bind probe owner
+check ovn-sbctl set Port_Binding probe up=true
+mon=$(ovn-sbctl --bare --columns=_uuid find Service_Monitor ip=10.0.0.12)
+generation=$(ovn-sbctl --bare --columns=config_generation find Service_Monitor ip=10.0.0.12)
+instance=11111111-1111-1111-1111-111111111111
+resolution=22222222-2222-2222-2222-222222222222
+check ovn-sbctl set Service_Monitor $mon observed_generation=$generation \
+    controller_instance=$instance resolution_generation=$resolution \
+    checked_resolution_generation=$resolution check_seqno=1 status=offline
+check ovn-nbctl --wait=sb sync
+AT_CHECK([ovn-sbctl lflow-list | grep 'ct_lb.*10.0.0.12:8080'], [1], [])
+check ovn-sbctl set Service_Monitor $mon check_seqno=2 status=online
+OVS_WAIT_UNTIL([ovn-sbctl lflow-list | grep 'ct_lb.*10.0.0.12:8080'])
+
+dnl Expiration must run without another controller transaction.
+OVS_WAIT_UNTIL([! ovn-sbctl lflow-list | grep 'ct_lb.*10.0.0.12:8080'])
+wait_row_count Service_Monitor 1 ip=10.0.0.12 status=online check_seqno=2
+check ovn-sbctl set Service_Monitor $mon check_seqno=3
+OVS_WAIT_UNTIL([ovn-sbctl lflow-list | grep 'ct_lb.*10.0.0.12:8080'])
+
+dnl A changed resolution immediately invalidates an old successful result.
+check ovn-sbctl set Service_Monitor $mon \
+    resolution_generation=33333333-3333-3333-3333-333333333333
+OVS_WAIT_UNTIL([! ovn-sbctl lflow-list | grep 'ct_lb.*10.0.0.12:8080'])
+check ovn-sbctl set Service_Monitor $mon \
+    checked_resolution_generation=33333333-3333-3333-3333-333333333333 check_seqno=4
+OVS_WAIT_UNTIL([ovn-sbctl lflow-list | grep 'ct_lb.*10.0.0.12:8080'])
+
+dnl A restarted controller cannot reuse a persisted successful observation.
+check ovn-sbctl set Service_Monitor $mon \
+    controller_instance=44444444-4444-4444-4444-444444444444 check_seqno=1
+OVS_WAIT_UNTIL([! ovn-sbctl lflow-list | grep 'ct_lb.*10.0.0.12:8080'])
+check ovn-sbctl set Service_Monitor $mon check_seqno=2
+OVS_WAIT_UNTIL([ovn-sbctl lflow-list | grep 'ct_lb.*10.0.0.12:8080'])
+AT_CHECK([ovn-nbctl get Load_Balancer lb4 vips], [0], [dnl
+{"192.0.2.100:80"="10.0.0.12:8080"}
+])
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([EVPN health checks - probe source neighbor responders])
+AT_KEYWORDS([health evpn nd-responder])
+CHECK_SCAPY
+ovn_start
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.0.2.1
+check ovn-nbctl ls-add tenant
+check ovn-nbctl set Logical_Switch tenant \
+    other_config:dynamic-routing-vni=10100 \
+    other_config:dynamic-routing-redistribute=fdb,ip \
+    other_config:dynamic-routing-bridge-ifname=hc-br \
+    other_config:dynamic-routing-vxlan-ifname=hc-vxlan \
+    other_config:dynamic-routing-advertise-ifname=hc-adv
+check ovn-nbctl lsp-add tenant probe
+check ovn-nbctl set Logical_Switch_Port probe type=health-monitor \
+    options:requested-chassis=hv1 \
+    addresses='"02:aa:ff:00:00:01 10.0.0.250 2001:db8::250"' \
+    port_security='"02:aa:ff:00:00:01 10.0.0.250 2001:db8::250"'
+check ovn-nbctl lsp-add tenant client
+check ovn-nbctl lsp-set-addresses client '02:00:00:00:00:11 10.0.0.11 2001:db8::11'
+check ovn-nbctl lsp-set-port-security client '02:00:00:00:00:11 10.0.0.11 2001:db8::11'
+check ovs-vsctl add-port br-int vif -- set Interface vif \
+    external_ids:iface-id=client options:tx_pcap=hv1/vif-tx.pcap \
+    options:rxq_pcap=hv1/vif-rx.pcap
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+wait_row_count nb:Logical_Switch_Port 1 name=probe up=true
+
+# Health sources have no destination kernel.  Both initial discovery and
+# unicast NUD must be answered by their owned logical responder.
+ovn-sbctl lflow-list tenant > source-flows
+AT_CAPTURE_FILE([source-flows])
+AT_CHECK([grep 'ls_in_arp_rsp' source-flows | grep 'priority=50' | \
+    grep 'arp.tpa == 10.0.0.250' | grep 'eth.dst == 02:aa:ff:00:00:01' | \
+    grep 'is_chassis_resident("probe")' | wc -l], [0], [1
+])
+AT_CHECK([grep 'ls_in_arp_rsp' source-flows | grep 'priority=50' | \
+    grep 'nd.target == 2001:db8::250' | grep 'eth.dst == 02:aa:ff:00:00:01' | \
+    grep 'is_chassis_resident("probe")' | wc -l], [0], [1
+])
+AT_CHECK([grep 'ls_in_arp_rsp' source-flows | grep 'priority=100' | \
+    grep 'inport == "probe"' | grep 'eth.dst == 02:aa:ff:00:00:01' | wc -l], [0], [2
+])
+: > expected
+for unicast in no yes; do
+    if test "$unicast" = yes; then
+        dst_mac=02:aa:ff:00:00:01
+        arp_target_mac=$dst_mac
+        dst_ip=2001:db8::250
+    else
+        dst_mac=ff:ff:ff:ff:ff:ff
+        arp_target_mac=00:00:00:00:00:00
+        dst_ip=ff02::1:ff00:250
+    fi
+    request=$(fmt_pkt "Ether(src='02:00:00:00:00:11', dst='$dst_mac')/ \
+                       ARP(op=1, hwsrc='02:00:00:00:00:11', hwdst='$arp_target_mac', \
+                           psrc='10.0.0.11', pdst='10.0.0.250')")
+    reply=$(fmt_pkt "Ether(src='02:aa:ff:00:00:01', dst='02:00:00:00:00:11')/ \
+                     ARP(op=2, hwsrc='02:aa:ff:00:00:01', hwdst='02:00:00:00:00:11', \
+                         psrc='10.0.0.250', pdst='10.0.0.11')")
+    check ovs-appctl netdev-dummy/receive vif $request
+    echo $reply >> expected
+    if test "$unicast" = no; then
+        dst_mac=33:33:ff:00:02:50
+    fi
+    request=$(fmt_pkt "Ether(src='02:00:00:00:00:11', dst='$dst_mac')/ \
+                       IPv6(src='2001:db8::11', dst='$dst_ip', hlim=255)/ \
+                       ICMPv6ND_NS(tgt='2001:db8::250')/ \
+                       ICMPv6NDOptSrcLLAddr(lladdr='02:00:00:00:00:11')")
+    reply=$(fmt_pkt "Ether(src='02:aa:ff:00:00:01', dst='02:00:00:00:00:11')/ \
+                     IPv6(src='2001:db8::250', dst='2001:db8::11', hlim=255)/ \
+                     ICMPv6ND_NA(tgt='2001:db8::250', R=0, S=1, O=1)/ \
+                     ICMPv6NDOptDstLLAddr(lladdr='02:aa:ff:00:00:01')")
+    check ovs-appctl netdev-dummy/receive vif $request
+    echo $reply >> expected
+done
+request=$(fmt_pkt "Ether(src='02:00:00:00:00:11', dst='33:33:ff:00:02:50')/ \
+                   IPv6(src='::', dst='ff02::1:ff00:250', hlim=255)/ \
+                   ICMPv6ND_NS(tgt='2001:db8::250')")
+reply=$(fmt_pkt "Ether(src='02:aa:ff:00:00:01', dst='33:33:00:00:00:01')/ \
+                 IPv6(src='2001:db8::250', dst='ff02::1', hlim=255)/ \
+                 ICMPv6ND_NA(tgt='2001:db8::250', R=0, S=0, O=1)/ \
+                 ICMPv6NDOptDstLLAddr(lladdr='02:aa:ff:00:00:01')")
+check ovs-appctl netdev-dummy/receive vif $request
+echo $reply >> expected
+OVN_CHECK_PACKETS([hv1/vif-tx.pcap], [expected])
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])

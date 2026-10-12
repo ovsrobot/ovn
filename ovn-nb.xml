@@ -1231,6 +1231,24 @@
             A VM (or VIF) interface.
           </dd>
 
+          <dt><code>health-monitor</code></dt>
+          <dd>
+            A controller-owned, unicast source for EVPN TCP load balancer
+            health probes. Reserve one static MAC and its IPv4 and/or IPv6
+            addresses, set identical <ref column="port_security"/>, and pin
+            the port with one <ref column="options" key="requested-chassis"/>.
+            No VM or OVS interface is required. The owner claims the port and
+            advertises its addresses only after its flows are acknowledged.
+            Disablement or ownership loss withdraws those advertisements.
+            The capable owner answers broadcast/multicast discovery and
+            unicast ARP/ND refresh requests for this port's MAC and addresses
+            through the tenant pipeline. Reserve a dedicated MAC distinct
+            from the global service-monitor MAC.
+            This port provides no DHCP, router advertisement or learned FDB
+            service. Its switch must have an EVPN VNI and IP/FDB
+            redistribution.
+          </dd>
+
           <dt><code>router</code></dt>
           <dd>
             A connection to a logical router.  The value of <ref
@@ -2894,6 +2912,18 @@ or
       <code>vip</code> whose endpoints should be monitored for health check.
     </column>
 
+    <column name="endpoints">
+      Typed EVPN endpoint checks. These references own the endpoint rows;
+      deleting the health check garbage collects them. Empty references
+      preserve legacy <ref table="Load_Balancer" column="ip_port_mappings"/>
+      semantics. A backend with an invalid typed configuration remains excluded
+      and never falls back to a legacy or unmonitored check. Before downgrading
+      northd or the database schemas, remove typed endpoint configuration and
+      <code>health-monitor</code> sources, then wait for EVPN
+      <ref table="Service_Monitor" db="OVN_Southbound"/> rows to be removed.
+      An older northd cannot enforce these eligibility rules.
+    </column>
+
     <group title="Health check options">
       <column name="options" key="interval" type='{"type": "integer"}'>
         The interval, in seconds, between health checks.
@@ -2912,6 +2942,19 @@ or
         The number of failure checks after which the endpoint is considered
         offline.
       </column>
+      <column name="options" key="stale_timeout"
+              type='{"type": "integer"}'>
+        Maximum seconds without a newly completed EVPN check before excluding
+        the backend. Applies only to typed EVPN endpoints. Must be at least
+        interval plus timeout plus the maximum scheduling jitter (ten percent
+        of interval, rounded up) plus one second. Defaults to the larger of ten
+        seconds and twice that minimum. Northd uses its own monotonic clock
+        and an advancing controller incarnation/check sequence, not remote
+        timestamps. After northd restart, a new completed observation is
+        required even when persisted status is online. Interval and timeout
+        must each be between 1 and 3600 seconds, and success and failure
+        thresholds between 1 and 1000 for EVPN checks.
+      </column>
     </group>
 
     <group title="Common Columns">
@@ -2919,6 +2962,45 @@ or
         See <em>External IDs</em> at the beginning of this document.
       </column>
     </group>
+  </table>
+
+  <table name="Load_Balancer_Health_Check_Endpoint"
+         title="Tenant-scoped EVPN TCP health endpoint">
+    <p>
+      Monitors a TCP backend through its directly extended Layer-2 tenant
+      switch, without requiring a backend logical port in this deployment.
+      Source ownership, usable EVPN IP/MAC forwarding, fresh completed checks
+      and matching configuration/forwarding generations are required before
+      the backend is eligible. This checks reachability for the probe's source
+      identity, not HTTP readiness, public NAT or a routed return path.
+    </p>
+    <column name="ip">
+      Unbracketed IPv4 or IPv6 backend address, normalized in SB. It must
+      match a
+      backend of the parent health check's VIP. Unspecified, multicast,
+      loopback, link-local and IPv4-mapped IPv6 addresses are invalid.
+    </column>
+    <column name="port">TCP backend port, from 1 through 65535.</column>
+    <column name="mode">The only supported mode is <code>evpn</code>.</column>
+    <column name="source_port">
+      Weak reference to exactly one local <code>health-monitor</code> source
+      port. Removing the source invalidates the check. Its logical switch must
+      host the LB or be directly attached to the LB router, with a configured
+      subnet containing both source and backend. A health check must not be
+      shared across unrelated LB attachment contexts or probing owners.
+      A capable owner advertises <code>lb-health-probe-evpn=true</code>.
+    </column>
+    <column name="source_ip">
+      Unbracketed address configured on the source port, normalized in SB,
+      matching the backend family and directly connected subnet. Each tenant
+      may reuse
+      addresses; the datapath/source/backend tuple defines probe identity.
+      Conflicting typed rows or legacy mappings are rejected. The CMS is
+      responsible for reservations across independent OVN databases.
+    </column>
+    <column name="external_ids">
+      See <em>External IDs</em> at the beginning of this document.
+    </column>
   </table>
 
   <table name="ACL" title="Access Control List (ACL) rule">
