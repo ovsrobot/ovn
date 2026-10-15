@@ -24,6 +24,7 @@
 #include "en-advertised-route-sync.h"
 #include "en-group-ecmp-route.h"
 #include "en-learned-route-sync.h"
+#include "hash.h"
 #include "hmapx.h"
 #include "openvswitch/hmap.h"
 
@@ -228,14 +229,12 @@ ecmp_groups_add_route(struct ecmp_groups_node *group,
                       const struct parsed_route *route)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-    if (group->route_count == UINT16_MAX) {
+    if (vector_len(&group->route_list) == UINT16_MAX) {
         VLOG_WARN_RL(&rl, "too many routes in a single ecmp group.");
         return;
     }
 
     if (route->is_discard_route) {
-        group->has_discard_route = true;
-
         char *prefix = normalize_v46_prefix(&route->prefix, route->plen);
         VLOG_WARN_RL(&rl, "The ECMP route \"%s\" contains \"discard\" "
                      "route, the whole group will drop traffic.", prefix);
@@ -244,22 +243,13 @@ ecmp_groups_add_route(struct ecmp_groups_node *group,
 
     struct ecmp_route_list_node er = (struct ecmp_route_list_node) {
         .route = route,
-        .id = ++group->route_count,
     };
-
-    if (group->route_count == 1) {
-        sset_clone(&group->selection_fields, &route->ecmp_selection_fields);
-    } else {
-        sset_intersect(&group->selection_fields,
-                       &route->ecmp_selection_fields);
-    }
 
     vector_push(&group->route_list, &er);
 }
 
-/* Removes a route from an ecmp group. If the ecmp group should persist
- * afterwards you must call ecmp_groups_update_ids before any further
- * insertions. */
+/* Removes a route from an ecmp group.  The ids of the group and of its
+ * members are refreshed by group_ecmp_datapath_finalize(). */
 static const struct parsed_route *
 ecmp_groups_remove_route(struct ecmp_groups_node *group,
                          const struct parsed_route *pr)
@@ -278,15 +268,221 @@ ecmp_groups_remove_route(struct ecmp_groups_node *group,
     return NULL;
 }
 
-static void
-ecmp_group_update_ids(struct ecmp_groups_node *group)
+/* NAT and LB routes for the same prefix share a group, see
+ * route_sources_ecmp_compatible(). */
+static enum route_source
+ecmp_group_source_class(enum route_source source)
 {
+    return source == ROUTE_SOURCE_LB ? ROUTE_SOURCE_NAT : source;
+}
+
+/* Hashes the key of 'eg', which is unique within a datapath, see
+ * ecmp_groups_find().  Unlike the members, the key does not change when
+ * routes are added to or removed from the group. */
+static uint32_t
+ecmp_group_hash(const struct ecmp_groups_node *eg)
+{
+    uint32_t hash = hash_bytes(&eg->prefix, sizeof eg->prefix, 0);
+    hash = hash_add(hash, eg->plen);
+    hash = hash_add(hash, eg->route_table_id);
+    hash = hash_add(hash, eg->is_src_route);
+    hash = hash_add(hash, ecmp_group_source_class(eg->source));
+    return hash_finish(hash, 0);
+}
+
+/* Hashes what makes 'route' unique within its ecmp group.  A NAT or LB row
+ * produces one route per path to the peer router, so its UUID alone is not
+ * enough. */
+static uint32_t
+ecmp_member_hash(const struct parsed_route *route)
+{
+    uint32_t hash = uuid_hash(&route->source_hint->uuid);
+    if (route->nexthop) {
+        hash = hash_bytes(route->nexthop, sizeof *route->nexthop, hash);
+    }
+    if (route->out_port) {
+        hash = hash_string(route->out_port->key, hash);
+    }
+    return hash;
+}
+
+/* Number of rounds after which ecmp_assign_ids() stops retrying hashes that
+ * collide and falls back to the next free id. */
+#define ECMP_ID_MAX_ROUNDS 32
+
+struct ecmp_id_slot {
+    struct hmap_node hmap_node;
+    uint16_t id;
+    bool taken;         /* Assigned to an element. */
+    size_t n_claims;    /* Elements that derived 'id' in the current round. */
+};
+
+static struct ecmp_id_slot *
+ecmp_id_slot_get(struct hmap *slots, uint16_t id)
+{
+    struct ecmp_id_slot *slot;
+    HMAP_FOR_EACH_WITH_HASH (slot, hmap_node, id, slots) {
+        if (slot->id == id) {
+            return slot;
+        }
+    }
+    slot = xzalloc(sizeof *slot);
+    slot->id = id;
+    hmap_insert(slots, &slot->hmap_node, id);
+    return slot;
+}
+
+static uint16_t
+ecmp_id_from_hash(uint32_t hash, unsigned int round)
+{
+    return hash_int(round, hash) % UINT16_MAX + 1;
+}
+
+/* Gives each of the 'n' elements a distinct id in [1, UINT16_MAX] derived
+ * from 'hashes', so that the id of an element does not depend on the order
+ * in which the elements are passed, nor on the ids of unrelated elements.
+ *
+ * An element keeps the id derived from its hash unless that id is already
+ * taken or another element derives the same id in the same round.  In that
+ * case all of them retry in the next round, with an id derived from their
+ * hash and the round number.  The result therefore only depends on the set
+ * of hashes.  Elements whose hashes are equal can't be told apart and, after
+ * ECMP_ID_MAX_ROUNDS rounds, take the next free id in the order they are
+ * passed. */
+static void
+ecmp_assign_ids(const uint32_t *hashes, uint16_t *ids, size_t n)
+{
+    struct hmap slots = HMAP_INITIALIZER(&slots);
+    struct ecmp_id_slot *slot;
+    size_t n_left = n;
+
+    memset(ids, 0, n * sizeof *ids);
+    for (unsigned int round = 0; n_left && round < ECMP_ID_MAX_ROUNDS;
+         round++) {
+        for (size_t i = 0; i < n; i++) {
+            if (!ids[i]) {
+                uint16_t id = ecmp_id_from_hash(hashes[i], round);
+                ecmp_id_slot_get(&slots, id)->n_claims++;
+            }
+        }
+        for (size_t i = 0; i < n; i++) {
+            if (!ids[i]) {
+                uint16_t id = ecmp_id_from_hash(hashes[i], round);
+                slot = ecmp_id_slot_get(&slots, id);
+                if (!slot->taken && slot->n_claims == 1) {
+                    slot->taken = true;
+                    ids[i] = id;
+                    n_left--;
+                }
+            }
+        }
+        HMAP_FOR_EACH (slot, hmap_node, &slots) {
+            slot->n_claims = 0;
+        }
+    }
+
+    for (size_t i = 0; n_left && i < n; i++) {
+        if (ids[i]) {
+            continue;
+        }
+        uint16_t id = ecmp_id_from_hash(hashes[i], 0);
+        while ((slot = ecmp_id_slot_get(&slots, id))->taken) {
+            id = id % UINT16_MAX + 1;
+        }
+        slot->taken = true;
+        ids[i] = id;
+        n_left--;
+    }
+
+    HMAP_FOR_EACH_POP (slot, hmap_node, &slots) {
+        free(slot);
+    }
+    hmap_destroy(&slots);
+}
+
+static int
+ecmp_route_list_node_id_cmp(const void *a_, const void *b_)
+{
+    const struct ecmp_route_list_node *a = a_;
+    const struct ecmp_route_list_node *b = b_;
+
+    return a->id < b->id ? -1 : a->id > b->id;
+}
+
+/* Recomputes everything in 'group' that is derived from its members, so that
+ * the result only depends on the set of members. */
+static void
+ecmp_group_finalize(struct ecmp_groups_node *group)
+{
+    size_t n = vector_len(&group->route_list);
+    uint32_t *hashes = xmalloc(n * sizeof *hashes);
+    uint16_t *ids = xmalloc(n * sizeof *ids);
     struct ecmp_route_list_node *er;
     size_t i = 0;
+
     VECTOR_FOR_EACH_PTR (&group->route_list, er) {
-        er->id = i++;
+        hashes[i++] = ecmp_member_hash(er->route);
     }
-    group->route_count = i;
+    ecmp_assign_ids(hashes, ids, n);
+    i = 0;
+    VECTOR_FOR_EACH_PTR (&group->route_list, er) {
+        er->id = ids[i++];
+    }
+    free(hashes);
+    free(ids);
+
+    /* The members are listed in this order in the select() action. */
+    vector_qsort(&group->route_list, ecmp_route_list_node_id_cmp);
+
+    bool first = true;
+    group->has_discard_route = false;
+    VECTOR_FOR_EACH_PTR (&group->route_list, er) {
+        if (er->route->is_discard_route) {
+            group->has_discard_route = true;
+        }
+        if (first) {
+            sset_destroy(&group->selection_fields);
+            sset_clone(&group->selection_fields,
+                       &er->route->ecmp_selection_fields);
+            group->source = er->route->source;
+            first = false;
+        } else {
+            sset_intersect(&group->selection_fields,
+                           &er->route->ecmp_selection_fields);
+        }
+    }
+}
+
+/* Assigns the group and member ids of all ecmp groups of 'gn'.  Must be
+ * called after the ecmp groups of 'gn' changed, both on full recompute and on
+ * incremental processing, so that both yield the same ids for the same set
+ * of routes and the generated logical flows do not change on recompute. */
+static void
+group_ecmp_datapath_finalize(struct group_ecmp_datapath *gn)
+{
+    size_t n = hmap_count(&gn->ecmp_groups);
+    if (!n) {
+        return;
+    }
+
+    struct ecmp_groups_node **groups = xmalloc(n * sizeof *groups);
+    uint32_t *hashes = xmalloc(n * sizeof *hashes);
+    uint16_t *ids = xmalloc(n * sizeof *ids);
+    struct ecmp_groups_node *eg;
+    size_t i = 0;
+
+    HMAP_FOR_EACH (eg, hmap_node, &gn->ecmp_groups) {
+        ecmp_group_finalize(eg);
+        groups[i] = eg;
+        hashes[i++] = ecmp_group_hash(eg);
+    }
+    ecmp_assign_ids(hashes, ids, n);
+    for (i = 0; i < n; i++) {
+        groups[i]->id = ids[i];
+    }
+    free(groups);
+    free(hashes);
+    free(ids);
 }
 
 static struct ecmp_groups_node *
@@ -302,7 +498,6 @@ ecmp_groups_add(struct group_ecmp_datapath *gn,
     struct ecmp_groups_node *eg = xzalloc(sizeof *eg);
     hmap_insert(&gn->ecmp_groups, &eg->hmap_node, route->hash);
 
-    eg->id = hmap_count(&gn->ecmp_groups);
     eg->prefix = route->prefix;
     eg->plen = route->plen;
     eg->is_src_route = route->is_src_route;
@@ -396,6 +591,10 @@ group_ecmp_route(struct group_ecmp_route_data *data,
         gn = group_ecmp_datapath_lookup_or_add(data, pr->od);
         add_route(gn, pr);
     }
+
+    HMAP_FOR_EACH (gn, hmap_node, &data->datapaths) {
+        group_ecmp_datapath_finalize(gn);
+    }
 }
 
 enum engine_node_state
@@ -472,9 +671,7 @@ handle_deleted_route(struct group_ecmp_route_data *data,
              * unique route. Otherwise it stays an ecmp group with just one
              * member. */
             ecmp_groups_remove_route(eg, pr);
-            if (ecmp_group_has_symmetric_reply(eg)) {
-                ecmp_group_update_ids(eg);
-            } else {
+            if (!ecmp_group_has_symmetric_reply(eg)) {
                 const struct ecmp_route_list_node *er =
                     vector_get_ptr(&eg->route_list, 0);
                 unique_routes_add(node, er->route);
@@ -482,11 +679,8 @@ handle_deleted_route(struct group_ecmp_route_data *data,
                 ecmp_groups_node_free(eg);
             }
         } else {
-            /* We can just remove the member from the group. We need to update
-             * the indices of all routes so that future insertions directly
-             * have a new index. */
+            /* We can just remove the member from the group. */
             ecmp_groups_remove_route(eg, pr);
-            ecmp_group_update_ids(eg);
         }
     }
 
@@ -537,6 +731,7 @@ group_ecmp_route_learned_route_change_handler(struct engine_node *eng_node,
             hmapx_add(&data->trk_data.deleted_datapath_routes, node);
             hmap_remove(&data->datapaths, &node->hmap_node);
         } else {
+            group_ecmp_datapath_finalize(node);
             hmapx_add(&data->trk_data.crupdated_datapath_routes, node);
         }
     }
@@ -589,6 +784,7 @@ group_ecmp_route_routes_change_handler(struct engine_node *eng_node,
             hmapx_add(&data->trk_data.deleted_datapath_routes, node);
             hmap_remove(&data->datapaths, &node->hmap_node);
         } else {
+            group_ecmp_datapath_finalize(node);
             hmapx_add(&data->trk_data.crupdated_datapath_routes, node);
         }
     }
@@ -645,6 +841,7 @@ group_ecmp_route_dynamic_routes_change_handler(struct engine_node *eng_node,
             hmapx_add(&gdata->trk_data.deleted_datapath_routes, node);
             hmap_remove(&gdata->datapaths, &node->hmap_node);
         } else {
+            group_ecmp_datapath_finalize(node);
             hmapx_add(&gdata->trk_data.crupdated_datapath_routes, node);
         }
     }
