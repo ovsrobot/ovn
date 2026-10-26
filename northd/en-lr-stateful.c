@@ -149,10 +149,18 @@ lr_stateful_northd_handler(struct engine_node *node, void *data OVS_UNUSED)
      *      This data gets updated when a logical router is created or deleted.
      *
      *      This node also accesses the router ports of the logical router
-     *      (od->ports).  When these logical router ports gets updated,
-     *      en_northd engine recomputes and so does this node.
-     *      Note: When we add I-P to handle router port changes, we need
-     *      to revisit this handler.
+     *      (od->ports), but only through build_lrouter_lb_reachable_ips()
+     *      and od_has_lb_vip(), i.e. only for routers that have load
+     *      balancers attached.  en_northd handles logical router port
+     *      creation/deletion incrementally only for routers without load
+     *      balancers (see lrp_needs_recompute()); for any other router port
+     *      change en_northd recomputes and so does this node.  The port set
+     *      also feeds the lr_nat record (ovn_nat.is_router_ip and
+     *      ovn_nat.l3dgw_port), and en_northd tracks such routers in
+     *      'trk_nat_lrs' so that this node is updated through its en_lr_nat
+     *      input instead.
+     *      Note: When we relax either restriction, we need to revisit this
+     *      handler.
      *
      *   2. northd_data->lb_datapaths_map
      *   3. northd_data->lb_group_datapaths_map

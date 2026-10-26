@@ -413,6 +413,8 @@ sync_to_sb_pb_northd_handler(struct engine_node *node, void *data OVS_UNUSED)
 
     sync_pbs_for_northd_changed_ovn_ports(&nd->trk_data.trk_lsps,
                                           &lr_stateful_data->table);
+    sync_pbs_for_northd_changed_lrps(&nd->trk_data.trk_lrps,
+                                     &lr_stateful_data->table);
     return EN_HANDLED_UPDATED;
 }
 

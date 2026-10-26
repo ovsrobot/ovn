@@ -157,6 +157,11 @@ lflow_northd_handler(struct engine_node *node,
                                      lflow_data->lflow_table,
                                      &lflow_data->trk_data.dirty_lflow_refs);
 
+    lflow_handle_northd_lrp_changes(&northd_data->trk_data.trk_lrps,
+                                    &lflow_input,
+                                    lflow_data->lflow_table,
+                                    &lflow_data->trk_data.dirty_lflow_refs);
+
     lflow_handle_northd_lb_changes(&northd_data->trk_data.trk_lbs,
                                    &lflow_input,
                                    lflow_data->lflow_table,
