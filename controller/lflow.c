@@ -1406,6 +1406,83 @@ add_neighbor_flows(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     }
 }
 
+static bool
+mac_binding_scope_is_local(
+    struct ovsdb_idl_index *sbrec_port_binding_by_mac_binding_scope,
+    const struct sbrec_mac_binding_scope *scope,
+    const struct hmap *local_datapaths,
+    const struct sbrec_chassis *chassis)
+{
+    if (!chassis) {
+        return false;
+    }
+
+    struct sbrec_port_binding *target = sbrec_port_binding_index_init_row(
+        sbrec_port_binding_by_mac_binding_scope);
+    sbrec_port_binding_index_set_mac_binding_scope(target, scope);
+
+    const struct sbrec_port_binding *pb;
+    bool is_local = false;
+    SBREC_PORT_BINDING_FOR_EACH_EQUAL (
+        pb, target, sbrec_port_binding_by_mac_binding_scope) {
+        if (pb->datapath && get_local_datapath(
+                local_datapaths, pb->datapath->tunnel_key)) {
+            is_local = true;
+            break;
+        }
+    }
+    sbrec_port_binding_index_destroy_row(target);
+    return is_local;
+}
+
+static void
+consider_shared_neighbor_flow__(
+    struct ovsdb_idl_index *sbrec_port_binding_by_mac_binding_scope,
+    const struct sbrec_shared_mac_binding *mb,
+    const struct hmap *local_datapaths,
+    const struct sbrec_chassis *chassis,
+    struct ovn_desired_flow_table *flow_table)
+{
+    if (mac_binding_scope_is_local(
+            sbrec_port_binding_by_mac_binding_scope, mb->scope,
+            local_datapaths, chassis)) {
+        consider_shared_neighbor_flow(mb, flow_table, true);
+    }
+}
+
+static void
+add_shared_neighbor_flows_for_scope(
+    struct ovsdb_idl_index *shared_mb_by_scope,
+    const struct sbrec_mac_binding_scope *scope,
+    struct ovn_desired_flow_table *flow_table)
+{
+    struct sbrec_shared_mac_binding *target =
+        sbrec_shared_mac_binding_index_init_row(shared_mb_by_scope);
+    sbrec_shared_mac_binding_index_set_scope(target, scope);
+    const struct sbrec_shared_mac_binding *mb;
+    SBREC_SHARED_MAC_BINDING_FOR_EACH_EQUAL (mb, target, shared_mb_by_scope) {
+        consider_shared_neighbor_flow(mb, flow_table, true);
+    }
+    sbrec_shared_mac_binding_index_destroy_row(target);
+}
+
+static void
+add_shared_neighbor_flows(
+    struct ovsdb_idl_index *sbrec_port_binding_by_mac_binding_scope,
+    const struct sbrec_shared_mac_binding_table *shared_mac_binding_table,
+    const struct hmap *local_datapaths,
+    const struct sbrec_chassis *chassis,
+    struct ovn_desired_flow_table *flow_table)
+{
+    const struct sbrec_shared_mac_binding *mb;
+    SBREC_SHARED_MAC_BINDING_TABLE_FOR_EACH (mb,
+                                             shared_mac_binding_table) {
+        consider_shared_neighbor_flow__(
+            sbrec_port_binding_by_mac_binding_scope, mb,
+            local_datapaths, chassis, flow_table);
+    }
+}
+
 /* Builds the "learn()" action to be triggered by packets initiating a
  * hairpin session.
  *
@@ -1957,6 +2034,31 @@ lflow_handle_changed_static_mac_bindings(
     }
 }
 
+void
+lflow_handle_changed_shared_mac_bindings(
+    struct ovsdb_idl_index *sbrec_port_binding_by_mac_binding_scope,
+    const struct sbrec_shared_mac_binding_table *shared_mac_binding_table,
+    const struct hmap *local_datapaths,
+    const struct sbrec_chassis *chassis,
+    struct ovn_desired_flow_table *flow_table)
+{
+    const struct sbrec_shared_mac_binding *mb;
+    SBREC_SHARED_MAC_BINDING_TABLE_FOR_EACH_TRACKED (
+        mb, shared_mac_binding_table) {
+        if (sbrec_shared_mac_binding_is_deleted(mb)) {
+            ofctrl_remove_flows(flow_table, &mb->header_.uuid);
+            continue;
+        }
+
+        if (!sbrec_shared_mac_binding_is_new(mb)) {
+            ofctrl_remove_flows(flow_table, &mb->header_.uuid);
+        }
+        consider_shared_neighbor_flow__(
+            sbrec_port_binding_by_mac_binding_scope, mb,
+            local_datapaths, chassis, flow_table);
+    }
+}
+
 static void
 consider_fdb_flows(const struct sbrec_fdb *fdb,
                    const struct hmap *local_datapaths,
@@ -2046,6 +2148,11 @@ lflow_run(struct lflow_ctx_in *l_ctx_in, struct lflow_ctx_out *l_ctx_out)
                        l_ctx_in->static_mac_binding_table,
                        l_ctx_in->local_datapaths,
                        l_ctx_out->flow_table);
+    add_shared_neighbor_flows(
+        l_ctx_in->sbrec_port_binding_by_mac_binding_scope,
+        l_ctx_in->shared_mac_binding_table,
+        l_ctx_in->local_datapaths, l_ctx_in->chassis,
+        l_ctx_out->flow_table);
     add_lb_hairpin_flows(l_ctx_in->local_lbs,
                          l_ctx_in->local_datapaths,
                          l_ctx_out->flow_table);
@@ -2163,6 +2270,30 @@ lflow_add_flows_for_datapath(const struct sbrec_datapath_binding *dp,
     }
     sbrec_mac_binding_index_destroy_row(mb_index_row);
 
+    /* Shared rows may already be monitored when this datapath becomes local.
+     * Install its scopes' bindings even if no shared row has changed. */
+    struct ovsdb_idl_index *pb_by_dp =
+        l_ctx_in->sbrec_port_binding_by_datapath;
+    struct ovsdb_idl_index *mb_by_scope =
+        l_ctx_in->sbrec_shared_mac_binding_by_scope;
+    struct sbrec_port_binding *pb_index_row =
+        sbrec_port_binding_index_init_row(pb_by_dp);
+    sbrec_port_binding_index_set_datapath(pb_index_row, dp);
+    struct uuidset scopes = UUIDSET_INITIALIZER(&scopes);
+    const struct sbrec_port_binding *pb;
+    SBREC_PORT_BINDING_FOR_EACH_EQUAL (pb, pb_index_row, pb_by_dp) {
+        const struct sbrec_mac_binding_scope *scope = pb->mac_binding_scope;
+        if (!scope || uuidset_find(&scopes, &scope->header_.uuid)) {
+            continue;
+        }
+        uuidset_insert(&scopes, &scope->header_.uuid);
+
+        add_shared_neighbor_flows_for_scope(mb_by_scope, scope,
+                                             l_ctx_out->flow_table);
+    }
+    uuidset_destroy(&scopes);
+    sbrec_port_binding_index_destroy_row(pb_index_row);
+
     struct sbrec_static_mac_binding *smb_index_row =
         sbrec_static_mac_binding_index_init_row(
             l_ctx_in->sbrec_static_mac_binding_by_datapath);
@@ -2239,6 +2370,10 @@ lflow_handle_changed_port_bindings(struct lflow_ctx_in *l_ctx_in,
     const struct sbrec_port_binding *pb;
     SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (pb,
                                                l_ctx_in->port_binding_table) {
+        if (sbrec_port_binding_is_updated(
+                pb, SBREC_PORT_BINDING_COL_MAC_BINDING_SCOPE)) {
+            return false;
+        }
         if (!sbrec_port_binding_is_new(pb)
             && !sbrec_port_binding_is_deleted(pb)) {
             continue;

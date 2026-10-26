@@ -894,6 +894,24 @@
         db="OVN_Southbound"/>, and <ref table="Learned_Route" column="nexthop"
         db="OVN_Southbound"/> columns.
       </dd>
+
+      <dt><ref table="Shared_MAC_Binding" db="OVN_Southbound"/></dt>
+      <dd>
+        <code>ovn-controller</code> creates and updates rows when
+        <code>put_arp</code> and <code>put_nd</code> logical actions learn on
+        a port in a MAC binding scope, and when locally simulating gratuitous
+        ARP for scoped ports.  It also creates, updates, and removes rows
+        while synchronizing EVPN neighbors.  It writes the
+        <ref table="Shared_MAC_Binding" column="scope" db="OVN_Southbound"/>,
+        <ref table="Shared_MAC_Binding" column="ip" db="OVN_Southbound"/>,
+        <ref table="Shared_MAC_Binding" column="mac" db="OVN_Southbound"/>, and
+        <ref table="Shared_MAC_Binding" column="timestamp"
+        db="OVN_Southbound"/> columns.  For scopes with aging enabled, it
+        refreshes timestamps for active bindings and synchronized EVPN
+        neighbors.  Learned bindings can outlive the controller;
+        <code>ovn-northd</code> ages them and removes bindings when their
+        scope is withdrawn.
+      </dd>
     </dl>
 
     <h1>Runtime Management Commands</h1>

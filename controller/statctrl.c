@@ -47,6 +47,7 @@ enum stat_type {
     STATS_MAC_BINDING = 0,
     STATS_FDB,
     STATS_MAC_BINDING_PROBE,
+    STATS_SHARED_MAC_BINDING_PROBE,
     STATS_MAX,
 };
 
@@ -180,6 +181,19 @@ statctrl_init(void)
                mac_binding_probe_stats_process_flow_stats,
                mac_binding_probe_stats_run, NULL);
 
+    struct ofputil_flow_stats_request shared_mac_binding_probe_request = {
+            .cookie = htonll(0),
+            .cookie_mask = htonll(0),
+            .out_port = OFPP_ANY,
+            .out_group = OFPG_ANY,
+            .table_id = OFTABLE_SHARED_MAC_BINDING,
+    };
+    STATS_NODE(SHARED_MAC_BINDING_PROBE,
+               shared_mac_binding_probe_request,
+               struct mac_cache_stats,
+               shared_mac_binding_probe_stats_process_flow_stats,
+               mac_binding_probe_stats_run, NULL);
+
     statctrl_ctx.thread = ovs_thread_create("ovn_statctrl",
                                             statctrl_thread_handler,
                                             &statctrl_ctx);
@@ -188,6 +202,7 @@ statctrl_init(void)
 void
 statctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
              struct ovsdb_idl_index *sbrec_port_binding_by_name,
+             struct ovsdb_idl_index *sbrec_port_binding_by_scope,
              const struct sbrec_chassis *chassis,
              struct mac_cache_data *mac_cache_data)
 {
@@ -199,6 +214,8 @@ statctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
         .cache_data = mac_cache_data,
         .mac_binding_pending = &statctrl_ctx.nodes[STATS_MAC_BINDING].pending,
         .sbrec_port_binding_by_name = sbrec_port_binding_by_name,
+        .sbrec_port_binding_by_mac_binding_scope =
+            sbrec_port_binding_by_scope,
         .swconn = statctrl_ctx.swconn,
         .chassis = chassis,
     };
@@ -207,6 +224,7 @@ statctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
         [STATS_MAC_BINDING] = mac_cache_data,
         [STATS_FDB] = mac_cache_data,
         [STATS_MAC_BINDING_PROBE] = &mac_binding_probe_data,
+        [STATS_SHARED_MAC_BINDING_PROBE] = &mac_binding_probe_data,
     };
 
     bool schedule_updated = false;

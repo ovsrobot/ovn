@@ -199,11 +199,13 @@ static void init_buffered_packets_map(void);
 static void destroy_buffered_packets_map(void);
 static void
 run_buffered_binding(const struct sbrec_mac_binding_table *mac_binding_table,
+                     const struct sbrec_shared_mac_binding_table *,
                      const struct hmap *local_datapaths,
                      struct ovsdb_idl_index *sbrec_port_binding_by_key,
                      struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                      struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip);
+                     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
+                     struct ovsdb_idl_index *shared_mb_by_scope_ip);
 
 static void pinctrl_handle_put_mac_binding(const struct flow *md,
                                            const struct flow *headers,
@@ -214,7 +216,9 @@ static void run_put_mac_bindings(
     struct ovsdb_idl_txn *ovnsb_idl_txn,
     struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
     struct ovsdb_idl_index *sbrec_port_binding_by_key,
-    struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip);
+    struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
+    struct ovsdb_idl_index *shared_mac_binding_by_scope_ip,
+    struct ovsdb_idl_index *sbrec_port_binding_by_name);
 static void wait_put_mac_bindings(void);
 static void send_mac_binding_buffered_pkts(struct rconn *swconn);
 
@@ -4207,12 +4211,14 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             struct ovsdb_idl_index *sbrec_port_binding_by_key,
             struct ovsdb_idl_index *sbrec_port_binding_by_name,
             struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
+            struct ovsdb_idl_index *shared_mac_binding_by_scope_ip,
             struct ovsdb_idl_index *sbrec_igmp_groups,
             struct ovsdb_idl_index *sbrec_ip_multicast_opts,
             struct ovsdb_idl_index *sbrec_fdb_by_dp_key_mac,
             const struct sbrec_controller_event_table *ce_table,
             const struct sbrec_service_monitor_table *svc_mon_table,
             const struct sbrec_mac_binding_table *mac_binding_table,
+            const struct sbrec_shared_mac_binding_table *shared_mb_table,
             const struct sbrec_bfd_table *bfd_table,
             const struct sbrec_ecmp_nexthop_table *ecmp_nh_table,
             const struct sbrec_chassis *chassis,
@@ -4248,14 +4254,17 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                         sbrec_port_binding_by_key, chassis);
     ovs_mutex_unlock(&pinctrl_mutex);
 
-    run_buffered_binding(mac_binding_table, local_datapaths,
+    run_buffered_binding(mac_binding_table, shared_mb_table, local_datapaths,
                          sbrec_port_binding_by_key,
                          sbrec_datapath_binding_by_key,
                          sbrec_port_binding_by_name,
-                         sbrec_mac_binding_by_lport_ip);
+                         sbrec_mac_binding_by_lport_ip,
+                         shared_mac_binding_by_scope_ip);
     run_put_mac_bindings(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
                          sbrec_port_binding_by_key,
-                         sbrec_mac_binding_by_lport_ip);
+                         sbrec_mac_binding_by_lport_ip,
+                         shared_mac_binding_by_scope_ip,
+                         sbrec_port_binding_by_name);
     run_put_fdbs(ovnsb_idl_txn, sbrec_port_binding_by_key,
                  sbrec_datapath_binding_by_key, sbrec_fdb_by_dp_key_mac,
                  cur_cfg);
@@ -4907,6 +4916,8 @@ run_put_mac_binding(struct ovsdb_idl_txn *ovnsb_idl_txn,
                     struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                     struct ovsdb_idl_index *sbrec_port_binding_by_key,
                     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
+                    struct ovsdb_idl_index *shared_mb_by_scope_ip,
+                    struct ovsdb_idl_index *sbrec_port_binding_by_name,
                     const struct mac_binding *mb)
 {
     /* Convert logical datapath and logical port key into lport. */
@@ -4921,16 +4932,30 @@ run_put_mac_binding(struct ovsdb_idl_txn *ovnsb_idl_txn,
         return;
     }
 
-    /* Convert ethernet argument to string form for database. */
-    char mac_string[ETH_ADDR_STRLEN + 1];
-    snprintf(mac_string, sizeof mac_string,
-             ETH_ADDR_FMT, ETH_ADDR_ARGS(mb->data.mac));
+    const struct sbrec_port_binding *scope_pb = pb;
+    if (!strcmp(scope_pb->type, "chassisredirect")) {
+        const char *distributed_port = smap_get(
+            &scope_pb->options, "distributed-port");
+        scope_pb = distributed_port
+                   ? lport_lookup_by_name(sbrec_port_binding_by_name,
+                                          distributed_port)
+                   : NULL;
+    }
 
     struct ds ip_s = DS_EMPTY_INITIALIZER;
     ipv6_format_mapped(&mb->data.ip, &ip_s);
-    mac_binding_add_to_sb(ovnsb_idl_txn, sbrec_mac_binding_by_lport_ip,
-                          pb->logical_port, pb->datapath, mb->data.mac,
-                          ds_cstr(&ip_s), false, NULL);
+    if (scope_pb && scope_pb->mac_binding_scope) {
+        shared_mac_binding_add_to_sb(ovnsb_idl_txn,
+                                     shared_mb_by_scope_ip,
+                                     scope_pb->mac_binding_scope,
+                                     mb->data.mac, ds_cstr(&ip_s),
+                                     false, NULL);
+    } else {
+        mac_binding_add_to_sb(ovnsb_idl_txn,
+                              sbrec_mac_binding_by_lport_ip,
+                              pb->logical_port, pb->datapath,
+                              mb->data.mac, ds_cstr(&ip_s), false, NULL);
+    }
     ds_destroy(&ip_s);
 }
 
@@ -4940,7 +4965,9 @@ static void
 run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
                      struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                      struct ovsdb_idl_index *sbrec_port_binding_by_key,
-                     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip)
+                     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
+                     struct ovsdb_idl_index *shared_mb_by_scope_ip,
+                     struct ovsdb_idl_index *sbrec_port_binding_by_name)
 {
     long long now = time_msec();
 
@@ -4973,7 +5000,9 @@ run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
             run_put_mac_binding(ovnsb_idl_txn,
                                 sbrec_datapath_binding_by_key,
                                 sbrec_port_binding_by_key,
-                                sbrec_mac_binding_by_lport_ip, mb);
+                                sbrec_mac_binding_by_lport_ip,
+                                shared_mb_by_scope_ip,
+                                sbrec_port_binding_by_name, mb);
             mac_binding_remove(&put_mac_bindings, mb);
         }
     }
@@ -4981,11 +5010,13 @@ run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
 
 static void
 run_buffered_binding(const struct sbrec_mac_binding_table *mac_binding_table,
+                     const struct sbrec_shared_mac_binding_table *shared_table,
                      const struct hmap *local_datapaths,
                      struct ovsdb_idl_index *sbrec_port_binding_by_key,
                      struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                      struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip)
+                     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
+                     struct ovsdb_idl_index *shared_mb_by_scope_ip)
 {
     if (cmap_is_empty(&buffered_packets_map)) {
         return;
@@ -5033,11 +5064,29 @@ run_buffered_binding(const struct sbrec_mac_binding_table *mac_binding_table,
         mac_binding_add(&recent_mbs, mb_data, smb, 0);
     }
 
+    const struct sbrec_shared_mac_binding *shared_mb;
+    SBREC_SHARED_MAC_BINDING_TABLE_FOR_EACH_TRACKED (shared_mb,
+                                                      shared_table) {
+        if (sbrec_shared_mac_binding_is_deleted(shared_mb)) {
+            continue;
+        }
+
+        struct mac_binding_data mb_data;
+        if (!mac_binding_data_parse(
+                &mb_data, shared_mb->scope->binding_key, 0,
+                shared_mb->ip, shared_mb->mac)) {
+            continue;
+        }
+        mb_data.is_scope = true;
+        mac_binding_add_shared(&recent_mbs, mb_data, shared_mb, 0);
+    }
+
     if (buffered_packets_lookup_run(&buffered_packets_map, &recent_mbs,
                                     sbrec_port_binding_by_key,
                                     sbrec_datapath_binding_by_key,
                                     sbrec_port_binding_by_name,
-                                    sbrec_mac_binding_by_lport_ip)) {
+                                    sbrec_mac_binding_by_lport_ip,
+                                    shared_mb_by_scope_ip)) {
         notify_pinctrl_handler();
     }
 

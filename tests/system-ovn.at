@@ -18717,6 +18717,49 @@ ovs-ofctl dump-flows br-int table=OFTABLE_EVPN_ARP_LOOKUP | \
     grep priority | awk '{print $[7], $[8]}' | sort > evpn_side_after
 AT_CHECK([diff -q evpn_side_before evpn_side_after])
 
+AS_BOX([Enable aging on existing EVPN shared bindings])
+dnl Start with aging disabled so EVPN has no timestamp-refresh wake pending.
+dnl Add a gateway after the EVPN neighbors already exist.  Both l3gateway
+dnl ports must be claimed before their peer link is usable, so sync must
+dnl react to the later chassis updates without a forced recompute or a new
+dnl EVPN neighbor notification.
+dnl Suppress this temporary router's GARPs so they do not leave learned
+dnl private bindings in the original router after the scope is removed.
+scope=$(ovn-nbctl create MAC_Binding_Scope name=evpn-scope \
+    disable_garp_rarp=true)
+check ovn-nbctl --wait=hv \
+    -- lr-add lr-scope \
+    -- set Logical_Router lr-scope options:chassis=hv1 \
+    -- lrp-add lr-scope lr-scope-evpn \
+        f0:00:0f:16:01:02 172.16.1.2/24 172:16::2/64 \
+    -- lsp-add-router-port ls-evpn evpn-lr-scope lr-scope-evpn \
+    -- set Logical_Router_Port lr-scope-evpn mac_binding_scope=$scope
+sb_scope=$(fetch_column sb:MAC_Binding_Scope _uuid name=evpn-scope)
+wait_row_count Shared_MAC_Binding 1 scope=$sb_scope ip=172.16.1.50
+wait_row_count Shared_MAC_Binding 1 scope=$sb_scope ip='172\:16\:\:50'
+mb4=$(fetch_column Shared_MAC_Binding _uuid \
+    scope=$sb_scope ip=172.16.1.50)
+mb6=$(fetch_column Shared_MAC_Binding _uuid \
+    scope=$sb_scope ip='172\:16\:\:50')
+timestamp4=$(ovn-sbctl get Shared_MAC_Binding $mb4 timestamp)
+timestamp6=$(ovn-sbctl get Shared_MAC_Binding $mb6 timestamp)
+check ovn-nbctl --wait=hv sync
+
+dnl Without changing any EVPN neighbor, enable aging and verify that the
+dnl same IPv4 and IPv6 rows are refreshed beyond their original lifetime.
+check ovn-nbctl --wait=hv set MAC_Binding_Scope $scope \
+    mac_binding_age_threshold=10
+OVS_WAIT_UNTIL([
+    test "$(ovn-sbctl get Shared_MAC_Binding $mb4 timestamp)" \
+        -gt "$((timestamp4 + 10000))" &&
+    test "$(ovn-sbctl get Shared_MAC_Binding $mb6 timestamp)" \
+        -gt "$((timestamp6 + 10000))"
+])
+check ovn-nbctl --wait=hv \
+    -- lsp-del evpn-lr-scope \
+    -- lr-del lr-scope \
+    -- destroy MAC_Binding_Scope $scope
+
 dnl Verify side table flows are removed when EVPN entries are removed.
 check ip neigh del dev $BR_NAME 172.16.1.50
 check ip neigh del dev $BR_NAME 172.16.1.60

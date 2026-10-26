@@ -363,7 +363,8 @@ m4_define([CHECK_RELATED_PORTS_AFTER_RECOMPUTE], [
 # CHECK_AFTER_RECOMPUTE(hv, sbox, related_ports, ignored_dp)
 # Check related ports (ignoring $related_ports) and FLOWS (ignoring flows from $ignored_dp and from $ignored_tables)
 # by comparing IP flows and flows after recompute.
-# We also ignore Flows from tables OFTABLE_MAC_BINDING, OFTABLE_MAC_LOOKUP, OFTABLE_MAC_CACHE_USE.
+# Ignore dynamic neighbor binding, lookup, and cache-use tables, including
+# shared bindings, since learning and aging can change them between dumps.
 m4_define([CHECK_AFTER_RECOMPUTE], [
     hv=$1
     sbox=$2
@@ -434,7 +435,12 @@ m4_define([CHECK_AFTER_RECOMPUTE], [
         cat flow-diff-$hv | grep -v "table=$table" > tmp; mv tmp flow-diff-$hv
       done
 
-      cat flow-diff-$hv | grep -v "table=OFTABLE_MAC_BINDING" | grep -v "table=OFTABLE_MAC_LOOKUP" | grep -v "table=OFTABLE_MAC_CACHE_USE" > tmp; mv tmp flow-diff-$hv
+      for table in OFTABLE_MAC_BINDING OFTABLE_MAC_LOOKUP \
+                   OFTABLE_MAC_CACHE_USE OFTABLE_SHARED_MAC_BINDING \
+                   OFTABLE_SHARED_MAC_LOOKUP; do
+        grep -v "table=$table," flow-diff-$hv > tmp
+        mv tmp flow-diff-$hv
+      done
       AT_CHECK([wc -l < flow-diff-$hv], [0], [0
 ])
     fi

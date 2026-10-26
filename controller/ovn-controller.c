@@ -262,6 +262,8 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
     struct ovsdb_idl_condition lf = OVSDB_IDL_CONDITION_INIT(&lf);
     struct ovsdb_idl_condition ldpg = OVSDB_IDL_CONDITION_INIT(&ldpg);
     struct ovsdb_idl_condition mb = OVSDB_IDL_CONDITION_INIT(&mb);
+    struct ovsdb_idl_condition shared_mb =
+        OVSDB_IDL_CONDITION_INIT(&shared_mb);
     struct ovsdb_idl_condition fdb = OVSDB_IDL_CONDITION_INIT(&fdb);
     struct ovsdb_idl_condition mg = OVSDB_IDL_CONDITION_INIT(&mg);
     struct ovsdb_idl_condition dns = OVSDB_IDL_CONDITION_INIT(&dns);
@@ -298,6 +300,7 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
         ovsdb_idl_condition_add_clause_true(&pb);
         ovsdb_idl_condition_add_clause_true(&lf);
         ovsdb_idl_condition_add_clause_true(&mb);
+        ovsdb_idl_condition_add_clause_true(&shared_mb);
         ovsdb_idl_condition_add_clause_true(&fdb);
         ovsdb_idl_condition_add_clause_true(&mg);
         ovsdb_idl_condition_add_clause_true(&dns);
@@ -429,6 +432,23 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
          * request all of them.
          */
         sbrec_logical_flow_add_clause_logical_dp_group(&lf, OVSDB_F_NE, NULL);
+
+        struct uuidset local_scopes = UUIDSET_INITIALIZER(&local_scopes);
+        const struct sbrec_port_binding *pb_row;
+        SBREC_PORT_BINDING_FOR_EACH (pb_row, ovnsb_idl) {
+            if (pb_row->datapath && pb_row->mac_binding_scope &&
+                get_local_datapath(local_datapaths,
+                                   pb_row->datapath->tunnel_key)) {
+                uuidset_insert(&local_scopes,
+                               &pb_row->mac_binding_scope->header_.uuid);
+            }
+        }
+        const struct uuidset_node *scope_node;
+        UUIDSET_FOR_EACH (scope_node, &local_scopes) {
+            sbrec_shared_mac_binding_add_clause_scope(
+                &shared_mb, OVSDB_F_EQ, &scope_node->uuid);
+        }
+        uuidset_destroy(&local_scopes);
     }
 
 out:;
@@ -437,6 +457,7 @@ out:;
         sbrec_logical_flow_set_condition(ovnsb_idl, &lf),
         sbrec_logical_dp_group_set_condition(ovnsb_idl, &ldpg),
         sbrec_mac_binding_set_condition(ovnsb_idl, &mb),
+        sbrec_shared_mac_binding_set_condition(ovnsb_idl, &shared_mb),
         sbrec_fdb_set_condition(ovnsb_idl, &fdb),
         sbrec_multicast_group_set_condition(ovnsb_idl, &mg),
         sbrec_dns_set_condition(ovnsb_idl, &dns),
@@ -460,6 +481,7 @@ out:;
     ovsdb_idl_condition_destroy(&lf);
     ovsdb_idl_condition_destroy(&ldpg);
     ovsdb_idl_condition_destroy(&mb);
+    ovsdb_idl_condition_destroy(&shared_mb);
     ovsdb_idl_condition_destroy(&fdb);
     ovsdb_idl_condition_destroy(&mg);
     ovsdb_idl_condition_destroy(&dns);
@@ -3274,6 +3296,81 @@ mac_binding_remove_sb(struct mac_cache_data *data,
 }
 
 static void
+shared_mac_binding_add_sb(
+    struct mac_cache_data *data,
+    const struct sbrec_shared_mac_binding *smb)
+{
+    struct mac_binding_data mb_data;
+    if (!mac_binding_data_from_shared_sbrec(&mb_data, smb)) {
+        return;
+    }
+
+    mac_binding_add_shared(&data->mac_bindings, mb_data, smb, 0);
+}
+
+static void
+shared_mac_binding_remove_sb(
+    struct mac_cache_data *data,
+    const struct sbrec_shared_mac_binding *smb)
+{
+    struct mac_binding_data mb_data;
+    if (!mac_binding_data_from_shared_sbrec(&mb_data, smb)) {
+        return;
+    }
+
+    struct mac_binding *mb = mac_binding_find(&data->mac_bindings, &mb_data);
+    if (mb) {
+        mac_binding_remove(&data->mac_bindings, mb);
+    }
+}
+
+static bool
+mac_cache_scope_is_local(struct ovsdb_idl_index *pb_by_scope,
+                         const struct sbrec_mac_binding_scope *scope,
+                         const struct hmap *local_datapaths)
+{
+    struct sbrec_port_binding *target =
+        sbrec_port_binding_index_init_row(pb_by_scope);
+    sbrec_port_binding_index_set_mac_binding_scope(target, scope);
+
+    const struct sbrec_port_binding *pb;
+    bool is_local = false;
+    SBREC_PORT_BINDING_FOR_EACH_EQUAL (pb, target, pb_by_scope) {
+        if (pb->datapath && get_local_datapath(
+                local_datapaths, pb->datapath->tunnel_key)) {
+            is_local = true;
+            break;
+        }
+    }
+    sbrec_port_binding_index_destroy_row(target);
+    return is_local;
+}
+
+static void
+mac_cache_mb_handle_for_scope(
+    struct mac_cache_data *data,
+    const struct sbrec_mac_binding_scope *scope,
+    struct ovsdb_idl_index *shared_mb_by_scope)
+{
+    bool has_threshold =
+        !!mac_cache_threshold_find_scope(data, scope->binding_key);
+    struct sbrec_shared_mac_binding *target =
+        sbrec_shared_mac_binding_index_init_row(shared_mb_by_scope);
+    sbrec_shared_mac_binding_index_set_scope(target, scope);
+
+    const struct sbrec_shared_mac_binding *mb;
+    SBREC_SHARED_MAC_BINDING_FOR_EACH_EQUAL (
+        mb, target, shared_mb_by_scope) {
+        if (has_threshold) {
+            shared_mac_binding_add_sb(data, mb);
+        } else {
+            shared_mac_binding_remove_sb(data, mb);
+        }
+    }
+    sbrec_shared_mac_binding_index_destroy_row(target);
+}
+
+static void
 fdb_add_sb(struct mac_cache_data *data, const struct sbrec_fdb *sfdb)
 {
     struct fdb_data fdb_data;
@@ -3377,6 +3474,13 @@ en_mac_cache_run(struct engine_node *node, void *data)
             engine_ovsdb_node_get_index(
                     engine_get_input("SB_fdb", node),
                     "dp_key");
+    const struct sbrec_mac_binding_scope_table *scope_table =
+        EN_OVSDB_GET(engine_get_input("SB_mac_binding_scope", node));
+    struct ovsdb_idl_index *pb_by_scope = engine_ovsdb_node_get_index(
+        engine_get_input("SB_port_binding", node), "mac_binding_scope");
+    struct ovsdb_idl_index *shared_mb_by_scope =
+        engine_ovsdb_node_get_index(
+            engine_get_input("SB_shared_mac_binding", node), "scope");
 
     mac_cache_thresholds_clear(cache_data);
     mac_bindings_clear(&cache_data->mac_bindings);
@@ -3396,7 +3500,71 @@ en_mac_cache_run(struct engine_node *node, void *data)
                                           sbrec_fdb_by_dp_key);
     }
 
+    const struct sbrec_mac_binding_scope *scope;
+    SBREC_MAC_BINDING_SCOPE_TABLE_FOR_EACH (scope, scope_table) {
+        if (!mac_cache_scope_is_local(pb_by_scope, scope,
+                                      &rt_data->local_datapaths)) {
+            continue;
+        }
+        mac_cache_threshold_add_scope(cache_data, scope);
+        mac_cache_mb_handle_for_scope(cache_data, scope,
+                                      shared_mb_by_scope);
+    }
+
     return EN_UPDATED;
+}
+
+static enum engine_input_handler_result
+mac_cache_sb_shared_mac_binding_handler(struct engine_node *node, void *data)
+{
+    struct mac_cache_data *cache_data = data;
+    const struct sbrec_shared_mac_binding_table *mb_table =
+        EN_OVSDB_GET(engine_get_input("SB_shared_mac_binding", node));
+    size_t previous_size = hmap_count(&cache_data->mac_bindings);
+
+    const struct sbrec_shared_mac_binding *mb;
+    SBREC_SHARED_MAC_BINDING_TABLE_FOR_EACH_TRACKED (mb, mb_table) {
+        if (!sbrec_shared_mac_binding_is_new(mb) &&
+            (sbrec_shared_mac_binding_is_updated(
+                 mb, SBREC_SHARED_MAC_BINDING_COL_SCOPE) ||
+             sbrec_shared_mac_binding_is_updated(
+                 mb, SBREC_SHARED_MAC_BINDING_COL_IP))) {
+            return EN_UNHANDLED;
+        }
+        if (!sbrec_shared_mac_binding_is_new(mb)) {
+            shared_mac_binding_remove_sb(cache_data, mb);
+        }
+        if (!sbrec_shared_mac_binding_is_deleted(mb) &&
+            mac_cache_threshold_find_scope(cache_data,
+                                           mb->scope->binding_key)) {
+            shared_mac_binding_add_sb(cache_data, mb);
+        }
+    }
+
+    return hmap_count(&cache_data->mac_bindings) != previous_size
+           ? EN_HANDLED_UPDATED : EN_HANDLED_UNCHANGED;
+}
+
+static enum engine_input_handler_result
+mac_cache_sb_port_binding_handler(struct engine_node *node,
+                                  void *data OVS_UNUSED)
+{
+    const struct sbrec_port_binding_table *pb_table =
+        EN_OVSDB_GET(engine_get_input("SB_port_binding", node));
+    const struct sbrec_port_binding *pb;
+
+    SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (pb, pb_table) {
+        if (sbrec_port_binding_is_updated(
+                pb, SBREC_PORT_BINDING_COL_MAC_BINDING_SCOPE) ||
+            (pb->mac_binding_scope &&
+             (sbrec_port_binding_is_updated(
+                  pb, SBREC_PORT_BINDING_COL_DATAPATH) ||
+              sbrec_port_binding_is_new(pb) ||
+              sbrec_port_binding_is_deleted(pb)))) {
+            return EN_UNHANDLED;
+        }
+    }
+    return EN_HANDLED_UNCHANGED;
 }
 
 static enum engine_input_handler_result
@@ -3484,6 +3652,12 @@ mac_cache_runtime_data_handler(struct engine_node *node, void *data OVS_UNUSED)
             engine_ovsdb_node_get_index(
                     engine_get_input("SB_fdb", node),
                     "dp_key");
+    const struct sbrec_mac_binding_scope_table *scope_table =
+        EN_OVSDB_GET(engine_get_input("SB_mac_binding_scope", node));
+
+    if (sbrec_mac_binding_scope_table_first(scope_table)) {
+        return EN_UNHANDLED;
+    }
 
     /* There are no tracked data. Fall back to full recompute. */
     if (!rt_data->tracked) {
@@ -3534,6 +3708,12 @@ mac_cache_sb_datapath_binding_handler(struct engine_node *node, void *data)
             engine_ovsdb_node_get_index(
                     engine_get_input("SB_fdb", node),
                     "dp_key");
+    const struct sbrec_mac_binding_scope_table *scope_table =
+        EN_OVSDB_GET(engine_get_input("SB_mac_binding_scope", node));
+
+    if (sbrec_mac_binding_scope_table_first(scope_table)) {
+        return EN_UNHANDLED;
+    }
 
     size_t previous_mb_size = hmap_count(&cache_data->mac_bindings);
     size_t previous_fdb_size = hmap_count(&cache_data->fdbs);
@@ -3970,6 +4150,11 @@ init_lflow_ctx(struct engine_node *node,
                 engine_get_input("SB_static_mac_binding", node),
                 "datapath");
 
+    struct ovsdb_idl_index *sbrec_port_binding_by_mac_binding_scope =
+        engine_ovsdb_node_get_index(
+                engine_get_input("SB_port_binding", node),
+                "mac_binding_scope");
+
     const struct sbrec_port_binding_table *port_binding_table =
         EN_OVSDB_GET(engine_get_input("SB_port_binding", node));
 
@@ -3990,6 +4175,9 @@ init_lflow_ctx(struct engine_node *node,
 
     const struct sbrec_static_mac_binding_table *smb_table =
         EN_OVSDB_GET(engine_get_input("SB_static_mac_binding", node));
+
+    const struct sbrec_shared_mac_binding_table *shared_mb_table =
+        EN_OVSDB_GET(engine_get_input("SB_shared_mac_binding", node));
 
     const struct ovsrec_open_vswitch_table *ovs_table =
         EN_OVSDB_GET(engine_get_input("OVS_open_vswitch", node));
@@ -4041,6 +4229,8 @@ init_lflow_ctx(struct engine_node *node,
     l_ctx_in->sbrec_mac_binding_by_datapath = sbrec_mac_binding_by_datapath;
     l_ctx_in->sbrec_static_mac_binding_by_datapath =
         sbrec_static_mac_binding_by_datapath;
+    l_ctx_in->sbrec_port_binding_by_mac_binding_scope =
+        sbrec_port_binding_by_mac_binding_scope;
     l_ctx_in->port_binding_table = port_binding_table;
     l_ctx_in->mac_binding_table = mac_binding_table;
     l_ctx_in->logical_flow_table = logical_flow_table;
@@ -4049,6 +4239,11 @@ init_lflow_ctx(struct engine_node *node,
     l_ctx_in->fdb_table = fdb_table,
     l_ctx_in->chassis = chassis;
     l_ctx_in->static_mac_binding_table = smb_table;
+    l_ctx_in->shared_mac_binding_table = shared_mb_table;
+    l_ctx_in->sbrec_port_binding_by_datapath = engine_ovsdb_node_get_index(
+        engine_get_input("SB_port_binding", node), "datapath");
+    l_ctx_in->sbrec_shared_mac_binding_by_scope = engine_ovsdb_node_get_index(
+        engine_get_input("SB_shared_mac_binding", node), "scope");
     l_ctx_in->local_datapaths = &rt_data->local_datapaths;
     l_ctx_in->addr_sets = addr_sets;
     l_ctx_in->port_groups = port_groups;
@@ -4309,6 +4504,34 @@ lflow_output_sb_mac_binding_handler(struct engine_node *node, void *data)
     lflow_handle_changed_mac_bindings(sbrec_port_binding_by_name,
             mac_binding_table, local_datapaths, &lfo->flow_table);
 
+    return EN_HANDLED_UPDATED;
+}
+
+static enum engine_input_handler_result
+lflow_output_sb_shared_mac_binding_handler(struct engine_node *node,
+                                           void *data)
+{
+    struct ovsdb_idl_index *pb_by_scope = engine_ovsdb_node_get_index(
+        engine_get_input("SB_port_binding", node), "mac_binding_scope");
+    const struct sbrec_shared_mac_binding_table *shared_mb_table =
+        EN_OVSDB_GET(engine_get_input("SB_shared_mac_binding", node));
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+    struct ed_type_lflow_output *lfo = data;
+    const struct ovsrec_open_vswitch_table *ovs_table =
+        EN_OVSDB_GET(engine_get_input("OVS_open_vswitch", node));
+    const char *chassis_id = get_ovs_chassis_id(ovs_table);
+    if (!chassis_id) {
+        return EN_UNHANDLED;
+    }
+    struct ovsdb_idl_index *chassis_by_name = engine_ovsdb_node_get_index(
+        engine_get_input("SB_chassis", node), "name");
+    const struct sbrec_chassis *chassis =
+        chassis_lookup_by_name(chassis_by_name, chassis_id);
+
+    lflow_handle_changed_shared_mac_bindings(
+        pb_by_scope, shared_mb_table, &rt_data->local_datapaths,
+        chassis, &lfo->flow_table);
     return EN_HANDLED_UPDATED;
 }
 
@@ -6083,6 +6306,10 @@ en_garp_rarp_run(struct engine_node *node, void *data_)
         engine_ovsdb_node_get_index(
                 engine_get_input("SB_mac_binding", node),
                 "lport_ip");
+    struct ovsdb_idl_index *shared_mac_binding_by_scope_ip =
+        engine_ovsdb_node_get_index(
+                engine_get_input("SB_shared_mac_binding", node),
+                "scope_ip");
 
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
@@ -6093,6 +6320,7 @@ en_garp_rarp_run(struct engine_node *node, void *data_)
         .sbrec_port_binding_by_datapath = sbrec_port_binding_by_datapath,
         .sbrec_port_binding_by_name = sbrec_port_binding_by_name,
         .sbrec_mac_binding_by_lport_ip = sbrec_mac_binding_by_lport_ip,
+        .shared_mac_binding_by_scope_ip = shared_mac_binding_by_scope_ip,
         .chassis = chassis,
         .active_tunnels = &rt_data->active_tunnels,
         .local_datapaths = &rt_data->local_datapaths,
@@ -7191,6 +7419,12 @@ en_evpn_mac_binding_sync_run(struct engine_node *node, void *data_)
         engine_ovsdb_node_get_index(sb_mb_node, "lport_ip");
     const struct sbrec_mac_binding_table *mb_table =
         EN_OVSDB_GET(sb_mb_node);
+    struct engine_node *shared_mb_node =
+        engine_get_input("SB_shared_mac_binding", node);
+    struct ovsdb_idl_index *shared_mac_binding_by_scope_ip =
+        engine_ovsdb_node_get_index(shared_mb_node, "scope_ip");
+    const struct sbrec_shared_mac_binding_table *shared_mb_table =
+        EN_OVSDB_GET(shared_mb_node);
 
     struct evpn_mb_sync_waker *waker =
         engine_get_input_data("evpn_mac_binding_sync_waker", node);
@@ -7200,7 +7434,9 @@ en_evpn_mac_binding_sync_run(struct engine_node *node, void *data_)
 
     evpn_mac_binding_sync_run(engine_get_context()->ovnsb_idl_txn,
                               sbrec_mac_binding_by_lport_ip,
+                              shared_mac_binding_by_scope_ip,
                               mb_table,
+                              shared_mb_table,
                               &rt_data->local_datapaths,
                               &earp_data->arps,
                               mac_cache_data,
@@ -7244,6 +7480,10 @@ evpn_mac_binding_sync_sb_port_binding_handler(struct engine_node *node,
 
     const struct sbrec_port_binding *pb;
     SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (pb, port_binding_table) {
+        if (sbrec_port_binding_is_updated(
+                pb, SBREC_PORT_BINDING_COL_MAC_BINDING_SCOPE)) {
+            return EN_UNHANDLED;
+        }
         if (sbrec_port_binding_is_deleted(pb) &&
             uuidset_contains(&data->lsp_peers, &pb->header_.uuid)) {
             return EN_UNHANDLED;
@@ -7253,23 +7493,27 @@ evpn_mac_binding_sync_sb_port_binding_handler(struct engine_node *node,
             uuidset_contains(&data->lsp_peers, &pb->header_.uuid) &&
             (sbrec_port_binding_is_updated(pb,
                                            SBREC_PORT_BINDING_COL_OPTIONS) ||
-            sbrec_port_binding_is_updated(pb, SBREC_PORT_BINDING_COL_TYPE))) {
+             sbrec_port_binding_is_updated(pb, SBREC_PORT_BINDING_COL_TYPE) ||
+             sbrec_port_binding_is_updated(pb,
+                                           SBREC_PORT_BINDING_COL_CHASSIS))) {
             return EN_UNHANDLED;
         }
 
-        if (!sbrec_port_binding_is_new(pb)) {
+        /* A gateway peer may not be usable until both ends are claimed.
+         * Reconsider it on binding changes even if the first sync skipped it
+         * and therefore did not record it in lsp_peers. */
+        if (!sbrec_port_binding_is_new(pb) &&
+            !sbrec_port_binding_is_updated(pb,
+                                           SBREC_PORT_BINDING_COL_CHASSIS) &&
+            !sbrec_port_binding_is_updated(pb,
+                                           SBREC_PORT_BINDING_COL_OPTIONS) &&
+            !sbrec_port_binding_is_updated(pb, SBREC_PORT_BINDING_COL_TYPE)) {
             continue;
         }
 
         struct local_datapath *ld = get_local_datapath(
             &rt_data->local_datapaths, pb->datapath->tunnel_key);
-        if (!ld || !ld->is_switch) {
-            continue;
-        }
-
-        int64_t vni = ovn_smap_get_llong(&ld->datapath->external_ids,
-                                         "dynamic-routing-vni", -1);
-        if (!ovn_is_valid_vni(vni)) {
+        if (!ld) {
             continue;
         }
 
@@ -7287,7 +7531,14 @@ evpn_mac_binding_sync_sb_port_binding_handler(struct engine_node *node,
         struct local_datapath *peer_ld =
             get_local_datapath(&rt_data->local_datapaths,
                                peer->datapath->tunnel_key);
-        if (!peer_ld || peer_ld->is_switch) {
+        if (!peer_ld || ld->is_switch == peer_ld->is_switch) {
+            continue;
+        }
+
+        const struct local_datapath *switch_ld = ld->is_switch ? ld : peer_ld;
+        int64_t vni = ovn_smap_get_llong(&switch_ld->datapath->external_ids,
+                                        "dynamic-routing-vni", -1);
+        if (!ovn_is_valid_vni(vni)) {
             continue;
         }
 
@@ -7316,6 +7567,8 @@ evpn_mac_binding_sync_sb_port_binding_handler(struct engine_node *node,
     SB_NODE(logical_dp_group) \
     SB_NODE(port_binding) \
     SB_NODE(mac_binding) \
+    SB_NODE(mac_binding_scope) \
+    SB_NODE(shared_mac_binding) \
     SB_NODE(logical_flow) \
     SB_NODE(dhcp_options) \
     SB_NODE(dhcpv6_options) \
@@ -7591,6 +7844,9 @@ inc_proc_ovn_controller_init(
 
     engine_add_input(&en_lflow_output, &en_sb_mac_binding,
                      lflow_output_sb_mac_binding_handler);
+    engine_add_input(&en_lflow_output, &en_sb_shared_mac_binding,
+                     lflow_output_sb_shared_mac_binding_handler);
+    engine_add_input(&en_lflow_output, &en_sb_mac_binding_scope, NULL);
     engine_add_input(&en_lflow_output, &en_sb_static_mac_binding,
                      lflow_output_sb_static_mac_binding_handler);
     engine_add_input(&en_lflow_output, &en_sb_logical_flow,
@@ -7653,12 +7909,15 @@ inc_proc_ovn_controller_init(
                      mac_cache_runtime_data_handler);
     engine_add_input(&en_mac_cache, &en_sb_mac_binding,
                      mac_cache_sb_mac_binding_handler);
+    engine_add_input(&en_mac_cache, &en_sb_shared_mac_binding,
+                     mac_cache_sb_shared_mac_binding_handler);
+    engine_add_input(&en_mac_cache, &en_sb_mac_binding_scope, NULL);
     engine_add_input(&en_mac_cache, &en_sb_fdb,
                      mac_cache_sb_fdb_handler);
     engine_add_input(&en_mac_cache, &en_sb_datapath_binding,
                      mac_cache_sb_datapath_binding_handler);
     engine_add_input(&en_mac_cache, &en_sb_port_binding,
-                     engine_noop_handler);
+                     mac_cache_sb_port_binding_handler);
 
     engine_add_input(&en_dns_cache, &en_sb_dns,
                      dns_cache_sb_dns_handler);
@@ -7672,6 +7931,9 @@ inc_proc_ovn_controller_init(
     /* The mac_binding data is just used in an index to filter duplicates when
      * inserting data to the southbound. */
     engine_add_input(&en_garp_rarp, &en_sb_mac_binding, engine_noop_handler);
+    engine_add_input(&en_garp_rarp, &en_sb_shared_mac_binding,
+                     engine_noop_handler);
+    engine_add_input(&en_garp_rarp, &en_sb_mac_binding_scope, NULL);
     engine_add_input(&en_garp_rarp, &en_runtime_data,
                      garp_rarp_runtime_data_handler);
 
@@ -7722,12 +7984,18 @@ inc_proc_ovn_controller_init(
     /* MAC_Binding data is only used via an index for lookups. */
     engine_add_input(&en_evpn_mac_binding_sync, &en_sb_mac_binding,
                      engine_noop_handler);
+    engine_add_input(&en_evpn_mac_binding_sync, &en_sb_shared_mac_binding,
+                     engine_noop_handler);
     /* Runtime data is only used for local_datapaths access. */
     engine_add_input(&en_evpn_mac_binding_sync, &en_runtime_data,
                      engine_noop_handler);
     /* MAC cache data is only used for aging threshold lookup. */
     engine_add_input(&en_evpn_mac_binding_sync, &en_mac_cache,
                      engine_noop_handler);
+    /* Enabling scope aging must start EVPN timestamp refreshes even when
+     * no refresh was scheduled under the previous policy. */
+    engine_add_input(&en_evpn_mac_binding_sync, &en_sb_mac_binding_scope,
+                     NULL);
     engine_add_input(&en_evpn_mac_binding_sync, &en_sb_ro,
                      evpn_mac_binding_sync_sb_ro_handler);
     engine_add_input(&en_evpn_mac_binding_sync, &en_sb_port_binding,
@@ -7793,6 +8061,13 @@ inc_proc_ovn_controller_init(
     engine_ovsdb_node_add_index(&en_sb_port_binding, "key",
                                 sbrec_port_binding_by_key);
 
+    struct ovsdb_idl_index *sbrec_port_binding_by_mac_binding_scope =
+        ovsdb_idl_index_create1(
+            sb_idl_loop->idl,
+            &sbrec_port_binding_col_mac_binding_scope);
+    engine_ovsdb_node_add_index(&en_sb_port_binding, "mac_binding_scope",
+                                sbrec_port_binding_by_mac_binding_scope);
+
     struct ovsdb_idl_index *sbrec_port_binding_by_datapath
         = ovsdb_idl_index_create1(sb_idl_loop->idl,
                                   &sbrec_port_binding_col_datapath);
@@ -7838,6 +8113,16 @@ inc_proc_ovn_controller_init(
 
     engine_ovsdb_node_add_index(&en_sb_mac_binding, "lport_ip",
                                 sbrec_mac_binding_by_lport_ip);
+
+    struct ovsdb_idl_index *shared_mac_binding_by_scope_ip =
+        shared_mac_binding_by_scope_ip_index_create(sb_idl_loop->idl);
+    engine_ovsdb_node_add_index(&en_sb_shared_mac_binding, "scope_ip",
+                                shared_mac_binding_by_scope_ip);
+    struct ovsdb_idl_index *shared_mac_binding_by_scope =
+        ovsdb_idl_index_create1(sb_idl_loop->idl,
+                                &sbrec_shared_mac_binding_col_scope);
+    engine_ovsdb_node_add_index(&en_sb_shared_mac_binding, "scope",
+                                shared_mac_binding_by_scope);
 
     engine_ovsdb_node_add_index(&en_ovs_flow_sample_collector_set, "id",
                                 ovsrec_flow_sample_collector_set_by_id);
@@ -8027,6 +8312,10 @@ main(int argc, char *argv[])
     struct ovsdb_idl_index *sbrec_port_binding_by_type
         = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
                                   &sbrec_port_binding_col_type);
+    struct ovsdb_idl_index *sbrec_port_binding_by_mac_binding_scope
+        = ovsdb_idl_index_create1(
+            ovnsb_idl_loop.idl,
+            &sbrec_port_binding_col_mac_binding_scope);
     struct ovsdb_idl_index *sbrec_port_binding_by_requested_chassis
         = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
                                   &sbrec_port_binding_col_requested_chassis);
@@ -8035,6 +8324,8 @@ main(int argc, char *argv[])
                                   &sbrec_datapath_binding_col_tunnel_key);
     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip
         = mac_binding_by_lport_ip_index_create(ovnsb_idl_loop.idl);
+    struct ovsdb_idl_index *shared_mac_binding_by_scope_ip
+        = shared_mac_binding_by_scope_ip_index_create(ovnsb_idl_loop.idl);
     struct ovsdb_idl_index *sbrec_ip_multicast
         = ip_mcast_index_create(ovnsb_idl_loop.idl);
     struct ovsdb_idl_index *sbrec_igmp_group
@@ -8057,6 +8348,8 @@ main(int argc, char *argv[])
      * values (it does read them to implement aging).  Therefore we
      * can disable change tracking and alerting for these columns. */
     ovsdb_idl_omit_alert(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_timestamp);
+    ovsdb_idl_omit_alert(ovnsb_idl_loop.idl,
+                         &sbrec_shared_mac_binding_col_timestamp);
     ovsdb_idl_omit_alert(ovnsb_idl_loop.idl, &sbrec_fdb_col_timestamp);
 
     /* Omit the external_ids column of all the tables except for -
@@ -8646,6 +8939,7 @@ main(int argc, char *argv[])
                                     sbrec_port_binding_by_key,
                                     sbrec_port_binding_by_name,
                                     sbrec_mac_binding_by_lport_ip,
+                                    shared_mac_binding_by_scope_ip,
                                     sbrec_igmp_group,
                                     sbrec_ip_multicast,
                                     sbrec_fdb_by_dp_key_mac,
@@ -8654,6 +8948,8 @@ main(int argc, char *argv[])
                                     sbrec_service_monitor_table_get(
                                         ovnsb_idl_loop.idl),
                                     sbrec_mac_binding_table_get(
+                                        ovnsb_idl_loop.idl),
+                                    sbrec_shared_mac_binding_table_get(
                                         ovnsb_idl_loop.idl),
                                     sbrec_bfd_table_get(ovnsb_idl_loop.idl),
                                     sbrec_ecmp_nexthop_table_get(
@@ -8672,10 +8968,12 @@ main(int argc, char *argv[])
                                    sbrec_mirror_table_get(ovnsb_idl_loop.idl),
                                    br_int,
                                    &runtime_data->lbinding_data.bindings);
-                        /* Updating monitor conditions if runtime data or
-                         * logical datapath goups changed. */
+                        /* Scope membership can change without changing
+                         * runtime data or logical datapath groups. */
                         if (engine_node_changed(&en_runtime_data)
-                            || engine_node_changed(&en_sb_logical_dp_group)) {
+                            || engine_node_changed(&en_sb_logical_dp_group)
+                            || engine_node_changed(&en_sb_port_binding)
+                            || engine_node_changed(&en_sb_mac_binding_scope)) {
                             bool had_all_data = ovnsb_cond_seqno ==
                                                 ovnsb_expected_cond_seqno;
                             ovnsb_expected_cond_seqno =
@@ -8728,6 +9026,7 @@ main(int argc, char *argv[])
                     mac_cache_data = engine_get_data(&en_mac_cache);
                     if (mac_cache_data) {
                         statctrl_run(ovnsb_idl_txn, sbrec_port_binding_by_name,
+                                     sbrec_port_binding_by_mac_binding_scope,
                                      chassis, mac_cache_data);
                     }
 
