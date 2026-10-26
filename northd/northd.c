@@ -7298,10 +7298,11 @@ enum mirror_filter {
 
 static void
 build_mirror_default_lflow(struct ovn_datapath *od,
-                           struct lflow_table *lflows)
+                           struct lflow_table *lflows,
+                           struct lflow_ref *lflow_ref)
 {
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_MIRROR, 0, "1", "next;", NULL);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_MIRROR, 0, "1", "next;", NULL);
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_MIRROR, 0, "1", "next;", lflow_ref);
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_MIRROR, 0, "1", "next;", lflow_ref);
 }
 
 static void
@@ -20605,54 +20606,6 @@ build_lr_stateful_flows(const struct lr_stateful_record *lr_stateful_rec,
                                       lr_stateful_rec->lflow_ref);
 }
 
-static void
-build_ls_stateful_flows(const struct ls_stateful_record *ls_stateful_rec,
-                        const struct ovn_datapath *od,
-                        const struct ls_port_group_table *ls_pgs,
-                        const struct shash *meter_groups,
-                        const struct sampling_app_table *sampling_apps,
-                        const struct chassis_features *features,
-                        struct lflow_table *lflows,
-                        const struct sbrec_acl_id_table *sbrec_acl_id_table)
-{
-    build_ls_stateful_rec_pre_acls(ls_stateful_rec, od, ls_pgs, lflows,
-                                   ls_stateful_rec->lflow_ref);
-    build_ls_stateful_rec_pre_lb(ls_stateful_rec, od, lflows,
-                                 ls_stateful_rec->lflow_ref);
-    build_acl_hints(ls_stateful_rec, od, lflows,
-                    ls_stateful_rec->lflow_ref);
-    build_acls(ls_stateful_rec, od, lflows, ls_pgs, meter_groups,
-               sampling_apps, features, ls_stateful_rec->lflow_ref,
-               sbrec_acl_id_table);
-
-    /* Build CT extraction flows - only needed if this datapath has load
-     * balancers. */
-    if (ls_stateful_rec->has_lb_vip) {
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
-                      "ct.new && ip && ip.is_frag",
-                      REG_CT_PROTO " = ct_proto(); "
-                      REG_CT_TP_DST " = ct_tp_dst(); next;",
-                      ls_stateful_rec->lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
-                      "ct.new && ip && tcp && !ip.is_frag",
-                      REG_CT_PROTO " = ip.proto; "
-                      REG_CT_TP_DST " = tcp.dst; next;",
-                      ls_stateful_rec->lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
-                      "ct.new && ip && udp && !ip.is_frag",
-                      REG_CT_PROTO " = ip.proto; "
-                      REG_CT_TP_DST " = udp.dst; next;",
-                      ls_stateful_rec->lflow_ref);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
-                      "ct.new && ip && sctp && !ip.is_frag",
-                      REG_CT_PROTO " = ip.proto; "
-                      REG_CT_TP_DST " = sctp.dst; next;",
-                      ls_stateful_rec->lflow_ref);
-    }
-
-    build_lb_hairpin(ls_stateful_rec, od, lflows, ls_stateful_rec->lflow_ref);
-}
-
 /* For packets received on tunnel and egressing towards a network-function port
  * commit the tunnel interface id in CT. This will be utilized when the packet
  * comes out of the other network-function interface of the service VM. The
@@ -21500,6 +21453,60 @@ build_network_function(const struct ovn_datapath *od,
     bitmap_free(nfg_egress_bitmap);
 }
 
+static void
+build_ls_stateful_flows(const struct ls_stateful_record *ls_stateful_rec,
+                        const struct ovn_datapath *od,
+                        const struct ls_port_group_table *ls_pgs,
+                        const struct shash *meter_groups,
+                        const struct sampling_app_table *sampling_apps,
+                        const struct chassis_features *features,
+                        struct lflow_table *lflows,
+                        const struct sbrec_acl_id_table *sbrec_acl_id_table)
+{
+    build_ls_stateful_rec_pre_acls(ls_stateful_rec, od, ls_pgs, lflows,
+                                   ls_stateful_rec->lflow_ref);
+    build_ls_stateful_rec_pre_lb(ls_stateful_rec, od, lflows,
+                                 ls_stateful_rec->lflow_ref);
+    build_acl_hints(ls_stateful_rec, od, lflows,
+                    ls_stateful_rec->lflow_ref);
+    build_acls(ls_stateful_rec, od, lflows, ls_pgs, meter_groups,
+               sampling_apps, features, ls_stateful_rec->lflow_ref,
+               sbrec_acl_id_table);
+
+    /* Build CT extraction flows - only needed if this datapath has load
+     * balancers. */
+    if (ls_stateful_rec->has_lb_vip) {
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
+                      "ct.new && ip && ip.is_frag",
+                      REG_CT_PROTO " = ct_proto(); "
+                      REG_CT_TP_DST " = ct_tp_dst(); next;",
+                      ls_stateful_rec->lflow_ref);
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
+                      "ct.new && ip && tcp && !ip.is_frag",
+                      REG_CT_PROTO " = ip.proto; "
+                      REG_CT_TP_DST " = tcp.dst; next;",
+                      ls_stateful_rec->lflow_ref);
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
+                      "ct.new && ip && udp && !ip.is_frag",
+                      REG_CT_PROTO " = ip.proto; "
+                      REG_CT_TP_DST " = udp.dst; next;",
+                      ls_stateful_rec->lflow_ref);
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CT_EXTRACT, 100,
+                      "ct.new && ip && sctp && !ip.is_frag",
+                      REG_CT_PROTO " = ip.proto; "
+                      REG_CT_TP_DST " = sctp.dst; next;",
+                      ls_stateful_rec->lflow_ref);
+    }
+
+    build_lb_hairpin(ls_stateful_rec, od, lflows, ls_stateful_rec->lflow_ref);
+
+    /* Network function flows are datapath-wide but owned by the per-switch
+     * ls_stateful lflow_ref, so that they are (re)generated and torn down
+     * together with the rest of the switch's stateful flows during
+     * incremental processing. */
+    build_network_function(od, lflows, ls_pgs, ls_stateful_rec->lflow_ref);
+}
+
 struct lswitch_flow_build_info {
     const struct ovn_datapaths *ls_datapaths;
     const struct ovn_datapaths *lr_datapaths;
@@ -21546,33 +21553,41 @@ build_lswitch_and_lrouter_iterate_by_ls(struct ovn_datapath *od,
                                         struct lswitch_flow_build_info *lsi)
 {
     ovs_assert(od->nbs);
-    build_mirror_default_lflow(od, lsi->lflows);
+    build_mirror_default_lflow(od, lsi->lflows, od->datapath_lflows);
     build_lswitch_lflows_pre_acl_and_acl(od, lsi->lflows,
-                                         lsi->meter_groups, NULL);
-    build_network_function(od, lsi->lflows, lsi->ls_port_groups, NULL);
-    build_fwd_group_lflows(od, lsi->lflows, NULL);
-    build_lswitch_lflows_admission_control(od, lsi->lflows, NULL);
-    build_lswitch_learn_fdb_od(od, lsi->lflows, NULL);
+                                         lsi->meter_groups,
+                                         od->datapath_lflows);
+    build_fwd_group_lflows(od, lsi->lflows, od->datapath_lflows);
+    build_lswitch_lflows_admission_control(od, lsi->lflows,
+                                           od->datapath_lflows);
+    build_lswitch_learn_fdb_od(od, lsi->lflows, od->datapath_lflows);
     build_lswitch_arp_nd_evpn_responder(od, lsi->lflows, lsi->meter_groups,
-                                        NULL);
-    build_lswitch_arp_nd_responder_default(od, lsi->lflows, NULL);
+                                        od->datapath_lflows);
+    build_lswitch_arp_nd_responder_default(od, lsi->lflows,
+                                           od->datapath_lflows);
     build_lswitch_dns_lookup_and_response(od, lsi->lflows, lsi->meter_groups,
-                                          NULL);
-    build_lswitch_dhcp_and_dns_defaults(od, lsi->lflows, NULL);
+                                          od->datapath_lflows);
+    build_lswitch_dhcp_and_dns_defaults(od, lsi->lflows, od->datapath_lflows);
     build_lswitch_destination_lookup_bmcast(od, lsi->lflows, &lsi->actions,
-                                            lsi->meter_groups, NULL);
-    build_lswitch_output_port_sec_od(od, lsi->lflows, NULL);
+                                            lsi->meter_groups,
+                                            od->datapath_lflows);
+    build_lswitch_output_port_sec_od(od, lsi->lflows, od->datapath_lflows);
     /* CT extraction flows are built with stateful flows, but default rule is
      * always needed */
     ovn_lflow_add(lsi->lflows, od, S_SWITCH_IN_CT_EXTRACT, 0, "1", "next;",
-                  NULL);
-    build_lswitch_lb_affinity_default_flows(od, lsi->lflows, NULL);
+                  od->datapath_lflows);
+    build_lswitch_lb_affinity_default_flows(od, lsi->lflows,
+                                            od->datapath_lflows);
     if (od->has_evpn_vni) {
-        build_lswitch_lflows_evpn_l2_unknown(od, lsi->lflows, NULL);
+        build_lswitch_lflows_evpn_l2_unknown(od, lsi->lflows,
+                                             od->datapath_lflows);
     } else {
-        build_lswitch_lflows_l2_unknown(od, lsi->lflows, NULL);
+        build_lswitch_lflows_l2_unknown(od, lsi->lflows, od->datapath_lflows);
     }
-    build_mcast_flood_lswitch(od, lsi->lflows, &lsi->actions, NULL);
+    /* build_network_function() flows are owned by the per-switch ls_stateful
+     * lflow_ref (built in build_ls_stateful_flows()).  The multicast flood
+     * flow (build_mcast_flood_lswitch()) is owned by the multicast_igmp
+     * node's lflow_ref (built in build_igmp_lflows()). */
 }
 
 /* Helper function to combine all lflow generation which is iterated by
@@ -22254,6 +22269,46 @@ lflow_reset_northd_refs(struct lflow_input *lflow_input)
 }
 
 void
+lflow_handle_northd_ls_changes(struct tracked_dps *tracked_lses,
+                               struct lflow_input *lflow_input,
+                               struct lflow_table *lflows,
+                               struct hmapx *dirty_lflow_refs)
+{
+    struct hmapx_node *hmapx_node;
+
+    struct lswitch_flow_build_info lsi = {
+        .ls_datapaths = lflow_input->ls_datapaths,
+        .ls_ports = lflow_input->ls_ports,
+        .ls_port_groups = lflow_input->ls_port_groups,
+        .meter_groups = lflow_input->meter_groups,
+        .features = lflow_input->features,
+        .lflows = lflows,
+        .match = DS_EMPTY_INITIALIZER,
+        .actions = DS_EMPTY_INITIALIZER,
+    };
+
+    /* Only the per-switch 'od->datapath_lflows' is handled here.  The other
+     * per-switch lflow_ref, the ls_stateful record's, is created and dropped
+     * along with the switch by en_ls_stateful and handled by
+     * lflow_handle_ls_stateful_changes(). */
+    HMAPX_FOR_EACH (hmapx_node, &tracked_lses->deleted) {
+        struct ovn_datapath *od = hmapx_node->data;
+        lflow_ref_unlink_lflows(od->datapath_lflows, lflows);
+        hmapx_add(dirty_lflow_refs, od->datapath_lflows);
+    }
+    HMAPX_FOR_EACH (hmapx_node, &tracked_lses->crupdated) {
+        struct ovn_datapath *od = hmapx_node->data;
+
+        lflow_ref_unlink_lflows(od->datapath_lflows, lflows);
+        build_lswitch_and_lrouter_iterate_by_ls(od, &lsi);
+        hmapx_add(dirty_lflow_refs, od->datapath_lflows);
+    }
+
+    ds_destroy(&lsi.actions);
+    ds_destroy(&lsi.match);
+}
+
+void
 lflow_handle_northd_lr_changes(struct tracked_dps *tracked_lrs,
                                struct lflow_input *lflow_input,
                                struct lflow_table *lflows,
@@ -22402,8 +22457,6 @@ lflow_handle_northd_port_changes(struct tracked_ovn_ports *trk_lsps,
                                 lflow_input->features,
                                 lflows,
                                 lflow_input->sbrec_acl_id_table);
-        build_network_function(od, lflows, lflow_input->ls_port_groups,
-                               ls_stateful_rec->lflow_ref);
         hmapx_add(dirty_lflow_refs, ls_stateful_rec->lflow_ref);
     }
 
@@ -22603,9 +22656,6 @@ lflow_handle_ls_stateful_changes(struct ls_stateful_tracked_data *trk_data,
                                 lflow_input->features,
                                 lflows,
                                 lflow_input->sbrec_acl_id_table);
-        build_network_function(od, lflows,
-                               lflow_input->ls_port_groups,
-                               ls_stateful_rec->lflow_ref);
         hmapx_add(dirty_lflow_refs, ls_stateful_rec->lflow_ref);
     }
 

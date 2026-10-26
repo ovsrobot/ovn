@@ -138,14 +138,15 @@ lflow_northd_handler(struct engine_node *node,
         return EN_UNHANDLED;
     }
 
-    if (northd_has_lswitches_in_tracked_data(&northd_data->trk_data)) {
-        return EN_UNHANDLED;
-    }
-
     struct lflow_data *lflow_data = data;
 
     struct lflow_input lflow_input;
     lflow_get_input_data(node, &lflow_input);
+
+    lflow_handle_northd_ls_changes(&northd_data->trk_data.trk_switches,
+                                   &lflow_input,
+                                   lflow_data->lflow_table,
+                                   &lflow_data->trk_data.dirty_lflow_refs);
 
     lflow_handle_northd_lr_changes(&northd_data->trk_data.trk_routers,
                                    &lflow_input,
