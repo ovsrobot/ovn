@@ -9935,6 +9935,154 @@ OVN_CLEANUP_NORTHD
 AT_CLEANUP
 ])
 
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([LR shared MAC binding scopes])
+ovn_start
+
+check ovn-sbctl chassis-add gw geneve 127.0.0.1
+
+check ovn-nbctl \
+    -- ls-add ext0 \
+    -- lsp-add-localnet-port ext0 ln0 physnet \
+    -- lr-add lr0 \
+    -- lrp-add lr0 rp0 00:00:00:00:00:01 192.0.2.1/24 fd00::1/64 \
+    -- lsp-add-router-port ext0 ext0-rp0 rp0 \
+    -- ls-add ext1 \
+    -- lsp-add-localnet-port ext1 ln1 physnet \
+    -- lr-add lr1 \
+    -- lrp-add lr1 rp1 00:00:00:00:00:02 192.0.2.2/24 fd00::2/64 \
+    -- lsp-add-router-port ext1 ext1-rp1 rp1
+check ovn-nbctl lrp-set-gateway-chassis rp0 gw
+check ovn-nbctl lrp-set-gateway-chassis rp1 gw
+
+scope=$(ovn-nbctl create MAC_Binding_Scope name=scope0 \
+    always_learn_from_arp_request=false disable_garp_rarp=true \
+    mac_binding_age_threshold=300)
+check ovn-nbctl set Logical_Router_Port rp0 mac_binding_scope=$scope \
+    -- set Logical_Router_Port rp1 mac_binding_scope=$scope
+check ovn-nbctl --wait=sb sync
+
+dnl The scope stays inactive until every local chassis supports it.
+check_row_count sb:MAC_Binding_Scope 0
+
+dnl Restoring support during a full recompute must re-enable the feature,
+dnl not retain the previously unsupported state.
+check as northd ovn-appctl -t ovn-northd pause
+check ovn-sbctl set Chassis gw other_config:shared-mac-binding=true
+check as northd ovn-appctl -t ovn-northd resume
+check ovn-nbctl --wait=sb sync
+check_row_count sb:MAC_Binding_Scope 1 name=scope0
+
+sb_scope=$(fetch_column sb:MAC_Binding_Scope _uuid name=scope0)
+scope_key=$(fetch_column sb:MAC_Binding_Scope binding_key name=scope0)
+check test "$scope_key" -gt 0
+check_column "$sb_scope" sb:Port_Binding mac_binding_scope \
+    logical_port=rp0
+check_column "$sb_scope" sb:Port_Binding mac_binding_scope \
+    logical_port=rp1
+check_column "$sb_scope" sb:Port_Binding mac_binding_scope \
+    logical_port=cr-rp0
+check_column "$sb_scope" sb:Port_Binding mac_binding_scope \
+    logical_port=cr-rp1
+check_row_count sb:MAC_Binding_Scope 1 name=scope0 \
+    options:always_learn_from_arp_request=false \
+    options:disable_garp_rarp=true options:mac_binding_age_threshold=300
+
+dnl Revalidating an unchanged active scope must not force lflow recompute.
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lb-add lb0 198.51.100.1 198.51.100.2
+check_engine_stats mac_binding_scope recompute nocompute
+check_engine_stats lflow norecompute compute
+
+ovn-sbctl dump-flows lr0 > lr0flows
+AT_CAPTURE_FILE([lr0flows])
+AT_CHECK([grep -Fq "lookup_arp(inport, arp.spa, arp.sha, $scope_key)" \
+    lr0flows])
+AT_CHECK([grep -Fq "get_arp(outport, reg0, $scope_key)" lr0flows])
+AT_CHECK([grep -Fq "mac_cache_use($scope_key)" lr0flows])
+
+dnl Scope policy takes precedence over the router policy in both directions.
+dnl Trace cold requests and replies, including NAs without a TLL option.
+check ovn-nbctl --wait=sb set Logical_Router lr0 \
+    options:always_learn_from_arp_request=false \
+    -- set MAC_Binding_Scope $scope always_learn_from_arp_request=true
+arp='inport == "rp0" && eth.src == 00:00:00:00:00:fe && eth.dst == 00:00:00:00:00:01 && arp.spa == 192.0.2.254 && arp.tpa == 192.0.2.253 && arp.sha == 00:00:00:00:00:fe && arp.tha == 00:00:00:00:00:01'
+nd='inport == "rp0" && eth.src == 00:00:00:00:00:fe && eth.dst == 00:00:00:00:00:01 && ip6.src == fd00::fe && ip6.dst == fd00::1 && ip.ttl == 255 && nd.target == fd00::fd'
+for op in 1 2; do
+    AT_CHECK([ovn_trace --detailed lr0 "$arp && arp.op == $op" > trace])
+    AT_CHECK([grep -q 'put_arp(inport, arp.spa, arp.sha)' trace])
+done
+for packet in 'nd_ns && nd.sll == 00:00:00:00:00:fe' \
+              'nd_na && nd.tll == 00:00:00:00:00:fe' \
+              'nd_na && nd.tll == 00:00:00:00:00:00'; do
+    AT_CHECK([ovn_trace --detailed lr0 "$nd && $packet" > trace])
+    AT_CHECK([grep -q 'put_nd' trace])
+done
+check ovn-nbctl --wait=sb set Logical_Router lr0 \
+    options:always_learn_from_arp_request=true \
+    -- set MAC_Binding_Scope $scope always_learn_from_arp_request=false
+AT_CHECK([ovn_trace --detailed lr0 "$arp && arp.op == 1" > trace])
+AT_CHECK([grep -q 'put_arp' trace], [1])
+AT_CHECK([ovn_trace --detailed lr0 \
+    "$nd && nd_ns && nd.sll == 00:00:00:00:00:fe" > trace])
+AT_CHECK([grep -q 'put_nd' trace], [1])
+AT_CAPTURE_FILE([trace])
+
+dnl Router-owned SNAT addresses must be dropped before either the IPv4 or
+dnl IPv6 scoped neighbor lookup, including unmatched inbound connections.
+check ovn-nbctl lr-nat-add lr0 snat 192.0.2.1 10.0.0.0/24
+check ovn-nbctl lr-nat-add lr0 snat fd00::1 fd01::/64
+check ovn-nbctl --wait=sb sync
+AT_CHECK([ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | \
+    grep 'priority=3 ' | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_arp_resolve  ), priority=3    , match=(ip4.dst == {192.0.2.1}), action=(drop;)
+  table=??(lr_in_arp_resolve  ), priority=3    , match=(ip6.dst == {fd00::1}), action=(drop;)
+])
+
+dnl Reconciliation preserves the OpenFlow namespace key.
+check ovn-nbctl --wait=sb set MAC_Binding_Scope $scope name=scope1
+check_column "$scope_key" sb:MAC_Binding_Scope binding_key name=scope1
+
+dnl Private rows for active members are stale and must be removed.
+dp0=$(fetch_column Datapath_Binding _uuid external_ids:name=lr0)
+check_uuid ovn-sbctl create MAC_Binding logical_port=rp0 \
+    ip=192.0.2.254 mac="00\:00\:00\:00\:00\:fe" datapath=$dp0 \
+    timestamp=0
+check_row_count MAC_Binding 1 logical_port=rp0
+check ovn-nbctl --wait=sb set MAC_Binding_Scope $scope \
+    external_ids:reconcile=true
+check_row_count MAC_Binding 0 logical_port=rp0
+
+dnl A shared row survives reconciliation but is removed with its scope.
+check ovn-nbctl --wait=sb clear MAC_Binding_Scope $scope \
+    mac_binding_age_threshold
+AT_CHECK([ovn-sbctl --if-exists get MAC_Binding_Scope $sb_scope \
+    options:mac_binding_age_threshold], [0], [
+])
+check_uuid ovn-sbctl create Shared_MAC_Binding scope=$sb_scope \
+    ip=192.0.2.254 mac="00\:00\:00\:00\:00\:fe" timestamp=0
+check ovn-nbctl --wait=sb set MAC_Binding_Scope $scope \
+    external_ids:reconcile=false
+check_row_count Shared_MAC_Binding 1 ip=192.0.2.254
+
+dnl A different localnet mapping invalidates the complete scope.
+check ovn-nbctl --wait=sb set Logical_Switch_Port ln1 \
+    options:network_name=other
+check_row_count sb:MAC_Binding_Scope 0
+check_row_count Shared_MAC_Binding 0
+check_column "" sb:Port_Binding mac_binding_scope logical_port=rp0
+check_column "" sb:Port_Binding mac_binding_scope logical_port=rp1
+
+dnl Invalid scope-wide aging policy also keeps the scope inactive.
+check ovn-nbctl set Logical_Switch_Port ln1 options:network_name=physnet
+check ovn-nbctl --wait=sb set MAC_Binding_Scope $scope \
+    mac_binding_age_threshold=invalid
+check_row_count sb:MAC_Binding_Scope 0
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
 OVN_FOR_EACH_NORTHD_NO_HV_PARALLELIZATION([
 AT_SETUP([LS default ACL drop])
 AT_KEYWORDS([acl])
@@ -11125,6 +11273,9 @@ AT_SETUP([check fip flows with redirect-type bridged])
 AT_KEYWORDS([fip-redirect-type-bridged])
 ovn_start
 
+check ovn-sbctl chassis-add hv1 geneve 127.0.0.1 \
+    -- set Chassis hv1 other_config:shared-mac-binding=true
+
 check ovn-nbctl lr-add R1
 check ovn-nbctl lrp-add R1 R1-S0 02:ac:10:01:00:01 10.0.0.1/24 1000::a/64
 check ovn-nbctl lrp-add R1 R1-PUB 02:ac:20:01:01:01 172.16.0.1/24 3000::a/64
@@ -11133,7 +11284,16 @@ check ovn-nbctl lrp-set-gateway-chassis R1-PUB hv1 20
 check ovn-nbctl ls-add S0
 check ovn-nbctl lsp-add-router-port S0 S0-R1 R1-S0
 check ovn-nbctl lsp-add S0 S0-P0
-check ovn-nbctl lsp-set-addresses S0-P0 "50:54:00:00:00:03 10.0.0.3 1000::3"
+check ovn-nbctl lsp-set-addresses S0-P0 \
+    "50:54:00:00:00:03 10.0.0.3 10.0.0.4 1000::3"
+
+check ovn-nbctl ls-add PUB
+check ovn-nbctl lsp-add-router-port PUB PUB-R1 R1-PUB
+check ovn-nbctl lsp-add-localnet-port PUB ln-pub physnet1
+
+scope1=$(ovn-nbctl create MAC_Binding_Scope name=scope1)
+check ovn-nbctl set Logical_Router_Port R1-PUB \
+    mac_binding_scope=$scope1
 
 check ovn-nbctl lr-nat-add R1 dnat_and_snat 172.16.0.110 10.0.0.3 S0-P0 30:54:00:00:00:03
 check ovn-nbctl lr-nat-add R1 dnat_and_snat 3000::c 1000::3 S0-P0 40:54:00:00:00:03
@@ -11147,9 +11307,36 @@ check ovn-nbctl --wait=sb set logical_router_port R1-PUB options:redirect-type=b
 ovn-sbctl dump-flows R1 > R1flows
 AT_CAPTURE_FILE([R1flows])
 
-AT_CHECK([grep "lr_in_arp_resolve" R1flows | grep priority=90 | ovn_strip_lflows], [0], [dnl
-  table=??(lr_in_arp_resolve  ), priority=90   , match=(outport == "R1-PUB" && ip4.src == 10.0.0.3 && is_chassis_resident("S0-P0")), action=(get_arp(outport, reg0); next;)
-  table=??(lr_in_arp_resolve  ), priority=90   , match=(outport == "R1-PUB" && ip6.src == 1000::3 && is_chassis_resident("S0-P0")), action=(get_nd(outport, xxreg0); next;)
+AT_CHECK([grep "lr_in_arp_resolve" R1flows | grep priority=90 | wc -l],
+    [0], [2
+])
+dnl The bridged redirect flows use the single DGP's MAC binding namespace.
+redirect_port=$(grep "lr_in_arp_resolve" R1flows | grep priority=90 | \
+    head -1 | cut -d '"' -f2)
+redirect_scope=$(fetch_column sb:Port_Binding mac_binding_scope \
+    logical_port=$redirect_port)
+redirect_scope_key=$(ovn-sbctl get MAC_Binding_Scope $redirect_scope \
+    binding_key)
+AT_CHECK_UNQUOTED([grep "lr_in_arp_resolve" R1flows | grep priority=90 | \
+    grep -F ", $redirect_scope_key); next;" | wc -l], [0], [2
+])
+
+dnl Bridged redirection is ignored when the router has multiple DGPs.
+check ovn-nbctl lrp-add R1 R1-PUB2 02:ac:20:01:02:01 172.17.0.1/24
+check ovn-nbctl lrp-set-gateway-chassis R1-PUB2 hv1 20
+check ovn-nbctl ls-add PUB2
+check ovn-nbctl lsp-add-router-port PUB2 PUB2-R1 R1-PUB2
+check ovn-nbctl lsp-add-localnet-port PUB2 ln-pub2 physnet2
+scope2=$(ovn-nbctl create MAC_Binding_Scope name=scope2)
+check ovn-nbctl set Logical_Router_Port R1-PUB2 \
+    mac_binding_scope=$scope2
+check ovn-nbctl --gateway-port=R1-PUB2 lr-nat-add R1 dnat_and_snat \
+    172.17.0.110 10.0.0.4 S0-P0 31:54:00:00:00:03
+check ovn-nbctl --wait=sb sync
+
+ovn-sbctl dump-flows R1 > R1flows
+AT_CHECK([grep "lr_in_arp_resolve" R1flows | grep priority=90 | sort],
+    [0], [dnl
 ])
 
 OVN_CLEANUP_NORTHD

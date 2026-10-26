@@ -217,9 +217,10 @@ en_global_config_run(struct engine_node *node , void *data)
         nbrec_nb_global_set_options(nb, options);
     }
 
-    if (smap_get_bool(&nb->options, "ignore_chassis_features", false)) {
-        northd_enable_all_features(config_data);
-    } else {
+    /* A full recompute must also be able to re-enable features.  The
+     * capability scan only clears flags for unsupported features. */
+    northd_enable_all_features(config_data);
+    if (!smap_get_bool(&nb->options, "ignore_chassis_features", false)) {
         build_chassis_features(sbrec_chassis_table, &config_data->features);
     }
 
@@ -520,6 +521,7 @@ northd_enable_all_features(struct ed_type_global_config *data)
         .ct_next_zone = true,
         .ct_label_flush = true,
         .ct_state_save = true,
+        .shared_mac_binding = true,
     };
 }
 
@@ -595,6 +597,15 @@ build_chassis_features(const struct sbrec_chassis_table *sbrec_chassis_table,
         if (!ct_state_save &&
             chassis_features->ct_state_save) {
             chassis_features->ct_state_save = false;
+        }
+
+        bool shared_mac_binding =
+                smap_get_bool(&chassis->other_config,
+                              OVN_FEATURE_SHARED_MAC_BINDING,
+                              false);
+        if (!shared_mac_binding &&
+            chassis_features->shared_mac_binding) {
+            chassis_features->shared_mac_binding = false;
         }
     }
 }
@@ -750,6 +761,10 @@ chassis_features_changed(const struct chassis_features *present,
     }
 
     if (present->ct_state_save != updated->ct_state_save) {
+        return true;
+    }
+
+    if (present->shared_mac_binding != updated->shared_mac_binding) {
         return true;
     }
 

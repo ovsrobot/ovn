@@ -31843,7 +31843,7 @@ if test X"$1" = X"DGP"; then
     inport=reg14
     outport=reg15
 else
-    prio=2
+    prio=3
 fi
 AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep -E "table=$arp_resolve, n_packets=1,.* priority=$prio,ip,$inport.*$outport.*metadata=0x${sw_key},nw_dst=10.0.1.1 actions=drop" -c], [0], [dnl
 1

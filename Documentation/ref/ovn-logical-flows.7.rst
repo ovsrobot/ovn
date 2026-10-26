@@ -3510,11 +3510,11 @@ contains the final destination.)  This table resolves the IP address in ``reg0``
   and the destination IP of the packet is still a router owned IP, the packets
   can be safely dropped.
 
-  A priority-2 logical flow with match ``ip4.dst = {..}`` matches on traffic
+  A priority-3 logical flow with match ``ip4.dst = {..}`` matches on traffic
   destined to router owned IPv4 addresses which are also SNAT IPs. This flow has
   action ``drop;``.
 
-  A priority-2 logical flow with match ``ip6.dst = {..}`` matches on traffic
+  A priority-3 logical flow with match ``ip6.dst = {..}`` matches on traffic
   destined to router owned IPv6 addresses which are also SNAT IPs. This flow has
   action ``drop;``.
 
@@ -3526,11 +3526,16 @@ contains the final destination.)  This table resolves the IP address in ``reg0``
   :ref:`ARP Request <lr-in-27>` will issue an ARP or neighbor solicitation
   request for cases where the binding is not yet known.)
 
-  A priority-0 logical flow with match ``ip4`` has actions ``get_arp(outport,
-  reg0); next;``.
+  A priority-1 logical flow with match ``reg9[9] == 1`` has actions
+  ``get_arp(outport, reg0); next;``.
 
-  A priority-0 logical flow with match ``ip6`` has actions ``get_nd(outport,
-  xxreg0); next;``.
+  A priority-1 logical flow with match ``reg9[9] == 0`` has actions
+  ``get_nd(outport, xxreg0); next;``.
+
+  For a port in an active MAC binding scope, priority-2 flows additionally
+  match ``outport`` and pass the scope's binding key as the final argument
+  to ``get_arp`` or ``get_nd``.  Router-owned destination drops take
+  precedence over these scoped lookups.
 
 - For a distributed gateway LRP with ``redirect-type`` set to ``bridged``, a
   priority-50 flow will match ``outport == "ROUTER_PORT" and
