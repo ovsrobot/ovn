@@ -70,6 +70,13 @@ vif_plug_dummy_port_prepare(const struct vif_plug_port_ctx_in *ctx_in,
     VLOG_DBG("vif_plug_dummy_port_prepare: %s", ctx_in->lport_name);
 
     if (ctx_in->op_type == PLUG_OP_CREATE) {
+        const char *return_false = smap_get(
+            &ctx_in->lport_options, "vif-plug-dummy-return-false");
+        if (return_false && !strcmp(return_false, "true")) {
+            VLOG_DBG("vif_plug_dummy_port_prepare: %s - returning false as "
+                     "requested", ctx_in->lport_name);
+            return false;
+        }
         size_t lport_name_len = strlen(ctx_in->lport_name);
         ctx_out->name = xzalloc(IFNAMSIZ);
         memcpy(ctx_out->name, ctx_in->lport_name,
