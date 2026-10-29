@@ -1053,6 +1053,20 @@ mac_binding_probe_stats_run(struct vector *stats_vec, uint64_t *req_delay,
             }
         }
 
+        /* The neighbor is not part of any of the LRP's configured prefixes.
+         * This is the case for off-subnet next hops selected with an explicit
+         * output_port route (e.g. /32 addressing with a reachable default
+         * gateway).  Fall back to the port's first address, matching
+         * find_static_route_outport(). */
+        if (ipv6_addr_equals(&local, &in6addr_any)) {
+            if (IN6_IS_ADDR_V4MAPPED(&mb->data.ip) && laddr.n_ipv4_addrs) {
+                local = in6_addr_mapped_ipv4(laddr.ipv4_addrs[0].addr);
+            } else if (!IN6_IS_ADDR_V4MAPPED(&mb->data.ip)
+                       && laddr.n_ipv6_addrs) {
+                local = laddr.ipv6_addrs[0].addr;
+            }
+        }
+
         if (!ipv6_addr_equals(&local, &in6addr_any)) {
             struct eth_addr eth_dst =
                 mb->arp_attempts < PROBE_MULICAST_THRESHOLD
