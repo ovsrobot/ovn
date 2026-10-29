@@ -82,6 +82,12 @@ enum chassis_update_status {
     CHASSIS_NEED_DELETE
 };
 
+enum chassis_parse_status {
+    CHASSIS_PARSED,
+    CHASSIS_NO_CFG,
+    CHASSIS_DELETE_NO_ENCAPS,
+};
+
 static void
 ovs_chassis_cfg_init(struct ovs_chassis_cfg *cfg)
 {
@@ -303,9 +309,12 @@ chassis_parse_ovs_iface_types(char **iface_types, size_t n_iface_types,
 }
 
 /*
- * Parse the 'ovs_table' entry and populate 'ovs_cfg'.
+ * Parse the 'ovs_table' entry and populate 'ovs_cfg'.  If successful,
+ * returns CHASSIS_PARSED.
+ * Otherwise, returns CHASSIS_NO_CFG if 'ovs_table' is NULL, or
+ * CHASSIS_DELETE_NO_ENCAPS if encap type or ip is NULL.
  */
-static bool
+static enum chassis_parse_status
 chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
                          const struct ovsrec_bridge *br_int,
                          struct ovs_chassis_cfg *ovs_cfg)
@@ -316,7 +325,7 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
 
     if (!cfg) {
         VLOG_INFO("No Open_vSwitch row defined.");
-        return false;
+        return CHASSIS_NO_CFG;
     }
 
     const char *chassis_id = get_ovs_chassis_id(ovs_table);
@@ -328,8 +337,9 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
         get_chassis_external_id_value(&cfg->external_ids, chassis_id,
                                       "ovn-encap-ip", NULL);
     if (!encap_type || !encap_ips) {
-        VLOG_INFO_RL(&rl, "Need to specify an encap type and ip");
-        return false;
+        VLOG_WARN_RL(&rl, "No encap type and/or ip on chassis '%s'. Deleting "
+                     "chassis.", chassis_id);
+        return CHASSIS_DELETE_NO_ENCAPS;
     }
 
     ovs_cfg->hostname = get_hostname(&cfg->external_ids, chassis_id);
@@ -386,7 +396,7 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
     ovs_cfg->ct_label_flush =
         ovs_feature_is_supported(OVS_CT_LABEL_FLUSH_SUPPORT);
 
-    return true;
+    return CHASSIS_PARSED;
 }
 
 static void
@@ -958,7 +968,29 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
 
     /* Get the chassis config from the ovs table. */
     ovs_chassis_cfg_init(&ovs_cfg);
-    if (!chassis_parse_ovs_config(ovs_table, br_int, &ovs_cfg)) {
+    enum chassis_parse_status parse_status =
+        chassis_parse_ovs_config(ovs_table, br_int, &ovs_cfg);
+
+    if (parse_status == CHASSIS_NO_CFG) {
+        ovs_chassis_cfg_destroy(&ovs_cfg);
+        return NULL;
+    }
+
+    /* If no encaps are configured, delete the Chassis record. */
+    if (parse_status == CHASSIS_DELETE_NO_ENCAPS) {
+        const struct sbrec_chassis *chassis_rec =
+            chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id);
+        if (chassis_rec && ovnsb_idl_txn) {
+            sbrec_chassis_delete(chassis_rec);
+        }
+        *chassis_private =
+            chassis_private_lookup_by_name(sbrec_chassis_private_by_name,
+                                           chassis_id);
+        if (*chassis_private && ovnsb_idl_txn) {
+            sbrec_chassis_private_delete(*chassis_private);
+        }
+
+        ovs_chassis_cfg_destroy(&ovs_cfg);
         return NULL;
     }
 
