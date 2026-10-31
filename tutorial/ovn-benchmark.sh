@@ -161,6 +161,11 @@ if [ ! -d "$PWD/sandbox" ]; then
     exit 1
 fi
 
+if [ "$(nm -an $PWD/../controller/ovn-controller | grep "asan\|ubsan")" ]; then
+    echo "Compiled with address sanitizer, which is incompatible. Exiting."
+    exit 1
+fi
+
 # Apply defaults if not set by user.
 NODES=${NODES:-$DEFAULT_NODES}
 
