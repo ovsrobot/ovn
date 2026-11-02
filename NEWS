@@ -3,6 +3,11 @@ Post v26.09.0
    - ACL sampling: observation data recorded by a sampled "pass" ACL is no
      longer inherited by the ACL that determines the verdict in the next
      tier.
+   - ACL sampling: "drop" and "reject" ACLs on logical switches with stateful
+     ACLs now sample all denied traffic, including untracked traffic and
+     traffic of sessions established before the ACL was added.  Such traffic
+     was previously not sampled or, for established sessions, attributed to
+     the "allow-related" ACL that originally admitted the session.
    - Learn ARP sender hardware address (arp.sha) and IPv6 Neighbor
      Discovery link-layer addresses (nd.tll, nd.sll) into the FDB
      table in addition to eth.src.  This allows VRRP virtual MACs to

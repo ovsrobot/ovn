@@ -15567,6 +15567,153 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([ACL Sampling - deny verdicts on stateful switch])
+AT_KEYWORDS([acl sampling])
+
+ovn_start
+
+check ovn-sbctl chassis-add gw1 geneve 127.0.0.1 \
+  -- set chassis gw1 other_config:ovn-sample-with-registers="true"
+
+collector1=$(ovn-nbctl create Sample_Collector id=1 name=c1 probability=65535 set_id=100)
+check_row_count nb:Sample_Collector 1
+
+check_uuid ovn-nbctl create Sampling_App type="acl-new" id="42"
+check_uuid ovn-nbctl create Sampling_App type="acl-est" id="43"
+check_row_count nb:Sampling_App 2
+
+dnl Traffic entering the switch from the router port is not sent to
+dnl conntrack (skip_port_from_conntrack), so it is always untracked.
+check ovn-nbctl                                      \
+  -- lr-add lr                                       \
+  -- lrp-add lr lrp1 00:00:00:00:01:00 42.42.42.1/24 \
+  -- ls-add ls                                       \
+  -- lsp-add ls vm1                                  \
+  -- lsp-set-addresses vm1 00:00:00:00:00:01         \
+  -- lsp-add ls vm2                                  \
+  -- lsp-set-addresses vm2 00:00:00:00:00:02         \
+  -- lsp-add-router-port ls ls-lr lrp1
+check ovn-nbctl --wait=sb sync
+
+rp_flow="inport == \"ls-lr\" && eth.src == 00:00:00:00:01:00 && eth.dst == 00:00:00:00:00:01 && ip4.src == 10.0.0.1 && ip4.dst == 42.42.42.2 && tcp"
+vm_flow="inport == \"vm1\" && eth.src == 00:00:00:00:00:01 && eth.dst == 00:00:00:00:00:02 && ip4.src == 42.42.42.2 && ip4.dst == 42.42.42.3 && tcp"
+m4_define([TRACE_FILTER], [grep -e sample -e commit | grep -v _sample | sort])
+
+dnl Stateful allow-related ACLs for vm1 with sampling enabled, plus
+dnl sampled drop/reject ACLs in every ACL stage.
+check_uuid ovn-nbctl --wait=sb                                                 \
+  -- --id=@sgn create Sample collector="$collector1" metadata=4301             \
+  -- --id=@sge create Sample collector="$collector1" metadata=4302             \
+  -- --sample-new=@sgn --sample-est=@sge                                       \
+     acl-add ls from-lport 1 'inport == "vm1"' allow-related                   \
+  -- --id=@sgn2 create Sample collector="$collector1" metadata=4303            \
+  -- --id=@sge2 create Sample collector="$collector1" metadata=4304            \
+  -- --sample-new=@sgn2 --sample-est=@sge2                                     \
+     acl-add ls to-lport 1 'outport == "vm1"' allow-related                    \
+  -- --id=@d1 create Sample collector="$collector1" metadata=4401              \
+  -- --sample-new=@d1 acl-add ls from-lport 2 'tcp.dst == 22' drop             \
+  -- --id=@d2 create Sample collector="$collector1" metadata=4402              \
+  -- --sample-new=@d2 acl-add ls from-lport 2 'tcp.dst == 23' reject           \
+  -- --id=@d3 create Sample collector="$collector1" metadata=4403              \
+  -- --sample-new=@d3 acl-add ls to-lport 2 'tcp.dst == 24' drop               \
+  -- --id=@d4 create Sample collector="$collector1" metadata=4404              \
+  -- --apply-after-lb --sample-new=@d4 acl-add ls from-lport 2 'tcp.dst == 25' drop
+check_row_count nb:ACL 6
+
+dnl Drop/reject ACLs on a switch with stateful ACLs sample every packet that
+dnl gets the deny verdict, regardless of the connection tracking state.
+AT_CHECK([ovn-sbctl lflow-list ls | grep -e ls_in_acl_sample -e ls_in_acl_after_lb_sample -e ls_out_acl_sample | ovn_strip_lflows | ovn_strip_collector_set | grep -e 'reg3 == 440'], [0], [dnl
+  table=??(ls_in_acl_after_lb_sample), priority=1300 , match=(ip && reg0[[13]] == 1 && (reg8[[17]] == 1 || reg8[[18]] == 1) && reg3 == 4404 && reg8[[19..20]] == 1), action=(flags.pkt_sampled = 1; sample(probability=65535,collector_set=??,obs_domain=42,obs_point=4404); next;)
+  table=??(ls_in_acl_sample   ), priority=1300 , match=(ip && reg0[[13]] == 1 && (reg8[[17]] == 1 || reg8[[18]] == 1) && reg3 == 4401 && reg8[[19..20]] == 0), action=(flags.pkt_sampled = 1; sample(probability=65535,collector_set=??,obs_domain=42,obs_point=4401); next;)
+  table=??(ls_in_acl_sample   ), priority=1300 , match=(ip && reg0[[13]] == 1 && (reg8[[17]] == 1 || reg8[[18]] == 1) && reg3 == 4402 && reg8[[19..20]] == 0), action=(flags.pkt_sampled = 1; sample(probability=65535,collector_set=??,obs_domain=42,obs_point=4402); next;)
+  table=??(ls_out_acl_sample  ), priority=1300 , match=(ip && reg0[[13]] == 1 && (reg8[[17]] == 1 || reg8[[18]] == 1) && reg3 == 4403 && reg8[[19..20]] == 2), action=(flags.pkt_sampled = 1; sample(probability=65535,collector_set=??,obs_domain=42,obs_point=4403); next;)
+])
+
+AS_BOX([from-lport drop: untracked traffic from the router port])
+AT_CHECK_UNQUOTED([ovn_trace ls "$rp_flow && tcp.dst == 22" | TRACE_FILTER], [0], [dnl
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=4401);
+])
+
+AS_BOX([from-lport reject: untracked traffic from the router port])
+AT_CHECK_UNQUOTED([ovn_trace ls "$rp_flow && tcp.dst == 23" | TRACE_FILTER], [0], [dnl
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=4402);
+])
+
+AS_BOX([from-lport drop: new connection])
+AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new ls "$vm_flow && tcp.dst == 22" | TRACE_FILTER], [0], [dnl
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=4401);
+])
+
+AS_BOX([from-lport drop: established connection previously allowed by the allow-related ACL])
+dnl The deny verdict is sampled.  The established-connection sampler of the
+dnl allow-related ACL (obs_domain 43, obs_point 4302) must not be hit.
+flow="$vm_flow && tcp.dst == 22 && ct_label.obs_point_id == 4302 && ct_mark.obs_collector_id == 1 && ct_mark.obs_stage == 0"
+AT_CHECK_UNQUOTED([ovn_trace --ct est --ct est ls "$flow" | TRACE_FILTER], [0], [dnl
+    ct_commit { ct_mark.blocked = 1; ct_label.obs_point_id = 0; };
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=4401);
+])
+
+AS_BOX([from-lport allow-related: established connection is still sampled])
+flow="$vm_flow && tcp.dst == 80 && ct_label.obs_point_id == 4302 && ct_mark.obs_collector_id == 1 && ct_mark.obs_stage == 0"
+AT_CHECK_UNQUOTED([ovn_trace --ct est --ct est ls "$flow" | TRACE_FILTER | grep -v 'ct_commit {'], [0], [dnl
+    sample(probability=65535,collector_set=100,obs_domain=43,obs_point=ct_label.obs_point_id);
+])
+
+AS_BOX([to-lport drop: new connection towards vm1])
+AT_CHECK_UNQUOTED([ovn_trace --ct new ls "$rp_flow && tcp.dst == 24" | TRACE_FILTER], [0], [dnl
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=4403);
+])
+
+AS_BOX([to-lport drop: established connection previously allowed by the allow-related ACL])
+flow="$rp_flow && tcp.dst == 24 && ct_label.obs_point_id == 4304 && ct_mark.obs_collector_id == 1 && ct_mark.obs_stage == 2"
+AT_CHECK_UNQUOTED([ovn_trace --ct est ls "$flow" | TRACE_FILTER], [0], [dnl
+    ct_commit { ct_mark.blocked = 1; ct_label.obs_point_id = 0; };
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=4403);
+])
+
+AS_BOX([from-lport-after-lb drop: new connection])
+dnl The from-lport allow-related ACL samples the new connection (4301, via
+dnl registers) before the from-lport-after-lb drop ACL samples the verdict.
+AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new ls "$vm_flow && tcp.dst == 25" | TRACE_FILTER], [0], [dnl
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=4404);
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=reg3);
+])
+
+AS_BOX([drop with sample_new and sample_est])
+dnl sample_est is only used by allow-related ACLs; a deny verdict is always
+dnl sampled with sample_new.
+check_uuid ovn-nbctl --wait=sb                                                 \
+  -- --id=@d5n create Sample collector="$collector1" metadata=4405             \
+  -- --id=@d5e create Sample collector="$collector1" metadata=4406             \
+  -- --sample-new=@d5n --sample-est=@d5e acl-add ls from-lport 2 'tcp.dst == 26' drop
+AT_CHECK([ovn-sbctl lflow-list ls | grep -e ls_in_acl_sample -e ls_out_acl_sample | ovn_strip_lflows | ovn_strip_collector_set | grep -e 440[[56]]], [0], [dnl
+  table=??(ls_in_acl_sample   ), priority=1300 , match=(ip && reg0[[13]] == 1 && (reg8[[17]] == 1 || reg8[[18]] == 1) && reg3 == 4405 && reg8[[19..20]] == 0), action=(flags.pkt_sampled = 1; sample(probability=65535,collector_set=??,obs_domain=42,obs_point=4405); next;)
+])
+dnl The sample_est observation point ID is only stored in the conntrack
+dnl label of the blocked connection.
+flow="$vm_flow && tcp.dst == 26 && ct_label.obs_point_id == 4302 && ct_mark.obs_collector_id == 1 && ct_mark.obs_stage == 0"
+AT_CHECK_UNQUOTED([ovn_trace --ct est --ct est ls "$flow" | TRACE_FILTER], [0], [dnl
+    ct_commit { ct_mark.blocked = 1; ct_label.obs_point_id = 4406; };
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=4405);
+])
+
+AS_BOX([switch without stateful ACLs keeps the stateless sampler])
+check ovn-nbctl                                      \
+  -- ls-add ls2                                      \
+  -- lsp-add ls2 vm3                                 \
+  -- lsp-set-addresses vm3 00:00:00:00:00:03
+check_uuid ovn-nbctl --wait=sb                                                 \
+  -- --id=@d6 create Sample collector="$collector1" metadata=4407              \
+  -- --sample-new=@d6 acl-add ls2 from-lport 2 'tcp.dst == 22' drop
+AT_CHECK([ovn-sbctl lflow-list ls2 | grep -e ls_in_acl_sample | ovn_strip_lflows | ovn_strip_collector_set | grep -e obs_point], [0], [dnl
+  table=??(ls_in_acl_sample   ), priority=900  , match=(ip && reg8[[0..7]] == 1 && reg8[[19..20]] == 0), action=(flags.pkt_sampled = 1; sample(probability=65535,collector_set=??,obs_domain=42,obs_point=reg3); next;)
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([ACL Sampling - pass ACL observation data does not leak to the next tier])
 AT_KEYWORDS([acl sampling])
 
@@ -15624,11 +15771,15 @@ check ovn-nbctl --wait=sb sync
 
 dnl The "pass" ACL is sampled in its own tier, according to the connection
 dnl state rules of the sample stage (new connections on this stateful
-dnl switch).
+dnl switch).  The sampled drop ACL is sampled for every denied packet.
 AS_BOX([sampled drop after pass, new connection: pass and drop are both sampled])
 AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new ls "$vm_flow && tcp.dst == 22" | TRACE_FILTER], [0], [dnl
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=4501);
     sample(probability=65535,collector_set=100,obs_domain=42,obs_point=m4_if(REGS, [true], [reg3], [4501]));
-    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=m4_if(REGS, [true], [reg3], [4501]));
+])
+AS_BOX([sampled drop after pass, untracked: only the drop is sampled])
+AT_CHECK_UNQUOTED([ovn_trace ls "$rp_flow && tcp.dst == 22" | TRACE_FILTER], [0], [dnl
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=4501);
 ])
 
 dnl The unsampled drop ACL must not be attributed to the "pass" ACL Sample.

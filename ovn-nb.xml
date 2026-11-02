@@ -3200,6 +3200,17 @@ or
       </p>
 
       <p>
+        For <code>drop</code> and <code>reject</code> ACLs on a logical
+        switch with stateful ACLs this is also used for sampling all traffic
+        matched by the ACL, regardless of its connection tracking state.
+        Untracked traffic (e.g., traffic entering the logical switch from a
+        router port) and traffic that belongs to sessions established before
+        the ACL was added are denied, and therefore sampled, too.  This
+        sampler takes precedence over the established session samplers of
+        <code>allow-related</code> ACLs.
+      </p>
+
+      <p>
         Sampling of a <code>pass</code> ACL follows the connection state
         rules of the ACL sample stage, in the tier of the <code>pass</code>
         ACL.  Its observation data is not inherited by the ACLs evaluated in
@@ -3218,7 +3229,13 @@ or
     <column name="sample_est">
       <p>
         The entry in the <ref table="Sample"/> table to use for sampling for
-        established/related sessions matched by this ACL.
+        established/related sessions matched by this ACL.  Only
+        <code>allow-related</code> ACLs install samplers for
+        established/related sessions.  For <code>drop</code> and
+        <code>reject</code> ACLs that also have <ref column="sample_new"/>
+        configured, the deny verdict sampler takes precedence; the
+        observation point ID of this entry is still stored in the connection
+        tracking label of the blocked session.
       </p>
 
       <p>
