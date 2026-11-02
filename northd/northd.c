@@ -7640,6 +7640,19 @@ build_acl_sample_label_action(struct ds *actions, const struct nbrec_acl *acl,
                   (uint8_t) obs_stage);
 }
 
+/* This builds the ACL action that clears the observation point and collector
+ * registers populated by build_acl_sample_label_action().
+ */
+static void
+build_acl_sample_label_clear_action(struct ds *actions)
+{
+    ds_put_cstr(actions, REGBIT_ACL_LABEL" = 0; "
+                         REG_OBS_POINT_ID_NEW " = 0; "
+                         REG_OBS_POINT_ID_EST " = 0; "
+                         REG_OBS_COLLECTOR_ID_NEW " = 0; "
+                         REG_OBS_COLLECTOR_ID_EST " = 0; ");
+}
+
 /* This builds an ACL logical flow specific match that selects traffic
  * with an associated observation point ID register equal to that of the
  * ACL label (if configured) or sample->metadata.
@@ -8372,6 +8385,12 @@ build_acl_action_lflows(const struct ls_stateful_record *ls_stateful_rec,
         ls_stateful_rec->max_acl_tier.egress,
     };
 
+    enum acl_observation_stage obs_stages[] = {
+        ACL_OBS_FROM_LPORT,
+        ACL_OBS_FROM_LPORT_AFTER_LB,
+        ACL_OBS_TO_LPORT,
+    };
+
     ds_clear(actions);
     ds_put_cstr(actions, REGBIT_ACL_VERDICT_ALLOW " = 0; "
                         REGBIT_ACL_VERDICT_DROP " = 0; "
@@ -8424,6 +8443,26 @@ build_acl_action_lflows(const struct ls_stateful_record *ls_stateful_rec,
                           j + 1, ingress ? "ingress" : "egress",
                           ovn_stage_get_table(eval_stages[i]));
             ovn_lflow_add(lflows, od, stage, 500, ds_cstr(match),
+                         ds_cstr(&tier_actions), lflow_ref);
+
+            /* A "pass" ACL with sampling enabled records its observation
+             * point in registers and gets sampled in the sample stage of
+             * its own tier.  Clear that observation data before moving to
+             * the next tier so that it is not attributed to the verdict of
+             * an ACL in a later tier.  Observation data recorded by another
+             * ACL stage (e.g., by a from-lport ACL while the
+             * from-lport-after-lb tier advances) is left untouched: the
+             * conntrack commit in the stateful stage still needs it. */
+            ds_put_format(match, " && "REGBIT_ACL_LABEL" == 1 && "
+                          REGBIT_ACL_OBS_STAGE" == %"PRIu8,
+                          (uint8_t) obs_stages[i]);
+            ds_clear(&tier_actions);
+            build_acl_sample_label_clear_action(&tier_actions);
+            ds_put_format(&tier_actions, REG_ACL_TIER " = %"PRIuSIZE"; "
+                          "next(pipeline=%s,table=%d);",
+                          j + 1, ingress ? "ingress" : "egress",
+                          ovn_stage_get_table(eval_stages[i]));
+            ovn_lflow_add(lflows, od, stage, 550, ds_cstr(match),
                          ds_cstr(&tier_actions), lflow_ref);
         }
         ds_destroy(&tier_actions);

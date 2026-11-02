@@ -3200,6 +3200,15 @@ or
       </p>
 
       <p>
+        Sampling of a <code>pass</code> ACL follows the connection state
+        rules of the ACL sample stage, in the tier of the <code>pass</code>
+        ACL.  Its observation data is not inherited by the ACLs evaluated in
+        a subsequent tier of the same stage: the ACL that eventually
+        determines the verdict is sampled according to its own
+        configuration.
+      </p>
+
+      <p>
         Note: if an ACL has both sampling enabled and a label associated to it
         then the label value overrides the observation point ID defined in the
         <code>sample_new</code> configuration.

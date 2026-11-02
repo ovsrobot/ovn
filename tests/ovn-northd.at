@@ -15567,6 +15567,93 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([ACL Sampling - pass ACL observation data does not leak to the next tier])
+AT_KEYWORDS([acl sampling])
+
+ovn_start
+
+collector1=$(ovn-nbctl create Sample_Collector id=1 name=c1 probability=65535 set_id=100)
+check_row_count nb:Sample_Collector 1
+
+check_uuid ovn-nbctl create Sampling_App type="acl-new" id="42"
+check_uuid ovn-nbctl create Sampling_App type="acl-est" id="43"
+check_row_count nb:Sampling_App 2
+
+check ovn-nbctl                                      \
+  -- lr-add lr                                       \
+  -- lrp-add lr lrp1 00:00:00:00:01:00 42.42.42.1/24 \
+  -- ls-add ls                                       \
+  -- lsp-add ls vm1                                  \
+  -- lsp-set-addresses vm1 00:00:00:00:00:01         \
+  -- lsp-add ls vm2                                  \
+  -- lsp-set-addresses vm2 00:00:00:00:00:02         \
+  -- lsp-add-router-port ls ls-lr lrp1
+check ovn-nbctl --wait=sb sync
+
+rp_flow="inport == \"ls-lr\" && eth.src == 00:00:00:00:01:00 && eth.dst == 00:00:00:00:00:01 && ip4.src == 10.0.0.1 && ip4.dst == 42.42.42.2 && tcp"
+vm_flow="inport == \"vm1\" && eth.src == 00:00:00:00:00:01 && eth.dst == 00:00:00:00:00:02 && ip4.src == 42.42.42.2 && ip4.dst == 42.42.42.3 && tcp"
+m4_define([TRACE_FILTER], [grep -e sample -e commit | grep -v _sample | sort])
+
+dnl Tier 0: a "pass" ACL with sampling enabled.
+dnl Tier 1: a drop ACL sharing the Sample of the "pass" ACL, a drop ACL
+dnl         without sampling and an allow-related ACL without sampling.
+check ovn-nbctl acl-add ls from-lport 1 'inport == "vm1"' allow-related
+check_uuid ovn-nbctl                                                           \
+  -- --id=@s create Sample collector="$collector1" metadata=4501               \
+  -- --tier=1 --sample-new=@s acl-add ls from-lport 10 'tcp.dst == 22' drop
+shared_sample=$(ovn-nbctl --bare --columns=_uuid find Sample metadata=4501)
+check ovn-nbctl --wait=sb                                                      \
+  -- --tier=0 --sample-new=$shared_sample acl-add ls from-lport 10 'tcp' pass  \
+  -- --tier=1 acl-add ls from-lport 10 'tcp.dst == 23' drop                    \
+  -- --tier=1 acl-add ls from-lport 10 'tcp.dst == 24' allow-related
+check_row_count nb:ACL 5
+check_row_count nb:Sample 1
+
+dnl Moving to the next tier clears observation data recorded by a "pass"
+dnl ACL in the current stage.
+AT_CHECK([ovn-sbctl lflow-list ls | grep ls_in_acl_action | grep -e 'priority=5[[05]]0' | ovn_strip_lflows], [0], [dnl
+  table=??(ls_in_acl_action   ), priority=500  , match=(reg8[[30..31]] == 0), action=(reg8[[30..31]] = 1; next(pipeline=ingress,table=??);)
+  table=??(ls_in_acl_action   ), priority=550  , match=(reg8[[30..31]] == 0 && reg0[[13]] == 1 && reg8[[19..20]] == 0), action=(reg0[[13]] = 0; reg3 = 0; reg9 = 0; reg8[[0..7]] = 0; reg8[[8..15]] = 0; reg8[[30..31]] = 1; next(pipeline=ingress,table=??);)
+])
+
+check ovn-sbctl chassis-add gw1 geneve 127.0.0.1
+m4_foreach([REGS], [true, false], [
+AS_BOX([ovn-sample-with-registers=REGS])
+check ovn-sbctl set chassis gw1 other_config:ovn-sample-with-registers="REGS"
+check ovn-nbctl --wait=sb sync
+
+dnl The "pass" ACL is sampled in its own tier, according to the connection
+dnl state rules of the sample stage (new connections on this stateful
+dnl switch).
+AS_BOX([sampled drop after pass, new connection: pass and drop are both sampled])
+AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new ls "$vm_flow && tcp.dst == 22" | TRACE_FILTER], [0], [dnl
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=m4_if(REGS, [true], [reg3], [4501]));
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=m4_if(REGS, [true], [reg3], [4501]));
+])
+
+dnl The unsampled drop ACL must not be attributed to the "pass" ACL Sample.
+AS_BOX([unsampled drop after pass, new connection: only the pass is sampled])
+AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new ls "$vm_flow && tcp.dst == 23" | TRACE_FILTER], [0], [dnl
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=m4_if(REGS, [true], [reg3], [4501]));
+])
+AS_BOX([unsampled drop after pass, untracked: nothing is sampled])
+AT_CHECK_UNQUOTED([ovn_trace ls "$rp_flow && tcp.dst == 23" | TRACE_FILTER], [0], [])
+
+dnl The unsampled allow-related ACL must not inherit the "pass" ACL Sample
+dnl either: the connection is committed without observation data.
+AS_BOX([unsampled allow-related after pass, new connection])
+AT_CHECK_UNQUOTED([ovn_trace --ct new --ct new ls "$vm_flow && tcp.dst == 24" | TRACE_FILTER], [0], [dnl
+    ct_commit { ct_mark.blocked = 0; ct_mark.allow_established = reg0[[20]]; ct_label.acl_id = reg2[[16..31]]; ct_label.nf = 0; ct_label.nf_id = 0; };
+    ct_commit { ct_mark.blocked = 0; ct_mark.allow_established = reg0[[20]]; ct_label.acl_id = reg2[[16..31]]; ct_label.nf = 0; ct_label.nf_id = 0; };
+    sample(probability=65535,collector_set=100,obs_domain=42,obs_point=m4_if(REGS, [true], [reg3], [4501]));
+])
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([NAT with match])
 ovn_start
 
