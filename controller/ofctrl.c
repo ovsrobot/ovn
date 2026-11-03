@@ -2821,12 +2821,6 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
     /* OpenFlow messages to send to the switch to bring it up-to-date. */
     struct ovs_list msgs = OVS_LIST_INITIALIZER(&msgs);
 
-    /* Removed ECMP next-hops stay pending while the connection is down,
-     * because rconn drops the messages queued then. */
-    if (rconn_is_connected(swconn)) {
-        ecmp_nexthop_monitor_flush(swconn, &msgs);
-    }
-
     /* Iterate through ct zones that need to be flushed. */
     struct shash_node *iter;
     SHASH_FOR_EACH(iter, pending_ct_zones) {
@@ -3022,6 +3016,15 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
             add_ct_flush_tuple(tuple, &msgs);
             free(tuple);
         }
+    }
+
+    /* Flush the conntrack entries of removed ECMP next-hops after the flow
+     * bundle, so that a packet in between cannot commit a new entry towards
+     * a removed next-hop through the old flows.  Removed next-hops stay
+     * pending while the connection is down, because rconn drops the
+     * messages queued then. */
+    if (rconn_is_connected(swconn)) {
+        ecmp_nexthop_monitor_flush(swconn, &msgs);
     }
 
     acl_ids_flush_expired(tracked_acl_ids, rconn_get_version(swconn), &msgs);
