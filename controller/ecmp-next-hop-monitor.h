@@ -18,9 +18,10 @@
 
 void ecmp_nexthop_init(void);
 void ecmp_nexthop_destroy(void);
-bool ecmp_nexthop_monitor_run(const struct sbrec_ecmp_nexthop_table *,
+void ecmp_nexthop_monitor_run(const struct sbrec_ecmp_nexthop_table *,
                               const struct hmap *local_datapaths,
-                              const struct shash *current_ct_zones,
-                              const struct rconn *swconn,
-                              struct ovs_list *msgs);
+                              const struct shash *current_ct_zones);
+bool ecmp_nexthop_monitor_has_pending_flush(void);
+void ecmp_nexthop_monitor_flush(const struct rconn *swconn,
+                                struct ovs_list *msgs);
 #endif /* OVN_ECMP_NEXT_HOP_MONITOR_H */
