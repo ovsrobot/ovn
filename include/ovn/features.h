@@ -45,6 +45,7 @@ enum ovs_feature_support_bits {
     OVS_OF_GROUP_SUPPORT_BIT,
     OVS_SAMPLE_REG_SUPPORT_BIT,
     OVS_CT_LABEL_FLUSH_BIT,
+    OVS_RECIRC_ACTION_BIT,
 };
 
 enum ovs_feature_value {
@@ -55,6 +56,7 @@ enum ovs_feature_value {
     OVS_OF_GROUP_SUPPORT = (1 << OVS_OF_GROUP_SUPPORT_BIT),
     OVS_SAMPLE_REG_SUPPORT = (1 << OVS_SAMPLE_REG_SUPPORT_BIT),
     OVS_CT_LABEL_FLUSH_SUPPORT = (1 << OVS_CT_LABEL_FLUSH_BIT),
+    OVS_RECIRC_ACTION_SUPPORT = (1 << OVS_RECIRC_ACTION_BIT),
 };
 
 void ovs_feature_support_destroy(void);

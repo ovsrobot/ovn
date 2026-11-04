@@ -188,8 +188,12 @@ group_features_handle_response(struct ovs_openflow_feature *feature,
     return supported_ovs_features & feature->value;
 }
 
+/* Offers ovs-vswitchd a flow with 'actions', in a bundle that is discarded
+ * straight away so that nothing is installed either way.  An error reply
+ * means ovs-vswitchd rejected the actions. */
 static void
-sample_with_reg_send_request(struct ovs_openflow_feature *feature)
+send_actions_probe(struct ovs_openflow_feature *feature,
+                   const struct ofpbuf *actions)
 {
     struct ofputil_bundle_ctrl_msg ctrl = {
         .bundle_id = 0,
@@ -199,28 +203,11 @@ sample_with_reg_send_request(struct ovs_openflow_feature *feature)
     rconn_send(swconn,
                ofputil_encode_bundle_ctrl_request(OFP15_VERSION, &ctrl), NULL);
 
-    uint8_t actions_stub[64];
-    struct ofpbuf actions;
-    ofpbuf_use_stub(&actions, actions_stub, sizeof(actions_stub));
-
-    struct mf_subfield subfield = {
-        .field = mf_from_id(MFF_REG0),
-        .n_bits = 32,
-        .ofs = 0
-    };
-
-    struct ofpact_sample *sample = ofpact_put_SAMPLE(&actions);
-    sample->probability = UINT16_MAX;
-    sample->collector_set_id = 0;
-    sample->obs_domain_src = subfield;
-    sample->obs_point_src = subfield;
-    sample->sampling_port = OFPP_NONE;
-
     struct ofputil_flow_mod fm = {
         .priority = 0,
         .table_id = 0,
-        .ofpacts = actions.data,
-        .ofpacts_len = actions.size,
+        .ofpacts = actions->data,
+        .ofpacts_len = actions->size,
         .command = OFPFC_ADD,
         .new_cookie = htonll(0),
         .buffer_id = UINT32_MAX,
@@ -252,9 +239,10 @@ sample_with_reg_send_request(struct ovs_openflow_feature *feature)
     ofpbuf_delete(fm_msg);
 }
 
+/* An error reply to send_actions_probe() means the actions were rejected. */
 static bool
-sample_with_reg_handle_response(struct ovs_openflow_feature *feature,
-                                enum ofptype type, const struct ofp_header *oh)
+actions_probe_handle_response(struct ovs_openflow_feature *feature,
+                              enum ofptype type, const struct ofp_header *oh)
 {
     if (type != OFPTYPE_ERROR) {
         log_unexpected_reply(feature, oh);
@@ -263,10 +251,48 @@ sample_with_reg_handle_response(struct ovs_openflow_feature *feature,
     return false;
 }
 
+/* Reaching the barrier with no error means they were accepted. */
 static bool
-sample_with_reg_handle_barrier(struct ovs_openflow_feature *feature OVS_UNUSED)
+actions_probe_handle_barrier(struct ovs_openflow_feature *feature OVS_UNUSED)
 {
     return true;
+}
+
+static void
+sample_with_reg_send_request(struct ovs_openflow_feature *feature)
+{
+    uint8_t actions_stub[64];
+    struct ofpbuf actions;
+    ofpbuf_use_stub(&actions, actions_stub, sizeof(actions_stub));
+
+    struct mf_subfield subfield = {
+        .field = mf_from_id(MFF_REG0),
+        .n_bits = 32,
+        .ofs = 0
+    };
+
+    struct ofpact_sample *sample = ofpact_put_SAMPLE(&actions);
+    sample->probability = UINT16_MAX;
+    sample->collector_set_id = 0;
+    sample->obs_domain_src = subfield;
+    sample->obs_point_src = subfield;
+    sample->sampling_port = OFPP_NONE;
+
+    send_actions_probe(feature, &actions);
+    ofpbuf_uninit(&actions);
+}
+
+static void
+recirc_action_send_request(struct ovs_openflow_feature *feature)
+{
+    uint8_t actions_stub[64];
+    struct ofpbuf actions;
+    ofpbuf_use_stub(&actions, actions_stub, sizeof(actions_stub));
+
+    ofpact_put_RECIRC(&actions);
+
+    send_actions_probe(feature, &actions);
+    ofpbuf_uninit(&actions);
 }
 
 static void
@@ -335,8 +361,15 @@ static struct ovs_openflow_feature all_openflow_features[] = {
             .value = OVS_SAMPLE_REG_SUPPORT,
             .name = "sample_action_with_registers",
             .send_request = sample_with_reg_send_request,
-            .handle_response = sample_with_reg_handle_response,
-            .handle_barrier = sample_with_reg_handle_barrier,
+            .handle_response = actions_probe_handle_response,
+            .handle_barrier = actions_probe_handle_barrier,
+        },
+        {
+            .value = OVS_RECIRC_ACTION_SUPPORT,
+            .name = "recirc_action",
+            .send_request = recirc_action_send_request,
+            .handle_response = actions_probe_handle_response,
+            .handle_barrier = actions_probe_handle_barrier,
         },
         {
             .value = OVS_CT_LABEL_FLUSH_SUPPORT,
@@ -418,6 +451,7 @@ ovs_feature_is_valid(enum ovs_feature_value feature)
     case OVS_OF_GROUP_SUPPORT:
     case OVS_SAMPLE_REG_SUPPORT:
     case OVS_CT_LABEL_FLUSH_SUPPORT:
+    case OVS_RECIRC_ACTION_SUPPORT:
         return true;
     default:
         return false;
