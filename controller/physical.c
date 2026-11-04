@@ -46,6 +46,7 @@
 #include "lib/ovn-sb-idl.h"
 #include "lib/ovn-util.h"
 #include "ovn/actions.h"
+#include "ovn/features.h"
 #include "if-status.h"
 #include "physical.h"
 #include "pinctrl.h"
@@ -2938,6 +2939,245 @@ flood_querier_port_add(struct mcast_querier_port *flood_ports,
     (*n_flood_ports)++;
 }
 
+/* One OpenFlow flow's actions are translated into one datapath flow, and
+ * resubmit is followed during that translation, so a flood of per-port
+ * resubmits becomes a single action list.  Three limits bound that list:
+ * the FLOW_MOD carrying it, the datapath's nl_attr_oversized() (which
+ * applies to the kernel and the userspace datapath alike), and OVS's
+ * resubmit count.  A flood too big for one flow is split into slices,
+ * each sized against all three.
+ *
+ * recirc ends a slice; the resubmit after it runs in the continuation and
+ * looks the next slice up by its id in reg0.  reg0 is stacked around that
+ * lookup so the egress pipeline still sees what the logical pipeline left
+ * there, and MLF_MC_CHUNK marks the lookup only.
+ *
+ * A datapath caps recirculation depth, so a chain longer than nine slices
+ * silently truncates the flood; the budgets below stay large enough that
+ * nine slices cover any plausible group. */
+
+/* Encoded OpenFlow action bytes.  add_flow_mod() has about 65,440 to
+ * spend on actions once the headers and the match are accounted for. */
+#define MC_CHUNK_OF_MAX (32 * 1024)
+
+/* Estimated datapath action bytes, against nl_attr_oversized's 65,531. */
+#define MC_CHUNK_DP_MAX (48 * 1024)
+
+/* Resubmits into the egress pipeline.  Each one costs as many of OVS's
+ * 4096 resubmits as that pipeline is deep, so keep this well under it. */
+#define MC_CHUNK_RESUBMITS_MAX 128
+
+struct mc_chunk_cost {
+    size_t of_bytes;
+    size_t dp_bytes;
+    size_t resubmits;
+};
+
+/* What one ofpact costs against each of the three limits.  'scratch' is
+ * reused across calls. */
+static void
+mc_chunk_cost(const struct ofpact *a, struct ofpbuf *scratch,
+              struct mc_chunk_cost *cost)
+{
+    /* The internal ofpact size is no guide to the encoded size: a
+     * set_field on a tunnel metadata field carries a 128-byte value and
+     * mask but encodes to 16 bytes.  Encode it and measure. */
+    ofpbuf_clear(scratch);
+    ofpacts_put_openflow_actions(a, OFPACT_ALIGN(a->len), scratch,
+                                 OFP15_VERSION);
+    cost->of_bytes = scratch->size;
+
+    /* An output to a tunnel port pushes an encapsulation header, and a
+     * resubmit can reach one. */
+    cost->dp_bytes = (a->type == OFPACT_OUTPUT
+                      || a->type == OFPACT_RESUBMIT) ? 128 : 32;
+    cost->resubmits = a->type == OFPACT_RESUBMIT;
+}
+
+static void
+mc_chunk_cost_add(struct mc_chunk_cost *sum,
+                  const struct mc_chunk_cost *cost)
+{
+    sum->of_bytes += cost->of_bytes;
+    sum->dp_bytes += cost->dp_bytes;
+    sum->resubmits += cost->resubmits;
+}
+
+static bool
+mc_chunk_cost_exceeded(const struct mc_chunk_cost *sum)
+{
+    return sum->of_bytes > MC_CHUNK_OF_MAX
+           || sum->dp_bytes > MC_CHUNK_DP_MAX
+           || sum->resubmits > MC_CHUNK_RESUBMITS_MAX;
+}
+
+static bool
+mc_fits_one_chunk(const struct ofpbuf *ofpacts)
+{
+    struct mc_chunk_cost sum = { 0, 0, 0 };
+    struct ofpbuf scratch;
+    const struct ofpact *a;
+
+    ofpbuf_init(&scratch, 64);
+    OFPACT_FOR_EACH (a, (const struct ofpact *) ofpacts->data, ofpacts->size) {
+        struct mc_chunk_cost cost;
+
+        mc_chunk_cost(a, &scratch, &cost);
+        mc_chunk_cost_add(&sum, &cost);
+    }
+    ofpbuf_uninit(&scratch);
+
+    return !mc_chunk_cost_exceeded(&sum);
+}
+
+static void
+mc_chunk_match(const struct sbrec_multicast_group *mc,
+               const struct mc_flow_ctx *ctx, uint32_t chunk_id,
+               struct match *match)
+{
+    uint32_t flags = ctx->flags;
+    uint32_t mask = ctx->flags_mask | MLF_MC_CHUNK;
+
+    match_init_catchall(match);
+    match_outport_dp_and_port_keys(match, mc->datapath->tunnel_key,
+                                   mc->tunnel_key);
+    if (chunk_id > 0) {
+        flags |= MLF_MC_CHUNK;
+        match_set_reg(match, MFF_REG0 - MFF_REG0, chunk_id);
+    }
+    match_set_reg_masked(match, MFF_LOG_FLAGS - MFF_REG0, flags, mask);
+}
+
+static void
+mc_compose_chunk(struct ofpbuf *dst, const struct ofpbuf *body,
+                 bool first, bool last, uint32_t next_chunk,
+                 int64_t mc_key, uint8_t same_table, bool resume_next,
+                 uint8_t next_table)
+{
+    ofpbuf_clear(dst);
+    if (!first) {
+        put_stack(MFF_REG0, ofpact_put_STACK_POP(dst));
+        put_load(0, MFF_LOG_FLAGS, MLF_MC_CHUNK_BIT, 1, dst);
+    }
+    ofpbuf_put(dst, body->data, body->size);
+    if (!last) {
+        /* The body may have overwritten the outport this table matches,
+         * and the egress pipeline reads reg0. */
+        put_stack(MFF_REG0, ofpact_put_STACK_PUSH(dst));
+        put_load(mc_key, MFF_LOG_OUTPORT, 0, 32, dst);
+        put_load(next_chunk, MFF_REG0, 0, 32, dst);
+        put_load(1, MFF_LOG_FLAGS, MLF_MC_CHUNK_BIT, 1, dst);
+        ofpact_put_RECIRC(dst);
+        put_resubmit(same_table, dst);
+    } else if (resume_next) {
+        put_load(mc_key, MFF_LOG_OUTPORT, 0, 32, dst);
+        put_resubmit(next_table, dst);
+    }
+}
+
+static void
+mc_add_chunk_flow(const struct sbrec_multicast_group *mc,
+                  const struct mc_flow_ctx *ctx, uint32_t chunk_id,
+                  const struct ofpbuf *actions,
+                  struct ovn_desired_flow_table *flow_table)
+{
+    struct match match;
+
+    mc_chunk_match(mc, ctx, chunk_id, &match);
+    ofctrl_add_flow(flow_table, ctx->stage, ctx->prio,
+                    mc->header_.uuid.parts[0], &match, actions,
+                    &mc->header_.uuid);
+}
+
+static void
+mc_split_flows(const struct sbrec_multicast_group *mc,
+               struct mc_flow_ctx *ctx, bool resume_next, uint8_t next_table,
+               struct ovn_desired_flow_table *flow_table)
+{
+    struct ofpbuf body, actions, scratch;
+    struct mc_chunk_cost sum = { 0, 0, 0 };
+    const struct ofpact *a;
+    const struct ofpact *base = ctx->ofpacts.data;
+    size_t total = ctx->ofpacts.size;
+    uint32_t chunk_id = 0;
+
+    ofpbuf_init(&body, 0);
+    ofpbuf_init(&actions, 0);
+    ofpbuf_init(&scratch, 64);
+
+    /* A slice has to end on a completed delivery: cutting between a port's
+     * register loads and the resubmit that consumes them would deliver that
+     * port to the multicast key the continuation restores. */
+    const struct ofpact *last = NULL;
+    OFPACT_FOR_EACH (a, base, total) {
+        struct mc_chunk_cost cost, next = sum;
+        bool boundary = last && (last->type == OFPACT_RESUBMIT
+                                 || last->type == OFPACT_OUTPUT);
+
+        mc_chunk_cost(a, &scratch, &cost);
+        mc_chunk_cost_add(&next, &cost);
+
+        if (body.size > 0 && mc_chunk_cost_exceeded(&next) && boundary) {
+            mc_compose_chunk(&actions, &body, chunk_id == 0, false,
+                             chunk_id + 1, mc->tunnel_key, ctx->stage,
+                             resume_next, next_table);
+            mc_add_chunk_flow(mc, ctx, chunk_id, &actions, flow_table);
+            chunk_id++;
+            ofpbuf_clear(&body);
+            last = NULL;
+            memset(&sum, 0, sizeof sum);
+            next = cost;
+        }
+        ofpbuf_put(&body, a, OFPACT_ALIGN(a->len));
+        sum = next;
+        last = a;
+    }
+
+    mc_compose_chunk(&actions, &body, chunk_id == 0, true, 0,
+                     mc->tunnel_key, ctx->stage, resume_next, next_table);
+    mc_add_chunk_flow(mc, ctx, chunk_id, &actions, flow_table);
+
+    ofpbuf_uninit(&body);
+    ofpbuf_uninit(&actions);
+    ofpbuf_uninit(&scratch);
+}
+
+/* Install the multicast output in 'ctx', splitting it across several flows
+ * if it is too large for one.  When 'resume_next' is true the last slice
+ * resubmits to 'next_table'. */
+static void
+mc_install_flows(const struct sbrec_multicast_group *mc,
+                 struct mc_flow_ctx *ctx, bool resume_next, uint8_t next_table,
+                 struct ovn_desired_flow_table *flow_table)
+{
+    size_t plain = ctx->ofpacts.size;
+
+    if (resume_next) {
+        put_resubmit(next_table, &ctx->ofpacts);
+    }
+    if (mc_fits_one_chunk(&ctx->ofpacts)) {
+        mc_ofctrl_add_flow(mc, ctx, flow_table);
+        return;
+    }
+
+    if (!ovs_feature_is_supported(OVS_RECIRC_ACTION_SUPPORT)) {
+        /* Nothing better to offer than the oversized flow: ovs-vswitchd may
+         * reject it, or install it and silently drop the destinations that
+         * do not fit. */
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_WARN_RL(&rl, "Multicast group %s is too large for one OpenFlow "
+                     "flow, and ovs-vswitchd does not support the recirc "
+                     "action needed to split it.  The flood may not reach "
+                     "every port.", mc->name);
+        mc_ofctrl_add_flow(mc, ctx, flow_table);
+        return;
+    }
+
+    ofpbuf_truncate(&ctx->ofpacts, plain);
+    mc_split_flows(mc, ctx, resume_next, next_table, flow_table);
+    ofpbuf_clear(&ctx->ofpacts);
+}
+
 static void
 consider_mc_group(const struct physical_ctx *ctx,
                   const struct sbrec_multicast_group *mc,
@@ -3118,7 +3358,7 @@ consider_mc_group(const struct physical_ctx *ctx,
 
     if (local_lports) {
         put_load(mc->tunnel_key, MFF_LOG_OUTPORT, 0, 32, &local_ctx->ofpacts);
-        mc_ofctrl_add_flow(mc, local_ctx, flow_table);
+        mc_install_flows(mc, local_ctx, false, 0, flow_table);
     }
 
     if (remote_ports) {
@@ -3150,14 +3390,14 @@ consider_mc_group(const struct physical_ctx *ctx,
 
     remote_ports = remote_ctx->ofpacts.size > 0;
     if (remote_ports) {
-        put_resubmit(OFTABLE_REMOTE_VTEP_OUTPUT, &remote_ctx->ofpacts);
-        mc_ofctrl_add_flow(mc, remote_ctx, flow_table);
+        mc_install_flows(mc, remote_ctx, true, OFTABLE_REMOTE_VTEP_OUTPUT,
+                         flow_table);
     }
 
     if (ramp_ports && has_vtep) {
         put_load(mc->tunnel_key, MFF_LOG_OUTPORT, 0, 32, &ramp_ctx->ofpacts);
-        put_resubmit(OFTABLE_REMOTE_VTEP_OUTPUT, &ramp_ctx->ofpacts);
-        mc_ofctrl_add_flow(mc, ramp_ctx, flow_table);
+        mc_install_flows(mc, ramp_ctx, true, OFTABLE_REMOTE_VTEP_OUTPUT,
+                         flow_table);
     }
 
     for (size_t i = 0; i < MC_FLOWS_MAX; i++) {

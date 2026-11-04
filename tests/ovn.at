@@ -47168,6 +47168,273 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([broadcast to many local ports stays in the datapath])
+ovn_start
+
+dnl A local port is delivered to by resubmitting into the egress
+dnl pipeline, which costs about 19 more resubmits.  A full flood of
+dnl roughly 215 ports therefore reaches OVS's 4096-resubmit limit and
+dnl translation aborts, dropping the broadcast.  That limit is enforced
+dnl while OVS translates the flow, so it applies to both the kernel and
+dnl the userspace datapath.  280 ports is past that point.  The split
+dnl installs several table-56 flows chained by recirc, and the trace of
+dnl a broadcast must still reach every port.
+check ovn-nbctl ls-add ls1
+
+nbctl_cmd=""
+for i in $(seq 1 280); do
+    idx=$(printf "%04d" $i)
+    hex_hi=$(printf "%02x" $(($i / 256)))
+    hex_lo=$(printf "%02x" $(($i % 256)))
+    mac="f0:00:00:00:${hex_hi}:${hex_lo}"
+    nbctl_cmd="$nbctl_cmd -- lsp-add ls1 vif-$idx"
+    nbctl_cmd="$nbctl_cmd -- lsp-set-addresses vif-$idx \"$mac\""
+done
+eval check ovn-nbctl $nbctl_cmd
+
+net_add n1
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+vsctl_cmd=""
+for i in $(seq 1 280); do
+    idx=$(printf "%04d" $i)
+    vsctl_cmd="$vsctl_cmd -- add-port br-int vif-$idx"
+    vsctl_cmd="$vsctl_cmd -- set Interface vif-$idx external-ids:iface-id=vif-$idx"
+done
+eval check ovs-vsctl $vsctl_cmd
+
+OVN_POPULATE_ARP
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+
+dnl At least one table-56 flow chains to the next slice with recirc.
+dnl grep -c exits 1 when the count is zero.
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_LOCAL_OUTPUT |
+          grep -c recirc], [0],
+         [ignore])
+
+in_ofport=$(as hv1 ovs-vsctl get Interface vif-0001 ofport)
+flow="in_port=$in_ofport,dl_src=f0:00:00:00:00:01,dl_dst=ff:ff:ff:ff:ff:ff,arp,arp_op=1,arp_spa=10.0.0.1,arp_tpa=10.0.0.250,arp_sha=f0:00:00:00:00:01,arp_tha=ff:ff:ff:ff:ff:ff"
+dnl ofproto/trace stops at recirc.  Follow each continuation immediately,
+dnl while the recirculation context is still allocated.
+: > all.trace
+rid=0
+for _ in $(seq 0 8); do
+    if test "$rid" = 0; then
+        AT_CHECK([as hv1 ovs-appctl ofproto/trace br-int "$flow"], [0], [stdout])
+    else
+        AT_CHECK([as hv1 ovs-appctl ofproto/trace br-int "$flow,recirc_id=$rid"], [0], [stdout])
+    fi
+    cat stdout >> all.trace
+    rid=$(grep 'recirc(0x' stdout | tail -1 | sed 's/.*recirc(0x//;s/).*//')
+    if test -z "$rid"; then
+        break
+    fi
+done
+cp all.trace stdout
+AT_CHECK([grep "Translation failed" stdout], [1])
+AT_CHECK([grep "over 4096 resubmit" stdout], [1])
+AT_CHECK([grep "over 64 kB of actions" stdout], [1])
+AT_CHECK([grep "handled by the userspace slow path" stdout], [1])
+AT_CHECK([grep "Recirculation context not found" stdout], [1])
+dnl The flood is split, so a later slice is reached only through recirc.
+AT_CHECK([test $(grep -c "Restoring actions" stdout) -ge 1])
+dnl Every port except the ingress port is output across the slices.
+AT_CHECK([test $(grep -c "output:" stdout) -ge 279])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+AT_SETUP([broadcast to many remote chassis stays in the datapath])
+ovn_start
+net_add n1
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1 16
+
+dnl A remote destination costs one output action, but that output pushes
+dnl a tunnel header, so it becomes about 100 datapath bytes.  Past roughly
+dnl 710 chassis the action list crosses the 16-bit Netlink attribute limit.
+dnl Translation then stops partway through and the remaining chassis are
+dnl dropped from the flow without any error, so those nodes silently never
+dnl receive the broadcast.  800 chassis is past that point.
+N=800
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lsp-add ls1 vif-local \
+    -- lsp-set-addresses vif-local "f0:00:00:00:00:01"
+check ovs-vsctl add-port br-int vif-local \
+    -- set Interface vif-local external-ids:iface-id=vif-local
+
+nbctl_cmd=""
+sbctl_cmd=""
+for i in $(seq 1 $N); do
+    a=$(($i / 250 + 1)); b=$(($i % 250 + 1))
+    hi=$(printf "%02x" $(($i / 256))); lo=$(printf "%02x" $(($i % 256)))
+    nbctl_cmd="$nbctl_cmd -- lsp-add ls1 rp-$i"
+    nbctl_cmd="$nbctl_cmd -- lsp-set-addresses rp-$i \"f0:00:01:00:$hi:$lo\""
+    sbctl_cmd="$sbctl_cmd -- chassis-add rch-$i geneve 192.168.$a.$b"
+done
+eval check ovn-nbctl $nbctl_cmd
+eval check ovn-sbctl $sbctl_cmd
+check ovn-nbctl --wait=sb sync
+
+bind_cmd=""
+for i in $(seq 1 $N); do
+    bind_cmd="$bind_cmd -- lsp-bind rp-$i rch-$i"
+done
+eval check ovn-sbctl $bind_cmd
+
+dnl Resolve the tunnel next hops so every output actually encapsulates.
+for i in $(seq 1 $N); do
+    a=$(($i / 250 + 1)); b=$(($i % 250 + 1))
+    hi=$(printf "%02x" $(($i / 256))); lo=$(printf "%02x" $(($i % 256)))
+    as hv1 ovs-appctl tnl/neigh/set br-phys 192.168.$a.$b f0:00:02:00:$hi:$lo
+done
+
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_UNTIL([test $(as hv1 ovs-vsctl list-ports br-int |
+                       grep -c '^ovn-rch') -ge $N])
+check ovn-nbctl --wait=hv sync
+
+dnl The remote output is split, so at least one table-54 flow chains to
+dnl the next slice with recirc.  grep -c exits 1 when the count is zero.
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_REMOTE_OUTPUT |
+          grep -c recirc], [0], [ignore])
+
+in_ofport=$(as hv1 ovs-vsctl get Interface vif-local ofport)
+flow="in_port=$in_ofport,dl_src=f0:00:00:00:00:01,dl_dst=ff:ff:ff:ff:ff:ff,arp,arp_op=1,arp_spa=10.0.0.1,arp_tpa=10.0.0.250,arp_sha=f0:00:00:00:00:01,arp_tha=ff:ff:ff:ff:ff:ff"
+dnl ofproto/trace stops at recirc.  Follow each continuation immediately,
+dnl while the recirculation context is still allocated.
+: > all.trace
+rid=0
+for _ in $(seq 0 8); do
+    if test "$rid" = 0; then
+        AT_CHECK([as hv1 ovs-appctl ofproto/trace br-int "$flow"], [0], [stdout])
+    else
+        AT_CHECK([as hv1 ovs-appctl ofproto/trace br-int "$flow,recirc_id=$rid"], [0], [stdout])
+    fi
+    cat stdout >> all.trace
+    rid=$(grep 'recirc(0x' stdout | tail -1 | sed 's/.*recirc(0x//;s/).*//')
+    if test -z "$rid"; then
+        break
+    fi
+done
+cp all.trace stdout
+
+AT_CHECK([grep "Translation failed" stdout], [1])
+AT_CHECK([grep "over 4096 resubmit" stdout], [1])
+AT_CHECK([grep "over 64 kB of actions" stdout], [1])
+AT_CHECK([grep "handled by the userspace slow path" stdout], [1])
+AT_CHECK([grep "Recirculation context not found" stdout], [1])
+dnl Every chassis is encapsulated to across the slices.
+AT_CHECK([test $(grep -o 'dst=192\.168\.[[0-9]]*\.[[0-9]]*' stdout |
+                 sort -u | wc -l) -eq $N])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+
+AT_SETUP([broadcast to many remote ports stays in the datapath])
+ovn_start
+net_add n1
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.11 16
+
+dnl Tunnels to a chassis in another availability zone are only built when
+dnl this chassis is an interconnection gateway.
+check ovs-vsctl set open . external_ids:ovn-is-interconn=true
+
+dnl A type=remote port models a port in another availability zone.  Unlike
+dnl a port on a peer chassis in this zone, it cannot share an output with
+dnl its neighbours: the remote zone has no copy of this multicast group, so
+dnl the destination's own tunnel key has to go into the Geneve option.  Each
+dnl one therefore costs three field writes plus an output: about 80 bytes of
+dnl OpenFlow, of which some 817 fit in a FLOW_MOD, and 92 bytes of datapath
+dnl actions, of which some 712 fit in one action list.  800 remote ports is
+dnl past the datapath limit, which is the one that binds here: the field
+dnl writes are large in OpenFlow but fold into the tunnel header.  Overrunning
+dnl it drops the destinations that do not fit, without an error.
+N=800
+
+check ovn-sbctl chassis-add rch geneve 192.168.0.12 \
+    -- set chassis rch other_config:is-remote=true
+
+check ovn-nbctl ls-add ls1
+check ovn-nbctl lsp-add ls1 vif-local \
+    -- lsp-set-addresses vif-local "f0:00:00:00:00:01"
+check ovs-vsctl add-port br-int vif-local \
+    -- set Interface vif-local external-ids:iface-id=vif-local
+
+dnl Every remote port is encapsulated to individually, so they can all sit
+dnl behind one remote chassis.
+nbctl_cmd=""
+for i in $(seq 1 $N); do
+    hi=$(printf "%02x" $(($i / 256))); lo=$(printf "%02x" $(($i % 256)))
+    nbctl_cmd="$nbctl_cmd -- lsp-add ls1 rp-$i"
+    nbctl_cmd="$nbctl_cmd -- lsp-set-type rp-$i remote"
+    nbctl_cmd="$nbctl_cmd -- lsp-set-options rp-$i requested-chassis=rch"
+    nbctl_cmd="$nbctl_cmd -- lsp-set-addresses rp-$i \"f0:00:01:00:$hi:$lo\""
+done
+eval check ovn-nbctl $nbctl_cmd
+check ovn-nbctl --wait=sb sync
+
+dnl Resolve the tunnel next hop so the outputs actually encapsulate.
+as hv1 ovs-appctl tnl/neigh/set br-phys 192.168.0.12 f0:00:02:00:00:01
+OVS_WAIT_UNTIL([as hv1 ovs-vsctl list-ports br-int | grep -q '^ovn-rch'])
+check ovn-nbctl --wait=hv sync
+
+dnl The flood is split, so at least one table-54 flow chains to the next
+dnl slice with recirc.  grep -c exits 1 when the count is zero.
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=OFTABLE_REMOTE_OUTPUT |
+          grep 'reg15=0x8000' | grep -c recirc], [0], [ignore])
+
+dnl Nothing was dropped for being too big to install.
+AT_CHECK([grep "FLOW_MOD message is too big" hv1/ovn-controller.log], [1])
+
+in_ofport=$(as hv1 ovs-vsctl get Interface vif-local ofport)
+flow="in_port=$in_ofport,dl_src=f0:00:00:00:00:01,dl_dst=ff:ff:ff:ff:ff:ff,arp,arp_op=1,arp_spa=10.0.0.1,arp_tpa=10.0.0.250,arp_sha=f0:00:00:00:00:01,arp_tha=ff:ff:ff:ff:ff:ff"
+dnl ofproto/trace stops at recirc.  Follow each continuation immediately,
+dnl while the recirculation context is still allocated.  Nine iterations is
+dnl all the userspace datapath would execute, so a flood needing more
+dnl slices than this fails the destination count below.
+: > all.trace
+rid=0
+for _ in $(seq 0 8); do
+    if test "$rid" = 0; then
+        AT_CHECK([as hv1 ovs-appctl ofproto/trace br-int "$flow"], [0], [stdout])
+    else
+        AT_CHECK([as hv1 ovs-appctl ofproto/trace br-int "$flow,recirc_id=$rid"], [0], [stdout])
+    fi
+    cat stdout >> all.trace
+    rid=$(grep 'recirc(0x' stdout | tail -1 | sed 's/.*recirc(0x//;s/).*//')
+    if test -z "$rid"; then
+        break
+    fi
+done
+cp all.trace stdout
+
+AT_CHECK([grep "Translation failed" stdout], [1])
+AT_CHECK([grep "over 4096 resubmit" stdout], [1])
+AT_CHECK([grep "over 64 kB of actions" stdout], [1])
+AT_CHECK([grep "handled by the userspace slow path" stdout], [1])
+AT_CHECK([grep "Recirculation context not found" stdout], [1])
+dnl Every remote port is encapsulated to across the slices.  They share one
+dnl tunnel, so the destinations are told apart by the Geneve option that
+dnl carries the destination's own tunnel key.
+AT_CHECK([test $(grep -o 'len=4,0x[[0-9a-f]]*' stdout |
+                 sort -u | wc -l) -eq $N])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([Port security - VRRPv3 ARP/ND])
 CHECK_SCAPY
 ovn_start
