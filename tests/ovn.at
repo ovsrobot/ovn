@@ -48682,3 +48682,121 @@ AT_CHECK([ovs-ofctl dump-flows br-int table=OFTABLE_PHY_TO_LOG \
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ECMP next-hop conntrack flush when ofctrl cannot send])
+AT_KEYWORDS([ecmp ecmp_nexthop_monitor])
+ovn_start
+
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+check ovn-appctl -t ovn-controller vlog/set ofctrl:dbg
+
+check ovn-nbctl set nb_global . options:ecmp_nexthop_monitor_enable=true
+check ovn-nbctl lr-add lr0 -- set logical_router lr0 options:chassis=hv1
+check ovn-nbctl lrp-add lr0 lr0-public 00:00:20:20:12:13 192.168.10.1/24
+check ovn-nbctl ls-add public
+check ovn-nbctl lsp-add-router-port public public-lr0 lr0-public
+check ovn-nbctl --ecmp-symmetric-reply lr-route-add lr0 1.0.0.0/24 192.168.10.10
+check ovn-nbctl --ecmp-symmetric-reply lr-route-add lr0 1.0.0.0/24 192.168.10.20
+check ovn-nbctl --wait=sb sync
+
+dp=$(fetch_column Datapath_Binding _uuid external_ids:name=lr0)
+check_uuid ovn-sbctl create MAC_Binding datapath=$dp logical_port=lr0-public \
+    ip=192.168.10.10 mac='"f0:00:00:00:10:10"'
+check_uuid ovn-sbctl create MAC_Binding datapath=$dp logical_port=lr0-public \
+    ip=192.168.10.20 mac='"f0:00:00:00:20:20"'
+wait_row_count ECMP_Nexthop 1 nexthop=192.168.10.10 mac='"f0:00:00:00:10:10"'
+wait_row_count ECMP_Nexthop 1 nexthop=192.168.10.20 mac='"f0:00:00:00:20:20"'
+check ovn-nbctl --wait=hv sync
+
+zone=$(ovn-appctl -t ovn-controller ct-zone-list | grep "^lr0_dnat " | cut -d ' ' -f 2)
+check test -n "$zone"
+flush_10="NXT_CT_FLUSH .* zone=$zone labels=0xf0000000101000000000/"
+flush_20="NXT_CT_FLUSH .* zone=$zone labels=0xf0000000202000000000/"
+
+AS_BOX([Removed next-hop is flushed])
+n=$(wc -l < hv1/ovs-vswitchd.log)
+check ovn-nbctl --wait=hv lr-route-del lr0 1.0.0.0/24 192.168.10.20
+tail -n +$((n + 1)) hv1/ovs-vswitchd.log > vswitchd-del.log
+AT_CHECK([grep -c "$flush_20" vswitchd-del.log], [0], [1
+])
+AT_CHECK([grep -c "$flush_10" vswitchd-del.log], [1], [0
+])
+
+AS_BOX([Removed next-hop is flushed when ofctrl could not send at removal])
+check ovn-nbctl --ecmp-symmetric-reply lr-route-add lr0 1.0.0.0/24 192.168.10.20
+wait_row_count ECMP_Nexthop 1 nexthop=192.168.10.20 mac='"f0:00:00:00:20:20"'
+check ovn-nbctl --wait=hv sync
+
+# Stop the switch and queue more flow updates than the connection can
+# buffer, so that ofctrl has a backlog.
+sleep_ovs hv1
+addrs=$(for i in $(seq 0 19); do for j in $(seq 1 250); do
+            printf '"10.0.%d.%d",' $i $j
+        done; done)
+stats=$(ovn-appctl -t ovn-controller inc-engine/show-stats lflow_output)
+check_uuid ovn-nbctl --wait=sb create Address_Set name=big \
+    addresses="${addrs%,}" -- acl-add public to-lport 1001 'ip4.src == $big' allow
+OVS_WAIT_UNTIL([test "$stats" != "$(ovn-appctl -t ovn-controller inc-engine/show-stats lflow_output)"])
+
+# Remove the next-hop while ovn-controller sleeps, so that the removal is
+# processed in one run while the backlog is still there.
+sleep_controller hv1
+check ovn-nbctl --wait=sb lr-route-del lr0 1.0.0.0/24 192.168.10.20
+check_row_count ECMP_Nexthop 0 nexthop=192.168.10.20
+n_skip=$(grep -c "ofctrl_put can't be performed" hv1/ovn-controller.log)
+stats=$(ovn-appctl -t ovn-controller inc-engine/show-stats lflow_output)
+wake_up_controller hv1
+OVS_WAIT_UNTIL([test "$stats" != "$(ovn-appctl -t ovn-controller inc-engine/show-stats lflow_output)"])
+OVS_WAIT_UNTIL([test $(grep -c "ofctrl_put can't be performed" hv1/ovn-controller.log) -gt $n_skip])
+
+wake_up_ovs hv1
+check ovn-nbctl --wait=hv sync
+AT_CHECK([grep -c "$flush_20" hv1/ovs-vswitchd.log], [0], [2
+])
+AT_CHECK([grep -c "$flush_10" hv1/ovs-vswitchd.log], [1], [0
+])
+
+AS_BOX([Next-hop that is back before ofctrl can send is not flushed])
+check ovn-nbctl --ecmp-symmetric-reply lr-route-add lr0 1.0.0.0/24 192.168.10.20
+wait_row_count ECMP_Nexthop 1 nexthop=192.168.10.20 mac='"f0:00:00:00:20:20"'
+check ovn-nbctl --wait=hv sync
+
+# Stop the switch again and queue the removal of the big ACL.
+sleep_ovs hv1
+stats=$(ovn-appctl -t ovn-controller inc-engine/show-stats lflow_output)
+check ovn-nbctl --wait=sb acl-del public -- destroy Address_Set big
+OVS_WAIT_UNTIL([test "$stats" != "$(ovn-appctl -t ovn-controller inc-engine/show-stats lflow_output)"])
+
+# Remove the next-hop and add it back, each in its own run, while ofctrl
+# still cannot send.
+sleep_controller hv1
+check ovn-nbctl --wait=sb lr-route-del lr0 1.0.0.0/24 192.168.10.20
+check_row_count ECMP_Nexthop 0 nexthop=192.168.10.20
+n_skip=$(grep -c "ofctrl_put can't be performed" hv1/ovn-controller.log)
+stats=$(ovn-appctl -t ovn-controller inc-engine/show-stats lflow_output)
+wake_up_controller hv1
+OVS_WAIT_UNTIL([test "$stats" != "$(ovn-appctl -t ovn-controller inc-engine/show-stats lflow_output)"])
+OVS_WAIT_UNTIL([test $(grep -c "ofctrl_put can't be performed" hv1/ovn-controller.log) -gt $n_skip])
+
+sleep_controller hv1
+check ovn-nbctl --wait=sb --ecmp-symmetric-reply lr-route-add lr0 1.0.0.0/24 192.168.10.20
+wait_row_count ECMP_Nexthop 1 nexthop=192.168.10.20 mac='"f0:00:00:00:20:20"'
+n_skip=$(grep -c "ofctrl_put can't be performed" hv1/ovn-controller.log)
+stats=$(ovn-appctl -t ovn-controller inc-engine/show-stats lflow_output)
+wake_up_controller hv1
+OVS_WAIT_UNTIL([test "$stats" != "$(ovn-appctl -t ovn-controller inc-engine/show-stats lflow_output)"])
+OVS_WAIT_UNTIL([test $(grep -c "ofctrl_put can't be performed" hv1/ovn-controller.log) -gt $n_skip])
+
+wake_up_ovs hv1
+check ovn-nbctl --wait=hv sync
+AT_CHECK([grep -c "$flush_20" hv1/ovs-vswitchd.log], [0], [2
+])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])

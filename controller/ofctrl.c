@@ -2802,28 +2802,29 @@ ofctrl_put(struct ovn_desired_flow_table *lflow_table,
         }
     }
 
-    /* OpenFlow messages to send to the switch to bring it up-to-date. */
-    struct ovs_list msgs = OVS_LIST_INITIALIZER(&msgs);
-
     if (local_datapaths) {
-        need_put |= ecmp_nexthop_monitor_run(enh_table, local_datapaths,
-                                             current_ct_zones, swconn, &msgs);
+        ecmp_nexthop_monitor_run(enh_table, local_datapaths,
+                                 current_ct_zones);
     }
+    need_put |= ecmp_nexthop_monitor_has_pending_flush();
 
     if (!need_put) {
-        ovs_assert(ovs_list_is_empty(&msgs));
         VLOG_DBG("ofctrl_put not needed");
         return;
     }
     if (!ofctrl_can_put()) {
         VLOG_DBG("ofctrl_put can't be performed");
-
-        struct ofpbuf *msg;
-        LIST_FOR_EACH_POP (msg, list_node, &msgs) {
-            ofpbuf_delete(msg);
-        }
         skipped_last_time = true;
         return;
+    }
+
+    /* OpenFlow messages to send to the switch to bring it up-to-date. */
+    struct ovs_list msgs = OVS_LIST_INITIALIZER(&msgs);
+
+    /* Removed ECMP next-hops stay pending while the connection is down,
+     * because rconn drops the messages queued then. */
+    if (rconn_is_connected(swconn)) {
+        ecmp_nexthop_monitor_flush(swconn, &msgs);
     }
 
     /* Iterate through ct zones that need to be flushed. */

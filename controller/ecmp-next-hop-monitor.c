@@ -25,7 +25,15 @@
 #include "ovn-sb-idl.h"
 #include "controller/ecmp-next-hop-monitor.h"
 
+VLOG_DEFINE_THIS_MODULE(ecmp_nexthop_monitor);
+
+/* Next-hops of the SB ECMP_Nexthop table that are in use on local
+ * datapaths. */
 static struct hmap ecmp_nexthop;
+
+/* Next-hops that went away but whose conntrack flush has not been sent to
+ * the switch yet.  They stay here until ofctrl is able to send it. */
+static struct hmap ecmp_nexthop_pending_flush;
 
 struct ecmp_nexthop_data {
     struct hmap_node hmap_node;
@@ -37,6 +45,7 @@ struct ecmp_nexthop_data {
 void ecmp_nexthop_init(void)
 {
     hmap_init(&ecmp_nexthop);
+    hmap_init(&ecmp_nexthop_pending_flush);
 }
 
 static void
@@ -60,6 +69,7 @@ ecmp_nexthop_destroy_map(struct hmap *map)
 void ecmp_nexthop_destroy(void)
 {
     ecmp_nexthop_destroy_map(&ecmp_nexthop);
+    ecmp_nexthop_destroy_map(&ecmp_nexthop_pending_flush);
 }
 
 static uint32_t
@@ -137,15 +147,16 @@ ecmp_nexthop_monitor_flush_ct_entry(const struct rconn *swconn,
     ovs_list_push_back(msgs, &msg->list_node);
 }
 
-bool
+/* Updates the monitored next-hops from 'enh_table'.  A monitored next-hop
+ * that is no longer there is moved to the pending flush set; its conntrack
+ * entries are flushed by ecmp_nexthop_monitor_flush(). */
+void
 ecmp_nexthop_monitor_run(const struct sbrec_ecmp_nexthop_table *enh_table,
                          const struct hmap *local_datapaths,
-                         const struct shash *current_ct_zones,
-                         const struct rconn *swconn, struct ovs_list *msgs)
+                         const struct shash *current_ct_zones)
 {
     struct hmap sb_ecmp_nexthop = HMAP_INITIALIZER(&sb_ecmp_nexthop);
     const struct sbrec_ecmp_nexthop *sbrec_ecmp_nexthop;
-    bool ret = false;
 
     ovs_assert(local_datapaths);
 
@@ -178,6 +189,17 @@ ecmp_nexthop_monitor_run(const struct sbrec_ecmp_nexthop_table *enh_table,
                                      sbrec_ecmp_nexthop->mac,
                                      ct_zone->zone, &ecmp_nexthop);
         }
+
+        /* A next-hop that is back before its flush was sent never left the
+         * flows on the switch, so its conntrack entries are still valid. */
+        struct ecmp_nexthop_data *pending =
+            ecmp_nexthop_find_entry(sbrec_ecmp_nexthop->nexthop,
+                                    sbrec_ecmp_nexthop->mac, ct_zone->zone,
+                                    &ecmp_nexthop_pending_flush);
+        if (pending) {
+            hmap_remove(&ecmp_nexthop_pending_flush, &pending->hmap_node);
+            ecmp_nexthop_destroy_entry(pending);
+        }
         ecmp_nexthop_alloc_entry(sbrec_ecmp_nexthop->nexthop,
                                  sbrec_ecmp_nexthop->mac, ct_zone->zone,
                                  &sb_ecmp_nexthop);
@@ -187,14 +209,38 @@ ecmp_nexthop_monitor_run(const struct sbrec_ecmp_nexthop_table *enh_table,
     HMAP_FOR_EACH_SAFE (e, hmap_node, &ecmp_nexthop) {
         if (!ecmp_nexthop_find_entry(e->nexthop, e->mac, e->zone_id,
                                      &sb_ecmp_nexthop)) {
-            ecmp_nexthop_monitor_flush_ct_entry(swconn, e->mac,
-                                                e->zone_id, msgs);
             hmap_remove(&ecmp_nexthop, &e->hmap_node);
-            ecmp_nexthop_destroy_entry(e);
-            ret = true;
+            if (ecmp_nexthop_find_entry(e->nexthop, e->mac, e->zone_id,
+                                        &ecmp_nexthop_pending_flush)) {
+                ecmp_nexthop_destroy_entry(e);
+            } else {
+                hmap_insert(&ecmp_nexthop_pending_flush, &e->hmap_node,
+                            ecmp_nexthop_hash(e->nexthop, e->mac,
+                                              e->zone_id));
+            }
         }
     }
     ecmp_nexthop_destroy_map(&sb_ecmp_nexthop);
+}
 
-    return ret;
+bool
+ecmp_nexthop_monitor_has_pending_flush(void)
+{
+    return !hmap_is_empty(&ecmp_nexthop_pending_flush);
+}
+
+/* Appends to 'msgs' a conntrack flush for each pending next-hop and forgets
+ * them.  The caller must make sure that 'msgs' are going to be sent to the
+ * switch. */
+void
+ecmp_nexthop_monitor_flush(const struct rconn *swconn, struct ovs_list *msgs)
+{
+    struct ecmp_nexthop_data *e;
+    HMAP_FOR_EACH_POP (e, hmap_node, &ecmp_nexthop_pending_flush) {
+        VLOG_DBG("Flushing CT for ECMP next-hop %s (MAC %s) in zone %"PRIu16,
+                 e->nexthop, e->mac, e->zone_id);
+        ecmp_nexthop_monitor_flush_ct_entry(swconn, e->mac, e->zone_id,
+                                            msgs);
+        ecmp_nexthop_destroy_entry(e);
+    }
 }
