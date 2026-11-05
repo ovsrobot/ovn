@@ -48718,7 +48718,7 @@ check test -n "$zone"
 flush_10="NXT_CT_FLUSH .* zone=$zone labels=0xf0000000101000000000/"
 flush_20="NXT_CT_FLUSH .* zone=$zone labels=0xf0000000202000000000/"
 
-AS_BOX([Removed next-hop is flushed])
+AS_BOX([Removed next-hop is flushed after the flow bundle])
 n=$(wc -l < hv1/ovs-vswitchd.log)
 check ovn-nbctl --wait=hv lr-route-del lr0 1.0.0.0/24 192.168.10.20
 tail -n +$((n + 1)) hv1/ovs-vswitchd.log > vswitchd-del.log
@@ -48726,6 +48726,10 @@ AT_CHECK([grep -c "$flush_20" vswitchd-del.log], [0], [1
 ])
 AT_CHECK([grep -c "$flush_10" vswitchd-del.log], [1], [0
 ])
+commit=$(grep -n "type=COMMIT_REQUEST" vswitchd-del.log | head -1 | cut -d: -f1)
+flush=$(grep -n "$flush_20" vswitchd-del.log | cut -d: -f1)
+check test -n "$commit"
+check test "$commit" -lt "$flush"
 
 AS_BOX([Removed next-hop is flushed when ofctrl could not send at removal])
 check ovn-nbctl --ecmp-symmetric-reply lr-route-add lr0 1.0.0.0/24 192.168.10.20
