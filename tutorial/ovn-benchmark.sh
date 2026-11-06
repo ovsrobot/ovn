@@ -161,6 +161,13 @@ if [ ! -d "$PWD/sandbox" ]; then
     exit 1
 fi
 
+if [ "$(ovn-controller --version | grep "asan\|ubsan")" ]; then
+    echo "Compiled with sanitizer, which is incompatible."
+    echo "$(ovn-controller --version | grep "asan\|ubsan")"
+    echo "$(ovn-northd --version | grep "asan\|ubsan")"
+    exit 1
+fi
+
 # Apply defaults if not set by user.
 NODES=${NODES:-$DEFAULT_NODES}
 
