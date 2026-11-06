@@ -170,6 +170,7 @@ SUFFIXES += .in
 	    -e 's,[@]OVSBUILDDIR[@],$(OVSBUILDDIR),g' \
 	    -e 's,[@]VERSION[@],$(VERSION),g' \
 	    -e 's,[@]VERSION_SUFFIX[@],$(VERSION_SUFFIX),g' \
+	    -e 's,[@]ASAN_UBSAN[@],$(ASAN_UBSAN),g' \
 	    -e 's,[@]OVSVERSION[@],$(OVSVERSION),g' \
 	    -e 's,[@]localstatedir[@],$(localstatedir),g' \
 	    -e 's,[@]pkgdatadir[@],$(pkgdatadir),g' \

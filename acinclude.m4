@@ -389,6 +389,8 @@ AC_DEFUN([OVN_ENABLE_VIF_PLUG], [
     fi
 ])
 
+dnl OVN_CHECK_VERSION_SUFFIX
+dnl
 dnl Append a version suffix.
 AC_DEFUN([OVN_CHECK_VERSION_SUFFIX], [
   AC_ARG_WITH([version-suffix],
@@ -398,4 +400,42 @@ AC_DEFUN([OVN_CHECK_VERSION_SUFFIX], [
   AC_DEFINE_UNQUOTED([VERSION_SUFFIX], ["$with_version_suffix"],
                      [Package version suffix])
   AC_SUBST([VERSION_SUFFIX], [$with_version_suffix])
+])
+
+dnl OVN_CHECK_ASAN_UBSAN
+dnl
+dnl Check if OVN is configured with the address sanitizer or
+dnl undefined behavior sanitizer so that $ASAN_UBSAN can be appended
+dnl to the version string.
+AC_DEFUN([OVN_CHECK_ASAN_UBSAN], [
+    ovn_has_asan=no
+    AC_COMPILE_IFELSE(
+        [AC_LANG_SOURCE([[
+            #ifndef __has_feature
+            # define __has_feature(x) 0
+            #endif
+            #if !__has_feature(address_sanitizer) && !defined(__SANITIZE_ADDRESS__)
+            # error "AddressSanitizer is not enabled (expected)"
+            #endif
+        ]])],
+        [ovn_has_asan=yes])
+    ovn_has_ubsan=no
+    AC_COMPILE_IFELSE(
+        [AC_LANG_SOURCE([[
+            #ifndef __has_feature
+            # define __has_feature(x) 0
+            #endif
+            #if !__has_feature(undefined_behavior_sanitizer)
+            # error "UndefinedBehaviorSanitizer is not enabled (expected)"
+            #endif
+        ]])],
+        [ovn_has_ubsan=yes])
+    ASAN_UBSAN=""
+    if test "$ovn_has_asan" = "yes"; then
+        ASAN_UBSAN="-asan"
+    fi
+    if test "$ovn_has_ubsan" = "yes"; then
+        ASAN_UBSAN="$ASAN_UBSAN-ubsan"
+    fi
+    AC_SUBST([ASAN_UBSAN])
 ])
