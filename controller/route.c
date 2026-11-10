@@ -121,6 +121,19 @@ route_advertising_port_is_local(
                           route->logical_port->logical_port);
 }
 
+/* True when the route references a tracked port that is not in the IDL.
+ * ovn-controller monitors the Port_Binding rows of local datapaths, so a
+ * tracked port on a datapath that is not local to this chassis is absent
+ * from the replica and the reference resolves to nothing even though the
+ * column is set. */
+static bool
+route_tracked_port_is_unresolved(const struct sbrec_advertised_route *route)
+{
+    const struct ovsdb_datum *datum = ovsdb_idl_read(
+        &route->header_, &sbrec_advertised_route_col_tracked_port);
+    return datum->n && !route->tracked_port;
+}
+
 static bool
 route_is_local_only_eligible(
     const struct sbrec_advertised_route *route,
@@ -824,6 +837,13 @@ route_run(struct route_ctx_in *r_ctx_in,
             if (!local_only_eligible) {
                 continue;
             }
+        } else if (route_tracked_port_is_unresolved(route) &&
+                   smap_get_bool(&route->logical_port->options,
+                                 "dynamic-routing-redistribute-local-only",
+                                 false)) {
+            /* The tracked port is bound on a datapath that is not local to
+             * this chassis, so the route is not selected for it. */
+            continue;
         }
 
         /* Single site where the standby band is applied, once the base

@@ -23474,6 +23474,145 @@ OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
 AT_CLEANUP
 ])
 
+AT_SETUP([dynamic-routing - LB redistribute local-only with a backend on a non-local datapath])
+AT_KEYWORDS([dynamic-routing])
+
+VRF_RESERVE([1345])
+
+# A distributed-LB route tracks its backend LSP.  ovn-controller monitors
+# Port_Binding rows of local datapaths only, so a backend on a datapath that
+# is not local to hv1 is absent from the IDL and the tracked_port
+# reference of the route resolves to nothing.  With local-only
+# advertisement the backend is bound elsewhere and the route must not be
+# installed here.
+#
+# Topology: lr-origin (hv1) advertises through its LRP into ls-share with
+# redistribute=lb.  lr-target is a gateway router pinned to hv2 and owns
+# the LB.  Its backend LSP be0 is on ls-be behind lr-target, so neither
+# lr-target nor ls-be is a local datapath on hv1 until be0 is bound here.
+
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+
+ADD_BR([br-int])
+ovn_remote=unix:$ovs_base/ovn-sb/ovn-sb.sock
+if test -n "$SSL_OVN_SB_DB"; then
+    check ovs-vsctl set-ssl \
+        $PKIDIR/testpki-hv1-privkey.pem \
+        $PKIDIR/testpki-hv1-cert.pem \
+        $PKIDIR/testpki-cacert.pem
+    ovn_remote=$SSL_OVN_SB_DB
+fi
+check ovs-vsctl \
+    -- set Open_vSwitch . external-ids:system-id=hv1 \
+    -- set Open_vSwitch . external-ids:ovn-remote=$ovn_remote \
+    -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+    -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+    -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+start_daemon ovn-controller
+
+check ovn-sbctl chassis-add hv2 geneve 169.0.0.2
+
+check ovn-nbctl ls-add ls-share
+
+# lr-origin: GW on hv1, vrf 1344, redistribute LRP into ls-share.
+check ovn-nbctl lr-add lr-origin \
+    -- set Logical_Router lr-origin options:chassis=hv1 \
+                                    options:dynamic-routing=true \
+                                    options:dynamic-routing-vrf-id=1345
+check ovn-nbctl lrp-add lr-origin lr-origin-share 00:de:ad:00:00:01 \
+        192.168.0.1/24 \
+    -- set Logical_Router_Port lr-origin-share \
+            options:dynamic-routing-redistribute="lb" \
+            options:dynamic-routing-maintain-vrf=true
+check ovn-nbctl lsp-add ls-share share-lr-origin \
+    -- set Logical_Switch_Port share-lr-origin type=router \
+                                               options:router-port=lr-origin-share \
+    -- lsp-set-addresses share-lr-origin router
+
+# lr-target: GW pinned to hv2, owns the LB, backend LS behind it.
+check ovn-nbctl lr-add lr-target \
+    -- set Logical_Router lr-target options:chassis=hv2
+check ovn-nbctl lrp-add lr-target lr-target-share 00:de:ad:00:00:02 \
+        192.168.0.2/24
+check ovn-nbctl lsp-add ls-share share-lr-target \
+    -- set Logical_Switch_Port share-lr-target type=router \
+                                               options:router-port=lr-target-share \
+    -- lsp-set-addresses share-lr-target router
+check ovn-nbctl lrp-add lr-target lr-target-be 00:de:ad:00:00:03 \
+        192.168.1.1/24
+check ovn-nbctl ls-add ls-be
+check ovn-nbctl lsp-add ls-be be-lr-target \
+    -- set Logical_Switch_Port be-lr-target type=router \
+                                            options:router-port=lr-target-be \
+    -- lsp-set-addresses be-lr-target router
+check ovn-nbctl lsp-add ls-be be0
+check ovn-nbctl lsp-set-addresses be0 "00:de:ad:00:00:10 192.168.1.10"
+
+check ovn-nbctl \
+    -- lb-add lb0 172.16.1.10:80 192.168.1.10:80 \
+    -- set Load_Balancer lb0 options:distributed=true \
+        ip_port_mappings:192.168.1.10="be0:192.168.1.1" \
+    -- lr-lb-add lr-target lb0
+
+check ovn-nbctl --wait=hv sync
+OVS_CTL_TIMEOUT=30
+
+OVS_WAIT_UNTIL([test -n "`ip vrf show ovnvrf1345 2>/dev/null`"])
+pb_be0=$(fetch_column Port_Binding _uuid logical_port=be0)
+wait_row_count sb:Advertised_Route 1 ip_prefix='"172.16.1.10"' \
+    tracked_port=$pb_be0
+
+# Without local-only the route is advertised from every chassis that hosts
+# the advertising port, whether or not the backend is visible.
+OVS_WAIT_UNTIL([
+    ip route list vrf ovnvrf1345 | grep -q "blackhole 172.16.1.10"])
+
+# With local-only the backend is bound elsewhere: be0 is on a datapath that
+# is not local to hv1, so the route is not selected for hv1.
+check ovn-nbctl --wait=hv set Logical_Router_Port lr-origin-share \
+    options:dynamic-routing-redistribute-local-only=true
+OVS_WAIT_UNTIL([
+    ! ip route list vrf ovnvrf1345 | grep -q "blackhole 172.16.1.10"])
+
+# Binding the backend on hv1 makes ls-be local and the route selected.
+ADD_NAMESPACES(be0_ns)
+ADD_VETH(be0, be0_ns, br-int, "192.168.1.10/24", "00:de:ad:00:00:10")
+hv1_uuid=$(fetch_column Chassis _uuid name=hv1)
+wait_row_count Port_Binding 1 logical_port=be0 chassis=$hv1_uuid
+OVS_WAIT_UNTIL([
+    ip route list vrf ovnvrf1345 | grep -q "blackhole 172.16.1.10"])
+
+# Releasing the backend takes ls-be out of the local datapaths again and
+# withdraws the route.
+check ovs-vsctl del-port br-int ovs-be0
+AT_CHECK([ip netns exec be0_ns ip link del be0], [ignore], [ignore], [ignore])
+wait_column "" Port_Binding chassis logical_port=be0
+OVS_WAIT_UNTIL([
+    ! ip route list vrf ovnvrf1345 | grep -q "blackhole 172.16.1.10"])
+
+check ovn-nbctl --wait=hv lr-lb-del lr-target lb0
+wait_row_count sb:Advertised_Route 0 ip_prefix='"172.16.1.10"'
+
+OVS_APP_EXIT_AND_WAIT([ovn-controller])
+
+as ovn-sb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as ovn-nb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as northd
+OVS_APP_EXIT_AND_WAIT([ovn-northd])
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/connection dropped.*/d"])
+
+AT_CLEANUP
+])
+
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([dynamic-routing - shared backend LSP gates per-VIP])
 AT_KEYWORDS([dynamic-routing])
