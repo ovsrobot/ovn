@@ -25991,9 +25991,10 @@ check_row_count Advertised_Route 2 ip_prefix='"172.16.0.20"'
 check_row_count Advertised_Route 2 ip_prefix='"10.0.0.10"'
 
 # The private VIP of lbB falls inside a subnet that priv1 and priv2
-# share, so northd warns.
+# share, so northd warns.  The order of the two switches follows the
+# router iteration and is not fixed.
 AT_CHECK([grep -q "VIP 10.0.0.10 of load balancer lbB advertised through lr0-up falls inside subnet 10.0.0.0/24" northd/ovn-northd.log])
-AT_CHECK([grep -q "falls inside subnet 10.0.0.0/24 used on logical switches priv1 and priv2" northd/ovn-northd.log])
+AT_CHECK([grep -qE "falls inside subnet 10.0.0.0/24 used on logical switches (priv1 and priv2|priv2 and priv1)" northd/ovn-northd.log])
 
 # The private VIP of lbA is not advertised, so it must not warn.
 AT_CHECK([grep -q "WARN.*of load balancer lbA" northd/ovn-northd.log], [1])
@@ -26019,6 +26020,170 @@ check ovn-nbctl --wait=sb set Load_Balancer lbA \
     options:dynamic-routing-advertise-vips="172.16.0.10,192.0.2.99"
 AT_CHECK([grep -q "Address '192.0.2.99' in dynamic-routing-advertise-vips of load balancer lbA matches no VIP" northd/ovn-northd.log])
 check_row_count Advertised_Route 2 ip_prefix='"172.16.0.10"'
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([dynamic-routing - advertised prefixes filter])
+AT_KEYWORDS([dynamic-routing])
+ovn_start
+
+# lr0 redistributes lb,nat toward the shared LS "up".  lr1 owns a
+# distributed load balancer with a floating IP VIP 172.16.1.10 and a
+# private VIP 192.168.1.100, the way a CMS adds the floating IP as an
+# extra VIP, a NAT entry for the floating IP and a NAT entry with a
+# private external IP.  dynamic-routing-advertise-prefixes lists the
+# address space whose addresses may be advertised to the fabric, the
+# way a CMS lists the subnet pools that share the address scope of the
+# provider network.
+
+check ovn-nbctl lr-add lr0
+check ovn-nbctl set Logical_Router lr0 \
+    options:dynamic-routing=true       \
+    options:chassis=hv1
+check ovn-nbctl lrp-add lr0 lr0-up 00:00:00:00:00:01
+check ovn-nbctl lrp-set-options lr0-up dynamic-routing-redistribute=lb,nat
+check ovn-nbctl ls-add up
+check ovn-nbctl lsp-add-router-port up up-lr0 lr0-up
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lr1-up 00:00:00:00:00:02 10.0.0.1/24
+check ovn-nbctl lrp-set-gateway-chassis lr1-up hv1
+check ovn-nbctl lsp-add-router-port up up-lr1 lr1-up
+check ovn-nbctl lrp-add lr1 lr1-be 00:00:00:00:00:03 192.168.1.1/24
+check ovn-nbctl ls-add be
+check ovn-nbctl lsp-add-router-port be be-lr1 lr1-be
+check ovn-nbctl lsp-add be be-vm1
+check ovn-nbctl lsp-set-addresses be-vm1 "00:00:00:00:01:01 192.168.1.10"
+check ovn-nbctl lsp-add be be-vm2
+check ovn-nbctl lsp-set-addresses be-vm2 "00:00:00:00:01:02 192.168.1.11"
+
+check ovn-nbctl \
+    -- lb-add lb0 172.16.1.10:80 192.168.1.10:80,192.168.1.11:80 \
+    -- lb-add lb0 192.168.1.100:80 192.168.1.10:80,192.168.1.11:80 \
+    -- set Load_Balancer lb0 options:distributed=true \
+        ip_port_mappings:192.168.1.10="be-vm1:192.168.1.1" \
+        ip_port_mappings:192.168.1.11="be-vm2:192.168.1.1" \
+    -- lr-lb-add lr1 lb0
+check ovn-nbctl lr-nat-add lr1 dnat_and_snat 172.16.1.10 192.168.1.10
+check ovn-nbctl lr-nat-add lr1 dnat_and_snat 192.168.1.200 192.168.1.20
+check ovn-nbctl --wait=sb sync
+
+pb_lr1_up=$(fetch_column Port_Binding _uuid logical_port=lr1-up)
+
+# Without the option every VIP and NAT external IP is advertised: four
+# LB routes and the NAT route of the private external IP.  The NAT route
+# of the floating IP is suppressed by the load balancer routes.
+check_row_count Advertised_Route 5
+check_row_count Advertised_Route 2 ip_prefix='"172.16.1.10"'
+check_row_count Advertised_Route 2 ip_prefix='"192.168.1.100"'
+check_row_count Advertised_Route 1 \
+    ip_prefix='"192.168.1.200"' tracked_port=$pb_lr1_up
+
+# Only addresses inside the listed prefixes are advertised and
+# forwarded.  The floating IP keeps its per-backend routes and stays
+# suppressed as a NAT route.  The private VIP and the NAT entry with a
+# private external IP are not advertised.
+check ovn-nbctl --wait=sb lrp-set-options lr0-up \
+    dynamic-routing-redistribute=lb,nat \
+    dynamic-routing-advertise-prefixes="172.16.1.0/24"
+check_row_count Advertised_Route 2
+check_row_count Advertised_Route 2 ip_prefix='"172.16.1.10"'
+check_row_count Advertised_Route 0 ip_prefix='"192.168.1.100"'
+check_row_count Advertised_Route 0 ip_prefix='"192.168.1.200"'
+ovn-sbctl lflow-list lr0 > lr0_flows
+AT_CHECK([grep -c 'lr_in_ip_routing.*172.16.1.10/32' lr0_flows], [0], [1
+])
+AT_CHECK([grep -c 'lr_in_ip_routing.*192.168.1.100/32' lr0_flows], [1], [0
+])
+AT_CHECK([grep -c 'lr_in_ip_routing.*192.168.1.200/32' lr0_flows], [1], [0
+])
+
+# Host bits are ignored, so this is the same prefix as above.
+check ovn-nbctl --wait=sb lrp-set-options lr0-up \
+    dynamic-routing-redistribute=lb,nat \
+    dynamic-routing-advertise-prefixes="172.16.1.9/24"
+check_row_count Advertised_Route 2
+
+# An entry that does not parse is ignored with a warning.
+check ovn-nbctl --wait=sb lrp-set-options lr0-up \
+    dynamic-routing-redistribute=lb,nat \
+    dynamic-routing-advertise-prefixes="bogus,172.16.1.0/24"
+check_row_count Advertised_Route 2
+AT_CHECK([grep -q "Ignoring invalid prefix 'bogus' in dynamic-routing-advertise-prefixes of logical router port lr0-up" northd/ovn-northd.log])
+
+# An IPv4 prefix in IPv4-mapped IPv6 notation is the same prefix again.  A
+# mapped prefix shorter than the mapped range is not a prefix of IPv4
+# addresses and is ignored like any invalid entry.  Its warning shares the
+# rate limit of the one above, so only the rows are checked here.
+check ovn-nbctl --wait=sb lrp-set-options lr0-up \
+    dynamic-routing-redistribute=lb,nat \
+    dynamic-routing-advertise-prefixes="::ffff:172.16.1.0/120"
+check_row_count Advertised_Route 2
+check ovn-nbctl --wait=sb lrp-set-options lr0-up \
+    dynamic-routing-redistribute=lb,nat \
+    dynamic-routing-advertise-prefixes="::ffff:172.16.1.0/64,172.16.1.0/24"
+check_row_count Advertised_Route 2
+check ovn-nbctl --wait=sb lrp-set-options lr0-up \
+    dynamic-routing-redistribute=lb,nat \
+    dynamic-routing-advertise-prefixes="::ffff:172.16.1.0/24"
+check_row_count Advertised_Route 0
+
+# A prefix of the same address space as the private addresses lets them
+# through, the case of a subnet pool that shares the provider address
+# scope.
+check ovn-nbctl --wait=sb lrp-set-options lr0-up \
+    dynamic-routing-redistribute=lb,nat \
+    dynamic-routing-advertise-prefixes="172.16.1.0/24,192.168.1.0/24"
+check_row_count Advertised_Route 5
+check_row_count Advertised_Route 2 ip_prefix='"192.168.1.100"'
+check_row_count Advertised_Route 1 ip_prefix='"192.168.1.200"'
+
+# The per-LB list applies as well, and a VIP is advertised only when
+# both allow it.  Listing only the private VIP in the load balancer
+# blocks the floating IP, so its NAT route returns, inside the prefixes.
+check ovn-nbctl --wait=sb set Load_Balancer lb0 \
+    options:dynamic-routing-advertise-vips="192.168.1.100"
+check_row_count Advertised_Route 4
+check_row_count Advertised_Route 1 \
+    ip_prefix='"172.16.1.10"' tracked_port=$pb_lr1_up
+check ovn-nbctl --wait=sb remove Load_Balancer lb0 options \
+    dynamic-routing-advertise-vips
+check_row_count Advertised_Route 5
+
+# An empty list advertises no VIP and no NAT external IP.
+check ovn-nbctl --wait=sb lrp-set-options lr0-up \
+    dynamic-routing-redistribute=lb,nat \
+    dynamic-routing-advertise-prefixes='""'
+check_row_count Advertised_Route 0
+
+# The router value is the default for every port of the router, and the
+# port value overrides it.
+check ovn-nbctl --wait=sb remove Logical_Router_Port lr0-up options \
+    dynamic-routing-advertise-prefixes
+check_row_count Advertised_Route 5
+check ovn-nbctl --wait=sb set Logical_Router lr0 \
+    options:dynamic-routing-advertise-prefixes="172.16.1.0/24"
+check_row_count Advertised_Route 2
+check_row_count Advertised_Route 2 ip_prefix='"172.16.1.10"'
+check ovn-nbctl --wait=sb lrp-set-options lr0-up \
+    dynamic-routing-redistribute=lb,nat \
+    dynamic-routing-advertise-prefixes="172.16.1.0/24,192.168.1.0/24"
+check_row_count Advertised_Route 5
+check ovn-nbctl --wait=sb remove Logical_Router_Port lr0-up options \
+    dynamic-routing-advertise-prefixes
+check_row_count Advertised_Route 2
+check ovn-nbctl --wait=sb set Logical_Router lr0 \
+    options:dynamic-routing-advertise-prefixes="bogus"
+check_row_count Advertised_Route 0
+AT_CHECK([grep -q "Ignoring invalid prefix 'bogus' in dynamic-routing-advertise-prefixes of logical router lr0" northd/ovn-northd.log])
+
+# Removing the option advertises every address again.
+check ovn-nbctl --wait=sb remove Logical_Router lr0 options \
+    dynamic-routing-advertise-prefixes
+check_row_count Advertised_Route 5
 
 OVN_CLEANUP_NORTHD
 AT_CLEANUP

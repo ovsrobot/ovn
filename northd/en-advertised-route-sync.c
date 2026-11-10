@@ -522,6 +522,144 @@ ip46_in_prefix(const struct in6_addr *ip, const struct in6_addr *prefix,
     return ipv6_is_zero(&masked);
 }
 
+/* Mask the host bits of prefix/plen in place, so that an entry with
+ * host bits set still names its network. */
+static void
+ip46_prefix_network(struct in6_addr *prefix, unsigned int plen)
+{
+    if (IN6_IS_ADDR_V4MAPPED(prefix)) {
+        ovs_be32 network = in6_addr_get_mapped_ipv4(prefix)
+                           & be32_prefix_mask(plen);
+        in6_addr_set_mapped_ipv4(prefix, network);
+    } else {
+        struct in6_addr mask = ipv6_create_mask(plen);
+        *prefix = ipv6_addr_bitand(prefix, &mask);
+    }
+}
+
+/* The CIDR prefixes listed in dynamic-routing-advertise-prefixes of the
+ * advertising logical router port, or of its logical router when the port
+ * has no value of its own. */
+struct advertise_prefix {
+    struct in6_addr network;   /* IPv4 stored as IPv4-mapped. */
+    unsigned int plen;
+};
+
+struct advertise_prefixes {
+    bool set;                  /* False when the option is absent. */
+    struct advertise_prefix *items;
+    size_t n;
+};
+
+static void
+advertise_prefixes_destroy(struct advertise_prefixes *prefixes)
+{
+    free(prefixes->items);
+}
+
+/* Fill prefixes with the networks listed in the advertising port's
+ * dynamic-routing-advertise-prefixes option, or in its router's option
+ * when the port has none.  Parsed once per advertising port, every load
+ * balancer and NAT entry seen through the port reuses the result.
+ * prefixes->set stays false when the option is absent, in which case every
+ * address passes.  An entry that does not parse is ignored with a
+ * warning. */
+static void
+advertise_prefixes_init(const struct ovn_port *advertising_op,
+                        struct advertise_prefixes *prefixes)
+{
+    *prefixes = (struct advertise_prefixes) { .set = false };
+    if (!advertising_op->nbrp) {
+        return;
+    }
+    /* One rate limit per owner kind, so that a bad entry on a router is
+     * still reported after one on a port was. */
+    static struct vlog_rate_limit rl_port = VLOG_RATE_LIMIT_INIT(5, 1);
+    static struct vlog_rate_limit rl_router = VLOG_RATE_LIMIT_INIT(5, 1);
+    bool from_router = false;
+    const char *owner_kind = "logical router port";
+    const char *owner = advertising_op->key;
+    const char *list = smap_get(&advertising_op->nbrp->options,
+                                "dynamic-routing-advertise-prefixes");
+    if (!list && advertising_op->od->nbr) {
+        from_router = true;
+        owner_kind = "logical router";
+        owner = advertising_op->od->nbr->name;
+        list = smap_get(&advertising_op->od->nbr->options,
+                        "dynamic-routing-advertise-prefixes");
+    }
+    if (!list) {
+        return;
+    }
+    prefixes->set = true;
+
+    struct sset tokens = SSET_INITIALIZER(&tokens);
+    sset_from_delimited_string(&tokens, list, ", ");
+
+    const char *token;
+    SSET_FOR_EACH (token, &tokens) {
+        struct in6_addr network;
+        unsigned int plen;
+        bool valid = ip46_parse_cidr(token, &network, &plen);
+        if (valid && IN6_IS_ADDR_V4MAPPED(&network) && strchr(token, ':')) {
+            /* An IPv4 prefix written in IPv4-mapped IPv6 notation carries
+             * an IPv6 prefix length.  Keep it as the IPv4 length when it
+             * covers the mapped range, reject it otherwise. */
+            valid = plen >= 96;
+            plen -= 96;
+        }
+        if (!valid) {
+            VLOG_WARN_RL(from_router ? &rl_router : &rl_port,
+                         "Ignoring invalid prefix '%s' in "
+                         "dynamic-routing-advertise-prefixes of %s %s",
+                         token, owner_kind, owner);
+            continue;
+        }
+        ip46_prefix_network(&network, plen);
+        prefixes->items = xrealloc(prefixes->items,
+                                   (prefixes->n + 1)
+                                   * sizeof *prefixes->items);
+        prefixes->items[prefixes->n].network = network;
+        prefixes->items[prefixes->n].plen = plen;
+        prefixes->n++;
+    }
+    sset_destroy(&tokens);
+}
+
+/* True when the option is absent or ip falls inside one of the
+ * prefixes. */
+static bool
+ip_in_advertise_prefixes(const struct in6_addr *ip,
+                         const struct advertise_prefixes *prefixes)
+{
+    if (!prefixes->set) {
+        return true;
+    }
+    for (size_t i = 0; i < prefixes->n; i++) {
+        if (ip46_in_prefix(ip, &prefixes->items[i].network,
+                           prefixes->items[i].plen)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* True when the option is absent or vip falls inside one of the
+ * prefixes.  A template VIP has no address and never passes a filter. */
+static bool
+vip_in_advertise_prefixes(const struct ovn_lb_vip *vip,
+                          const struct advertise_prefixes *prefixes)
+{
+    if (!prefixes->set) {
+        return true;
+    }
+    struct in6_addr ip;
+    if (!lb_vip_address(vip, &ip)) {
+        return false;
+    }
+    return ip_in_advertise_prefixes(&ip, prefixes);
+}
+
 /* A subnet of a logical router port network, collected to find address
  * space that more than one logical switch claims. */
 struct subnet_ls {
@@ -705,6 +843,7 @@ static void
 build_nat_route_for_port(const struct ovn_port *advertising_op,
                          const struct lr_nat_record *lr_nat,
                          const struct hmap *ls_ports,
+                         const struct advertise_prefixes *prefixes,
                          const struct sset *distributed_lb_routes,
                          struct hmap *routes,
                          const struct ovn_port *forwarding_port,
@@ -720,6 +859,19 @@ build_nat_route_for_port(const struct ovn_port *advertising_op,
 
         if (!smap_get_bool(&nat->nb->options,
                            "dynamic-routing-advertise", true)) {
+            continue;
+        }
+
+        /* The external IP has to fall inside the advertised prefixes, the
+         * way a load balancer VIP has to. */
+        struct in6_addr external_addr;
+        if (nat_entry_is_v6(nat)) {
+            external_addr = nat->ext_addrs.ipv6_addrs[0].addr;
+        } else {
+            in6_addr_set_mapped_ipv4(&external_addr,
+                                     nat->ext_addrs.ipv4_addrs[0].addr);
+        }
+        if (!ip_in_advertise_prefixes(&external_addr, prefixes)) {
             continue;
         }
 
@@ -780,9 +932,12 @@ build_nat_routes(const struct ovn_datapath *od,
             continue;
         }
 
-        build_nat_route_for_port(op, lr_nat, ls_ports,
+        struct advertise_prefixes prefixes;
+        advertise_prefixes_init(op, &prefixes);
+        build_nat_route_for_port(op, lr_nat, ls_ports, &prefixes,
                                  &data->distributed_lb_routes,
                                  &data->routes, NULL, NULL);
+        advertise_prefixes_destroy(&prefixes);
     }
 }
 
@@ -813,22 +968,25 @@ build_nat_connected_routes(
         /* Track the peer datapath for any changes. */
         dynamic_routes_track_od(data, peer_od);
 
+        struct advertise_prefixes prefixes;
+        advertise_prefixes_init(op, &prefixes);
+
         /* This is a directly connected LR peer. */
         if (peer_od->nbr) {
             const struct lr_stateful_record *peer_lr_stateful =
                 lr_stateful_table_find_by_uuid(lr_stateful_table,
                                                  peer_od->key);
-            if (!peer_lr_stateful) {
-                continue;
-            }
-
             /* Advertise peer's NAT routes via the local port too, and
              * install forwarding routes so we can reach the
              * peer's external IPs. */
-            build_nat_route_for_port(op, peer_lr_stateful->lrnat_rec,
-                                     ls_ports, &data->distributed_lb_routes,
-                                     &data->routes, op->peer,
-                                     &data->parsed_routes);
+            if (peer_lr_stateful) {
+                build_nat_route_for_port(op, peer_lr_stateful->lrnat_rec,
+                                         ls_ports, &prefixes,
+                                         &data->distributed_lb_routes,
+                                         &data->routes, op->peer,
+                                         &data->parsed_routes);
+            }
+            advertise_prefixes_destroy(&prefixes);
             continue;
         }
 
@@ -852,13 +1010,15 @@ build_nat_connected_routes(
              * install forwarding routes so we can reach the
              * peer's external IPs. */
             build_nat_route_for_port(op, peer_lr_stateful->lrnat_rec,
-                                     ls_ports, &data->distributed_lb_routes,
+                                     ls_ports, &prefixes,
+                                     &data->distributed_lb_routes,
                                      &data->routes, rp->peer,
                                      &data->parsed_routes);
             /* Track the LR datapath on the other side of LS
              * for any changes. */
             dynamic_routes_track_od(data, rp->peer->od);
         }
+        advertise_prefixes_destroy(&prefixes);
     }
 }
 
@@ -872,9 +1032,12 @@ build_nat_connected_routes(
  * in place of a per-backend LSP. The forwarding route is emitted once
  * per VIP regardless of backend count: the data-plane forwarding
  * decision is independent of which backend ends up serving the flow.
- * Every VIP of a distributed LB is recorded in distributed_lb_routes with
- * owner_lr, the logical router the LB is attached to, so that
- * build_nat_route_for_port() can skip the NAT route for it. */
+ * Every advertised VIP of a distributed LB is recorded in
+ * distributed_lb_routes with owner_lr, the logical router the LB is
+ * attached to, so that build_nat_route_for_port() can skip the NAT
+ * route for it.  A VIP is advertised only when both the load
+ * balancer's dynamic-routing-advertise-vips list and the advertising
+ * port's dynamic-routing-advertise-prefixes list allow it. */
 static void
 build_lb_routes_for_lb(const struct ovn_port *advertising_op,
                        const struct ovn_port *fallback_tracked_port,
@@ -882,6 +1045,7 @@ build_lb_routes_for_lb(const struct ovn_port *advertising_op,
                        const struct nbrec_load_balancer *nbrec_lb,
                        const struct hmap *lb_datapaths_map,
                        const struct hmap *ls_ports,
+                       const struct advertise_prefixes *prefixes,
                        struct dup_subnets *dup_subnets,
                        struct sset *distributed_lb_routes,
                        struct hmap *routes,
@@ -915,6 +1079,10 @@ build_lb_routes_for_lb(const struct ovn_port *advertising_op,
         const struct ovn_northd_lb_vip *vip_nb = &lb->vips_nb[v];
 
         if (!lb_vip_is_advertised(vip, filtered, &advertised_vips)) {
+            continue;
+        }
+
+        if (!vip_in_advertise_prefixes(vip, prefixes)) {
             continue;
         }
 
@@ -1004,6 +1172,7 @@ build_lb_lr_routes(const struct ovn_port *advertising_op,
                    const struct nbrec_logical_router *peer_lr_nbr,
                    const struct hmap *lb_datapaths_map,
                    const struct hmap *ls_ports,
+                   const struct advertise_prefixes *prefixes,
                    struct dup_subnets *dup_subnets,
                    struct sset *distributed_lb_routes,
                    struct hmap *routes,
@@ -1019,7 +1188,8 @@ build_lb_lr_routes(const struct ovn_port *advertising_op,
         uuidset_insert(&visited, &lb->header_.uuid);
         build_lb_routes_for_lb(advertising_op, fallback_tracked_port,
                                peer_lr_nbr, lb, lb_datapaths_map, ls_ports,
-                               dup_subnets, distributed_lb_routes, routes,
+                               prefixes, dup_subnets,
+                               distributed_lb_routes, routes,
                                parsed_routes_out);
     }
 
@@ -1034,7 +1204,7 @@ build_lb_lr_routes(const struct ovn_port *advertising_op,
             uuidset_insert(&visited, &lb->header_.uuid);
             build_lb_routes_for_lb(advertising_op, fallback_tracked_port,
                                    peer_lr_nbr, lb, lb_datapaths_map,
-                                   ls_ports, dup_subnets,
+                                   ls_ports, prefixes, dup_subnets,
                                    distributed_lb_routes, routes,
                                    parsed_routes_out);
         }
@@ -1069,12 +1239,16 @@ build_lb_connected_routes(const struct ovn_datapath *od,
         /* Track the peer datapath for any changes. */
         dynamic_routes_track_od(data, peer_od);
 
+        struct advertise_prefixes prefixes;
+        advertise_prefixes_init(op, &prefixes);
+
         /* This is directly connected LR peer. */
         if (peer_od->nbr) {
             build_lb_lr_routes(op, op->peer, peer_od->nbr,
-                               lb_datapaths_map, ls_ports, dup_subnets,
-                               &data->distributed_lb_routes,
+                               lb_datapaths_map, ls_ports, &prefixes,
+                               dup_subnets, &data->distributed_lb_routes,
                                &data->routes, &data->parsed_routes);
+            advertise_prefixes_destroy(&prefixes);
             continue;
         }
 
@@ -1088,13 +1262,14 @@ build_lb_connected_routes(const struct ovn_datapath *od,
                 continue;
             }
             build_lb_lr_routes(op, rp->peer, rp->peer->od->nbr,
-                               lb_datapaths_map, ls_ports, dup_subnets,
-                               &data->distributed_lb_routes,
+                               lb_datapaths_map, ls_ports, &prefixes,
+                               dup_subnets, &data->distributed_lb_routes,
                                &data->routes, &data->parsed_routes);
             /* Track the LR datapath on the other side of LS
              * for any changes. */
             dynamic_routes_track_od(data, rp->peer->od);
         }
+        advertise_prefixes_destroy(&prefixes);
     }
 }
 
@@ -1116,20 +1291,24 @@ build_lb_routes(const struct ovn_datapath *od,
             continue;
         }
 
+        struct advertise_prefixes prefixes;
+        advertise_prefixes_init(op, &prefixes);
+
         if (od->is_gw_router) {
             build_lb_lr_routes(op, NULL, od->nbr,
-                               lb_datapaths_map, ls_ports, dup_subnets,
-                               &data->distributed_lb_routes,
+                               lb_datapaths_map, ls_ports, &prefixes,
+                               dup_subnets, &data->distributed_lb_routes,
                                &data->routes, NULL);
         } else {
             struct ovn_port *dgp;
             VECTOR_FOR_EACH (&od->l3dgw_ports, dgp) {
                 build_lb_lr_routes(op, dgp, od->nbr,
-                                   lb_datapaths_map, ls_ports, dup_subnets,
-                                   &data->distributed_lb_routes,
+                                   lb_datapaths_map, ls_ports, &prefixes,
+                                   dup_subnets, &data->distributed_lb_routes,
                                    &data->routes, NULL);
             }
         }
+        advertise_prefixes_destroy(&prefixes);
     }
 }
 
