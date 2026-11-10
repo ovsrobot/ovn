@@ -169,6 +169,15 @@ lookup_local_port_cb(const void *aux_, const char *port_name)
 {
     const struct lookup_port_aux *aux = aux_;
 
+    /* Store the name used to look up the lport as an lflow reference, so that
+     * when the lport's port binding changes the logical flow that depends on
+     * the port being local can be reprocessed.  Actions such as
+     * ct_lb_mark_local only keep the backends that are local to this chassis,
+     * so binding or unbinding a backend port changes the flow that the action
+     * encodes to. */
+    objdep_mgr_add(aux->deps_mgr, OBJDEP_TYPE_PORTBINDING, port_name,
+                   &aux->lflow->header_.uuid);
+
     if (local_binding_get_primary_pb(aux->local_bindings, port_name)) {
         return true;
     }
