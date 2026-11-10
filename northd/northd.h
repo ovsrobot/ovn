@@ -1015,7 +1015,17 @@ bool northd_handle_lb_data_changes(struct tracked_lb_data *,
                                    struct hmap *lb_datapaths_map,
                                    struct hmap *lbgrp_datapaths_map,
                                    const struct hmap *lr_lb_map,
-                                   struct northd_tracked_data *);
+                                   struct northd_tracked_data *,
+                                   struct ovsdb_idl_txn *ovnsb_txn,
+                                   const struct svc_monitor_addresses *,
+                                   struct hmap *ls_ports,
+                                   struct sset *svc_monitor_lsps,
+                                   struct hmap *local_svc_monitors_map,
+                                   struct hmap *ic_learned_svc_monitors_map);
+bool northd_handle_sb_service_monitor_changes(
+    const struct sbrec_service_monitor_table *,
+    struct hmap *local_svc_monitors_map,
+    struct northd_tracked_data *);
 
 void build_route_policies(struct ovn_datapath *, const struct hmap *,
                           const struct hmap *, struct hmap *, struct hmap *,

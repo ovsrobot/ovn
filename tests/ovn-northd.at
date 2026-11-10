@@ -2044,6 +2044,218 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Load balancer health check incremental processing])
+ovn_start
+
+check ovn-nbctl ls-add sw0
+check ovn-nbctl lsp-add sw0 sw0-p1 -- lsp-set-addresses sw0-p1 \
+    "00:00:00:00:00:03 10.0.0.3"
+check ovn-nbctl lsp-add sw0 sw0-p2 -- lsp-set-addresses sw0-p2 \
+    "00:00:00:00:00:04 10.0.0.4"
+check ovn-sbctl chassis-add hv1 geneve 127.0.0.1
+check ovn-sbctl lsp-bind sw0-p1 hv1
+check ovn-sbctl lsp-bind sw0-p2 hv1
+wait_row_count nb:Logical_Switch_Port 1 name=sw0-p1 'up=true'
+wait_row_count nb:Logical_Switch_Port 1 name=sw0-p2 'up=true'
+
+check ovn-nbctl lb-add lb1 10.0.0.10:80 10.0.0.3:80 \
+    -- set load_balancer lb1 ip_port_mappings:10.0.0.3=sw0-p1:10.0.0.2
+check_uuid ovn-nbctl -- --id=@hc create Load_Balancer_Health_Check \
+    vip="10.0.0.10\:80" -- add Load_Balancer lb1 health_check @hc
+check ovn-nbctl --wait=sb ls-lb-add sw0 lb1
+wait_row_count Service_Monitor 1 logical_port=sw0-p1
+check ovn-sbctl set service_monitor sw0-p1 status=online
+
+AT_CAPTURE_FILE([sbflows])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows sw0 | tee sbflows | grep 'priority=120.*backends' | ovn_strip_lflows], 0, [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark(backends=10.0.0.3:80);)
+])
+
+AS_BOX([A backend added to the load balancer gets its monitor without a recompute])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:\"10.0.0.10:80\"=\"10.0.0.3:80,10.0.0.4:80\" \
+    ip_port_mappings:10.0.0.4=sw0-p2:10.0.0.2
+wait_row_count Service_Monitor 1 logical_port=sw0-p2
+wait_row_count Service_Monitor 2
+check_engine_stats northd norecompute compute
+check_engine_stats lflow norecompute compute
+
+# The new monitor starts offline, so its backend is not programmed yet.
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows sw0 | tee sbflows | grep 'priority=120.*backends' | ovn_strip_lflows], 0, [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark(backends=10.0.0.3:80);)
+])
+
+AS_BOX([A status change rebuilds the load balancer flows without a recompute])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-sbctl set service_monitor sw0-p2 status=online
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows sw0 | tee sbflows | grep 'priority=120.*backends' | ovn_strip_lflows], 0, [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark(backends=10.0.0.3:80,10.0.0.4:80);)
+])
+check_engine_stats northd norecompute compute
+check_engine_stats lflow norecompute compute
+
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-sbctl set service_monitor sw0-p2 status=offline
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows sw0 | tee sbflows | grep 'priority=120.*backends' | ovn_strip_lflows], 0, [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark(backends=10.0.0.3:80);)
+])
+check_engine_stats northd norecompute compute
+check_engine_stats lflow norecompute compute
+
+AS_BOX([A health check option change updates the monitors without a recompute])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer_health_check . options:interval=5
+wait_row_count Service_Monitor 2 options:interval=5
+check_engine_stats northd norecompute compute
+
+AS_BOX([A monitor that goes online before northd sees its row programs the backend])
+check ovn-nbctl lsp-add sw0 sw0-p3 -- lsp-set-addresses sw0-p3 \
+    "00:00:00:00:00:05 10.0.0.5"
+check ovn-sbctl lsp-bind sw0-p3 hv1
+wait_row_count nb:Logical_Switch_Port 1 name=sw0-p3 'up=true'
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+# Hold the Southbound server so that northd's transaction with the new
+# monitor stays in flight, then hold northd once it has sent it.  The
+# server then commits the insert while northd cannot read the echo, the
+# status changes in the meantime, and northd sees the row for the first
+# time with the status already online.
+on_exit "test -e ovn-sb/ovsdb-server.pid && kill -CONT $(cat ovn-sb/ovsdb-server.pid)"
+on_exit "test -e northd/ovn-northd.pid && kill -CONT $(cat northd/ovn-northd.pid)"
+AT_CHECK([kill -STOP $(cat ovn-sb/ovsdb-server.pid)])
+check ovn-nbctl set load_balancer lb1 \
+    vips:\"10.0.0.10:80\"=\"10.0.0.3:80,10.0.0.4:80,10.0.0.5:80\" \
+    ip_port_mappings:10.0.0.5=sw0-p3:10.0.0.2
+OVS_WAIT_UNTIL([test "$(as northd ovn-appctl -t ovn-northd inc-engine/show-stats northd | cut -d '-' -f3 | cut -d ':' -f2 | tr -d ' ')" != "0"])
+AT_CHECK([kill -STOP $(cat northd/ovn-northd.pid)])
+AT_CHECK([kill -CONT $(cat ovn-sb/ovsdb-server.pid)])
+wait_row_count Service_Monitor 1 logical_port=sw0-p3
+check ovn-sbctl set service_monitor sw0-p3 status=online
+AT_CHECK([kill -CONT $(cat northd/ovn-northd.pid)])
+check ovn-nbctl --wait=sb sync
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows sw0 | tee sbflows | grep 'priority=120.*backends' | ovn_strip_lflows], 0, [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark(backends=10.0.0.3:80,10.0.0.5:80);)
+])
+check_engine_stats northd norecompute compute
+
+AS_BOX([Backends swapped between two load balancers keep their monitors])
+check ovn-nbctl lb-add lb3 10.0.0.30:80 10.0.0.4:80 \
+    -- set load_balancer lb3 ip_port_mappings:10.0.0.4=sw0-p2:10.0.0.2
+check_uuid ovn-nbctl --wait=sb -- --id=@hc create Load_Balancer_Health_Check \
+    vip="10.0.0.30\:80" -- add Load_Balancer lb3 health_check @hc
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:\"10.0.0.10:80\"=\"10.0.0.3:80\"
+wait_row_count Service_Monitor 2
+check ovn-sbctl set service_monitor sw0-p1 status=online
+check ovn-sbctl set service_monitor sw0-p2 status=online
+check ovn-nbctl --wait=sb sync
+sm_p1=$(fetch_column Service_Monitor _uuid logical_port=sw0-p1)
+sm_p2=$(fetch_column Service_Monitor _uuid logical_port=sw0-p2)
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb \
+    -- set load_balancer lb1 vips:\"10.0.0.10:80\"=\"10.0.0.4:80\" \
+       ip_port_mappings:10.0.0.4=sw0-p2:10.0.0.2 \
+    -- set load_balancer lb3 vips:\"10.0.0.30:80\"=\"10.0.0.3:80\" \
+       ip_port_mappings:10.0.0.3=sw0-p1:10.0.0.2
+wait_row_count Service_Monitor 2
+check_engine_stats northd norecompute compute
+check test "$sm_p1" = "$(fetch_column Service_Monitor _uuid logical_port=sw0-p1)"
+check test "$sm_p2" = "$(fetch_column Service_Monitor _uuid logical_port=sw0-p2)"
+check_column online Service_Monitor status logical_port=sw0-p1
+check_column online Service_Monitor status logical_port=sw0-p2
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows sw0 | tee sbflows | grep 'priority=120.*backends' | grep 10.0.0.10 | ovn_strip_lflows], 0, [dnl
+  table=??(ls_in_lb           ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && reg1[[16..23]] == 6 && reg1[[0..15]] == 80), action=(reg4 = 10.0.0.10; reg2[[0..15]] = 80; ct_lb_mark(backends=10.0.0.4:80);)
+])
+check ovn-nbctl --wait=sb \
+    -- set load_balancer lb1 vips:\"10.0.0.10:80\"=\"10.0.0.3:80,10.0.0.4:80\" \
+       ip_port_mappings:10.0.0.3=sw0-p1:10.0.0.2 \
+    -- lb-del lb3
+wait_row_count Service_Monitor 2
+check test "$sm_p1" = "$(fetch_column Service_Monitor _uuid logical_port=sw0-p1)"
+check ovn-sbctl set service_monitor sw0-p2 status=offline
+check ovn-nbctl --wait=sb sync
+
+AS_BOX([A backend removed from the load balancer drops its monitor without a recompute])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:\"10.0.0.10:80\"=\"10.0.0.3:80\"
+wait_row_count Service_Monitor 0 logical_port=sw0-p2
+wait_row_count Service_Monitor 1
+check_engine_stats northd norecompute compute
+
+AS_BOX([A monitor shared by two load balancers survives the deletion of one])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl lb-add lb2 10.0.0.20:80 10.0.0.3:80 \
+    -- set load_balancer lb2 ip_port_mappings:10.0.0.3=sw0-p1:10.0.0.2
+check_uuid ovn-nbctl --wait=sb -- --id=@hc create Load_Balancer_Health_Check \
+    vip="10.0.0.20\:80" -- add Load_Balancer lb2 health_check @hc
+wait_row_count Service_Monitor 1
+check_engine_stats northd norecompute compute
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-nbctl --wait=sb lb-del lb2
+wait_row_count Service_Monitor 1 logical_port=sw0-p1
+check_engine_stats northd norecompute compute
+
+AS_BOX([A port health check that shares a monitor with a load balancer])
+check ovn-nbctl --wait=sb lsp-hc-add sw0-p1 tcp 10.0.0.2 80 10.0.0.3
+wait_row_count Service_Monitor 1
+# The port loses the address.  The port health check is outdated, but the
+# load balancer still probes its backend through the same monitor, which
+# has to survive the recompute and the next load balancer change.
+check ovn-nbctl --wait=sb lsp-set-addresses sw0-p1 \
+    "00:00:00:00:00:03 10.0.0.6"
+wait_row_count Service_Monitor 1 logical_port=sw0-p1
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:\"10.0.0.10:80\"=\"10.0.0.3:80,10.0.0.4:80\"
+wait_row_count Service_Monitor 2
+check ovn-nbctl --wait=sb set load_balancer lb1 \
+    vips:\"10.0.0.10:80\"=\"10.0.0.3:80\"
+wait_row_count Service_Monitor 1
+check ovn-nbctl --wait=sb lsp-hc-del sw0-p1
+check ovn-nbctl --wait=sb lsp-set-addresses sw0-p1 \
+    "00:00:00:00:00:03 10.0.0.3"
+wait_row_count Service_Monitor 1 logical_port=sw0-p1
+
+AS_BOX([A status change and the deletion of the load balancer in one run])
+check ovn-nbctl lb-add lb4 10.0.0.40:80 10.0.0.4:80 \
+    -- set load_balancer lb4 ip_port_mappings:10.0.0.4=sw0-p2:10.0.0.2
+check_uuid ovn-nbctl --wait=sb -- --id=@hc create Load_Balancer_Health_Check \
+    vip="10.0.0.40\:80" -- add Load_Balancer lb4 health_check @hc
+wait_row_count Service_Monitor 1 logical_port=sw0-p2
+check ovn-sbctl set service_monitor sw0-p2 status=online
+check ovn-nbctl --wait=sb sync
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+# Hold northd so that it sees the status change and the deletion together.
+kill -STOP $(cat northd/ovn-northd.pid)
+check ovn-sbctl set service_monitor sw0-p2 status=offline
+check ovn-nbctl lb-del lb4
+kill -CONT $(cat northd/ovn-northd.pid)
+check ovn-nbctl --wait=sb sync
+wait_row_count Service_Monitor 0 logical_port=sw0-p2
+check_engine_stats northd norecompute compute
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([A monitor deleted behind northd's back is recreated by a recompute])
+check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
+check ovn-sbctl destroy service_monitor sw0-p1
+wait_row_count Service_Monitor 1 logical_port=sw0-p1
+check_engine_compute northd recompute
+
+AS_BOX([Deleting the load balancer drops its monitor])
+check ovn-nbctl --wait=sb lb-del lb1
+wait_row_count Service_Monitor 0
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([Load balancer VIP in NAT entries])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
@@ -13439,28 +13651,29 @@ AT_CHECK([ovn-nbctl --wait=sb \
           -- add Load_Balancer . health_check @hc | uuidfilt], [0], [<0>
 ])
 check_engine_stats lb_data norecompute compute
-check_engine_stats northd recompute nocompute
-check_engine_stats lr_stateful recompute nocompute
-check_engine_stats lflow recompute nocompute
-check_engine_stats sync_to_sb_lb recompute nocompute
+check_engine_stats northd norecompute compute
+check_engine_stats lr_stateful norecompute compute
+check_engine_stats lflow norecompute compute
+check_engine_stats sync_to_sb_lb norecompute compute
 
-# Any change to load balancer health check should also result in full recompute
-# of northd node (but not northd_lb_data node)
+# A change to a load balancer health check updates the service monitors of
+# the load balancer without a full recompute.
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 check ovn-nbctl --wait=sb set load_balancer_health_check . options:foo=bar1
 check_engine_stats lb_data norecompute compute
-check_engine_stats northd recompute nocompute
-check_engine_stats lflow recompute nocompute
-check_engine_stats sync_to_sb_lb recompute nocompute
+check_engine_stats northd norecompute compute
+check_engine_stats lflow norecompute compute
+check_engine_stats sync_to_sb_lb norecompute compute
 
-# Delete the health check from the load balancer.  northd engine node should do a full recompute.
+# Delete the health check from the load balancer.  The northd engine node
+# drops the service monitors without a full recompute.
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 check ovn-nbctl --wait=sb clear Load_Balancer . health_check
 check_engine_stats lb_data norecompute compute
-check_engine_stats northd recompute nocompute
-check_engine_stats lr_stateful recompute nocompute
-check_engine_stats lflow recompute nocompute
-check_engine_stats sync_to_sb_lb recompute nocompute
+check_engine_stats northd norecompute compute
+check_engine_stats lr_stateful norecompute compute
+check_engine_stats lflow norecompute compute
+check_engine_stats sync_to_sb_lb norecompute compute
 
 check as northd ovn-appctl -t ovn-northd inc-engine/clear-stats
 check ovn-nbctl ls-add sw0

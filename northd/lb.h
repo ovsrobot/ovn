@@ -162,6 +162,12 @@ struct ovn_lb_datapaths {
 
     struct hmapx ls_lb_with_stateless_mode;
 
+    /* The service monitors (struct service_monitor_info, owned by the
+     * en_northd node) that probe the backends of this load balancer.  Kept
+     * so that a change to the load balancer can drop the monitors it no
+     * longer needs without a full recompute. */
+    struct hmapx svc_mons;
+
     /* Reference of lflows generated for this load balancer.
      *
      * This data is initialized and destroyed by the en_northd node, but

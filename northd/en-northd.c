@@ -224,14 +224,26 @@ northd_lb_data_handler(struct engine_node *node, void *data)
         return EN_UNHANDLED;
     }
 
+    const struct engine_context *eng_ctx = engine_get_context();
     struct northd_data *nd = data;
+    struct northd_input input_data;
+
+    northd_get_input_data(node, &input_data);
+
+    struct hmap *ic_learned_map = input_data.ic_learned_svc_monitors_map;
     if (!northd_handle_lb_data_changes(&lb_data->tracked_lb_data,
                                        &nd->ls_datapaths,
                                        &nd->lr_datapaths,
                                        &nd->lb_datapaths_map,
                                        &nd->lb_group_datapaths_map,
                                        &lb_data->lr_lb_map,
-                                       &nd->trk_data)) {
+                                       &nd->trk_data,
+                                       eng_ctx->ovnsb_idl_txn,
+                                       input_data.svc_global_addresses,
+                                       &nd->ls_ports,
+                                       &nd->svc_monitor_lsps,
+                                       &nd->local_svc_monitors_map,
+                                       ic_learned_map)) {
         return EN_UNHANDLED;
     }
 
@@ -685,6 +697,56 @@ en_northd_clear_tracked_data(void *data_)
 {
     struct northd_data *data = data_;
     destroy_northd_data_tracked_changes(data);
+}
+
+enum engine_input_handler_result
+northd_sb_service_monitor_handler(struct engine_node *node, void *data)
+{
+    struct northd_data *nd = data;
+    const struct sbrec_service_monitor_table *sbrec_service_monitor_table =
+        EN_OVSDB_GET(engine_get_input("SB_service_monitor", node));
+
+    if (!northd_handle_sb_service_monitor_changes(sbrec_service_monitor_table,
+                                                  &nd->local_svc_monitors_map,
+                                                  &nd->trk_data)) {
+        return EN_UNHANDLED;
+    }
+
+    if (northd_has_lbs_in_tracked_data(&nd->trk_data)) {
+        return EN_HANDLED_UPDATED;
+    }
+
+    return EN_HANDLED_UNCHANGED;
+}
+
+/* The interconnect learned monitors map only depends on the rows with
+ * ic_learned set, and on rows that lose the flag when northd takes them
+ * over.  Any other change, such as a status update by ovn-controller,
+ * leaves the map as it is. */
+enum engine_input_handler_result
+ic_learned_svc_monitors_sb_service_monitor_handler(struct engine_node *node,
+                                                   void *data OVS_UNUSED)
+{
+    const struct sbrec_service_monitor_table *sb_mon_table =
+        EN_OVSDB_GET(engine_get_input("SB_service_monitor", node));
+
+    const struct sbrec_service_monitor *sbrec_mon;
+    SBREC_SERVICE_MONITOR_TABLE_FOR_EACH_TRACKED (sbrec_mon, sb_mon_table) {
+        if (sbrec_mon->ic_learned) {
+            return EN_UNHANDLED;
+        }
+        /* A row that lost the flag was taken over by northd.  An inserted
+         * row reports every column as updated, and a deleted one is gone
+         * with its flag, so only look at modified rows. */
+        if (!sbrec_service_monitor_is_new(sbrec_mon)
+            && !sbrec_service_monitor_is_deleted(sbrec_mon)
+            && sbrec_service_monitor_is_updated(
+                   sbrec_mon, SBREC_SERVICE_MONITOR_COL_IC_LEARNED)) {
+            return EN_UNHANDLED;
+        }
+    }
+
+    return EN_HANDLED_UNCHANGED;
 }
 
 enum engine_input_handler_result

@@ -29,7 +29,7 @@ digraph "Incremental-Processing-Engine" {
 	SB_static_mac_binding [[style=filled, shape=box, fillcolor=white, label="SB_static_mac_binding"]];
 	SB_chassis_template_var [[style=filled, shape=box, fillcolor=white, label="SB_chassis_template_var"]];
 	ic_learned_svc_monitors [[style=filled, shape=box, fillcolor=white, label="ic_learned_svc_monitors"]];
-	SB_service_monitor -> ic_learned_svc_monitors [[label=""]];
+	SB_service_monitor -> ic_learned_svc_monitors [[label="ic_learned_svc_monitors_sb_service_monitor_handler"]];
 	SB_fdb [[style=filled, shape=box, fillcolor=white, label="SB_fdb"]];
 	NB_nb_global [[style=filled, shape=box, fillcolor=white, label="NB_nb_global"]];
 	NB_logical_switch [[style=filled, shape=box, fillcolor=white, label="NB_logical_switch"]];
@@ -84,7 +84,7 @@ digraph "Incremental-Processing-Engine" {
 	SB_meter -> northd [[label=""]];
 	SB_dns -> northd [[label=""]];
 	SB_ha_chassis_group -> northd [[label=""]];
-	SB_service_monitor -> northd [[label=""]];
+	SB_service_monitor -> northd [[label="northd_sb_service_monitor_handler"]];
 	SB_static_mac_binding -> northd [[label=""]];
 	SB_chassis_template_var -> northd [[label=""]];
 	ic_learned_svc_monitors -> northd [[label=""]];
