@@ -2839,6 +2839,36 @@ or
         router.
       </column>
 
+      <column name="options" key="symmetric_return"
+              type='{"type": "boolean"}'>
+        <p>
+          On a distributed logical router with no distributed gateway port,
+          a load balancer is applied in <code>lr_in_dnat</code> on every
+          chassis, but the replies from its backends are not un-DNATed.
+          If set to <code>true</code>, such a router un-DNATs those replies
+          in its egress pipeline on the chassis where they pass it.  The
+          default is <code>false</code>.
+        </p>
+
+        <p>
+          The CMS must guarantee that replies to the load balanced traffic
+          re-enter the router on the chassis that load balanced the request,
+          for example because the source of the requests is translated by
+          a distributed NAT rule (see the <ref column="logical_port"
+          table="NAT"/> and <ref column="external_mac" table="NAT"/> columns
+          of the <ref table="NAT"/> table) on a downstream router whose
+          external IP is reachable only on that chassis.  OVN does not verify
+          this.  If replies reach another chassis, they are not un-DNATed.
+          Unlike <ref column="options" key="distributed"/>, this option does
+          not restrict the backends to logical ports on the local chassis.
+        </p>
+
+        <p>
+          This option has no effect on gateway routers and on routers with
+          a distributed gateway port.
+        </p>
+      </column>
+
       <column name="options" key="event" type='{"type": "boolean"}'>
         If set to <code>true</code> and the load balancer has no
         active backends, whenever a packet matches a VIP on this

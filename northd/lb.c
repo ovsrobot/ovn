@@ -392,6 +392,9 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
     lb->is_distributed = smap_get_bool(&nbrec_lb->options, "distributed",
                                        false);
 
+    lb->symmetric_return = smap_get_bool(&nbrec_lb->options,
+                                         "symmetric_return", false);
+
     sset_init(&lb->ips_v4);
     sset_init(&lb->ips_v6);
     struct smap_node *node;

@@ -14170,6 +14170,15 @@ build_lrouter_nat_flows_for_lb(
 
         if (vector_is_empty(&od->l3dgw_ports)) {
             bitmap_set1(gw_dp_bitmap[type], index);
+            /* A distributed router without a DGP load balances on every
+             * chassis.  With symmetric_return, the CMS guarantees that the
+             * replies re-enter the router on the chassis that load balanced
+             * the request, so un-DNAT them there. */
+            if (!od->is_gw_router && lb->symmetric_return
+                && !vector_is_empty(&lb_vip->backends)) {
+                build_lrouter_lb_undnat_flow(&ctx, type, od, NULL, NULL,
+                                             lb_dps->lflow_ref);
+            }
         } else {
             /* Create stateless LB NAT rules when using multiple DGPs and
              * use_stateless_nat is true.

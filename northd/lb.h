@@ -81,6 +81,12 @@ struct ovn_northd_lb {
 
     bool use_stateless_nat;
 
+    /* Set by options:symmetric_return.  The CMS guarantees that replies to
+     * this load balancer re-enter the router on the chassis that load
+     * balanced the request, so a distributed router without a distributed
+     * gateway port un-DNATs them there. */
+    bool symmetric_return;
+
     char *hairpin_snat_ip;
 };
 

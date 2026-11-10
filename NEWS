@@ -44,6 +44,9 @@ Post v26.09.0
      table at startup; it defers its kernel route updates until the initial
      dump of the advertised routes of the local route-exchange datapaths is
      complete.
+   - Added the "symmetric_return" option to the Load_Balancer table.  With
+     it, a distributed router without a distributed gateway port un-DNATs
+     the replies from the load balancer's backends.  See ovn-nb(5).
 
 OVN v26.09.0 - xxx xx xxxx
 --------------------------
