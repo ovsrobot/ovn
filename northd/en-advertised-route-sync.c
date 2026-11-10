@@ -465,6 +465,223 @@ lb_vip_is_advertised(const struct ovn_lb_vip *vip, bool filtered,
     return sset_contains(advertised_vips, buf);
 }
 
+/* Warn about entries of dynamic-routing-advertise-vips that match no VIP
+ * of the load balancer.  Such an entry has no effect and either holds a
+ * typo or an address that no longer belongs to the load balancer, for
+ * example a floating IP that changed while the list kept it. */
+static void
+lb_warn_unmatched_advertised_vips(
+    const struct nbrec_load_balancer *nbrec_lb,
+    const struct ovn_northd_lb *lb,
+    const struct sset *advertised_vips)
+{
+    struct sset vip_strs = SSET_INITIALIZER(&vip_strs);
+    for (size_t v = 0; v < lb->n_vips; v++) {
+        struct in6_addr ip;
+        if (!lb_vip_address(&lb->vips[v], &ip)) {
+            continue;
+        }
+        char buf[INET6_ADDRSTRLEN];
+        ipv6_string_mapped(buf, &ip);
+        sset_add(&vip_strs, buf);
+    }
+
+    const char *entry;
+    SSET_FOR_EACH (entry, advertised_vips) {
+        if (!sset_contains(&vip_strs, entry)) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_WARN_RL(&rl, "Address '%s' in dynamic-routing-advertise-vips "
+                         "of load balancer %s matches no VIP of the load "
+                         "balancer.", entry, nbrec_lb->name);
+        }
+    }
+    sset_destroy(&vip_strs);
+}
+
+/* True when ip falls inside prefix/plen.  Both must be of the same
+ * family, IPv4 addresses are compared as IPv4-mapped IPv6 addresses. */
+static bool
+ip46_in_prefix(const struct in6_addr *ip, const struct in6_addr *prefix,
+               unsigned int plen)
+{
+    bool prefix_v4 = IN6_IS_ADDR_V4MAPPED(prefix);
+    if (prefix_v4 != IN6_IS_ADDR_V4MAPPED(ip)) {
+        return false;
+    }
+    if (prefix_v4) {
+        if (plen > 32) {
+            return false;
+        }
+        return !((in6_addr_get_mapped_ipv4(ip)
+                  ^ in6_addr_get_mapped_ipv4(prefix))
+                 & be32_prefix_mask(plen));
+    }
+    struct in6_addr mask = ipv6_create_mask(plen);
+    struct in6_addr diff = ipv6_addr_bitxor(ip, prefix);
+    struct in6_addr masked = ipv6_addr_bitand(&diff, &mask);
+    return ipv6_is_zero(&masked);
+}
+
+/* A subnet of a logical router port network, collected to find address
+ * space that more than one logical switch claims. */
+struct subnet_ls {
+    struct hmap_node node;
+    struct in6_addr network;   /* IPv4 stored as IPv4-mapped. */
+    unsigned int plen;
+    struct uuidset ls_keys;    /* Logical switches that use the subnet. */
+    const char *ls_names[2];   /* The first two of them, for logging. */
+};
+
+static uint32_t
+subnet_ls_hash(const struct in6_addr *network, unsigned int plen)
+{
+    return hash_bytes(network->s6_addr, sizeof network->s6_addr, plen);
+}
+
+static struct subnet_ls *
+subnet_ls_find(struct hmap *subnets, const struct in6_addr *network,
+               unsigned int plen)
+{
+    struct subnet_ls *sn;
+    HMAP_FOR_EACH_WITH_HASH (sn, node, subnet_ls_hash(network, plen),
+                             subnets) {
+        if (sn->plen == plen && ipv6_addr_equals(&sn->network, network)) {
+            return sn;
+        }
+    }
+    return NULL;
+}
+
+static void
+subnet_ls_add(struct hmap *subnets, const struct in6_addr *network,
+              unsigned int plen, const struct ovn_datapath *ls)
+{
+    struct subnet_ls *sn = subnet_ls_find(subnets, network, plen);
+    if (!sn) {
+        sn = xzalloc(sizeof *sn);
+        sn->network = *network;
+        sn->plen = plen;
+        uuidset_init(&sn->ls_keys);
+        hmap_insert(subnets, &sn->node, subnet_ls_hash(network, plen));
+    }
+    if (!uuidset_contains(&sn->ls_keys, &ls->key)) {
+        uuidset_insert(&sn->ls_keys, &ls->key);
+        size_t n = uuidset_count(&sn->ls_keys);
+        if (n <= 2) {
+            sn->ls_names[n - 1] = ls->nbs->name;
+        }
+    }
+}
+
+/* The subnets that more than one logical switch claims, built once per
+ * run of en_dynamic_routes and only when a VIP is about to be advertised,
+ * so that a deployment without load balancer redistribution never walks
+ * the router ports for it. */
+struct dup_subnets {
+    struct hmap subnets;       /* Contains struct subnet_ls. */
+    bool built;
+    const struct ovn_datapaths *lr_datapaths;
+};
+
+static void
+dup_subnets_init(struct dup_subnets *ds,
+                 const struct ovn_datapaths *lr_datapaths)
+{
+    hmap_init(&ds->subnets);
+    ds->built = false;
+    ds->lr_datapaths = lr_datapaths;
+}
+
+/* Collect the subnets of every logical router port network.  A subnet
+ * that a single logical switch uses is one overlay network however many
+ * routers connect to it.  Only subnets that more than one logical
+ * switch claims are kept, those are the ones the fabric cannot tell
+ * apart. */
+static void
+dup_subnets_build(struct hmap *subnets,
+                  const struct ovn_datapaths *lr_datapaths)
+{
+    const struct ovn_datapath *od;
+    HMAP_FOR_EACH (od, key_node, &lr_datapaths->datapaths) {
+        const struct ovn_port *op;
+        HMAP_FOR_EACH (op, dp_node, &od->ports) {
+            if (!op->nbrp || !op->peer || !op->peer->od->nbs) {
+                continue;
+            }
+            for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+                const struct ipv4_netaddr *na =
+                    &op->lrp_networks.ipv4_addrs[i];
+                struct in6_addr network;
+                in6_addr_set_mapped_ipv4(&network, na->network);
+                subnet_ls_add(subnets, &network, na->plen, op->peer->od);
+            }
+            for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
+                const struct ipv6_netaddr *na =
+                    &op->lrp_networks.ipv6_addrs[i];
+                subnet_ls_add(subnets, &na->network, na->plen, op->peer->od);
+            }
+        }
+    }
+
+    struct subnet_ls *sn, *next;
+    HMAP_FOR_EACH_SAFE (sn, next, node, subnets) {
+        if (uuidset_count(&sn->ls_keys) < 2) {
+            hmap_remove(subnets, &sn->node);
+            uuidset_destroy(&sn->ls_keys);
+            free(sn);
+        }
+    }
+}
+
+static void
+dup_subnets_destroy(struct dup_subnets *ds)
+{
+    struct subnet_ls *sn;
+    HMAP_FOR_EACH_POP (sn, node, &ds->subnets) {
+        uuidset_destroy(&sn->ls_keys);
+        free(sn);
+    }
+    hmap_destroy(&ds->subnets);
+}
+
+/* Warn when a VIP that is about to be advertised falls inside a subnet
+ * that more than one logical switch uses.  The fabric routes by prefix
+ * alone, so such an announcement cannot be told apart between the
+ * switches and traffic lands on whichever of them advertised the
+ * address. */
+static void
+warn_vip_in_duplicated_subnet(const struct ovn_lb_vip *vip,
+                              const struct nbrec_load_balancer *nbrec_lb,
+                              const struct ovn_port *advertising_op,
+                              struct dup_subnets *ds)
+{
+    struct in6_addr ip;
+    if (!lb_vip_address(vip, &ip)) {
+        return;
+    }
+    if (!ds->built) {
+        dup_subnets_build(&ds->subnets, ds->lr_datapaths);
+        ds->built = true;
+    }
+    struct subnet_ls *sn;
+    HMAP_FOR_EACH (sn, node, &ds->subnets) {
+        if (!ip46_in_prefix(&ip, &sn->network, sn->plen)) {
+            continue;
+        }
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        char *network_s = normalize_v46_prefix(&sn->network, sn->plen);
+        VLOG_WARN_RL(&rl, "VIP %s of load balancer %s advertised through %s "
+                     "falls inside subnet %s used on logical switches %s "
+                     "and %s.  The fabric cannot tell these networks apart, "
+                     "keep the VIP private with "
+                     "dynamic-routing-advertise-vips.", vip->vip_str,
+                     nbrec_lb->name, advertising_op->key, network_s,
+                     sn->ls_names[0], sn->ls_names[1]);
+        free(network_s);
+        return;
+    }
+}
+
 /* This function adds a new route for each entry in lr_nat record
  * to "routes". Logical port of the route is set to "advertising_op" and
  * tracked port is set to NAT's distributed gw port. If NAT doesn't have
@@ -665,6 +882,7 @@ build_lb_routes_for_lb(const struct ovn_port *advertising_op,
                        const struct nbrec_load_balancer *nbrec_lb,
                        const struct hmap *lb_datapaths_map,
                        const struct hmap *ls_ports,
+                       struct dup_subnets *dup_subnets,
                        struct sset *distributed_lb_routes,
                        struct hmap *routes,
                        struct hmap *parsed_routes_out)
@@ -688,6 +906,9 @@ build_lb_routes_for_lb(const struct ovn_port *advertising_op,
                            ? lb->nlb->protocol : "tcp";
     struct sset advertised_vips = SSET_INITIALIZER(&advertised_vips);
     bool filtered = lb_advertised_vips_init(nbrec_lb, &advertised_vips);
+    if (filtered) {
+        lb_warn_unmatched_advertised_vips(nbrec_lb, lb, &advertised_vips);
+    }
 
     for (size_t v = 0; v < lb->n_vips; v++) {
         const struct ovn_lb_vip *vip = &lb->vips[v];
@@ -696,6 +917,9 @@ build_lb_routes_for_lb(const struct ovn_port *advertising_op,
         if (!lb_vip_is_advertised(vip, filtered, &advertised_vips)) {
             continue;
         }
+
+        warn_vip_in_duplicated_subnet(vip, nbrec_lb, advertising_op,
+                                      dup_subnets);
 
         if (parsed_routes_out) {
             add_redistribute_parsed_route(
@@ -780,6 +1004,7 @@ build_lb_lr_routes(const struct ovn_port *advertising_op,
                    const struct nbrec_logical_router *peer_lr_nbr,
                    const struct hmap *lb_datapaths_map,
                    const struct hmap *ls_ports,
+                   struct dup_subnets *dup_subnets,
                    struct sset *distributed_lb_routes,
                    struct hmap *routes,
                    struct hmap *parsed_routes_out)
@@ -794,7 +1019,7 @@ build_lb_lr_routes(const struct ovn_port *advertising_op,
         uuidset_insert(&visited, &lb->header_.uuid);
         build_lb_routes_for_lb(advertising_op, fallback_tracked_port,
                                peer_lr_nbr, lb, lb_datapaths_map, ls_ports,
-                               distributed_lb_routes, routes,
+                               dup_subnets, distributed_lb_routes, routes,
                                parsed_routes_out);
     }
 
@@ -809,7 +1034,8 @@ build_lb_lr_routes(const struct ovn_port *advertising_op,
             uuidset_insert(&visited, &lb->header_.uuid);
             build_lb_routes_for_lb(advertising_op, fallback_tracked_port,
                                    peer_lr_nbr, lb, lb_datapaths_map,
-                                   ls_ports, distributed_lb_routes, routes,
+                                   ls_ports, dup_subnets,
+                                   distributed_lb_routes, routes,
                                    parsed_routes_out);
         }
     }
@@ -825,6 +1051,7 @@ static void
 build_lb_connected_routes(const struct ovn_datapath *od,
                           const struct hmap *lb_datapaths_map,
                           const struct hmap *ls_ports,
+                          struct dup_subnets *dup_subnets,
                           struct dynamic_routes_data *data)
 {
     const struct ovn_port *op;
@@ -845,7 +1072,7 @@ build_lb_connected_routes(const struct ovn_datapath *od,
         /* This is directly connected LR peer. */
         if (peer_od->nbr) {
             build_lb_lr_routes(op, op->peer, peer_od->nbr,
-                               lb_datapaths_map, ls_ports,
+                               lb_datapaths_map, ls_ports, dup_subnets,
                                &data->distributed_lb_routes,
                                &data->routes, &data->parsed_routes);
             continue;
@@ -861,7 +1088,7 @@ build_lb_connected_routes(const struct ovn_datapath *od,
                 continue;
             }
             build_lb_lr_routes(op, rp->peer, rp->peer->od->nbr,
-                               lb_datapaths_map, ls_ports,
+                               lb_datapaths_map, ls_ports, dup_subnets,
                                &data->distributed_lb_routes,
                                &data->routes, &data->parsed_routes);
             /* Track the LR datapath on the other side of LS
@@ -880,6 +1107,7 @@ static void
 build_lb_routes(const struct ovn_datapath *od,
                 const struct hmap *lb_datapaths_map,
                 const struct hmap *ls_ports,
+                struct dup_subnets *dup_subnets,
                 struct dynamic_routes_data *data)
 {
     const struct ovn_port *op;
@@ -890,14 +1118,14 @@ build_lb_routes(const struct ovn_datapath *od,
 
         if (od->is_gw_router) {
             build_lb_lr_routes(op, NULL, od->nbr,
-                               lb_datapaths_map, ls_ports,
+                               lb_datapaths_map, ls_ports, dup_subnets,
                                &data->distributed_lb_routes,
                                &data->routes, NULL);
         } else {
             struct ovn_port *dgp;
             VECTOR_FOR_EACH (&od->l3dgw_ports, dgp) {
                 build_lb_lr_routes(op, dgp, od->nbr,
-                                   lb_datapaths_map, ls_ports,
+                                   lb_datapaths_map, ls_ports, dup_subnets,
                                    &data->distributed_lb_routes,
                                    &data->routes, NULL);
             }
@@ -1139,6 +1367,10 @@ en_dynamic_routes_run(struct engine_node *node, void *data)
 
     dynamic_routes_prepare_rebuild(dynamic_routes_data);
 
+    /* Built on first use, once for the whole run. */
+    struct dup_subnets dup_subnets;
+    dup_subnets_init(&dup_subnets, &northd_data->lr_datapaths);
+
     const struct ovn_datapath *od;
     HMAP_FOR_EACH (od, key_node, &northd_data->lr_datapaths.datapaths) {
         if (!od->dynamic_routing) {
@@ -1161,10 +1393,10 @@ en_dynamic_routes_run(struct engine_node *node, void *data)
          * external IP that a distributed load balancer already advertises
          * through the same port. */
         build_lb_routes(od, &northd_data->lb_datapaths_map,
-                        &northd_data->ls_ports,
+                        &northd_data->ls_ports, &dup_subnets,
                         dynamic_routes_data);
         build_lb_connected_routes(od, &northd_data->lb_datapaths_map,
-                                  &northd_data->ls_ports,
+                                  &northd_data->ls_ports, &dup_subnets,
                                   dynamic_routes_data);
 
         build_nat_routes(od, lr_stateful_rec->lrnat_rec,
@@ -1174,6 +1406,7 @@ en_dynamic_routes_run(struct engine_node *node, void *data)
                                    &northd_data->ls_ports,
                                    dynamic_routes_data);
     }
+    dup_subnets_destroy(&dup_subnets);
 
     dynamic_routes_data->tracked =
         !hmapx_is_empty(
