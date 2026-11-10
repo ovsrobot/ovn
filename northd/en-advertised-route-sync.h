@@ -20,6 +20,7 @@
 #include "lib/uuidset.h"
 #include "openvswitch/hmap.h"
 #include "hmapx.h"
+#include "sset.h"
 
 /* Track what changed in the dynamic_routes engine node's parsed_routes.
  * All hmapx node data are pointers to struct parsed_route. */
@@ -50,6 +51,11 @@ struct dynamic_routes_data {
     /* Contains the uuids of all NB Logical Switches where we rely on port
      * changes for host routes. */
     struct uuidset nb_ls;
+    /* Advertising port and prefix of every distributed load balancer route
+     * emitted in this run, as "<port> <prefix>".  A NAT entry whose
+     * external IP is in this set is not advertised through that port, see
+     * build_nat_route_for_port(). */
+    struct sset distributed_lb_routes;
 
     /* 'tracked' is set to true if there is information available for
      * incremental processing. If true then trk_data is valid. */

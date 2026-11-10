@@ -1,5 +1,9 @@
 Post v26.09.0
 --------------
+   - A NAT entry whose external IP is also a VIP of a distributed load
+     balancer of the same router is no longer advertised as a NAT route.
+     The load balancer routes carry the locality and health of the
+     address.
    - Learn ARP sender hardware address (arp.sha) and IPv6 Neighbor
      Discovery link-layer addresses (nd.tll, nd.sll) into the FDB
      table in addition to eth.src.  This allows VRRP virtual MACs to

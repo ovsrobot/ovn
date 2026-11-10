@@ -19923,6 +19923,272 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([dynamic-routing - NAT external IP owned by a distributed LB VIP])
+AT_KEYWORDS([dynamic-routing])
+ovn_start
+
+# lr0 redistributes lb,nat toward the shared LS "join".  lr1 is a neighbour
+# with a distributed gateway port.  It owns a distributed LB and a
+# dnat_and_snat whose external IP is the LB VIP, the way a CMS exposes an
+# overlay VIP through a floating IP.  The per-backend LB routes carry the
+# locality and health of the VIP, so the NAT entry must not add a route
+# tracked by the gateway port: that route would keep the gateway chassis
+# advertised after the LB routes were withdrawn there.
+
+check ovn-nbctl lr-add lr0
+check ovn-nbctl set Logical_Router lr0 \
+    options:dynamic-routing=true       \
+    options:chassis=hv1
+check ovn-nbctl lrp-add lr0 lr0-join 00:00:00:00:00:01
+check ovn-nbctl lrp-set-options lr0-join \
+    dynamic-routing-redistribute=lb,nat
+check ovn-nbctl ls-add join
+check ovn-nbctl lsp-add-router-port join join-lr0 lr0-join
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lr1-join 00:00:00:00:00:02 10.0.0.1/24
+check ovn-nbctl lrp-set-gateway-chassis lr1-join hv1
+check ovn-nbctl lsp-add-router-port join join-lr1 lr1-join
+check ovn-nbctl lrp-add lr1 lr1-be 00:00:00:00:00:03 192.168.1.1/24
+check ovn-nbctl ls-add be
+check ovn-nbctl lsp-add-router-port be be-lr1 lr1-be
+check ovn-nbctl lsp-add be be-vm1
+check ovn-nbctl lsp-set-addresses be-vm1 "00:00:00:00:01:01 192.168.1.10"
+check ovn-nbctl lsp-add be be-vm2
+check ovn-nbctl lsp-set-addresses be-vm2 "00:00:00:00:01:02 192.168.1.11"
+
+check ovn-nbctl \
+    -- lb-add lb0 172.16.1.10:80 192.168.1.10:80,192.168.1.11:80 \
+    -- set Load_Balancer lb0 options:distributed=true \
+        ip_port_mappings:192.168.1.10="be-vm1:192.168.1.1" \
+        ip_port_mappings:192.168.1.11="be-vm2:192.168.1.1" \
+    -- lr-lb-add lr1 lb0
+check ovn-nbctl lr-nat-add lr1 dnat_and_snat 172.16.1.10 192.168.1.100
+check ovn-nbctl --wait=sb sync
+
+datapath_lr0=$(fetch_column Datapath_Binding _uuid external_ids:name=lr0)
+pb_lr0_join=$(fetch_column Port_Binding _uuid logical_port=lr0-join)
+pb_lr1_join=$(fetch_column Port_Binding _uuid logical_port=lr1-join)
+pb_be_vm1=$(fetch_column Port_Binding _uuid logical_port=be-vm1)
+pb_be_vm2=$(fetch_column Port_Binding _uuid logical_port=be-vm2)
+
+# Only the two per-backend LB routes exist.  No route tracks lr1-join.
+check_row_count Advertised_Route 2
+check_row_count Advertised_Route 1 \
+    ip_prefix="172.16.1.10"         \
+    datapath=$datapath_lr0           \
+    logical_port=$pb_lr0_join        \
+    tracked_port=$pb_be_vm1
+check_row_count Advertised_Route 1 \
+    ip_prefix="172.16.1.10"         \
+    datapath=$datapath_lr0           \
+    logical_port=$pb_lr0_join        \
+    tracked_port=$pb_be_vm2
+AT_CHECK([ovn-sbctl --bare --columns=external_ids \
+    find Advertised_Route ip_prefix=172.16.1.10 |
+    grep -c 'distributed-lb.*true'], [0], [2
+])
+
+# The VIP is still forwarded through lr1 once.
+ovn-sbctl lflow-list lr0 > lr0_flows
+AT_CHECK([grep -c 'lr_in_ip_routing.*172.16.1.10/32' lr0_flows], [0], [1
+])
+
+# A NAT entry of another router that uses the same address keeps its
+# route.  Only the router that owns the LB gives up its own NAT route.
+check ovn-nbctl --wait=sb lr-nat-add lr0 dnat_and_snat \
+    172.16.1.10 10.0.0.100
+check_row_count Advertised_Route 3
+check_row_count Advertised_Route 3 ip_prefix="172.16.1.10"
+check ovn-nbctl --wait=sb lr-nat-del lr0 dnat_and_snat 172.16.1.10
+check_row_count Advertised_Route 2
+
+# A port that redistributes nat alone has no LB route to rely on, so the
+# NAT entry is advertised and forwarded as before.
+check ovn-nbctl --wait=sb lrp-set-options lr0-join \
+    dynamic-routing-redistribute=nat
+check_row_count Advertised_Route 1
+check_row_count Advertised_Route 1 \
+    ip_prefix="172.16.1.10"         \
+    datapath=$datapath_lr0           \
+    logical_port=$pb_lr0_join        \
+    tracked_port=$pb_lr1_join
+ovn-sbctl lflow-list lr0 > lr0_flows
+AT_CHECK([grep -c 'lr_in_ip_routing.*172.16.1.10/32' lr0_flows], [0], [1
+])
+check ovn-nbctl --wait=sb lrp-set-options lr0-join \
+    dynamic-routing-redistribute=lb,nat
+check_row_count Advertised_Route 2
+
+# A NAT whose external IP is not a VIP is advertised as before.
+check ovn-nbctl --wait=sb lr-nat-add lr1 dnat_and_snat \
+    172.16.1.11 192.168.1.101
+check_row_count Advertised_Route 3
+check_row_count Advertised_Route 1 \
+    ip_prefix="172.16.1.11"         \
+    datapath=$datapath_lr0           \
+    logical_port=$pb_lr0_join        \
+    tracked_port=$pb_lr1_join
+
+# A centralized LB has one VIP-level route that shares the gateway port
+# with the NAT.  The NAT contributes to that route, which stays
+# unconditional.
+check ovn-nbctl --wait=sb set Load_Balancer lb0 options:distributed=false
+check_row_count Advertised_Route 2
+check_row_count Advertised_Route 1 \
+    ip_prefix="172.16.1.10"         \
+    datapath=$datapath_lr0           \
+    logical_port=$pb_lr0_join        \
+    tracked_port=$pb_lr1_join
+AT_CHECK([! ovn-sbctl --bare --columns=external_ids \
+    find Advertised_Route ip_prefix=172.16.1.10 |
+    grep -q 'source'])
+
+# Making the LB distributed again drops the NAT route for the VIP.
+check ovn-nbctl --wait=sb set Load_Balancer lb0 options:distributed=true
+check_row_count Advertised_Route 3
+check_row_count Advertised_Route 0 \
+    ip_prefix="172.16.1.10"         \
+    tracked_port=$pb_lr1_join
+
+# A centralized LB on the same router as a distributed one keeps the
+# route of its own VIP, which shares the gateway port with its NAT entry,
+# whether the port redistributes lb,nat or nat alone.
+check ovn-nbctl \
+    -- lb-add lb1 172.16.1.12:80 192.168.1.10:80 \
+    -- lr-lb-add lr1 lb1
+check ovn-nbctl --wait=sb lr-nat-add lr1 dnat_and_snat \
+    172.16.1.12 192.168.1.102
+check_row_count Advertised_Route 4
+check_row_count Advertised_Route 1 \
+    ip_prefix="172.16.1.12"         \
+    datapath=$datapath_lr0           \
+    logical_port=$pb_lr0_join        \
+    tracked_port=$pb_lr1_join
+check ovn-nbctl --wait=sb lrp-set-options lr0-join \
+    dynamic-routing-redistribute=nat
+check_row_count Advertised_Route 3
+check_row_count Advertised_Route 1 \
+    ip_prefix="172.16.1.12"         \
+    datapath=$datapath_lr0           \
+    logical_port=$pb_lr0_join        \
+    tracked_port=$pb_lr1_join
+check ovn-nbctl --wait=sb lrp-set-options lr0-join \
+    dynamic-routing-redistribute=lb,nat
+check ovn-nbctl --wait=sb \
+    -- lr-lb-del lr1 lb1 \
+    -- lb-del lb1 \
+    -- lr-nat-del lr1 dnat_and_snat 172.16.1.12
+check_row_count Advertised_Route 3
+
+# The external IP is matched in canonical form.  An IPv6 NAT entry spelled
+# with a leading zero still matches the VIP.
+check ovn-nbctl lsp-set-addresses be-vm1 \
+    "00:00:00:00:01:01 192.168.1.10 fd00::10"
+check ovn-nbctl lsp-set-addresses be-vm2 \
+    "00:00:00:00:01:02 192.168.1.11 fd00::11"
+check ovn-nbctl \
+    -- lb-add lb6 "[[2001:db8::10]]:80" "[[fd00::10]]:80,[[fd00::11]]:80" \
+    -- set Load_Balancer lb6 options:distributed=true \
+        ip_port_mappings:\"[[fd00::10]]\"=\"be-vm1:[[fd00::1]]\" \
+        ip_port_mappings:\"[[fd00::11]]\"=\"be-vm2:[[fd00::1]]\" \
+    -- lr-lb-add lr1 lb6
+check ovn-nbctl --wait=sb lr-nat-add lr1 dnat_and_snat \
+    2001:0db8::10 fd00::100
+check_row_count Advertised_Route 5
+check_row_count Advertised_Route 1 \
+    ip_prefix=\"2001:db8::10\"        \
+    datapath=$datapath_lr0           \
+    logical_port=$pb_lr0_join        \
+    tracked_port=$pb_be_vm1
+check_row_count Advertised_Route 1 \
+    ip_prefix=\"2001:db8::10\"        \
+    datapath=$datapath_lr0           \
+    logical_port=$pb_lr0_join        \
+    tracked_port=$pb_be_vm2
+check_row_count Advertised_Route 0 tracked_port=$pb_lr1_join \
+    ip_prefix=\"2001:0db8::10\"
+check_row_count Advertised_Route 0 tracked_port=$pb_lr1_join \
+    ip_prefix=\"2001:db8::10\"
+check ovn-nbctl --wait=sb \
+    -- lr-lb-del lr1 lb6 \
+    -- lb-del lb6 \
+    -- lr-nat-del lr1 dnat_and_snat 2001:0db8::10
+check_row_count Advertised_Route 3
+
+# Removing the LB leaves the plain NAT route.
+check ovn-nbctl --wait=sb lr-lb-del lr1 lb0
+check_row_count Advertised_Route 2
+check_row_count Advertised_Route 1 \
+    ip_prefix="172.16.1.10"         \
+    datapath=$datapath_lr0           \
+    logical_port=$pb_lr0_join        \
+    tracked_port=$pb_lr1_join
+
+# The router that owns both the LB and the NAT applies the same rule to
+# its own routes.
+check ovn-nbctl set Logical_Router lr1 options:dynamic-routing=true
+check ovn-nbctl lrp-set-options lr1-join \
+    dynamic-routing-redistribute=lb,nat
+check ovn-nbctl --wait=sb lr-lb-add lr1 lb0
+datapath_lr1=$(fetch_column Datapath_Binding _uuid external_ids:name=lr1)
+check_row_count Advertised_Route 2 \
+    ip_prefix="172.16.1.10"         \
+    datapath=$datapath_lr1           \
+    logical_port=$pb_lr1_join
+check_row_count Advertised_Route 0 \
+    ip_prefix="172.16.1.10"         \
+    datapath=$datapath_lr1           \
+    tracked_port=$pb_lr1_join
+check_row_count Advertised_Route 1 \
+    ip_prefix="172.16.1.11"         \
+    datapath=$datapath_lr1           \
+    logical_port=$pb_lr1_join        \
+    tracked_port=$pb_lr1_join
+
+# A distributed NAT entry is tracked by its own logical port and keeps its
+# route.  lr2 has a distributed gateway port on its own external switch with
+# a localnet port, so the peer of the gateway port gets no chassisredirect
+# port and a NAT entry with a logical port and an external MAC is
+# distributed.  It shares the row of the backend that it maps, which stays
+# unconditional.
+check ovn-nbctl lr-add lr2
+check ovn-nbctl lrp-add lr2 lr2-join 00:00:00:00:00:04 10.0.0.2/24
+check ovn-nbctl lsp-add-router-port join join-lr2 lr2-join
+check ovn-nbctl ls-add ext2
+check ovn-nbctl lrp-add lr2 lr2-ext2 00:00:00:00:00:05 203.0.113.1/24
+check ovn-nbctl lrp-set-gateway-chassis lr2-ext2 hv1
+check ovn-nbctl lsp-add-router-port ext2 ext2-lr2 lr2-ext2
+check ovn-nbctl lsp-add ext2 ln-ext2
+check ovn-nbctl lsp-set-type ln-ext2 localnet
+check ovn-nbctl lsp-set-options ln-ext2 network_name=phys
+check ovn-nbctl lrp-add lr2 lr2-be2 00:00:00:00:00:06 192.168.2.1/24
+check ovn-nbctl ls-add be2
+check ovn-nbctl lsp-add-router-port be2 be2-lr2 lr2-be2
+check ovn-nbctl lsp-add be2 be2-vm1
+check ovn-nbctl lsp-set-addresses be2-vm1 "00:00:00:00:02:01 192.168.2.10"
+check ovn-nbctl \
+    -- lb-add lb2 172.16.1.20:80 192.168.2.10:80 \
+    -- set Load_Balancer lb2 options:distributed=true \
+        ip_port_mappings:192.168.2.10="be2-vm1:192.168.2.1" \
+    -- lr-lb-add lr2 lb2
+check ovn-nbctl --wait=sb lr-nat-add lr2 dnat_and_snat \
+    172.16.1.20 192.168.2.10 be2-vm1 00:00:00:00:02:01
+pb_be2_vm1=$(fetch_column Port_Binding _uuid logical_port=be2-vm1)
+check_row_count Advertised_Route 1 \
+    ip_prefix="172.16.1.20"         \
+    datapath=$datapath_lr0           \
+    logical_port=$pb_lr0_join        \
+    tracked_port=$pb_be2_vm1
+AT_CHECK([! ovn-sbctl --bare --columns=external_ids \
+    find Advertised_Route ip_prefix=172.16.1.20 |
+    grep -q 'source'])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([dynamic-routing - LB redistribute uses backend LSP as tracked_port])
 AT_KEYWORDS([dynamic-routing])
 ovn_start

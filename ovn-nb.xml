@@ -3648,7 +3648,12 @@ or
           NAT's external IP on this router and it's neighboring routers.
           Neighboring routers are those that are either directly connected,
           via Logical Router Port, or those that are connected via shared
-          Logical Switch.
+          Logical Switch.  A NAT entry that is not distributed, that is,
+          without <ref column="logical_port" table="NAT"/>, is not advertised
+          through a port when a Load Balancer of the same router with
+          <ref column="options" key="distributed" table="Load_Balancer"/>
+          enabled advertises the same address through that port.  The Load
+          Balancer routes carry the locality and health of that address.
         </p>
 
         <p>
