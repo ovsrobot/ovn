@@ -4766,6 +4766,26 @@ or
         </p>
       </column>
 
+      <column name="options" key="ic-route-adv-cidrs"
+              type='{"type": "string"}'>
+        <p>
+          This option applies to a Logical Router Port connected to a transit
+          switch.  It expects a comma-separated list of CIDRs, for example
+          <code>10.0.0.0/25,2001:db8::/80</code>.  When advertising, through
+          this port, the directly-connected networks of the other ports of
+          the router, <code>ovn-ic</code>  advertises the directly-connected
+          networks of the other ports of the router through this port,
+          each network is replaced by the listed CIDRs that it contains.
+        </p>
+
+        <p>
+          The advertised CIDRs are still subject to the other advertisement
+          filters, such as <code>ic-route-filter-adv</code> and
+          <code>ic-route-deny-adv</code>.  If all the CIDRs contained in a
+          network are filtered, the network itself is not advertised either.
+        </p>
+      </column>
+
       <column name="options" key="ic-route-filter-tag"
               type='{"type": "string"}'>
         <p>

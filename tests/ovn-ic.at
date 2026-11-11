@@ -5425,6 +5425,143 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-ic -- route adv -- specific CIDRs of connected networks])
+ovn_init_ic_db
+ovn-ic-nbctl ts-add ts1
+for i in 1 2; do
+    ovn_start az$i
+    ovn_as az$i
+    check ovn-nbctl set nb_global . options:ic-route-learn=true
+    check ovn-nbctl set nb_global . options:ic-route-adv=true
+done
+
+OVS_WAIT_FOR_OUTPUT([ovn-ic-sbctl show], [0], [dnl
+availability-zone az1
+availability-zone az2
+])
+check ovn-ic-nbctl --wait=sb sync
+
+# logical router (lr11) - transit switch (ts1) - logical router (lr12)
+for i in 1 2; do
+    ovn_as az$i
+    lr=lr1$i
+    check ovn-nbctl lr-add $lr
+    lrp=lrp-$lr-ts1
+    lsp=lsp-ts1-$lr
+    check ovn-nbctl lrp-add $lr $lrp aa:aa:aa:aa:ab:0$i 169.254.101.$i/24 fe80:10::$i/64
+    check ovn-nbctl lsp-add-router-port ts1 $lsp $lrp
+done
+
+ovn_as az2 check ovn-nbctl lrp-add lr12 lrp-lr12-1 aa:aa:aa:aa:bb:01 "192.168.12.1/24" "2001:db12::1/64"
+ovn_as az2 check ovn-nbctl --wait=sb lrp-add lr12 lrp-lr12-2 aa:aa:aa:aa:bb:02 "192.168.2.1/24"
+check ovn-ic-nbctl --wait=sb sync
+
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 |
+    grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.12.0/24 169.254.101.2
+192.168.2.0/24 169.254.101.2
+2001:db12::/64 fe80:10::2
+])
+
+# Advertise through lrp-lr12-ts1 only parts of the IPv4 network of
+# lrp-lr12-1.  The CIDRs outside of the router's networks are ignored and the
+# networks that contain none of the listed CIDRs are still advertised as a
+# whole.  Host bits are cleared.
+ovn_as az2 check ovn-nbctl set logical_router_port lrp-lr12-ts1 \
+    options:ic-route-adv-cidrs="\"192.168.12.0/26,192.168.12.130/25,10.0.0.0/24,192.168.0.0/16,invalid\""
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 |
+    grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.12.0/26 169.254.101.2
+192.168.12.128/25 169.254.101.2
+192.168.2.0/24 169.254.101.2
+2001:db12::/64 fe80:10::2
+])
+
+# IPv6 CIDRs work the same way.
+ovn_as az2 check ovn-nbctl set logical_router_port lrp-lr12-ts1 \
+    options:ic-route-adv-cidrs="\"192.168.12.0/26,2001:db12::/80\""
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 |
+    grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.12.0/26 169.254.101.2
+192.168.2.0/24 169.254.101.2
+2001:db12::/80 fe80:10::2
+])
+
+# The advertised CIDRs are still subject to the advertisement filters.
+ovn_as az2 check ovn-nbctl set logical_router_port lrp-lr12-ts1 \
+    options:ic-route-deny-adv=192.168.12.0/26
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 |
+    grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.2.0/24 169.254.101.2
+2001:db12::/80 fe80:10::2
+])
+ovn_as az2 check ovn-nbctl remove logical_router_port lrp-lr12-ts1 \
+    options ic-route-deny-adv
+
+# ic-route-filter-adv is applied to each advertised CIDR.  A filter entry
+# containing the CIDRs lets all of them through.
+ovn_as az2 check ovn-nbctl set logical_router_port lrp-lr12-ts1 \
+    options:ic-route-adv-cidrs="\"192.168.12.0/26,192.168.12.128/25\""
+ovn_as az2 check ovn-nbctl set logical_router_port lrp-lr12-ts1 \
+    options:ic-route-filter-adv=192.168.12.0/24
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 |
+    grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.12.0/26 169.254.101.2
+192.168.12.128/25 169.254.101.2
+])
+
+# A filter disjoint from the CIDRs filters all of them, and the whole
+# network is not advertised as a fallback.
+ovn_as az2 check ovn-nbctl set logical_router_port lrp-lr12-ts1 \
+    options:ic-route-filter-adv="\"192.168.12.64/26,192.168.2.0/24\""
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 |
+    grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.2.0/24 169.254.101.2
+])
+
+# A filter equal to one of the CIDRs lets only that one through.
+ovn_as az2 check ovn-nbctl set logical_router_port lrp-lr12-ts1 \
+    options:ic-route-filter-adv=192.168.12.0/26
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 |
+    grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.12.0/26 169.254.101.2
+])
+
+# A filter more specific than a CIDR does not split it: 192.168.12.0/26 is
+# not contained in 192.168.12.0/27, so it is filtered.
+ovn_as az2 check ovn-nbctl set logical_router_port lrp-lr12-ts1 \
+    options:ic-route-filter-adv="\"192.168.12.0/27,192.168.2.0/24\""
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 |
+    grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.2.0/24 169.254.101.2
+])
+
+# Without ic-route-adv-cidrs, the same filter as the network lets the
+# whole network through.
+ovn_as az2 check ovn-nbctl set logical_router_port lrp-lr12-ts1 \
+    options:ic-route-filter-adv=192.168.12.0/24
+ovn_as az2 check ovn-nbctl remove logical_router_port lrp-lr12-ts1 \
+    options ic-route-adv-cidrs
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 |
+    grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.12.0/24 169.254.101.2
+])
+
+# Removing the filter too restores advertising all the networks.
+ovn_as az2 check ovn-nbctl remove logical_router_port lrp-lr12-ts1 \
+    options ic-route-filter-adv
+OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 |
+    grep learned | awk '{print $1, $2}' | sort ], [0], [dnl
+192.168.12.0/24 169.254.101.2
+192.168.2.0/24 169.254.101.2
+2001:db12::/64 fe80:10::2
+])
+
+OVN_CLEANUP_IC([az1], [az2])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn-ic -- Check ovn-ic adv and learn from SB Learned Route])
 
 ovn_init_ic_db

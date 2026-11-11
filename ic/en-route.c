@@ -556,6 +556,103 @@ add_network_to_routes_ad(struct hmap *routes_ad, const char *network,
                      NULL, nb_lrp, NULL, nb_lr, NULL, route_tag, false);
 }
 
+#define IC_ROUTE_ADV_CIDRS "ic-route-adv-cidrs"
+
+struct adv_cidr {
+    struct in6_addr prefix;     /* Host bits already cleared. */
+    unsigned int plen;
+};
+
+/* Parses the "ic-route-adv-cidrs" option of 'ts_lrp' into 'cidrs', a vector
+ * of 'struct adv_cidr'.  Invalid CIDRs are logged and skipped. */
+static void
+parse_adv_cidrs(const struct nbrec_logical_router_port *ts_lrp,
+                struct vector *cidrs)
+{
+    const char *adv_cidrs = ts_lrp ? smap_get(&ts_lrp->options,
+                                              IC_ROUTE_ADV_CIDRS)
+                                   : NULL;
+    if (!adv_cidrs) {
+        return;
+    }
+
+    struct sset cidr_set = SSET_INITIALIZER(&cidr_set);
+    sset_from_delimited_string(&cidr_set, adv_cidrs, ",");
+
+    const char *cidr;
+    SSET_FOR_EACH (cidr, &cidr_set) {
+        struct adv_cidr c;
+        if (!ip46_parse_cidr(cidr, &c.prefix, &c.plen)) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_WARN_RL(&rl, "Invalid CIDR \"%s\" in option %s of logical "
+                         "router port %s, ignoring it.",
+                         cidr, IC_ROUTE_ADV_CIDRS, ts_lrp->name);
+            continue;
+        }
+
+        struct in6_addr mask = ipv6_create_mask(
+            c.plen + (IN6_IS_ADDR_V4MAPPED(&c.prefix) ? 96 : 0));
+        c.prefix = ipv6_addr_bitand(&c.prefix, &mask);
+        vector_push(cidrs, &c);
+    }
+    sset_destroy(&cidr_set);
+}
+
+/* Advertises the CIDRs in 'cidrs' (a vector of 'struct adv_cidr', parsed from
+ * the "ic-route-adv-cidrs" option of 'ts_lrp') that are contained in 'network'
+ * of 'nb_lrp', instead of 'network' itself.  If 'cidrs' is empty or none of
+ * its CIDRs is contained in 'network', the whole 'network' is advertised. */
+static void
+add_lrp_network_to_routes_ad(struct hmap *routes_ad, const char *network,
+                             const struct nbrec_logical_router_port *nb_lrp,
+                             const struct lport_addresses *nexthop_addresses,
+                             const struct smap *nb_options,
+                             const struct nbrec_logical_router *nb_lr,
+                             const struct nbrec_logical_router_port *ts_lrp,
+                             const char *route_tag,
+                             const char *ts_route_table,
+                             const struct vector *cidrs)
+{
+    struct in6_addr net_prefix;
+    unsigned int net_plen;
+
+    if (vector_is_empty(cidrs) ||
+        !ip46_parse_cidr(network, &net_prefix, &net_plen)) {
+        add_network_to_routes_ad(routes_ad, network, nb_lrp,
+                                 nexthop_addresses, nb_options, nb_lr,
+                                 ts_lrp, route_tag, ts_route_table, false);
+        return;
+    }
+
+    struct sset net_set = SSET_INITIALIZER(&net_set);
+    sset_add(&net_set, network);
+    bool found = false;
+    const struct adv_cidr *adv_cidr;
+    VECTOR_FOR_EACH_PTR (cidrs, adv_cidr) {
+        if (!find_prefix_in_set(&adv_cidr->prefix, adv_cidr->plen, &net_set,
+                                IC_ROUTE_ADV_CIDRS)) {
+            continue;
+        }
+
+        struct ds cidr = DS_EMPTY_INITIALIZER;
+        ipv6_format_mapped(&adv_cidr->prefix, &cidr);
+        ds_put_format(&cidr, "/%u", adv_cidr->plen);
+
+        add_network_to_routes_ad(routes_ad, ds_cstr(&cidr), nb_lrp,
+                                 nexthop_addresses, nb_options, nb_lr,
+                                 ts_lrp, route_tag, ts_route_table, false);
+        ds_destroy(&cidr);
+        found = true;
+    }
+    sset_destroy(&net_set);
+
+    if (!found) {
+        add_network_to_routes_ad(routes_ad, network, nb_lrp,
+                                 nexthop_addresses, nb_options, nb_lr,
+                                 ts_lrp, route_tag, ts_route_table, false);
+    }
+}
+
 static void
 add_lb_vip_to_routes_ad(struct hmap *routes_ad, const char *vip_key,
                         const struct nbrec_load_balancer *nb_lb,
@@ -1393,16 +1490,19 @@ build_ts_routes_to_adv(struct ic_context *ctx,
         }
     }
 
+    struct vector cidrs = VECTOR_EMPTY_INITIALIZER(struct adv_cidr);
+    parse_adv_cidrs(ts_lrp, &cidrs);
+
     /* Check directly-connected subnets of the LR */
     for (int i = 0; i < lr->n_ports; i++) {
         const struct nbrec_logical_router_port *lrp = lr->ports[i];
         if (!lrp_is_ts_port(ctx, ic_lr, lrp->name)) {
             for (int j = 0; j < lrp->n_networks; j++) {
-                add_network_to_routes_ad(routes_ad, lrp->networks[j], lrp,
-                                         ts_port_addrs,
-                                         &nb_global->options,
-                                         lr, ts_lrp, route_tag,
-                                         ts_route_table, false);
+                add_lrp_network_to_routes_ad(routes_ad, lrp->networks[j],
+                                             lrp, ts_port_addrs,
+                                             &nb_global->options,
+                                             lr, ts_lrp, route_tag,
+                                             ts_route_table, &cidrs);
             }
         } else {
             /* The router port of the TS port is ignored. */
@@ -1410,6 +1510,7 @@ build_ts_routes_to_adv(struct ic_context *ctx,
                      lrp->name);
         }
     }
+    vector_destroy(&cidrs);
 
     /* Check loadbalancers associated with the LR */
     if (smap_get_bool(&nb_global->options, "ic-route-adv-lb", false)) {
@@ -2226,7 +2327,8 @@ route_nb_logical_router_handler(struct engine_node *node,
 }
 
 /* NB Logical_Router_Port: networks and options (route_table, ic-route-tag,
- * ic-route-learn-tag-rules, and the deprecated ic-route-filter-tag) affect
+ * ic-route-adv-cidrs, ic-route-learn-tag-rules, and the deprecated
+ * ic-route-filter-tag) affect
  * connected-route advertising and learning for the owning router.  Port
  * creation/deletion changes the router's 'ports' column and is handled by
  * route_nb_logical_router_handler; here only column updates to an existing

@@ -57,6 +57,10 @@ Post v26.09.0
      table at startup; it defers its kernel route updates until the initial
      dump of the advertised routes of the local route-exchange datapaths is
      complete.
+   - Added the "ic-route-adv-cidrs" option to Logical_Router_Port.  When set
+     on a port connected to a transit switch, ovn-ic advertises through it
+     the listed CIDRs contained in a directly-connected network of the router
+     instead of that whole network.
 
 OVN v26.09.0 - xxx xx xxxx
 --------------------------
