@@ -3173,9 +3173,51 @@ delete_fdb_entries(struct ovsdb_idl_index *sbrec_fdb_by_dp_and_port,
 
 struct service_monitor_info {
     struct hmap_node hmap_node;
+    /* The SB row.  A row northd inserted is freed by the IDL once the
+     * transaction completes and comes back as a new row with the server's
+     * update, so the pointer is re-pointed in
+     * northd_handle_sb_service_monitor_changes() and the key of the monitor
+     * is kept here rather than read through it. */
     const struct sbrec_service_monitor *sbrec_mon;
+    char *ip;
+    char *logical_port;
+    char *protocol;
+    uint16_t port;
     bool required;
+    /* The load balancers (struct ovn_lb_datapaths) whose backends this
+     * monitor probes, so that a change of the monitor rebuilds only their
+     * flows and a change of a load balancer drops only the monitors it
+     * no longer needs. */
+    struct hmapx lbs;
+    /* True when a network function or a logical switch port health check
+     * uses this monitor too.  Such a monitor is never deleted on a load
+     * balancer change, and a status change of it needs a recompute. */
+    bool non_lb_user;
 };
+
+static struct service_monitor_info *
+service_monitor_info_alloc(const struct sbrec_service_monitor *sbrec_mon)
+{
+    struct service_monitor_info *mon_info = xzalloc(sizeof *mon_info);
+    mon_info->sbrec_mon = sbrec_mon;
+    mon_info->ip = xstrdup(sbrec_mon->ip);
+    mon_info->logical_port = xstrdup(sbrec_mon->logical_port);
+    mon_info->protocol = xstrdup(sbrec_mon->protocol ? sbrec_mon->protocol
+                                                     : "");
+    mon_info->port = sbrec_mon->port;
+    hmapx_init(&mon_info->lbs);
+    return mon_info;
+}
+
+static void
+service_monitor_info_destroy(struct service_monitor_info *mon_info)
+{
+    hmapx_destroy(&mon_info->lbs);
+    free(mon_info->ip);
+    free(mon_info->logical_port);
+    free(mon_info->protocol);
+    free(mon_info);
+}
 
 
 static inline bool
@@ -3183,10 +3225,10 @@ monitor_info_matches(const struct service_monitor_info *mon_info,
                      const char *ip, const char *logical_port,
                      uint16_t service_port, const char *protocol)
 {
-    return (mon_info->sbrec_mon->port == service_port &&
-            !strcmp(mon_info->sbrec_mon->ip, ip) &&
-            !strcmp(mon_info->sbrec_mon->protocol, protocol) &&
-            !strcmp(mon_info->sbrec_mon->logical_port, logical_port));
+    return (mon_info->port == service_port &&
+            !strcmp(mon_info->ip, ip) &&
+            !strcmp(mon_info->protocol, protocol) &&
+            !strcmp(mon_info->logical_port, logical_port));
 }
 
 static struct service_monitor_info *
@@ -3288,8 +3330,7 @@ create_or_get_service_mon(struct ovsdb_idl_txn *ovnsb_txn,
      * the first health check probe succeeds. */
     sbrec_service_monitor_set_status(sbrec_mon, "offline");
 
-    mon_info = xzalloc(sizeof *mon_info);
-    mon_info->sbrec_mon = sbrec_mon;
+    mon_info = service_monitor_info_alloc(sbrec_mon);
     mon_info->required = true;
     hmap_insert(local_svc_monitors_map, &mon_info->hmap_node, hash);
 
@@ -3391,6 +3432,7 @@ ovn_nf_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                                   nbrec_nf->inport->name,
                                   0, "icmp", false);
 
+    mon_info->non_lb_user = true;
     set_service_mon_options(mon_info->sbrec_mon,
                             &nbrec_nf->health_check->options, NULL);
 
@@ -3430,9 +3472,13 @@ ovn_nf_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
     }
 }
 
-static void
+/* Creates or updates the service monitors of the load balancer's backends
+ * and records them in lb_dps->svc_mons.  Returns false when a monitor is
+ * owned by the interconnect learned map, which incremental processing
+ * cannot track. */
+static bool
 ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
-                  const struct ovn_lb_datapaths *lb_dps,
+                  struct ovn_lb_datapaths *lb_dps,
                   const struct svc_monitor_addresses *svc_global_addresses,
                   struct hmap *ls_ports,
                   struct sset *svc_monitor_lsps,
@@ -3440,9 +3486,10 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                   struct hmap *ic_learned_svc_monitors_map)
 {
     const struct ovn_northd_lb *lb = lb_dps->lb;
+    bool all_local = true;
 
     if (lb->template) {
-        return;
+        return true;
     }
 
     for (size_t i = 0; i < lb->n_vips; i++) {
@@ -3499,6 +3546,13 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                                           protocol,
                                           backend_nb->remote_backend);
 
+            if (hmap_contains(local_svc_monitors_map, &mon_info->hmap_node)) {
+                hmapx_add(&mon_info->lbs, lb_dps);
+                hmapx_add(&lb_dps->svc_mons, mon_info);
+            } else {
+                all_local = false;
+            }
+
             set_service_mon_options(mon_info->sbrec_mon,
                                     &lb_vip_nb->lb_health_check->options,
                                     backend_nb->az_name);
@@ -3535,6 +3589,29 @@ ovn_lb_svc_create(struct ovsdb_idl_txn *ovnsb_txn,
                                                            chassis_name);
                 }
             }
+        }
+    }
+    return all_local;
+}
+
+/* Drops the references lb_dps held on the monitors in old_mons that are no
+ * longer in lb_dps->svc_mons, and deletes the monitors nothing else uses.
+ * A monitor the load balancer still needs keeps its row and its status. */
+static void
+ovn_lb_svc_prune(struct ovn_lb_datapaths *lb_dps, const struct hmapx *old_mons,
+                 struct hmap *local_svc_monitors_map)
+{
+    struct hmapx_node *node;
+    HMAPX_FOR_EACH (node, old_mons) {
+        struct service_monitor_info *mon_info = node->data;
+        if (hmapx_contains(&lb_dps->svc_mons, mon_info)) {
+            continue;
+        }
+        hmapx_find_and_delete(&mon_info->lbs, lb_dps);
+        if (hmapx_is_empty(&mon_info->lbs) && !mon_info->non_lb_user) {
+            sbrec_service_monitor_delete(mon_info->sbrec_mon);
+            hmap_remove(local_svc_monitors_map, &mon_info->hmap_node);
+            service_monitor_info_destroy(mon_info);
         }
     }
 }
@@ -3815,16 +3892,17 @@ ovn_lsp_svc_monitors_process_port(
             lport_addresses_contains_ip(op->lsp_addrs, op->n_lsp_addrs,
                                         lsp_hc->address);
 
-        /* Remove outdated records */
+        /* Remove outdated records, unless a load balancer still probes the
+         * same backend through the monitor. */
         if (!lsp_contain_ip) {
             mon_info = get_service_mon(local_svc_monitors_map,
                                        NULL, lsp_hc->address,
                                        op->key, lsp_hc->port,
                                        lsp_hc->protocol);
-            if (mon_info) {
+            if (mon_info && hmapx_is_empty(&mon_info->lbs)) {
                 sbrec_service_monitor_delete(mon_info->sbrec_mon);
                 hmap_remove(local_svc_monitors_map, &mon_info->hmap_node);
-                free(mon_info);
+                service_monitor_info_destroy(mon_info);
             }
             continue;
         }
@@ -3836,6 +3914,7 @@ ovn_lsp_svc_monitors_process_port(
                                              lsp_hc->port, lsp_hc->protocol,
                                              false);
 
+        mon_info->non_lb_user = true;
         set_service_mon_options(mon_info->sbrec_mon, &lsp_hc->options, NULL);
 
         struct eth_addr ea;
@@ -3892,8 +3971,8 @@ build_svc_monitors_data(
         uint32_t hash = sbrec_mon->port;
         hash = hash_string(sbrec_mon->ip, hash);
         hash = hash_string(sbrec_mon->logical_port, hash);
-        struct service_monitor_info *mon_info = xzalloc(sizeof *mon_info);
-        mon_info->sbrec_mon = sbrec_mon;
+        struct service_monitor_info *mon_info =
+            service_monitor_info_alloc(sbrec_mon);
         mon_info->required = false;
         hmap_insert(local_svc_monitors_map,
                     &mon_info->hmap_node, hash);
@@ -3949,7 +4028,7 @@ build_svc_monitors_data(
         if (!mon_info->required) {
             sbrec_service_monitor_delete(mon_info->sbrec_mon);
             hmap_remove(local_svc_monitors_map, &mon_info->hmap_node);
-            free(mon_info);
+            service_monitor_info_destroy(mon_info);
         }
     }
 }
@@ -5937,12 +6016,19 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
                               struct hmap *lb_datapaths_map,
                               struct hmap *lbgrp_datapaths_map,
                               const struct hmap *lr_lb_map,
-                              struct northd_tracked_data *nd_changes)
+                              struct northd_tracked_data *nd_changes,
+                              struct ovsdb_idl_txn *ovnsb_txn,
+                              const struct svc_monitor_addresses
+                                  *svc_global_addresses,
+                              struct hmap *ls_ports,
+                              struct sset *svc_monitor_lsps,
+                              struct hmap *local_svc_monitors_map,
+                              struct hmap *ic_learned_svc_monitors_map)
 {
-    if (trk_lb_data->has_health_checks) {
-        /* Fall back to recompute since a tracked load balancer
-         * has health checks configured and I-P is not yet supported
-         * for such load balancers. */
+    if (trk_lb_data->has_health_checks && !ovnsb_txn) {
+        /* The service monitors of a load balancer with health checks live
+         * in the Southbound database, so their update needs a transaction.
+         * Without one, fall back to recompute. */
         return false;
     }
 
@@ -6024,7 +6110,10 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
 
         hmap_remove(lb_datapaths_map, &lb_dps->hmap_node);
 
-        /* Add the deleted lb to the northd tracked data. */
+        /* Add the deleted lb to the northd tracked data.  A service monitor
+         * change handled earlier in this run may have marked it as updated,
+         * and a deleted load balancer gets no flows rebuilt. */
+        hmapx_find_and_delete(&nd_changes->trk_lbs.crupdated, lb_dps);
         hmapx_add(&nd_changes->trk_lbs.deleted, lb_dps);
     }
 
@@ -6211,6 +6300,166 @@ northd_handle_lb_data_changes(struct tracked_lb_data *trk_lb_data,
         dynamic_bitmap_free(&distributed_lrs);
         if (transition) {
             return false;
+        }
+    }
+
+    /* Service monitors.  Every load balancer that changed, was deleted, or
+     * was attached to a router, which decides the source address of its
+     * monitors, drops the monitors it held and builds its current set.
+     * The datapath associations above have to be in place for that. */
+    struct hmapx svc_lbs = HMAPX_INITIALIZER(&svc_lbs);
+    HMAPX_FOR_EACH (hmapx_node, &nd_changes->trk_lbs.deleted) {
+        hmapx_add(&svc_lbs, hmapx_node->data);
+    }
+    HMAP_FOR_EACH (clb, hmap_node, &trk_lb_data->crupdated_lbs) {
+        lb_dps = ovn_lb_datapaths_find(lb_datapaths_map,
+                                       &clb->lb->nlb->header_.uuid);
+        hmapx_add(&svc_lbs, lb_dps);
+    }
+    HMAP_FOR_EACH (crupdated_lbgrp, hmap_node,
+                   &trk_lb_data->crupdated_lbgrps) {
+        struct hmapx_node *hnode;
+        HMAPX_FOR_EACH (hnode, &crupdated_lbgrp->assoc_lbs) {
+            lb = hnode->data;
+            lb_dps = ovn_lb_datapaths_find(lb_datapaths_map,
+                                           &lb->nlb->header_.uuid);
+            hmapx_add(&svc_lbs, lb_dps);
+        }
+    }
+    LIST_FOR_EACH (codlb, list_node, &trk_lb_data->crupdated_lr_lbs) {
+        struct uuidset_node *uuidnode;
+        UUIDSET_FOR_EACH (uuidnode, &codlb->assoc_lbs) {
+            lb_dps = ovn_lb_datapaths_find(lb_datapaths_map, &uuidnode->uuid);
+            hmapx_add(&svc_lbs, lb_dps);
+        }
+        UUIDSET_FOR_EACH (uuidnode, &codlb->assoc_lbgrps) {
+            lbgrp_dps = ovn_lb_group_datapaths_find(lbgrp_datapaths_map,
+                                                    &uuidnode->uuid);
+            for (size_t j = 0; j < lbgrp_dps->lb_group->n_lbs; j++) {
+                lb_dps = ovn_lb_datapaths_find(
+                    lb_datapaths_map,
+                    &lbgrp_dps->lb_group->lbs[j]->nlb->header_.uuid);
+                hmapx_add(&svc_lbs, lb_dps);
+            }
+        }
+    }
+    /* Build the current set of every load balancer first, so that a monitor
+     * a load balancer keeps, or that moves from one load balancer to another
+     * in the same change, is updated in place and keeps its status.  Only
+     * then drop the monitors no load balancer needs any more.  A deleted
+     * load balancer only gives its monitors up. */
+    size_t n_svc_lbs = 0;
+    struct ovn_lb_datapaths **svc_lb_dps =
+        xmalloc(hmapx_count(&svc_lbs) * sizeof *svc_lb_dps);
+    struct hmapx *old_mons = xmalloc(hmapx_count(&svc_lbs) * sizeof *old_mons);
+    bool ok = true;
+    HMAPX_FOR_EACH (hmapx_node, &svc_lbs) {
+        lb_dps = hmapx_node->data;
+        bool deleted = hmapx_contains(&nd_changes->trk_lbs.deleted, lb_dps);
+        if (hmapx_is_empty(&lb_dps->svc_mons)
+            && (deleted || !lb_dps->lb->health_checks)) {
+            continue;
+        }
+        if (!ovnsb_txn) {
+            ok = false;
+            break;
+        }
+        hmapx_init(&old_mons[n_svc_lbs]);
+        hmapx_swap(&old_mons[n_svc_lbs], &lb_dps->svc_mons);
+        svc_lb_dps[n_svc_lbs++] = lb_dps;
+    }
+    for (size_t i = 0; ok && i < n_svc_lbs; i++) {
+        lb_dps = svc_lb_dps[i];
+        if (!hmapx_contains(&nd_changes->trk_lbs.deleted, lb_dps)
+            && lb_dps->lb->health_checks
+            && !ovn_lb_svc_create(ovnsb_txn, lb_dps, svc_global_addresses,
+                                  ls_ports, svc_monitor_lsps,
+                                  local_svc_monitors_map,
+                                  ic_learned_svc_monitors_map)) {
+            ok = false;
+        }
+    }
+    for (size_t i = 0; i < n_svc_lbs; i++) {
+        ovn_lb_svc_prune(svc_lb_dps[i], &old_mons[i], local_svc_monitors_map);
+        hmapx_destroy(&old_mons[i]);
+    }
+    free(old_mons);
+    free(svc_lb_dps);
+    hmapx_destroy(&svc_lbs);
+
+    return ok;
+}
+
+/* Handles the tracked changes of the SB Service_Monitor table for the
+ * monitors northd owns.  A status change rebuilds the flows of the load
+ * balancers the monitor probes.  Returns false when the change needs a
+ * recompute: a monitor northd does not know, one that was deleted behind
+ * its back, or a status change of a monitor that a network function or a
+ * logical switch port health check uses. */
+bool
+northd_handle_sb_service_monitor_changes(
+    const struct sbrec_service_monitor_table *sb_mon_table,
+    struct hmap *local_svc_monitors_map,
+    struct northd_tracked_data *nd_changes)
+{
+    const struct sbrec_service_monitor *sbrec_mon;
+    SBREC_SERVICE_MONITOR_TABLE_FOR_EACH_TRACKED (sbrec_mon, sb_mon_table) {
+        if (sbrec_mon->ic_learned) {
+            /* Owned by the interconnect learned monitors node. */
+            continue;
+        }
+
+        struct service_monitor_info *mon_info =
+            get_service_mon(local_svc_monitors_map, NULL, sbrec_mon->ip,
+                            sbrec_mon->logical_port, sbrec_mon->port,
+                            sbrec_mon->protocol);
+
+        if (sbrec_service_monitor_is_deleted(sbrec_mon)) {
+            if (mon_info && mon_info->sbrec_mon == sbrec_mon) {
+                /* Deleted by someone else, recreate it. */
+                return false;
+            }
+            continue;
+        }
+
+        bool status_changed;
+        if (sbrec_service_monitor_is_new(sbrec_mon)) {
+            if (!mon_info) {
+                /* A row northd did not create. */
+                return false;
+            }
+            /* The row northd inserted was freed with its transaction and
+             * this is the server's copy of it.  northd inserted it as
+             * "offline" and built the flows that way, so a status that
+             * ovn-controller set before this copy arrived is a change. */
+            mon_info->sbrec_mon = sbrec_mon;
+            status_changed = !sbrec_mon->status
+                             || strcmp(sbrec_mon->status, "offline");
+        } else {
+            if (!mon_info || mon_info->sbrec_mon != sbrec_mon) {
+                /* A row northd did not create. */
+                return false;
+            }
+            status_changed = sbrec_service_monitor_is_updated(
+                sbrec_mon, SBREC_SERVICE_MONITOR_COL_STATUS);
+        }
+
+        if (!status_changed) {
+            continue;
+        }
+
+        if (mon_info->non_lb_user) {
+            return false;
+        }
+
+        struct hmapx_node *node;
+        HMAPX_FOR_EACH (node, &mon_info->lbs) {
+            if (hmapx_contains(&nd_changes->trk_lbs.deleted, node->data)) {
+                /* Deleted earlier in this run. */
+                continue;
+            }
+            hmapx_add(&nd_changes->trk_lbs.crupdated, node->data);
+            nd_changes->type |= NORTHD_TRACKED_LBS;
         }
     }
 
@@ -12317,8 +12566,8 @@ build_ic_learned_svc_monitors_map(
         uint32_t hash = sbrec_mon->port;
         hash = hash_string(sbrec_mon->ip, hash);
         hash = hash_string(sbrec_mon->logical_port, hash);
-        struct service_monitor_info *mon_info = xzalloc(sizeof *mon_info);
-        mon_info->sbrec_mon = sbrec_mon;
+        struct service_monitor_info *mon_info =
+            service_monitor_info_alloc(sbrec_mon);
         mon_info->required = true;
         hmap_insert(ic_learned_svc_monitors_map,
                     &mon_info->hmap_node, hash);
@@ -21785,7 +22034,7 @@ northd_destroy(struct northd_data *data)
 
     struct service_monitor_info *mon_info;
     HMAP_FOR_EACH_POP (mon_info, hmap_node, &data->local_svc_monitors_map) {
-        free(mon_info);
+        service_monitor_info_destroy(mon_info);
     }
     hmap_destroy(&data->local_svc_monitors_map);
 
@@ -21822,7 +22071,7 @@ __ic_learned_svcs_cleanup(struct hmap *ic_learned_svc_monitors_map)
 {
     struct service_monitor_info *mon_info;
     HMAP_FOR_EACH_POP (mon_info, hmap_node, ic_learned_svc_monitors_map) {
-        free(mon_info);
+        service_monitor_info_destroy(mon_info);
     }
     hmap_destroy(ic_learned_svc_monitors_map);
 }

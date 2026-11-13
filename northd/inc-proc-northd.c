@@ -251,7 +251,8 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
                      lb_data_synced_logical_router_handler);
 
     engine_add_input(&en_ic_learned_svc_monitors,
-                     &en_sb_service_monitor, NULL);
+                     &en_sb_service_monitor,
+                     ic_learned_svc_monitors_sb_service_monitor_handler);
 
     engine_add_input(&en_northd, &en_nb_mirror, NULL);
     engine_add_input(&en_northd, &en_nb_mirror_rule, NULL);
@@ -272,7 +273,8 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
     engine_add_input(&en_northd, &en_sb_meter, NULL);
     engine_add_input(&en_northd, &en_sb_dns, NULL);
     engine_add_input(&en_northd, &en_sb_ha_chassis_group, NULL);
-    engine_add_input(&en_northd, &en_sb_service_monitor, NULL);
+    engine_add_input(&en_northd, &en_sb_service_monitor,
+                     northd_sb_service_monitor_handler);
     engine_add_input(&en_northd, &en_sb_static_mac_binding, NULL);
     engine_add_input(&en_northd, &en_sb_chassis_template_var, NULL);
     engine_add_input(&en_northd, &en_ic_learned_svc_monitors, NULL);
