@@ -12,6 +12,10 @@ Post v26.09.0
    - Added a new "options:dynamic-routing-advertise-vips" key on the NB
      Load_Balancer table to limit route advertisement to a subset of the
      load balancer VIPs.
+   - Added a new "options:dynamic-routing-advertise-prefixes" key on the
+     NB Logical_Router table, with a Logical_Router_Port override, to
+     limit the advertisement of load balancer VIPs and NAT external IPs
+     to the listed CIDR prefixes.
    - Learn ARP sender hardware address (arp.sha) and IPv6 Neighbor
      Discovery link-layer addresses (nd.tll, nd.sll) into the FDB
      table in addition to eth.src.  This allows VRRP virtual MACs to

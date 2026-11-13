@@ -3732,6 +3732,43 @@ or
         </p>
       </column>
 
+      <column name="options" key="dynamic-routing-advertise-prefixes">
+        <p>
+          Only relevant if <ref column="options" key="dynamic-routing"/>
+          is set to <code>true</code> and <code>lb</code> or
+          <code>nat</code> is in
+          <ref column="options" key="dynamic-routing-redistribute"/>.
+        </p>
+
+        <p>
+          A comma or space separated list of CIDR prefixes.  When set, a
+          load balancer VIP or a NAT external IP is advertised and
+          forwarded through a port of this router only when the address
+          falls inside one of the prefixes.  A CMS uses this to advertise
+          the addresses of its own address space only, for example the
+          subnet pools that share the address scope of the provider
+          network, while addresses of private networks that overlap
+          between tenants stay unadvertised whichever load balancer or
+          NAT entry carries them.  An empty list advertises no load
+          balancer VIP and no NAT external IP.  The list of
+          <ref column="options" key="dynamic-routing-advertise-vips"
+          table="Load_Balancer"/> applies as well, and a VIP is advertised
+          only when both allow it.  An entry that does not parse is
+          ignored with a warning in the <code>ovn-northd</code> log, and
+          the host bits of an entry are ignored.  By default every
+          address is advertised.  Prefer this option to a list on every
+          load balancer.  The address space is configured once, and a
+          load balancer without a list of its own cannot leak an
+          address through a port of this router.
+        </p>
+
+        <p>
+          This value can be overwritten on a per LRP basis using
+          <ref column="options" key="dynamic-routing-advertise-prefixes"
+               table="Logical_Router_Port"/> on the Logical_Router_Port.
+        </p>
+      </column>
+
       <column name="options" key="dynamic-routing-vrf-name"
           type='{"type": "string"}'>
         <p>
@@ -5001,6 +5038,31 @@ or
         <p>
           If not set the value from <ref column="options"
           key="dynamic-routing-redistribute-local-only"
+          table="Logical_Router"/> on the <ref table="Logical_Router"/> will
+          be used.
+        </p>
+      </column>
+
+      <column name="options" key="dynamic-routing-advertise-prefixes">
+        <p>
+          Only relevant if <ref column="options" key="dynamic-routing"/>
+          is set to <code>true</code> and <code>lb</code> or
+          <code>nat</code> is in
+          <ref column="options" key="dynamic-routing-redistribute"/>.
+        </p>
+
+        <p>
+          A comma or space separated list of CIDR prefixes.  When set, a
+          load balancer VIP or a NAT external IP is advertised and
+          forwarded through this port only when the address falls inside
+          one of the prefixes, see <ref column="options"
+          key="dynamic-routing-advertise-prefixes"
+          table="Logical_Router"/>.
+        </p>
+
+        <p>
+          If not set the value from <ref column="options"
+          key="dynamic-routing-advertise-prefixes"
           table="Logical_Router"/> on the <ref table="Logical_Router"/> will
           be used.
         </p>
