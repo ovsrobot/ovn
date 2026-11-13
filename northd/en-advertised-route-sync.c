@@ -25,6 +25,8 @@
 #include "openvswitch/hmap.h"
 #include "openvswitch/vlog.h"
 #include "ovn-util.h"
+#include "packets.h"
+#include "sset.h"
 #include "util.h"
 
 VLOG_DEFINE_THIS_MODULE(en_advertised_route_sync);
@@ -394,6 +396,75 @@ distributed_lb_route_exists(const struct sset *distributed_lb_routes,
     return exists;
 }
 
+/* Store the address of vip in ip and return true, or return false for a
+ * template VIP, which has no address.  The address was parsed when the
+ * load balancer key was read.  A template load balancer keeps literal
+ * VIPs as strings only, those are parsed here. */
+static bool
+lb_vip_address(const struct ovn_lb_vip *vip, struct in6_addr *ip)
+{
+    if (vip->template_vips) {
+        return false;
+    }
+    if (!ipv6_is_zero(&vip->vip)) {
+        *ip = vip->vip;
+        return true;
+    }
+    return ip46_parse(vip->vip_str, ip);
+}
+
+/* Fill vips with the canonical addresses listed in the load balancer's
+ * dynamic-routing-advertise-vips option.  Returns false when the option is
+ * absent, in which case every VIP is advertised. */
+static bool
+lb_advertised_vips_init(const struct nbrec_load_balancer *nbrec_lb,
+                        struct sset *vips)
+{
+    const char *list = smap_get(&nbrec_lb->options,
+                                "dynamic-routing-advertise-vips");
+    if (!list) {
+        return false;
+    }
+
+    struct sset tokens = SSET_INITIALIZER(&tokens);
+    sset_from_delimited_string(&tokens, list, ", ");
+
+    const char *token;
+    SSET_FOR_EACH (token, &tokens) {
+        struct in6_addr ip;
+        if (!ip46_parse(token, &ip)) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_WARN_RL(&rl, "Ignoring invalid IP address '%s' in "
+                         "dynamic-routing-advertise-vips of load balancer "
+                         "%s", token, nbrec_lb->name);
+            continue;
+        }
+        char buf[INET6_ADDRSTRLEN];
+        ipv6_string_mapped(buf, &ip);
+        sset_add(vips, buf);
+    }
+    sset_destroy(&tokens);
+    return true;
+}
+
+/* The VIP address was parsed when the load balancer key was read, so the
+ * canonical string only needs formatting, no second parse. */
+static bool
+lb_vip_is_advertised(const struct ovn_lb_vip *vip, bool filtered,
+                     const struct sset *advertised_vips)
+{
+    if (!filtered) {
+        return true;
+    }
+    struct in6_addr ip;
+    if (!lb_vip_address(vip, &ip)) {
+        return false;
+    }
+    char buf[INET6_ADDRSTRLEN];
+    ipv6_string_mapped(buf, &ip);
+    return sset_contains(advertised_vips, buf);
+}
+
 /* This function adds a new route for each entry in lr_nat record
  * to "routes". Logical port of the route is set to "advertising_op" and
  * tracked port is set to NAT's distributed gw port. If NAT doesn't have
@@ -615,9 +686,16 @@ build_lb_routes_for_lb(const struct ovn_port *advertising_op,
     const struct ovn_northd_lb *lb = lb_dps->lb;
     const char *protocol = lb->nlb->protocol && lb->nlb->protocol[0]
                            ? lb->nlb->protocol : "tcp";
+    struct sset advertised_vips = SSET_INITIALIZER(&advertised_vips);
+    bool filtered = lb_advertised_vips_init(nbrec_lb, &advertised_vips);
+
     for (size_t v = 0; v < lb->n_vips; v++) {
         const struct ovn_lb_vip *vip = &lb->vips[v];
         const struct ovn_northd_lb_vip *vip_nb = &lb->vips_nb[v];
+
+        if (!lb_vip_is_advertised(vip, filtered, &advertised_vips)) {
+            continue;
+        }
 
         if (parsed_routes_out) {
             add_redistribute_parsed_route(
@@ -691,6 +769,8 @@ build_lb_routes_for_lb(const struct ovn_port *advertising_op,
             route_e->distributed_lb = true;
         }
     }
+
+    sset_destroy(&advertised_vips);
 }
 
 /* Process LBs attached directly to peer_lr_nbr and through its LB groups. */

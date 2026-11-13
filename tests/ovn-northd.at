@@ -20224,6 +20224,115 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([dynamic-routing - LB advertised VIPs filter])
+AT_KEYWORDS([dynamic-routing])
+ovn_start
+
+# lb0 has a VIP on the provider network and one on a private network.
+# dynamic-routing-advertise-vips limits advertisement and forwarding to the
+# listed VIPs.
+
+check ovn-nbctl lr-add lr0
+check ovn-nbctl set Logical_Router lr0 \
+    options:dynamic-routing=true       \
+    options:chassis=hv1
+check ovn-nbctl lrp-add lr0 lr0-up 00:00:00:00:00:01
+check ovn-nbctl lrp-set-options lr0-up dynamic-routing-redistribute=lb
+check ovn-nbctl ls-add up
+check ovn-nbctl lsp-add-router-port up up-lr0 lr0-up
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lr1-up 00:00:00:00:00:02 10.0.0.1/24
+check ovn-nbctl lsp-add-router-port up up-lr1 lr1-up
+check ovn-nbctl lrp-add lr1 lr1-be 00:00:00:00:00:03 192.168.1.1/24
+check ovn-nbctl ls-add be
+check ovn-nbctl lsp-add-router-port be be-lr1 lr1-be
+check ovn-nbctl lsp-add be be-vm1
+check ovn-nbctl lsp-set-addresses be-vm1 "00:00:00:00:01:01 192.168.1.10"
+check ovn-nbctl lsp-add be be-vm2
+check ovn-nbctl lsp-set-addresses be-vm2 "00:00:00:00:01:02 192.168.1.11"
+
+check ovn-nbctl \
+    -- lb-add lb0 172.16.1.10:80 192.168.1.10:80,192.168.1.11:80 \
+    -- lb-add lb0 192.168.1.100:80 192.168.1.10:80,192.168.1.11:80 \
+    -- set Load_Balancer lb0 options:distributed=true \
+        ip_port_mappings:192.168.1.10="be-vm1:192.168.1.1" \
+        ip_port_mappings:192.168.1.11="be-vm2:192.168.1.1" \
+    -- lr-lb-add lr1 lb0
+check ovn-nbctl --wait=sb sync
+
+# Both VIPs are advertised and forwarded by default.
+check_row_count Advertised_Route 4
+check_row_count Advertised_Route 2 ip_prefix="172.16.1.10"
+check_row_count Advertised_Route 2 ip_prefix="192.168.1.100"
+ovn-sbctl lflow-list lr0 > lr0_flows
+AT_CHECK([grep -c 'lr_in_ip_routing.*172.16.1.10/32' lr0_flows], [0], [1
+])
+AT_CHECK([grep -c 'lr_in_ip_routing.*192.168.1.100/32' lr0_flows], [0], [1
+])
+
+# Only the listed VIP is advertised and forwarded.
+check ovn-nbctl --wait=sb set Load_Balancer lb0 \
+    options:dynamic-routing-advertise-vips="172.16.1.10"
+check_row_count Advertised_Route 2
+check_row_count Advertised_Route 2 ip_prefix="172.16.1.10"
+ovn-sbctl lflow-list lr0 > lr0_flows
+AT_CHECK([grep -c 'lr_in_ip_routing.*172.16.1.10/32' lr0_flows], [0], [1
+])
+AT_CHECK([grep -c 'lr_in_ip_routing.*192.168.1.100/32' lr0_flows], [1], [0
+])
+
+# Addresses are compared in canonical form.
+check ovn-nbctl --wait=sb set Load_Balancer lb0 \
+    options:dynamic-routing-advertise-vips="::ffff:172.16.1.10, 192.168.1.100"
+check_row_count Advertised_Route 4
+
+# An invalid entry is ignored with a warning.
+check ovn-nbctl --wait=sb set Load_Balancer lb0 \
+    options:dynamic-routing-advertise-vips="bogus,192.168.1.100"
+check_row_count Advertised_Route 2
+check_row_count Advertised_Route 2 ip_prefix="192.168.1.100"
+AT_CHECK([grep -q "Ignoring invalid IP address 'bogus'" northd/ovn-northd.log])
+
+# An empty list keeps every VIP private.
+check ovn-nbctl --wait=sb set Load_Balancer lb0 \
+    options:dynamic-routing-advertise-vips='""'
+check_row_count Advertised_Route 0
+ovn-sbctl lflow-list lr0 > lr0_flows
+AT_CHECK([grep -c 'lr_in_ip_routing.*172.16.1.10/32' lr0_flows], [1], [0
+])
+
+# Removing the option advertises every VIP again.
+check ovn-nbctl --wait=sb remove Load_Balancer lb0 options \
+    dynamic-routing-advertise-vips
+check_row_count Advertised_Route 4
+
+
+# A NAT entry for the public VIP is replaced by the per-backend LB routes
+# only while the LB advertises that VIP.  With the VIP left out of the
+# list the NAT route is advertised as before.
+check ovn-nbctl lrp-set-gateway-chassis lr1-up hv1
+check ovn-nbctl lrp-set-options lr0-up dynamic-routing-redistribute=lb,nat
+check ovn-nbctl --wait=sb lr-nat-add lr1 dnat_and_snat \
+    172.16.1.10 192.168.1.100
+pb_lr1_up=$(fetch_column Port_Binding _uuid logical_port=lr1-up)
+check_row_count Advertised_Route 4
+check_row_count Advertised_Route 0 tracked_port=$pb_lr1_up
+check ovn-nbctl --wait=sb set Load_Balancer lb0 \
+    options:dynamic-routing-advertise-vips="172.16.1.10"
+check_row_count Advertised_Route 2
+check_row_count Advertised_Route 0 tracked_port=$pb_lr1_up
+check ovn-nbctl --wait=sb set Load_Balancer lb0 \
+    options:dynamic-routing-advertise-vips='""'
+check_row_count Advertised_Route 1
+check_row_count Advertised_Route 1 \
+    ip_prefix="172.16.1.10"         \
+    tracked_port=$pb_lr1_up
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([dynamic-routing - LB redistribute uses backend LSP as tracked_port])
 AT_KEYWORDS([dynamic-routing])
 ovn_start

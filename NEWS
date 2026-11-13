@@ -9,6 +9,9 @@ Post v26.09.0
      balancer of the same router is no longer advertised as a NAT route.
      The load balancer routes carry the locality and health of the
      address.
+   - Added a new "options:dynamic-routing-advertise-vips" key on the NB
+     Load_Balancer table to limit route advertisement to a subset of the
+     load balancer VIPs.
    - Learn ARP sender hardware address (arp.sha) and IPv6 Neighbor
      Discovery link-layer addresses (nd.tll, nd.sll) into the FDB
      table in addition to eth.src.  This allows VRRP virtual MACs to

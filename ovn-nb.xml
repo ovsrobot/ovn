@@ -2887,6 +2887,19 @@ or
         Service IP via the <ref table="Advertised_Route" db="OVN_Southbound"/>
         table.  Default: <code>true</code>.
       </column>
+
+      <column name="options" key="dynamic-routing-advertise-vips">
+        A comma separated list of VIP IP addresses of this load balancer.
+        When set, only the listed VIPs are advertised via the
+        <ref table="Advertised_Route" db="OVN_Southbound"/> table and
+        forwarded by the advertising routers.  The other VIPs of the load
+        balancer are not advertised, for example a VIP on a private network
+        that must stay private while the VIP on the provider network is
+        advertised.  An empty list advertises none of the VIPs, for a
+        load balancer that must stay private.  Only relevant if
+        <ref column="options" key="dynamic-routing-advertise"/> is
+        <code>true</code>.  By default all VIPs are advertised.
+      </column>
     </group>
   </table>
 
