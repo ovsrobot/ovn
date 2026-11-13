@@ -26420,6 +26420,114 @@ AT_CHECK([ovn-sbctl lflow-list lr0 | grep "lr_in_policy[[^_]]" | ovn_strip_lflow
   table=??(lr_in_policy       ), priority=100  , match=(reg9[[16..31]] == 0 && (ip4.src == 40.0.0.0/24)), action=(reg9[[16..31]]=1; next(pipeline=ingress, table=??);)
   table=??(lr_in_policy       ), priority=200  , match=(reg9[[16..31]] == 1 && (1)), action=(reg8[[0..15]] = 0; next;)
 ])
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([dynamic-routing - LB VIP on a subnet shared between logical switches])
+AT_KEYWORDS([dynamic-routing])
+ovn_start
+
+# Two tenant routers use the same private subnet 10.0.0.0/24 on two
+# different logical switches.  lr0 advertises the load balancers of both
+# tenants through the shared switch "up".  lbA keeps the private VIP
+# private with dynamic-routing-advertise-vips, lbB does not, so lbB
+# announces the private VIP and northd warns about the subnet.  The
+# floating IP VIPs are in the provider subnet 172.16.0.0/24, which two
+# logical switches with a localnet port on the same physical network
+# carry, the way a CMS bridges a provider network into a BGP router.  A
+# physical network is routed by the fabric, so it must not warn.  The
+# subnet of "up" is on a single logical switch and must not warn either.
+
+check ovn-nbctl lr-add lr0
+check ovn-nbctl set Logical_Router lr0 \
+    options:dynamic-routing=true       \
+    options:chassis=hv1
+check ovn-nbctl lrp-add lr0 lr0-up 00:00:00:00:00:01
+check ovn-nbctl lrp-set-options lr0-up dynamic-routing-redistribute=lb
+check ovn-nbctl ls-add up
+check ovn-nbctl lsp-add-router-port up up-lr0 lr0-up
+
+for i in 1 2; do
+    check ovn-nbctl lr-add lr$i
+    check ovn-nbctl lrp-add lr$i lr$i-up 00:00:00:00:00:0$i \
+        192.168.100.1$i/24
+    check ovn-nbctl lsp-add-router-port up up-lr$i lr$i-up
+    check ovn-nbctl lrp-add lr$i lr$i-priv 00:00:00:00:00:1$i 10.0.0.1/24
+    check ovn-nbctl ls-add priv$i
+    check ovn-nbctl lsp-add-router-port priv$i priv$i-lr$i lr$i-priv
+    check ovn-nbctl lrp-add lr$i lr$i-prov 00:00:00:00:00:2$i \
+        172.16.0.1$i/24
+    check ovn-nbctl ls-add prov$i
+    check ovn-nbctl lsp-add-router-port prov$i prov$i-lr$i lr$i-prov
+    check ovn-nbctl lsp-add prov$i prov$i-localnet \
+        -- lsp-set-type prov$i-localnet localnet \
+        -- lsp-set-addresses prov$i-localnet unknown \
+        -- lsp-set-options prov$i-localnet network_name=phys
+    check ovn-nbctl lsp-add priv$i vm$i-1
+    check ovn-nbctl lsp-set-addresses vm$i-1 "00:00:00:00:0$i:01 10.0.0.20"
+    check ovn-nbctl lsp-add priv$i vm$i-2
+    check ovn-nbctl lsp-set-addresses vm$i-2 "00:00:00:00:0$i:02 10.0.0.21"
+done
+
+# lbA advertises only its floating IP 172.16.0.10.  lbB advertises both
+# its floating IP 172.16.0.20 and the private VIP 10.0.0.10.
+check ovn-nbctl \
+    -- lb-add lbA 10.0.0.10:80 10.0.0.20:80,10.0.0.21:80 \
+    -- lb-add lbA 172.16.0.10:80 10.0.0.20:80,10.0.0.21:80 \
+    -- set Load_Balancer lbA options:distributed=true \
+        ip_port_mappings:10.0.0.20="vm1-1:10.0.0.1" \
+        ip_port_mappings:10.0.0.21="vm1-2:10.0.0.1" \
+        options:dynamic-routing-advertise-vips="172.16.0.10" \
+    -- lr-lb-add lr1 lbA
+check ovn-nbctl \
+    -- lb-add lbB 10.0.0.10:80 10.0.0.20:80,10.0.0.21:80 \
+    -- lb-add lbB 172.16.0.20:80 10.0.0.20:80,10.0.0.21:80 \
+    -- set Load_Balancer lbB options:distributed=true \
+        ip_port_mappings:10.0.0.20="vm2-1:10.0.0.1" \
+        ip_port_mappings:10.0.0.21="vm2-2:10.0.0.1" \
+    -- lr-lb-add lr2 lbB
+
+check ovn-nbctl --wait=sb sync
+
+# Both floating IPs and, from lbB only, the private VIP are advertised.
+check_row_count Advertised_Route 2 ip_prefix='"172.16.0.10"'
+check_row_count Advertised_Route 2 ip_prefix='"172.16.0.20"'
+check_row_count Advertised_Route 2 ip_prefix='"10.0.0.10"'
+
+# The private VIP of lbB falls inside a subnet that priv1 and priv2
+# share, so northd warns.
+AT_CHECK([grep -q "VIP 10.0.0.10 of load balancer lbB advertised through lr0-up falls inside subnet 10.0.0.0/24" northd/ovn-northd.log])
+AT_CHECK([grep -q "falls inside subnet 10.0.0.0/24 used on logical switches priv1 and priv2" northd/ovn-northd.log])
+
+# The private VIP of lbA is not advertised, so it must not warn.
+AT_CHECK([grep -q "WARN.*of load balancer lbA" northd/ovn-northd.log], [1])
+
+# A subnet that a single logical switch uses is not reported, however
+# many routers connect to it.  Both tenant routers have an address in
+# 192.168.100.0/24 on "up".  The floating IPs are in 172.16.0.0/24, which
+# prov1 and prov2 carry, but both have a localnet port, so the subnet is
+# a physical network and is not reported either.
+AT_CHECK([grep -q "WARN.*falls inside subnet 192.168.100.0/24" northd/ovn-northd.log], [1])
+AT_CHECK([grep -q "WARN.*falls inside subnet 172.16.0.0/24" northd/ovn-northd.log], [1])
+AT_CHECK([grep -q "WARN.*VIP 172.16.0.10" northd/ovn-northd.log], [1])
+AT_CHECK([grep -q "WARN.*VIP 172.16.0.20" northd/ovn-northd.log], [1])
+
+# Keeping the VIP private also stops the warning.  Count the warnings
+# before and after.
+before=$(grep -c "falls inside subnet 10.0.0.0/24" northd/ovn-northd.log)
+check ovn-nbctl --wait=sb set Load_Balancer lbB \
+    options:dynamic-routing-advertise-vips="172.16.0.20"
+check_row_count Advertised_Route 0 ip_prefix='"10.0.0.10"'
+after=$(grep -c "falls inside subnet 10.0.0.0/24" northd/ovn-northd.log)
+AT_CHECK([test "$after" = "$before"])
+
+# An entry that matches no VIP advertises nothing and warns.
+check ovn-nbctl --wait=sb set Load_Balancer lbA \
+    options:dynamic-routing-advertise-vips="172.16.0.10,192.0.2.99"
+AT_CHECK([grep -q "Address '192.0.2.99' in dynamic-routing-advertise-vips of load balancer lbA matches no VIP" northd/ovn-northd.log])
+check_row_count Advertised_Route 2 ip_prefix='"172.16.0.10"'
 
 OVN_CLEANUP_NORTHD
 AT_CLEANUP

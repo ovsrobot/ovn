@@ -2898,7 +2898,13 @@ or
         advertised.  An empty list advertises none of the VIPs, for a
         load balancer that must stay private.  Only relevant if
         <ref column="options" key="dynamic-routing-advertise"/> is
-        <code>true</code>.  By default all VIPs are advertised.
+        <code>true</code>.  By default all VIPs are advertised.  An
+        address that does not parse, or that matches no VIP of the load
+        balancer, is ignored with a warning in the
+        <code>ovn-northd</code> log.  The list applies to this load
+        balancer only, and the same address as a VIP of another load
+        balancer is still advertised unless that load balancer filters it
+        too.
       </column>
     </group>
   </table>
