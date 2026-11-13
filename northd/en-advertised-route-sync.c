@@ -359,11 +359,55 @@ add_redistribute_parsed_route(struct hmap *parsed_routes_out,
     parsed_route_free(new_pr);
 }
 
+static char *
+distributed_lb_route_key(const struct ovn_port *advertising_op,
+                         const struct uuid *owner_lr,
+                         const char *ip_prefix)
+{
+    return xasprintf("%s "UUID_FMT" %s", advertising_op->key,
+                     UUID_ARGS(owner_lr), ip_prefix);
+}
+
+/* Records that a distributed load balancer owned by the logical router
+ * owner_lr advertises a route for ip_prefix through advertising_op. */
+static void
+distributed_lb_route_add(struct sset *distributed_lb_routes,
+                         const struct ovn_port *advertising_op,
+                         const struct uuid *owner_lr,
+                         const char *ip_prefix)
+{
+    sset_add_and_free(distributed_lb_routes,
+                      distributed_lb_route_key(advertising_op, owner_lr,
+                                               ip_prefix));
+}
+
+static bool
+distributed_lb_route_exists(const struct sset *distributed_lb_routes,
+                            const struct ovn_port *advertising_op,
+                            const struct uuid *owner_lr,
+                            const char *ip_prefix)
+{
+    char *key = distributed_lb_route_key(advertising_op, owner_lr,
+                                         ip_prefix);
+    bool exists = sset_contains(distributed_lb_routes, key);
+    free(key);
+    return exists;
+}
+
 /* This function adds a new route for each entry in lr_nat record
  * to "routes". Logical port of the route is set to "advertising_op" and
  * tracked port is set to NAT's distributed gw port. If NAT doesn't have
  * DGP (for example if it's set on gateway router), no tracked port will
  * be set.
+ *
+ * A NAT entry that is not distributed is skipped when a distributed load
+ * balancer of the same router already advertises a route for its external
+ * IP through advertising_op, see distributed_lb_routes.  The per-backend
+ * load balancer routes carry the locality and health of that address, and a
+ * route tracked by the gateway port would keep that chassis advertised
+ * after the load balancer routes were withdrawn there.  A distributed NAT
+ * entry is tracked by its own logical port and stays advertised, and so
+ * does a NAT entry of another router that uses the same address.
  *
  * If forwarding_port and parsed_routes_out are non-NULL, also installs a
  * local forwarding parsed_route on advertising_op->od.  forwarding_port is
@@ -373,6 +417,7 @@ static void
 build_nat_route_for_port(const struct ovn_port *advertising_op,
                          const struct lr_nat_record *lr_nat,
                          const struct hmap *ls_ports,
+                         const struct sset *distributed_lb_routes,
                          struct hmap *routes,
                          const struct ovn_port *forwarding_port,
                          struct hmap *parsed_routes_out)
@@ -387,6 +432,19 @@ build_nat_route_for_port(const struct ovn_port *advertising_op,
 
         if (!smap_get_bool(&nat->nb->options,
                            "dynamic-routing-advertise", true)) {
+            continue;
+        }
+
+        /* Compare the canonical form of the external IP, the load balancer
+         * VIP it may match was parsed and formatted the same way. */
+        const char *external_ip =
+            nat_entry_is_v6(nat)
+            ? nat->ext_addrs.ipv6_addrs[0].addr_s
+            : nat->ext_addrs.ipv4_addrs[0].addr_s;
+        if (!nat->is_distributed
+            && distributed_lb_route_exists(distributed_lb_routes,
+                                           advertising_op, &lr_nat->nbr_uuid,
+                                           external_ip)) {
             continue;
         }
 
@@ -426,7 +484,7 @@ static void
 build_nat_routes(const struct ovn_datapath *od,
                  const struct lr_nat_record *lr_nat,
                  const struct hmap *ls_ports,
-                 struct hmap *routes)
+                 struct dynamic_routes_data *data)
 {
     const struct ovn_port *op;
     HMAP_FOR_EACH (op, dp_node, &od->ports) {
@@ -434,7 +492,9 @@ build_nat_routes(const struct ovn_datapath *od,
             continue;
         }
 
-        build_nat_route_for_port(op, lr_nat, ls_ports, routes, NULL, NULL);
+        build_nat_route_for_port(op, lr_nat, ls_ports,
+                                 &data->distributed_lb_routes,
+                                 &data->routes, NULL, NULL);
     }
 }
 
@@ -478,8 +538,8 @@ build_nat_connected_routes(
              * install forwarding routes so we can reach the
              * peer's external IPs. */
             build_nat_route_for_port(op, peer_lr_stateful->lrnat_rec,
-                                     ls_ports, &data->routes,
-                                     op->peer,
+                                     ls_ports, &data->distributed_lb_routes,
+                                     &data->routes, op->peer,
                                      &data->parsed_routes);
             continue;
         }
@@ -504,8 +564,8 @@ build_nat_connected_routes(
              * install forwarding routes so we can reach the
              * peer's external IPs. */
             build_nat_route_for_port(op, peer_lr_stateful->lrnat_rec,
-                                     ls_ports, &data->routes,
-                                     rp->peer,
+                                     ls_ports, &data->distributed_lb_routes,
+                                     &data->routes, rp->peer,
                                      &data->parsed_routes);
             /* Track the LR datapath on the other side of LS
              * for any changes. */
@@ -523,13 +583,18 @@ build_nat_connected_routes(
  * entry, one Advertised_Route covers the VIP with fallback_tracked_port
  * in place of a per-backend LSP. The forwarding route is emitted once
  * per VIP regardless of backend count: the data-plane forwarding
- * decision is independent of which backend ends up serving the flow. */
+ * decision is independent of which backend ends up serving the flow.
+ * Every VIP of a distributed LB is recorded in distributed_lb_routes with
+ * owner_lr, the logical router the LB is attached to, so that
+ * build_nat_route_for_port() can skip the NAT route for it. */
 static void
 build_lb_routes_for_lb(const struct ovn_port *advertising_op,
                        const struct ovn_port *fallback_tracked_port,
+                       const struct nbrec_logical_router *owner_lr,
                        const struct nbrec_load_balancer *nbrec_lb,
                        const struct hmap *lb_datapaths_map,
                        const struct hmap *ls_ports,
+                       struct sset *distributed_lb_routes,
                        struct hmap *routes,
                        struct hmap *parsed_routes_out)
 {
@@ -572,6 +637,9 @@ build_lb_routes_for_lb(const struct ovn_port *advertising_op,
             }
             continue;
         }
+
+        distributed_lb_route_add(distributed_lb_routes, advertising_op,
+                                 &owner_lr->header_.uuid, vip->vip_str);
 
         bool emitted_any = false;
         for (size_t b = 0; b < vip_nb->n_backends; b++) {
@@ -632,6 +700,7 @@ build_lb_lr_routes(const struct ovn_port *advertising_op,
                    const struct nbrec_logical_router *peer_lr_nbr,
                    const struct hmap *lb_datapaths_map,
                    const struct hmap *ls_ports,
+                   struct sset *distributed_lb_routes,
                    struct hmap *routes,
                    struct hmap *parsed_routes_out)
 {
@@ -643,8 +712,9 @@ build_lb_lr_routes(const struct ovn_port *advertising_op,
     for (size_t i = 0; i < peer_lr_nbr->n_load_balancer; i++) {
         const struct nbrec_load_balancer *lb = peer_lr_nbr->load_balancer[i];
         uuidset_insert(&visited, &lb->header_.uuid);
-        build_lb_routes_for_lb(advertising_op, fallback_tracked_port, lb,
-                               lb_datapaths_map, ls_ports, routes,
+        build_lb_routes_for_lb(advertising_op, fallback_tracked_port,
+                               peer_lr_nbr, lb, lb_datapaths_map, ls_ports,
+                               distributed_lb_routes, routes,
                                parsed_routes_out);
     }
 
@@ -657,8 +727,9 @@ build_lb_lr_routes(const struct ovn_port *advertising_op,
                 continue;
             }
             uuidset_insert(&visited, &lb->header_.uuid);
-            build_lb_routes_for_lb(advertising_op, fallback_tracked_port, lb,
-                                   lb_datapaths_map, ls_ports, routes,
+            build_lb_routes_for_lb(advertising_op, fallback_tracked_port,
+                                   peer_lr_nbr, lb, lb_datapaths_map,
+                                   ls_ports, distributed_lb_routes, routes,
                                    parsed_routes_out);
         }
     }
@@ -695,6 +766,7 @@ build_lb_connected_routes(const struct ovn_datapath *od,
         if (peer_od->nbr) {
             build_lb_lr_routes(op, op->peer, peer_od->nbr,
                                lb_datapaths_map, ls_ports,
+                               &data->distributed_lb_routes,
                                &data->routes, &data->parsed_routes);
             continue;
         }
@@ -710,6 +782,7 @@ build_lb_connected_routes(const struct ovn_datapath *od,
             }
             build_lb_lr_routes(op, rp->peer, rp->peer->od->nbr,
                                lb_datapaths_map, ls_ports,
+                               &data->distributed_lb_routes,
                                &data->routes, &data->parsed_routes);
             /* Track the LR datapath on the other side of LS
              * for any changes. */
@@ -727,7 +800,7 @@ static void
 build_lb_routes(const struct ovn_datapath *od,
                 const struct hmap *lb_datapaths_map,
                 const struct hmap *ls_ports,
-                struct hmap *routes)
+                struct dynamic_routes_data *data)
 {
     const struct ovn_port *op;
     HMAP_FOR_EACH (op, dp_node, &od->ports) {
@@ -737,12 +810,16 @@ build_lb_routes(const struct ovn_datapath *od,
 
         if (od->is_gw_router) {
             build_lb_lr_routes(op, NULL, od->nbr,
-                               lb_datapaths_map, ls_ports, routes, NULL);
+                               lb_datapaths_map, ls_ports,
+                               &data->distributed_lb_routes,
+                               &data->routes, NULL);
         } else {
             struct ovn_port *dgp;
             VECTOR_FOR_EACH (&od->l3dgw_ports, dgp) {
                 build_lb_lr_routes(op, dgp, od->nbr,
-                                   lb_datapaths_map, ls_ports, routes, NULL);
+                                   lb_datapaths_map, ls_ports,
+                                   &data->distributed_lb_routes,
+                                   &data->routes, NULL);
             }
         }
     }
@@ -882,6 +959,8 @@ en_dynamic_routes_init(struct engine_node *node OVS_UNUSED,
         .old_parsed_routes = HMAP_INITIALIZER(&data->old_parsed_routes),
         .nb_lr = UUIDSET_INITIALIZER(&data->nb_lr),
         .nb_ls = UUIDSET_INITIALIZER(&data->nb_ls),
+        .distributed_lb_routes =
+            SSET_INITIALIZER(&data->distributed_lb_routes),
         .tracked = false,
         .trk_data.trk_created_parsed_routes =
             HMAPX_INITIALIZER(&data->trk_data.trk_created_parsed_routes),
@@ -924,6 +1003,7 @@ en_dynamic_routes_clear(struct dynamic_routes_data *data)
 
     uuidset_clear(&data->nb_lr);
     uuidset_clear(&data->nb_ls);
+    sset_clear(&data->distributed_lb_routes);
 }
 
 /* Mark the current parsed routes as deleted, then move them aside so each
@@ -950,6 +1030,7 @@ dynamic_routes_prepare_rebuild(struct dynamic_routes_data *data)
     }
     uuidset_clear(&data->nb_lr);
     uuidset_clear(&data->nb_ls);
+    sset_clear(&data->distributed_lb_routes);
 }
 
 void
@@ -965,6 +1046,7 @@ en_dynamic_routes_cleanup(void *data_)
     hmapx_destroy(&data->trk_data.trk_deleted_parsed_routes);
     uuidset_destroy(&data->nb_lr);
     uuidset_destroy(&data->nb_ls);
+    sset_destroy(&data->distributed_lb_routes);
 }
 
 enum engine_node_state
@@ -995,19 +1077,22 @@ en_dynamic_routes_run(struct engine_node *node, void *data)
             continue;
         }
 
-        build_nat_routes(od, lr_stateful_rec->lrnat_rec,
-                         &northd_data->ls_ports,
-                         &dynamic_routes_data->routes);
-        build_nat_connected_routes(od, &lr_stateful_data->table,
-                                   &northd_data->ls_ports,
-                                   dynamic_routes_data);
-
+        /* Load balancer routes come first: the NAT builders skip an
+         * external IP that a distributed load balancer already advertises
+         * through the same port. */
         build_lb_routes(od, &northd_data->lb_datapaths_map,
                         &northd_data->ls_ports,
-                        &dynamic_routes_data->routes);
+                        dynamic_routes_data);
         build_lb_connected_routes(od, &northd_data->lb_datapaths_map,
                                   &northd_data->ls_ports,
                                   dynamic_routes_data);
+
+        build_nat_routes(od, lr_stateful_rec->lrnat_rec,
+                         &northd_data->ls_ports,
+                         dynamic_routes_data);
+        build_nat_connected_routes(od, &lr_stateful_data->table,
+                                   &northd_data->ls_ports,
+                                   dynamic_routes_data);
     }
 
     dynamic_routes_data->tracked =
