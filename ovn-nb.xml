@@ -3702,7 +3702,9 @@ or
           This controls whether <code>ovn-controller</code> will advertise
           <ref table="Advertised_Route" db="OVN_Southbound"/> records
           only on the chassis where their <code>tracked_port</code> is
-          bound.  Default: <code>false</code>.
+          bound.  A <code>tracked_port</code> on a datapath that is not
+          local to the chassis is bound elsewhere, so the record is not
+          advertised there.  Default: <code>false</code>.
         </p>
       </column>
 
