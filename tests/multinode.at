@@ -5885,4 +5885,54 @@ AT_CHECK([cat ch2_genev.tcpdump], [0], [dnl
 AT_CHECK([cat ch2_eth2.tcpdump], [0], [dnl
 ])
 
+# An overlay client on a chassis without a backend.  With the load balancer
+# on the switch, the chassis falls back to the backends of the other
+# chassis and the reply returns through the client's chassis.
+check multinode_nbctl lsp-add ls1 ls1c3
+check multinode_nbctl lsp-set-addresses ls1c3 "00:00:00:01:04:02 192.168.1.4"
+m_as ovn-chassis-3 /data/create_fake_vm.sh ls1c3 ls1c3 00:00:00:01:04:02 1500 192.168.1.4 24 192.168.1.254 2001::4/64 2001::a
+m_wait_for_ports_up
+check multinode_nbctl ls-lb-add ls1 lb1
+check multinode_nbctl --wait=hv sync
+
+get_lb_backends_ch3() {
+    m_as ovn-chassis-3 ovs-ofctl dump-groups br-int > groups || return 1
+    tr ')' '\n' < groups | sed -n 's/.*nat(dst=//p' | sort
+}
+OVS_WAIT_FOR_OUTPUT([get_lb_backends_ch3], [0], [dnl
+192.168.1.1:10880
+192.168.1.2:10880
+192.168.1.3:10880
+])
+
+AT_CHECK([m_as ovn-chassis-3 ip netns exec ls1c3 /bin/bash -c '
+    for i in $(seq 20); do
+        reply=$(echo "" | timeout 5 nc -w 3 172.31.0.1 80) || exit 1
+        case "$reply" in
+            ls1p1|ls1p2|ls1p3) ;;
+            *) exit 1 ;;
+        esac
+    done
+'], [0], [])
+
+# A backend bound on the client chassis takes over and the group shrinks
+# to it.  The router flow, local-only, now has a local backend as well and
+# gets a group of its own, so the backend shows up twice.
+check m_as ovn-chassis-2 ovs-vsctl del-port br-int ls1p3-p
+m_wait_row_count nb:Logical_Switch_Port 1 name=ls1p3 up=false
+check m_as ovn-chassis-3 /data/create_fake_vm.sh ls1p3 ls1p3 00:00:00:01:03:02 1500 192.168.1.3 24 192.168.1.254 2001::3/64 2001::a
+m_wait_row_count nb:Logical_Switch_Port 1 name=ls1p3 up=true
+check multinode_nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends_ch3], [0], [dnl
+192.168.1.3:10880
+192.168.1.3:10880
+])
+M_START_L4_SERVER([ovn-chassis-3], [ls1p3], [192.168.1.3], [10880], [ls1p3-ch3], [ls1p3-ch3.pid])
+AT_CHECK([m_as ovn-chassis-3 ip netns exec ls1c3 /bin/bash -c '
+    for i in $(seq 10); do
+        reply=$(echo "" | timeout 5 nc -w 3 172.31.0.1 80) || exit 1
+        test "$reply" = "ls1p3-ch3" || exit 1
+    done
+'], [0], [])
+
 AT_CLEANUP

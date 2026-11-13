@@ -2853,7 +2853,16 @@ or
       <column name="options" key="distributed">
         Option enables distributed load balancing across compute nodes,
         ensuring traffic is always routed to local backends, eliminating
-        east-west traffic between nodes.
+        east-west traffic between nodes.  Traffic that enters through a
+        logical router port is delivered to the backends of the chassis
+        it entered on only.  Traffic from a logical switch port is
+        delivered to a backend of the same chassis when there is one and
+        to any backend otherwise, unless the logical switch has a localnet,
+        l2gateway, vtep or remote port, in which case it is delivered to
+        local backends only as well.
+        Traffic that a logical router forwards into the switch is not
+        load balanced by the logical switch.  A load balancer that must
+        serve such traffic is attached to the logical router as well.
         Required configuration: <ref column="ip_port_mappings"/>.
         NOTE: The addressing of the underlay network must not overlap with the
         addressing of Load Balancer VIP. If the Load Balancer is attached to a

@@ -1218,6 +1218,7 @@ parse_ct_lb_action(struct action_context *ctx,
     struct vector dsts = VECTOR_EMPTY_INITIALIZER(struct ovnact_ct_lb_dst);
     char *hash_fields = NULL;
     enum ovnact_ct_lb_flag ct_flag = OVNACT_CT_LB_FLAG_NONE;
+    bool fallback = false;
 
     if (lexer_match(ctx->lexer, LEX_T_LPAREN) &&
         !lexer_match(ctx->lexer, LEX_T_RPAREN)) {
@@ -1326,6 +1327,12 @@ parse_ct_lb_action(struct action_context *ctx,
             ct_flag = OVNACT_CT_LB_FLAG_FORCE_SNAT;
             lexer_get(ctx->lexer);
         }
+
+        if (type == OVNACT_CT_LB_LOCAL_TYPE_MARK
+            && lexer_match_id(ctx->lexer, "fallback")) {
+            fallback = true;
+            lexer_get(ctx->lexer);
+        }
     }
 
     struct ovnact_ct_lb *cl;
@@ -1345,6 +1352,7 @@ parse_ct_lb_action(struct action_context *ctx,
     cl->dsts = vector_steal_array(&dsts);
     cl->hash_fields = hash_fields;
     cl->ct_flag = ct_flag;
+    cl->fallback = fallback;
 }
 
 static void
@@ -1399,6 +1407,9 @@ format_ct_lb(const struct ovnact_ct_lb *cl, struct ds *s,
                 /* None is the default value not shown in the output. */
                 break;
         }
+        if (cl->fallback) {
+            ds_put_cstr(s, "; fallback");
+        }
         ds_put_char(s, ')');
     }
 
@@ -1415,6 +1426,69 @@ static void
 format_CT_LB_MARK_LOCAL(const struct ovnact_ct_lb *cl, struct ds *s)
 {
     format_ct_lb(cl, s, OVNACT_CT_LB_LOCAL_TYPE_MARK);
+}
+
+/* Writes the select group that load balances over the destinations of 'cl'
+ * into 'ds' and returns the number of buckets.  With 'local_only' set, only
+ * the destinations whose logical port is local to this chassis get a
+ * bucket. */
+static size_t
+encode_ct_lb_group(const struct ovnact_ct_lb *cl,
+                   const struct ovnact_encode_params *ep,
+                   bool local_only, uint8_t recirc_table, uint32_t zone_reg,
+                   const char *ct_flag_value, struct ds *ds)
+{
+    ds_clear(ds);
+    ds_put_format(ds, "type=select,selection_method=%s",
+                  cl->hash_fields ? "hash": "dp_hash");
+    if (cl->hash_fields) {
+        ds_put_format(ds, ",fields(%s)", cl->hash_fields);
+    }
+
+    size_t n_active_backends = 0;
+    for (size_t bucket_id = 0; bucket_id < cl->n_dsts; bucket_id++) {
+        const struct ovnact_ct_lb_dst *dst = &cl->dsts[bucket_id];
+        char ip_addr[INET6_ADDRSTRLEN];
+
+        if (local_only && !ep->lookup_local_port(ep->aux, dst->port_name)) {
+            continue;
+        }
+
+        if (dst->family == AF_INET) {
+            inet_ntop(AF_INET, &dst->ipv4, ip_addr, sizeof ip_addr);
+        } else {
+            inet_ntop(AF_INET6, &dst->ipv6, ip_addr, sizeof ip_addr);
+        }
+
+        ds_put_format(ds, ",bucket=bucket_id=%"PRIuSIZE",weight:100,actions=",
+                      bucket_id);
+
+        bool is_ipv6_address = (dst->family == AF_INET6 && dst->port);
+        ds_put_format(ds, "ct(nat(dst=");
+        if (is_ipv6_address) {
+            ds_put_format(ds, "[%s]", ip_addr);
+        } else {
+            ds_put_format(ds, "%s", ip_addr);
+        }
+
+        if (dst->port) {
+            ds_put_format(ds, ":%"PRIu16, dst->port);
+        }
+        ds_put_format(ds, "),commit,table=%d,zone=NXM_NX_REG%d[0..15],"
+                      "exec(set_field:"
+                        OVN_CT_MASKED_STR(OVN_CT_NATTED)
+                      "->ct_mark",
+                      recirc_table, zone_reg);
+        if (ct_flag_value) {
+            ds_put_format(ds, ",set_field:%s->ct_mark", ct_flag_value);
+        }
+
+        ds_put_cstr(ds, "))");
+
+        n_active_backends++;
+    }
+
+    return n_active_backends;
 }
 
 static void
@@ -1468,58 +1542,19 @@ encode_ct_lb(const struct ovnact_ct_lb *cl,
             break;
     }
 
-    struct ds ds = DS_EMPTY_INITIALIZER;
-    ds_put_format(&ds, "type=select,selection_method=%s",
-                  cl->hash_fields ? "hash": "dp_hash");
-    if (cl->hash_fields) {
-        ds_put_format(&ds, ",fields(%s)", cl->hash_fields);
-    }
-
     /* Make sure that all the used registers are within the NXM_NX class. */
     BUILD_ASSERT(OVN_FLOW_N_REGS_SUPPORTED == 16);
 
-    size_t n_active_backends = 0;
-    for (size_t bucket_id = 0; bucket_id < cl->n_dsts; bucket_id++) {
-        const struct ovnact_ct_lb_dst *dst = &cl->dsts[bucket_id];
-        char ip_addr[INET6_ADDRSTRLEN];
-
-        if (type == OVNACT_CT_LB_LOCAL_TYPE_MARK
-            && !ep->lookup_local_port(ep->aux, dst->port_name)) {
-            continue;
-        }
-
-        if (dst->family == AF_INET) {
-            inet_ntop(AF_INET, &dst->ipv4, ip_addr, sizeof ip_addr);
-        } else {
-            inet_ntop(AF_INET6, &dst->ipv6, ip_addr, sizeof ip_addr);
-        }
-
-        ds_put_format(&ds, ",bucket=bucket_id=%"PRIuSIZE",weight:100,actions=",
-                      bucket_id);
-
-        bool is_ipv6_address = (dst->family == AF_INET6 && dst->port);
-        ds_put_format(&ds, "ct(nat(dst=");
-        if (is_ipv6_address) {
-            ds_put_format(&ds, "[%s]", ip_addr);
-        } else {
-            ds_put_format(&ds, "%s", ip_addr);
-        }
-
-        if (dst->port) {
-            ds_put_format(&ds, ":%"PRIu16, dst->port);
-        }
-        ds_put_format(&ds, "),commit,table=%d,zone=NXM_NX_REG%d[0..15],"
-                      "exec(set_field:"
-                        OVN_CT_MASKED_STR(OVN_CT_NATTED)
-                      "->ct_mark",
-                      recirc_table, zone_reg);
-        if (ct_flag_value) {
-            ds_put_format(&ds, ",set_field:%s->ct_mark", ct_flag_value);
-        }
-
-        ds_put_cstr(&ds, "))");
-
-        n_active_backends++;
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    bool local_only = type == OVNACT_CT_LB_LOCAL_TYPE_MARK;
+    size_t n_active_backends = encode_ct_lb_group(cl, ep, local_only,
+                                                  recirc_table, zone_reg,
+                                                  ct_flag_value, &ds);
+    if (!n_active_backends && local_only && cl->fallback) {
+        /* No backend is local to this chassis and the action asked to use
+         * every backend in that case instead of dropping the traffic. */
+        n_active_backends = encode_ct_lb_group(cl, ep, false, recirc_table,
+                                               zone_reg, ct_flag_value, &ds);
     }
 
     if (!n_active_backends) {

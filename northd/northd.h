@@ -414,6 +414,11 @@ struct ovn_datapath {
     bool has_unknown;
     bool has_vtep_lports;
     bool has_arp_proxy_port;
+    /* True if a localnet, l2gateway, vtep or remote port carries traffic of
+     * this switch, or if it is a transit switch, that is, if traffic does
+     * not enter and leave the switch through a port bound to one chassis of
+     * this deployment. */
+    bool has_non_overlay_lports;
 
     /* Set to true if the option 'enable-stateless-acl-with-lb' is enabled
      * on the logical switch. */

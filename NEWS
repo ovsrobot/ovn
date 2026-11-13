@@ -12,6 +12,11 @@ Post v26.09.0
    - Added a new "options:dynamic-routing-advertise-vips" key on the NB
      Load_Balancer table to limit route advertisement to a subset of the
      load balancer VIPs.
+   - A distributed load balancer now delivers traffic from a logical switch
+     port to any backend when the chassis has no local backend, instead of
+     dropping it.  Traffic that enters through a logical router port and
+     traffic on a logical switch with a localnet, l2gateway, vtep or remote
+     port keep local-only delivery.
    - Added a new "options:dynamic-routing-advertise-prefixes" key on the
      NB Logical_Router table, with a Logical_Router_Port override, to
      limit the advertisement of load balancer VIPs and NAT external IPs

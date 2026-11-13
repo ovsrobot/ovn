@@ -4749,3 +4749,203 @@ OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller - distributed LB fallback on a logical switch])
+AT_KEYWORDS([ovn lb])
+ovn_start
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+
+AT_CAPTURE_FILE([groups])
+get_lb_backends() {
+    ovs-ofctl dump-groups br-int > groups || return 1
+    tr ')' '\n' < groups | sed -n 's/.*nat(dst=//p' | sort
+}
+
+# A client port makes the switch an overlay one.  While no backend is
+# bound on this chassis, the switch flow of a distributed load balancer
+# selects among every backend, and it goes back to the local backend
+# once one is bound.
+check ovn-nbctl ls-add be
+check ovn-nbctl lsp-add be be-client
+check ovn-nbctl lsp-set-addresses be-client "00:00:00:00:01:00 192.168.1.5"
+check ovn-nbctl lsp-add be be-vm1
+check ovn-nbctl lsp-set-addresses be-vm1 "00:00:00:00:01:01 192.168.1.10"
+check ovn-nbctl lsp-add be be-vm2
+check ovn-nbctl lsp-set-addresses be-vm2 "00:00:00:00:01:02 192.168.1.11"
+check ovn-nbctl \
+    -- lb-add lb0 172.16.1.10:80 192.168.1.10:80,192.168.1.11:80 \
+    -- set Load_Balancer lb0 options:distributed=true \
+        ip_port_mappings:192.168.1.10="be-vm1" \
+        ip_port_mappings:192.168.1.11="be-vm2"
+check ovn-nbctl ls-lb-add be lb0
+check ovn-nbctl --wait=hv sync
+
+check ovs-vsctl add-port br-int vif0 \
+    -- set Interface vif0 external_ids:iface-id=be-client
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-client up) = xtrue])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.10:80
+192.168.1.11:80
+])
+
+check ovs-vsctl add-port br-int vif1 \
+    -- set Interface vif1 external_ids:iface-id=be-vm1
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm1 up) = xtrue])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.10:80
+])
+CHECK_AFTER_RECOMPUTE([hv1], [hv1])
+
+check ovs-vsctl del-port br-int vif1
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm1 up) = xfalse])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.10:80
+192.168.1.11:80
+])
+CHECK_AFTER_RECOMPUTE([hv1], [hv1])
+
+# A switch with a localnet port keeps local-only delivery, so without a
+# local backend its flow encodes to no group at all.
+check ovn-nbctl ls-add ext
+check ovn-nbctl lsp-add ext ext-ln \
+    -- lsp-set-type ext-ln localnet \
+    -- lsp-set-addresses ext-ln unknown \
+    -- lsp-set-options ext-ln network_name=phys
+check ovn-nbctl lsp-add ext ext-client
+check ovn-nbctl lsp-set-addresses ext-client "00:00:00:00:02:00 192.168.2.5"
+check ovn-nbctl ls-lb-del be lb0 -- ls-lb-add ext lb0
+check ovn-nbctl --wait=hv sync
+check ovs-vsctl add-port br-int vif2 \
+    -- set Interface vif2 external_ids:iface-id=ext-client
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port ext-client up) = xtrue])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+])
+CHECK_AFTER_RECOMPUTE([hv1], [hv1])
+
+# With a local backend the localnet switch keeps that backend only.
+check ovs-vsctl add-port br-int vif1 \
+    -- set Interface vif1 external_ids:iface-id=be-vm1
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm1 up) = xtrue])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.10:80
+])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller - distributed LB fallback with backends on another chassis])
+AT_KEYWORDS([ovn lb])
+ovn_start
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.11
+sim_add hv2
+as hv2
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.12
+
+AT_CAPTURE_FILE([groups])
+get_lb_backends() {
+    as $1 ovs-ofctl dump-groups br-int > groups || return 1
+    tr ')' '\n' < groups | sed -n 's/.*nat(dst=//p' | sort
+}
+
+# A client on each chassis, the backends on hv2.  hv1 falls back to every
+# backend while hv2 keeps its local ones, and each follows the bindings as
+# backends move.
+check ovn-nbctl ls-add be
+check ovn-nbctl lsp-add be be-client
+check ovn-nbctl lsp-set-addresses be-client "00:00:00:00:01:00 192.168.1.5"
+check ovn-nbctl lsp-add be be-client2
+check ovn-nbctl lsp-set-addresses be-client2 "00:00:00:00:01:05 192.168.1.6"
+check ovn-nbctl lsp-add be be-vm1
+check ovn-nbctl lsp-set-addresses be-vm1 "00:00:00:00:01:01 192.168.1.10"
+check ovn-nbctl lsp-add be be-vm2
+check ovn-nbctl lsp-set-addresses be-vm2 "00:00:00:00:01:02 192.168.1.11"
+check ovn-nbctl \
+    -- lb-add lb0 172.16.1.10:80 192.168.1.10:80,192.168.1.11:80 \
+    -- set Load_Balancer lb0 options:distributed=true \
+        ip_port_mappings:192.168.1.10="be-vm1" \
+        ip_port_mappings:192.168.1.11="be-vm2"
+check ovn-nbctl ls-lb-add be lb0
+check ovn-nbctl --wait=hv sync
+
+as hv1 check ovs-vsctl add-port br-int vif0 \
+    -- set Interface vif0 external_ids:iface-id=be-client
+as hv2 check ovs-vsctl add-port br-int vif3 \
+    -- set Interface vif3 external_ids:iface-id=be-client2
+as hv2 check ovs-vsctl add-port br-int vif1 \
+    -- set Interface vif1 external_ids:iface-id=be-vm1
+as hv2 check ovs-vsctl add-port br-int vif2 \
+    -- set Interface vif2 external_ids:iface-id=be-vm2
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends hv1], [0], [dnl
+192.168.1.10:80
+192.168.1.11:80
+])
+OVS_WAIT_FOR_OUTPUT([get_lb_backends hv2], [0], [dnl
+192.168.1.10:80
+192.168.1.11:80
+])
+
+# One backend leaves hv2: hv2 keeps the other, hv1 still has both.
+as hv2 check ovs-vsctl del-port br-int vif2
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm2 up) = xfalse])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends hv2], [0], [dnl
+192.168.1.10:80
+])
+OVS_WAIT_FOR_OUTPUT([get_lb_backends hv1], [0], [dnl
+192.168.1.10:80
+192.168.1.11:80
+])
+
+# The remaining backend moves to hv1: hv1 becomes local-only and hv2, left
+# with a client and no backend, falls back to every backend.
+as hv2 check ovs-vsctl del-port br-int vif1
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm1 up) = xfalse])
+as hv1 check ovs-vsctl add-port br-int vif1 \
+    -- set Interface vif1 external_ids:iface-id=be-vm1
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm1 up) = xtrue])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends hv1], [0], [dnl
+192.168.1.10:80
+])
+OVS_WAIT_FOR_OUTPUT([get_lb_backends hv2], [0], [dnl
+192.168.1.10:80
+192.168.1.11:80
+])
+
+# A backend bound on hv2 again gives hv2 a local-only group.
+as hv2 check ovs-vsctl add-port br-int vif2 \
+    -- set Interface vif2 external_ids:iface-id=be-vm2
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm2 up) = xtrue])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends hv2], [0], [dnl
+192.168.1.11:80
+])
+OVS_WAIT_FOR_OUTPUT([get_lb_backends hv1], [0], [dnl
+192.168.1.10:80
+])
+CHECK_AFTER_RECOMPUTE([hv1], [hv1])
+CHECK_AFTER_RECOMPUTE([hv2], [hv2])
+
+OVN_CLEANUP([hv1], [hv2])
+AT_CLEANUP
+])

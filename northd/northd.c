@@ -985,6 +985,14 @@ init_ls_other_config(struct ovn_datapath *od)
     int64_t vni = ovn_smap_get_llong(&od->nbs->other_config,
                                      "dynamic-routing-vni", -1);
     od->has_evpn_vni = ovn_is_valid_vni(vni);
+
+    /* A transit switch carries traffic from other zones through remote
+     * ports that arrive after its creation and come and go with the
+     * interconnection, so the switch itself, not the ports, marks the
+     * traffic as not entering through a port bound to one chassis. */
+    if (smap_get(&od->nbs->other_config, "interconn-ts")) {
+        od->has_non_overlay_lports = true;
+    }
 }
 
 /* Initializes 'ls_datapaths' to contain a "struct ovn_datapath" for every
@@ -1301,6 +1309,56 @@ static bool
 lsp_is_vtep(const struct nbrec_logical_switch_port *nbsp)
 {
     return !strcmp(nbsp->type, "vtep");
+}
+
+/* True for a port whose traffic enters or leaves this deployment
+ * itself, not one chassis of it. */
+static bool
+lsp_is_non_overlay(const struct nbrec_logical_switch_port *nbsp)
+{
+    return lsp_is_localnet(nbsp) || lsp_is_vtep(nbsp) || lsp_is_remote(nbsp)
+           || !strcmp(nbsp->type, "l2gateway");
+}
+
+/* True if 'od' has load balancer flows: a load balancer or group of its
+ * own, or one of a neighbouring router when install_ls_lb_from_router is
+ * set. */
+static bool
+ls_has_lb(const struct ovn_datapath *od)
+{
+    if (od->nbs->n_load_balancer || od->nbs->n_load_balancer_group) {
+        return true;
+    }
+    if (!install_ls_lb_from_router) {
+        return false;
+    }
+    const struct ovn_port *op;
+    VECTOR_FOR_EACH (&od->router_ports, op) {
+        const struct ovn_datapath *lr = op->peer ? op->peer->od : NULL;
+        if (lr && lr->nbr
+            && (lr->nbr->n_load_balancer || lr->nbr->n_load_balancer_group)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* True if 'od' is a transit switch or has a non-overlay port other than
+ * 'skip', which may be NULL. */
+static bool
+ls_has_non_overlay_lport_other_than(const struct ovn_datapath *od,
+                                    const struct ovn_port *skip)
+{
+    if (smap_get(&od->nbs->other_config, "interconn-ts")) {
+        return true;
+    }
+    const struct ovn_port *op;
+    HMAP_FOR_EACH (op, dp_node, &od->ports) {
+        if (op != skip && op->nbsp && lsp_is_non_overlay(op->nbsp)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool
@@ -1693,6 +1751,10 @@ join_logical_ports_lsp(struct hmap *ports,
 
     if (lsp_is_vtep(nbsp)) {
         od->has_vtep_lports = true;
+    }
+
+    if (lsp_is_non_overlay(nbsp)) {
+        od->has_non_overlay_lports = true;
     }
 
     parse_lsp_addrs(op);
@@ -3654,7 +3716,7 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
                      struct ds *skip_snat_action,
                      struct ds *force_snat_action,
                      const struct svc_monitors_map_data *svc_mons_data,
-                     bool ls_dp)
+                     bool ls_dp, bool fallback)
 {
     bool reject =
         vector_is_empty(&lb_vip->backends) && lb_vip->empty_backend_rej;
@@ -3734,6 +3796,9 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
     }
 
     bool is_lb_action = !(reject || drop);
+    if (is_lb_action && fallback) {
+        ds_put_cstr(action, "; fallback");
+    }
     const char *enclose = is_lb_action ? ");" : "";
 
     if (!ls_dp) {
@@ -5129,6 +5194,14 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 if (!lsp_can_be_inc_processed(new_nbsp)) {
                     goto fail;
                 }
+                if (lsp_is_remote(new_nbsp) && !od->has_non_overlay_lports) {
+                    /* The first non-overlay port changes the form of the
+                     * load balancer flows of the switch. */
+                    if (ls_has_lb(od)) {
+                        goto fail;
+                    }
+                    od->has_non_overlay_lports = true;
+                }
                 op = ls_port_create(ovnsb_idl_txn, &nd->ls_ports,
                                     new_nbsp->name, new_nbsp, od,
                                     ni->sbrec_mirror_table,
@@ -5218,6 +5291,15 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                  * that a port is being deleted the conflict may be
                  * resolved; fall back to recompute. */
                 goto fail;
+            }
+            if (lsp_is_remote(op->nbsp)
+                && !ls_has_non_overlay_lport_other_than(od, op)) {
+                /* The last non-overlay port changes the form of the load
+                 * balancer flows of the switch. */
+                if (ls_has_lb(od)) {
+                    goto fail;
+                }
+                od->has_non_overlay_lports = false;
             }
             add_op_to_northd_tracked_ports(&trk_lsps->deleted, op);
             hmap_remove(&nd->ls_ports, &op->key_node);
@@ -9789,6 +9871,51 @@ build_lb_health_check_response_lflows(
     ds_destroy(&probe_match);
 }
 
+/* Adds the ls_in_lb flow of one VIP to the switches in 'dp_map'. */
+static void
+build_lb_rules_for_dps(struct lflow_table *lflows,
+                       struct ovn_lb_datapaths *lb_dps,
+                       const struct ovn_datapaths *ls_datapaths,
+                       const unsigned long *dp_map,
+                       int priority, bool reject,
+                       struct ds *match, struct ds *action,
+                       const struct shash *meter_groups)
+{
+    const struct ovn_northd_lb *lb = lb_dps->lb;
+    unsigned long *dp_non_meter = NULL;
+    bool build_non_meter = false;
+    if (reject) {
+        size_t index;
+
+        dp_non_meter = bitmap_clone(dp_map, ods_size(ls_datapaths));
+        BITMAP_FOR_EACH_1 (index, ods_size(ls_datapaths), dp_map) {
+            struct ovn_datapath *od = sparse_array_get(&ls_datapaths->dps,
+                                                       index);
+
+            const char *meter = copp_meter_get(COPP_REJECT, od->nbs->copp,
+                                               meter_groups);
+            if (!meter) {
+                build_non_meter = true;
+                continue;
+            }
+            bitmap_set0(dp_non_meter, index);
+            ovn_lflow_add(lflows, od, S_SWITCH_IN_LB, priority,
+                          ds_cstr(match), ds_cstr(action),
+                          lb_dps->lflow_ref, WITH_CTRL_METER(meter),
+                          WITH_HINT(&lb->nlb->header_));
+        }
+    }
+    if (!reject || build_non_meter) {
+        ovn_lflow_add_with_dp_group(lflows,
+                                    dp_non_meter ? dp_non_meter : dp_map,
+                                    ods_size(ls_datapaths), S_SWITCH_IN_LB,
+                                    priority, ds_cstr(match),
+                                    ds_cstr(action), lb_dps->lflow_ref,
+                                    WITH_HINT(&lb->nlb->header_));
+    }
+    bitmap_free(dp_non_meter);
+}
+
 static void
 build_lb_rules(struct lflow_table *lflows, struct ovn_lb_datapaths *lb_dps,
                const struct ovn_datapaths *ls_datapaths,
@@ -9797,22 +9924,39 @@ build_lb_rules(struct lflow_table *lflows, struct ovn_lb_datapaths *lb_dps,
                const struct svc_monitors_map_data *svc_mons_data)
 {
     const struct ovn_northd_lb *lb = lb_dps->lb;
+
+    /* A distributed load balancer delivers to a local backend when the
+     * chassis has one and to any backend otherwise: the reply of a client
+     * on a port bound to a chassis returns through the conntrack zone of
+     * its own switch on its own chassis, whichever chassis the backend is
+     * on.  Traffic from outside the overlay, through a localnet, l2gateway,
+     * vtep or remote port or over a transit switch, has no such return:
+     * its reply would leave through the chassis of the backend, so its
+     * switch keeps local-only delivery. */
+    unsigned long *dp_fallback = NULL;
+    unsigned long *dp_local = NULL;
+    if (lb->is_distributed) {
+        size_t n_dps = ods_size(ls_datapaths);
+        dp_fallback = dynamic_bitmap_clone_map(&lb_dps->nb_ls_map);
+        dp_local = bitmap_allocate(n_dps);
+        size_t index;
+        DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_ls_map) {
+            struct ovn_datapath *od = sparse_array_get(&ls_datapaths->dps,
+                                                       index);
+            if (od->has_non_overlay_lports) {
+                bitmap_set0(dp_fallback, index);
+                bitmap_set1(dp_local, index);
+            }
+        }
+    }
+
     for (size_t i = 0; i < lb->n_vips; i++) {
         struct ovn_lb_vip *lb_vip = &lb->vips[i];
         struct ovn_northd_lb_vip *lb_vip_nb = &lb->vips_nb[i];
         const char *ip_match =
             lb_vip->address_family == AF_INET ? "ip4" : "ip6";
 
-        ds_clear(action);
         ds_clear(match);
-
-        /* New connections in Ingress table. */
-        const char *meter = NULL;
-        bool reject = build_lb_vip_actions(lb, lb_vip, lb_vip_nb, action,
-                                           lb->selection_fields,
-                                           NULL, NULL,
-                                           svc_mons_data, true);
-
         ds_put_format(match, "ct.new && %s.dst == %s", ip_match,
                       lb_vip->vip_str);
         int priority = 110;
@@ -9826,41 +9970,43 @@ build_lb_rules(struct lflow_table *lflows, struct ovn_lb_datapaths *lb_dps,
         build_lb_affinity_ls_flows(lflows, lb_dps, lb_vip, ls_datapaths,
                                    lb_dps->lflow_ref);
 
-        unsigned long *dp_non_meter = NULL;
-        bool build_non_meter = false;
-        if (reject) {
-            size_t index;
-
-            dp_non_meter = dynamic_bitmap_clone_map(&lb_dps->nb_ls_map);
-            DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_ls_map) {
-                struct ovn_datapath *od = sparse_array_get(&ls_datapaths->dps,
-                                                           index);
-
-                meter = copp_meter_get(COPP_REJECT, od->nbs->copp,
-                                       meter_groups);
-                if (!meter) {
-                    build_non_meter = true;
-                    continue;
-                }
-                bitmap_set0(dp_non_meter, index);
-                ovn_lflow_add(lflows, od, S_SWITCH_IN_LB, priority,
-                              ds_cstr(match), ds_cstr(action),
-                              lb_dps->lflow_ref, WITH_CTRL_METER(meter),
-                              WITH_HINT(&lb->nlb->header_));
-            }
+        /* New connections in Ingress table. */
+        if (!lb->is_distributed) {
+            ds_clear(action);
+            bool reject = build_lb_vip_actions(lb, lb_vip, lb_vip_nb, action,
+                                               lb->selection_fields,
+                                               NULL, NULL, svc_mons_data,
+                                               true, false);
+            build_lb_rules_for_dps(lflows, lb_dps, ls_datapaths,
+                                   lb_dps->nb_ls_map.map, priority, reject,
+                                   match, action, meter_groups);
+            continue;
         }
-        if (!reject || build_non_meter) {
-            ovn_lflow_add_with_dp_group(lflows,
-                                        dp_non_meter
-                                            ? dp_non_meter
-                                            : lb_dps->nb_ls_map.map,
-                                        ods_size(ls_datapaths), S_SWITCH_IN_LB,
-                                        priority, ds_cstr(match),
-                                        ds_cstr(action), lb_dps->lflow_ref,
-                                        WITH_HINT(&lb->nlb->header_));
+
+        if (!bitmap_is_all_zeros(dp_fallback, ods_size(ls_datapaths))) {
+            ds_clear(action);
+            bool reject = build_lb_vip_actions(lb, lb_vip, lb_vip_nb, action,
+                                               lb->selection_fields,
+                                               NULL, NULL, svc_mons_data,
+                                               true, true);
+            build_lb_rules_for_dps(lflows, lb_dps, ls_datapaths, dp_fallback,
+                                   priority, reject, match, action,
+                                   meter_groups);
         }
-        bitmap_free(dp_non_meter);
+        if (!bitmap_is_all_zeros(dp_local, ods_size(ls_datapaths))) {
+            ds_clear(action);
+            bool reject = build_lb_vip_actions(lb, lb_vip, lb_vip_nb, action,
+                                               lb->selection_fields,
+                                               NULL, NULL, svc_mons_data,
+                                               true, false);
+            build_lb_rules_for_dps(lflows, lb_dps, ls_datapaths, dp_local,
+                                   priority, reject, match, action,
+                                   meter_groups);
+        }
     }
+
+    bitmap_free(dp_fallback);
+    bitmap_free(dp_local);
 }
 
 static void
@@ -14121,7 +14267,7 @@ build_lrouter_nat_flows_for_lb(
                                        &skip_snat_act,
                                        &force_snat_act,
                                        svc_mons_data,
-                                       false);
+                                       false, false);
 
     /* Higher priority rules are added for load-balancing in DNAT
      * table.  For every match (on a VIP[:port]), we add two flows.

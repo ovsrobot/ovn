@@ -2279,13 +2279,22 @@
         </dd>
 
         <dt><code>ct_lb_mark_local;</code></dt>
-        <dt><code>ct_lb_mark_local(backends=<var>lport_name</var>[<var>ip</var>[:<var>port</var>][,...][; hash_fields=<var>field1</var>,<var>field2</var>,...][; ct_flag]);</code></dt>
+        <dt><code>ct_lb_mark_local(backends=<var>lport_name</var>[<var>ip</var>[:<var>port</var>][,...][; hash_fields=<var>field1</var>,<var>field2</var>,...][; ct_flag][; fallback]);</code></dt>
         <dd>
           <p>
               Same as <code>ct_lb_mark</code>, with the key difference that it
               implements local-only load balancing. This mode selects backends
               only from those running on the current chassis, preventing
               traffic from being forwarded to backends on remote nodes.
+          </p>
+
+          <p>
+              With <code>fallback</code>, a chassis that has none of the
+              backends selects among all of them instead of dropping the
+              traffic.  This is meant for traffic whose reply returns through
+              the chassis that applied the action whichever chassis the
+              backend is on, such as traffic from a logical switch port of
+              the same chassis.
           </p>
         </dd>
 

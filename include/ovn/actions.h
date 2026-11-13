@@ -340,6 +340,8 @@ struct ovnact_ct_lb {
     uint8_t ltable;             /* Logical table ID of next table. */
     char *hash_fields;
     enum ovnact_ct_lb_flag ct_flag;
+    bool fallback;              /* ct_lb_mark_local: use every backend when
+                                 * none of them is local. */
 };
 
 struct ovnact_select_dst {

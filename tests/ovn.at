@@ -2424,6 +2424,42 @@ ct_lb_mark_local(backends="lsp1":[[fd0f::2]]:80);
     uses group: id(23), name(type=select,selection_method=dp_hash,bucket=bucket_id=0,weight:100,actions=ct(nat(dst=[[fd0f::2]]:80),commit,table=oflow_in_table,zone=NXM_NX_REG13[[0..15]],exec(set_field:2/2->ct_mark)))
     has prereqs ip
 
+# A backend whose port is not local gets no bucket, the action encodes
+# to nothing without a fallback and to the full set with one.
+ct_lb_mark_local(backends="lsp2":192.168.0.102:80);
+    encodes as drop
+    has prereqs ip
+
+ct_lb_mark_local(backends="lsp2":192.168.0.102:80; fallback);
+    encodes as group:24
+    uses group: id(24), name(type=select,selection_method=dp_hash,bucket=bucket_id=0,weight:100,actions=ct(nat(dst=192.168.0.102:80),commit,table=oflow_in_table,zone=NXM_NX_REG13[[0..15]],exec(set_field:2/2->ct_mark)))
+    has prereqs ip
+
+ct_lb_mark_local(backends="lsp1":192.168.0.101:80,"lsp2":192.168.0.102:80; fallback);
+    encodes as group:25
+    uses group: id(25), name(type=select,selection_method=dp_hash,bucket=bucket_id=0,weight:100,actions=ct(nat(dst=192.168.0.101:80),commit,table=oflow_in_table,zone=NXM_NX_REG13[[0..15]],exec(set_field:2/2->ct_mark)))
+    has prereqs ip
+
+ct_lb_mark_local(backends="lsp2":192.168.0.102:80; hash_fields="ip_src,ip_dst"; skip_snat; fallback);
+    encodes as group:26
+    uses group: id(26), name(type=select,selection_method=hash,fields(ip_src,ip_dst),bucket=bucket_id=0,weight:100,actions=ct(nat(dst=192.168.0.102:80),commit,table=oflow_in_table,zone=NXM_NX_REG13[[0..15]],exec(set_field:2/2->ct_mark,set_field:4/4->ct_mark)))
+    has prereqs ip
+
+ct_lb_mark(backends=192.168.0.102:80; fallback);
+    Syntax error at `fallback' expecting `;'.
+
+ct_lb_mark_local(backends="lsp2":192.168.0.102:80; hash_fields="ip_src,ip_dst"; fallback);
+    encodes as group:27
+    uses group: id(27), name(type=select,selection_method=hash,fields(ip_src,ip_dst),bucket=bucket_id=0,weight:100,actions=ct(nat(dst=192.168.0.102:80),commit,table=oflow_in_table,zone=NXM_NX_REG13[[0..15]],exec(set_field:2/2->ct_mark)))
+    has prereqs ip
+
+# The keyword comes last and only once.
+ct_lb_mark_local(backends="lsp2":192.168.0.102:80; fallback; skip_snat);
+    Syntax error at `skip_snat' expecting `;'.
+
+ct_lb_mark_local(backends="lsp2":192.168.0.102:80; fallback; fallback);
+    Syntax error at `fallback' expecting `;'.
+
 # Miscellaneous negative tests.
 ;
     Syntax error at `;'.
@@ -48870,5 +48906,48 @@ AT_CHECK([ovs-ofctl dump-flows br-int table=OFTABLE_PHY_TO_LOG \
     | grep in_port=$ofport], [1], [])
 
 OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([ovn-trace - distributed LB ingress from a client and a router port])
+AT_KEYWORDS([ovn-trace])
+ovn_start
+
+# The load balancer is attached to the switch only.  The same VIP packet
+# enters once from a logical switch port, which the switch load balances,
+# and once from the logical router port, which the pre-load-balancer
+# stage skips conntrack for, so the switch never load balances it.
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-be 00:00:00:00:00:01 172.31.0.254/24
+check ovn-nbctl ls-add be
+check ovn-nbctl lsp-add-router-port be be-lr0 lr0-be
+check ovn-nbctl lsp-add be be-client
+check ovn-nbctl lsp-set-addresses be-client "00:00:00:00:01:10 172.31.0.100"
+check ovn-nbctl lsp-add be be-vm1
+check ovn-nbctl lsp-set-addresses be-vm1 "00:00:00:00:01:01 172.31.0.10"
+check ovn-nbctl lsp-add be be-vm2
+check ovn-nbctl lsp-set-addresses be-vm2 "00:00:00:00:01:02 172.31.0.11"
+check ovn-nbctl lb-add lb0 172.31.0.1:80 172.31.0.10:80,172.31.0.11:80
+check ovn-nbctl set Load_Balancer lb0 options:distributed=true \
+    ip_port_mappings:172.31.0.10=be-vm1 \
+    ip_port_mappings:172.31.0.11=be-vm2
+check ovn-nbctl --wait=sb ls-lb-add be lb0
+
+AT_CHECK([ovn-trace be 'inport == "be-client" && eth.src == 00:00:00:00:01:10 && eth.dst == 00:00:00:00:01:01 && ip4.src == 172.31.0.100 && ip4.dst == 172.31.0.1 && tcp && tcp.src == 40000 && tcp.dst == 80' > client.out], [0], [ignore])
+AT_CHECK([ovn-trace be 'inport == "be-lr0" && eth.src == 00:00:00:00:00:01 && eth.dst == 00:00:00:00:01:01 && ip4.src == 172.31.0.100 && ip4.dst == 172.31.0.1 && tcp && tcp.src == 40000 && tcp.dst == 80' > router.out], [0], [ignore])
+
+# The same packet from a logical switch port is load balanced: the
+# pre-stateful stage sends it to conntrack and commits the load
+# balancing for the VIP, and the connection is tracked from then on.
+AT_CHECK([grep 'ip4.dst == 172.31.0.1 && tcp.dst == 80' client.out], [0], [ignore])
+AT_CHECK([grep 'ls_in_acl_hint.*!ct.new && ct.est' client.out], [0], [ignore])
+# The packet from the router port is not: the pre-load-balancer stage
+# skips conntrack for the router ports, the load balancing flow cannot
+# match, and the packet stays untracked.
+AT_CHECK([! grep -q 'ip4.dst == 172.31.0.1 && tcp.dst == 80' router.out])
+AT_CHECK([grep 'ls_in_acl_hint.*!ct.trk' router.out], [0], [ignore])
+AT_CHECK([grep 'ls_in_pre_lb.*ip && inport == "be-lr0", priority 110' router.out], [0], [ignore])
+OVN_CLEANUP_NORTHD
 AT_CLEANUP
 ])
