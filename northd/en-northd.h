@@ -29,6 +29,11 @@ enum engine_input_handler_result
 northd_nb_port_group_handler(struct engine_node *node, void *data);
 enum engine_input_handler_result
 northd_sb_fdb_change_handler(struct engine_node *node, void *data);
+enum engine_input_handler_result
+northd_sb_service_monitor_handler(struct engine_node *node, void *data);
+enum engine_input_handler_result
+ic_learned_svc_monitors_sb_service_monitor_handler(struct engine_node *node,
+                                                   void *data);
 void *en_routes_init(struct engine_node *node OVS_UNUSED,
                             struct engine_arg *arg OVS_UNUSED);
 void en_routes_clear_tracked_data(void *data);
