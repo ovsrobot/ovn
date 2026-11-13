@@ -4610,3 +4610,142 @@ OVN_CLEANUP([hv2], [hv1
 /No encap type and\/or ip on chassis 'hv1'. Deleting chassis/d])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller - distributed LB backend binding on a local datapath])
+AT_KEYWORDS([ovn lb])
+ovn_start
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+AT_CAPTURE_FILE([groups])
+get_lb_backends() {
+    ovs-ofctl dump-groups br-int > groups || return 1
+    tr ')' '\n' < groups | sed -n 's/.*nat(dst=//p' | sort
+}
+
+# ct_lb_mark_local only keeps the backends that are local to this chassis, so
+# the flow it encodes to depends on the local binding of each backend port.
+# Binding a second backend on a datapath that is already local must add it to
+# the group instead of leaving the flow with only the first backend.
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-be 00:00:00:00:00:03 192.168.1.1/24
+check ovn-nbctl ls-add be
+check ovn-nbctl lsp-add-router-port be be-lr0 lr0-be
+check ovn-nbctl lsp-add be be-vm1
+check ovn-nbctl lsp-set-addresses be-vm1 "00:00:00:00:01:01 192.168.1.10"
+check ovn-nbctl lsp-add be be-vm2
+check ovn-nbctl lsp-set-addresses be-vm2 "00:00:00:00:01:02 192.168.1.11"
+check ovn-nbctl \
+    -- lb-add lb0 172.16.1.10:80 192.168.1.10:80,192.168.1.11:80 \
+    -- set Load_Balancer lb0 options:distributed=true \
+        ip_port_mappings:192.168.1.10="be-vm1" \
+        ip_port_mappings:192.168.1.11="be-vm2"
+check ovn-nbctl lr-lb-add lr0 lb0
+check ovn-nbctl --wait=hv sync
+
+check ovs-vsctl add-port br-int vif1 \
+    -- set Interface vif1 external_ids:iface-id=be-vm1
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm1 up) = xtrue])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.10:80
+])
+
+check ovs-vsctl add-port br-int vif2 \
+    -- set Interface vif2 external_ids:iface-id=be-vm2
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm2 up) = xtrue])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.10:80
+192.168.1.11:80
+])
+CHECK_AFTER_RECOMPUTE([hv1], [hv1])
+
+# Keep the datapath local through be-vm1 while removing and rebinding be-vm2.
+check ovs-vsctl del-port br-int vif2
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm2 up) = xfalse])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.10:80
+])
+CHECK_AFTER_RECOMPUTE([hv1], [hv1])
+
+check ovs-vsctl add-port br-int vif2 \
+    -- set Interface vif2 external_ids:iface-id=be-vm2
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm2 up) = xtrue])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.10:80
+192.168.1.11:80
+])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn-controller - distributed LB backend binding on a pinned router])
+AT_KEYWORDS([ovn lb])
+ovn_start
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+
+AT_CAPTURE_FILE([groups])
+get_lb_backends() {
+    ovs-ofctl dump-groups br-int > groups || return 1
+    tr ')' '\n' < groups | sed -n 's/.*nat(dst=//p' | sort
+}
+
+# The datapath of a router pinned to this chassis is local before any backend
+# is bound, so the load balancer flow is first encoded with no local backend.
+# Binding a backend afterwards must re-encode the flow with it.
+check ovn-nbctl lr-add lr0
+check ovn-nbctl set Logical_Router lr0 options:chassis=hv1
+check ovn-nbctl lrp-add lr0 lr0-be 00:00:00:00:00:03 192.168.1.1/24
+check ovn-nbctl ls-add be
+check ovn-nbctl lsp-add-router-port be be-lr0 lr0-be
+check ovn-nbctl lsp-add be be-vm1
+check ovn-nbctl lsp-set-addresses be-vm1 "00:00:00:00:01:01 192.168.1.10"
+check ovn-nbctl \
+    -- lb-add lb0 172.16.1.10:80 192.168.1.10:80 \
+    -- set Load_Balancer lb0 options:distributed=true \
+        ip_port_mappings:192.168.1.10="be-vm1"
+check ovn-nbctl lr-lb-add lr0 lb0
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [])
+
+check ovs-vsctl add-port br-int vif1 \
+    -- set Interface vif1 external_ids:iface-id=be-vm1
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm1 up) = xtrue])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.10:80
+])
+CHECK_AFTER_RECOMPUTE([hv1], [hv1])
+
+# The pinned router must encode with no local backend again after unbinding
+# its last backend, then use that backend once it is rebound.
+check ovs-vsctl del-port br-int vif1
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm1 up) = xfalse])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [])
+CHECK_AFTER_RECOMPUTE([hv1], [hv1])
+
+check ovs-vsctl add-port br-int vif1 \
+    -- set Interface vif1 external_ids:iface-id=be-vm1
+OVS_WAIT_UNTIL([test x$(ovn-nbctl get logical_switch_port be-vm1 up) = xtrue])
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.10:80
+])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])

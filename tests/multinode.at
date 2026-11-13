@@ -5820,6 +5820,62 @@ AT_CHECK([m_as ovn-gw-1 /bin/bash -c 'for i in $(seq 500); \
 # Check that requests are distributed among all backends.
 AT_CHECK([grep -q ls1p1 reply && grep -q ls1p2 reply && grep -q ls1p3 reply], [0], [])
 
+# Keep traffic on chassis-2 while its backend bindings change. Leave the NB
+# load balancer configuration and the backend servers unchanged.
+check m_as ovn-gw-1 ip route replace $lb_vip via $ip_ch2 dev eth1
+
+AT_CAPTURE_FILE([groups])
+get_lb_backends() {
+    m_as ovn-chassis-2 ovs-ofctl dump-groups br-int > groups || return 1
+    tr ')' '\n' < groups | sed -n 's/.*nat(dst=//p' | sort
+}
+
+check_lb_reply() {
+    m_as ovn-gw-1 /bin/bash -c '
+        for i in $(seq 10); do
+            reply=$(echo "" | timeout 5 nc -w 3 172.31.0.1 80) || exit 1
+            test "$reply" = "$1" || exit 1
+        done
+    ' bash "$1"
+}
+
+# Unbinding a backend must remove it from the group while the other backend
+# keeps the datapath local. Each request below uses a fresh TCP connection.
+check m_as ovn-chassis-2 ovs-vsctl del-port br-int ls1p3-p
+m_wait_row_count nb:Logical_Switch_Port 1 name=ls1p3 up=false
+check multinode_nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.2:10880
+])
+check check_lb_reply ls1p2
+
+check m_as ovn-chassis-2 ovs-vsctl add-port br-int ls1p3-p \
+    -- set Interface ls1p3-p external_ids:iface-id=ls1p3
+m_wait_row_count nb:Logical_Switch_Port 1 name=ls1p3 up=true
+check multinode_nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.2:10880
+192.168.1.3:10880
+])
+
+# Remove the other binding to make every request use the rebound backend.
+check m_as ovn-chassis-2 ovs-vsctl del-port br-int ls1p2-p
+m_wait_row_count nb:Logical_Switch_Port 1 name=ls1p2 up=false
+check multinode_nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.3:10880
+])
+check check_lb_reply ls1p3
+
+check m_as ovn-chassis-2 ovs-vsctl add-port br-int ls1p2-p \
+    -- set Interface ls1p2-p external_ids:iface-id=ls1p2
+m_wait_row_count nb:Logical_Switch_Port 1 name=ls1p2 up=true
+check multinode_nbctl --wait=hv sync
+OVS_WAIT_FOR_OUTPUT([get_lb_backends], [0], [dnl
+192.168.1.2:10880
+192.168.1.3:10880
+])
+
 AT_CHECK([cat ch1_genev.tcpdump], [0], [dnl
 ])
 AT_CHECK([cat ch1_eth2.tcpdump], [0], [dnl
