@@ -260,13 +260,13 @@ will see the route ::
 
     $ ovn-nbctl lr-route-list lr1
     IPv4 Routes
-                 10.0.2.0/24             169.254.100.2 dst-ip (learned)
+              10.0.2.0/24             169.254.100.2 dst-ip (learned, connected)
 
 In ovn-west you will see ::
 
     $ ovn-nbctl lr-route-list lr2
     IPv4 Routes
-                 10.0.1.0/24             169.254.100.1 dst-ip (learned)
+              10.0.1.0/24             169.254.100.1 dst-ip (learned, connected)
 
 Static routes configured in the routers can be advertised and learned as well.
 For more details of router advertisement and its configure options, please

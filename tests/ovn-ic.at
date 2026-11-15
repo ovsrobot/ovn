@@ -1932,7 +1932,7 @@ AT_CHECK([ovn_as az1 ovn-nbctl lr-route-list lr1], [0], [dnl
 IPv4 Routes
 Route Table <main>:
              10.11.1.0/24               169.254.0.1 dst-ip
-             10.11.2.0/24             169.254.100.2 dst-ip (learned)
+             10.11.2.0/24             169.254.100.2 dst-ip (learned, static)
              10.22.1.0/24               169.254.0.2 src-ip
 ])
 
@@ -2020,7 +2020,7 @@ check ovn-ic-nbctl --wait=sb sync
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-             10.11.1.0/24             169.254.100.1 dst-ip (learned)
+             10.11.1.0/24             169.254.100.1 dst-ip (learned, static)
              10.11.2.0/24               169.254.0.1 dst-ip
              10.22.2.0/24               169.254.0.2 src-ip
 ])
@@ -2206,13 +2206,13 @@ wait_row_count ic-sb:Route 1 ip_prefix=200.1.2.50/32 origin=loadbalancer
 AT_CHECK([ovn_as az1 ovn-nbctl lr-route-list lr1], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.2.50             169.254.100.2 dst-ip (learned)
+               200.1.2.50             169.254.100.2 dst-ip (learned, loadbalancer)
 ])
 
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
 ])
 
 # Add another few instances of LB in AZ1, some with same VIP IP.
@@ -2230,9 +2230,9 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 200
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
-               200.1.1.54             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.54             169.254.100.1 dst-ip (learned, loadbalancer)
 ])
 
 # Remove one LB.
@@ -2241,8 +2241,8 @@ OVS_WAIT_WHILE([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 200
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
 ])
 
 # Add load balancer group.
@@ -2262,10 +2262,10 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 250
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
-               250.1.1.11             169.254.100.1 dst-ip (learned)
-               250.1.1.12             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
+               250.1.1.11             169.254.100.1 dst-ip (learned, loadbalancer)
+               250.1.1.12             169.254.100.1 dst-ip (learned, loadbalancer)
 ])
 
 # Remove the LB group from LR.
@@ -2276,8 +2276,8 @@ OVS_WAIT_WHILE([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 250
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
 ])
 
 # Disable LB route-advertising for AZ1.
@@ -2295,8 +2295,8 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 200
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
 ])
 
 # Disable LB route-learning for AZ2.
@@ -2314,8 +2314,8 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 200
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
 ])
 
 # Add IPv6 LB.
@@ -2333,12 +2333,12 @@ origin              : loadbalancer
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
 
 IPv6 Routes
 Route Table <main>:
-                  4242::1             2001:db8:1::1 dst-ip (learned)
+                  4242::1             2001:db8:1::1 dst-ip (learned, loadbalancer)
 ])
 
 # Remove IPv6 LB
@@ -2347,8 +2347,8 @@ OVS_WAIT_WHILE([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 424
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
 ])
 
 # Configure same LB VIP locally as in remote az. Ensure learnt route is removed.
@@ -2359,7 +2359,7 @@ OVS_WAIT_WHILE([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 200
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.53             169.254.100.1 dst-ip (learned)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
 ])
 check ovn_as az2 ovn-nbctl lr-lb-del lr2 lb_temp
 check ovn_as az2 ovn-nbctl lb-del lb_temp
@@ -2367,8 +2367,8 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 200
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
 ])
 
 # Configure static route in remote az. Route would be learnt. Add local LB VIP
@@ -2378,9 +2378,9 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 200
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
-               200.1.3.55             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.3.55             169.254.100.1 dst-ip (learned, static)
 ])
 
 check ovn_as az2 ovn-nbctl lb-add lb_temp 200.1.3.55:80 1.1.1.1:80,1.1.1.2:80
@@ -2389,8 +2389,8 @@ OVS_WAIT_WHILE([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 200
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
 ])
 
 check ovn_as az2 ovn-nbctl lr-lb-del lr2 lb_temp
@@ -2399,17 +2399,17 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 200
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
-               200.1.3.55             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.3.55             169.254.100.1 dst-ip (learned, static)
 ])
 check ovn_as az1 ovn-nbctl lr-route-del lr1 200.1.3.55 169.1.1.1
 OVS_WAIT_WHILE([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 200.1.3.55])
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
 ])
 
 # Create a third az
@@ -2433,9 +2433,9 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 200
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned)
-               200.1.1.53             169.254.100.1 dst-ip (learned)
-               200.1.3.50             169.254.100.3 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.3.50             169.254.100.3 dst-ip (learned, loadbalancer)
 ])
 
 # Create LB in az3 with same VIP as az1, check for ECMP route in az2 LR
@@ -2445,10 +2445,10 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep ecm
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-               200.1.1.50             169.254.100.1 dst-ip (learned) ecmp
-               200.1.1.50             169.254.100.3 dst-ip (learned) ecmp
-               200.1.1.53             169.254.100.1 dst-ip (learned)
-               200.1.3.50             169.254.100.3 dst-ip (learned)
+               200.1.1.50             169.254.100.1 dst-ip (learned, loadbalancer) ecmp
+               200.1.1.50             169.254.100.3 dst-ip (learned, loadbalancer) ecmp
+               200.1.1.53             169.254.100.1 dst-ip (learned, loadbalancer)
+               200.1.3.50             169.254.100.3 dst-ip (learned, loadbalancer)
 ])
 
 OVN_CLEANUP_IC([az1], [az2])
@@ -2488,7 +2488,7 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned \
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-             10.11.1.0/24             169.254.100.1 dst-ip (learned)
+             10.11.1.0/24             169.254.100.1 dst-ip (learned, static)
 ])
 
 # Enable "IPv4 over IPv6" on the advertising LR: the IPv4 route is now
@@ -2500,7 +2500,7 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep 10.11.1.0 \
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-             10.11.1.0/24             2001:db8:1::1 dst-ip (learned)
+             10.11.1.0/24             2001:db8:1::1 dst-ip (learned, static)
 ])
 
 # The next hop stored in IC-SB is the IPv6 address.
@@ -2518,7 +2518,7 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep 10.11.1.0 \
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-             10.11.1.0/24             169.254.100.1 dst-ip (learned)
+             10.11.1.0/24             169.254.100.1 dst-ip (learned, static)
 ])
 
 OVN_CLEANUP_IC([az1], [az2])
@@ -2563,7 +2563,7 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep 10.11.1.0 \
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-             10.11.1.0/24             2001:db8:1::1 dst-ip (learned)
+             10.11.1.0/24             2001:db8:1::1 dst-ip (learned, static)
              10.11.2.0/24                   discard dst-ip
 ])
 
@@ -2575,7 +2575,7 @@ AT_CHECK([ovn_as az1 ovn-nbctl lr-route-list lr1], [0], [dnl
 IPv4 Routes
 Route Table <main>:
              10.11.1.0/24                   discard dst-ip
-             10.11.2.0/24             169.254.100.2 dst-ip (learned)
+             10.11.2.0/24             169.254.100.2 dst-ip (learned, static)
 ])
 
 OVN_CLEANUP_IC([az1], [az2])
@@ -2618,7 +2618,7 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned \
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-             10.11.1.0/24             169.254.100.1 dst-ip (learned)
+             10.11.1.0/24             169.254.100.1 dst-ip (learned, static)
 ])
 
 # The next hop stored in IC-SB is the IPv4 address.
@@ -2710,7 +2710,7 @@ AT_CHECK([ovn_as az1 ovn-nbctl lr-route-list lr1], [0], [dnl
 IPv4 Routes
 Route Table <main>:
              10.11.1.0/24               169.254.0.1 dst-ip
-             10.11.2.0/24             169.254.100.2 dst-ip (learned)
+             10.11.2.0/24             169.254.100.2 dst-ip (learned, static)
 
 Route Table rtb1:
              10.22.1.0/24               169.254.0.2 src-ip
@@ -2753,7 +2753,7 @@ AT_CHECK([ovn_as az1 ovn-nbctl lr-route-list lr1], [0], [dnl
 IPv4 Routes
 Route Table rtb1:
              10.11.1.0/24               169.254.0.1 dst-ip
-             10.11.2.0/24             169.254.100.2 dst-ip (learned)
+             10.11.2.0/24             169.254.100.2 dst-ip (learned, static)
              10.22.1.0/24               169.254.0.2 src-ip
 ])
 
@@ -2780,7 +2780,7 @@ AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned], [0], [ignore])
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table rtb1:
-             10.11.1.0/24             169.254.100.1 dst-ip (learned)
+             10.11.1.0/24             169.254.100.1 dst-ip (learned, static)
              10.11.2.0/24               169.254.0.1 dst-ip
              10.22.2.0/24               169.254.0.2 src-ip
 ])
@@ -2821,14 +2821,14 @@ OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl lr-route-list lr2 | grep learned | grep 192
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr2], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-           192.168.0.0/24             169.254.100.1 dst-ip (learned)
+           192.168.0.0/24             169.254.100.1 dst-ip (learned, connected)
 
 Route Table rtb1:
-             10.11.1.0/24             169.254.100.1 dst-ip (learned)
+             10.11.1.0/24             169.254.100.1 dst-ip (learned, static)
              10.11.2.0/24               169.254.0.1 dst-ip
-           192.168.0.0/24             169.254.100.1 dst-ip (learned) override-connected
+           192.168.0.0/24             169.254.100.1 dst-ip (learned, connected) override-connected
              10.22.2.0/24               169.254.0.2 src-ip
-                0.0.0.0/0             169.254.100.1 dst-ip (learned)
+                0.0.0.0/0             169.254.100.1 dst-ip (learned, static)
 ])
 
 # Delete the directly connected subnet from AZ1, learned route should be
@@ -2851,7 +2851,7 @@ IPv4 Routes
 Route Table rtb1:
              10.11.2.0/24               169.254.0.1 dst-ip
              10.22.2.0/24               169.254.0.2 src-ip
-                0.0.0.0/0             169.254.100.1 dst-ip (learned)
+                0.0.0.0/0             169.254.100.1 dst-ip (learned, static)
 ])
 
 OVN_CLEANUP_IC([az1], [az2])
@@ -2946,7 +2946,7 @@ check ovn-ic-nbctl --wait=sb sync
 check ovn-ic-nbctl --wait=sb sync
 # Test direct routes from lr12 were learned to lr11
 OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 192.168 |
-             grep learned | awk '{print $1, $2, $5}' | sort ], [0], [dnl
+             grep learned | awk '{print $1, $2, $6}' | sort ], [0], [dnl
 192.168.0.0/24 169.254.101.2 ecmp
 192.168.0.0/24 169.254.101.2 override-connected
 192.168.0.0/24 169.254.102.2 ecmp
@@ -2959,28 +2959,28 @@ OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 192.168 |
 OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl --route-table=rtb1 lr-route-list lr11], [0], [dnl
 IPv4 Routes
 Route Table rtb1:
-            10.10.10.0/24             169.254.101.2 dst-ip (learned)
-           192.168.0.0/24             169.254.101.2 dst-ip (learned) override-connected
+            10.10.10.0/24             169.254.101.2 dst-ip (learned, static)
+           192.168.0.0/24             169.254.101.2 dst-ip (learned, connected) override-connected
 ])
 OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl --route-table=rtb2 lr-route-list lr11], [0], [dnl
 IPv4 Routes
 Route Table rtb2:
-            10.10.10.0/24             169.254.102.2 dst-ip (learned)
-           192.168.0.0/24             169.254.102.2 dst-ip (learned) override-connected
+            10.10.10.0/24             169.254.102.2 dst-ip (learned, static)
+           192.168.0.0/24             169.254.102.2 dst-ip (learned, connected) override-connected
 ])
 OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl --route-table=rtb3 lr-route-list lr11], [0], [dnl
 IPv4 Routes
 Route Table rtb3:
-            10.10.10.0/24             169.254.103.2 dst-ip (learned)
-           192.168.0.0/24             169.254.103.2 dst-ip (learned) override-connected
+            10.10.10.0/24             169.254.103.2 dst-ip (learned, static)
+           192.168.0.0/24             169.254.103.2 dst-ip (learned, connected) override-connected
 ])
 
 # Test routes from lr12 didn't leak as learned to lr21
 OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr21 | grep 192.168 | sort], [0], [dnl
-           192.168.0.0/24             169.254.101.2 dst-ip (learned) ecmp
-           192.168.0.0/24             169.254.101.2 dst-ip (learned) override-connected
-           192.168.0.0/24             169.254.102.2 dst-ip (learned) ecmp
-           192.168.0.0/24             169.254.102.2 dst-ip (learned) override-connected
+           192.168.0.0/24             169.254.101.2 dst-ip (learned, connected) ecmp
+           192.168.0.0/24             169.254.101.2 dst-ip (learned, connected) override-connected
+           192.168.0.0/24             169.254.102.2 dst-ip (learned, connected) ecmp
+           192.168.0.0/24             169.254.102.2 dst-ip (learned, connected) override-connected
 ])
 
 OVN_CLEANUP_IC([az1], [az2])
@@ -3079,7 +3079,7 @@ check ovn_as az2 ovn-nbctl --wait=sb lrp-add lr22 lrp-lr22 aa:aa:aa:aa:bb:01 "20
 check ovn-ic-nbctl --wait=sb sync
 check ovn-ic-nbctl --wait=sb sync
 AT_CHECK([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 2001:db8:200 |
-             grep learned | awk '{print $1, $2, $5}' | sort], [0], [dnl
+             grep learned | awk '{print $1, $2, $6}' | sort], [0], [dnl
 2001:db8:200::/64 2001:db8:1::2 ecmp
 2001:db8:200::/64 2001:db8:1::2 override-connected
 2001:db8:200::/64 2001:db8:2::2 ecmp
@@ -3093,31 +3093,31 @@ OVS_WAIT_UNTIL([ovn_as az1 ovn-nbctl --route-table=rtb1 lr-route-list lr11 | gre
 AT_CHECK([ovn_as az1 ovn-nbctl --route-table=rtb1 lr-route-list lr11], [0], [dnl
 IPv6 Routes
 Route Table rtb1:
-        2001:db8:200::/64             2001:db8:1::2 dst-ip (learned) override-connected
-       2001:db8:aaaa::/64             2001:db8:1::2 dst-ip (learned)
+        2001:db8:200::/64             2001:db8:1::2 dst-ip (learned, connected) override-connected
+       2001:db8:aaaa::/64             2001:db8:1::2 dst-ip (learned, static)
 ])
 OVS_WAIT_UNTIL([ovn_as az1 ovn-nbctl --route-table=rtb2 lr-route-list lr11 | grep learned])
 AT_CHECK([ovn_as az1 ovn-nbctl --route-table=rtb2 lr-route-list lr11], [0], [dnl
 IPv6 Routes
 Route Table rtb2:
-        2001:db8:200::/64             2001:db8:2::2 dst-ip (learned) override-connected
-       2001:db8:aaaa::/64             2001:db8:2::2 dst-ip (learned)
+        2001:db8:200::/64             2001:db8:2::2 dst-ip (learned, connected) override-connected
+       2001:db8:aaaa::/64             2001:db8:2::2 dst-ip (learned, static)
 ])
 OVS_WAIT_UNTIL([ovn_as az1 ovn-nbctl --route-table=rtb3 lr-route-list lr11 | grep learned])
 AT_CHECK([ovn_as az1 ovn-nbctl --route-table=rtb3 lr-route-list lr11], [0], [dnl
 IPv6 Routes
 Route Table rtb3:
-        2001:db8:200::/64             2001:db8:3::2 dst-ip (learned) override-connected
-       2001:db8:aaaa::/64             2001:db8:3::2 dst-ip (learned)
+        2001:db8:200::/64             2001:db8:3::2 dst-ip (learned, connected) override-connected
+       2001:db8:aaaa::/64             2001:db8:3::2 dst-ip (learned, static)
 ])
 
 # Test routes from lr12 didn't leak as learned to lr21
 OVS_WAIT_UNTIL([ovn_as az1 ovn-nbctl lr-route-list lr21 | grep "2001:db8:2::2" | grep learned])
 AT_CHECK([ovn_as az1 ovn-nbctl lr-route-list lr21 | grep 2001 | sort], [0], [dnl
-        2001:db8:200::/64             2001:db8:1::2 dst-ip (learned) ecmp
-        2001:db8:200::/64             2001:db8:1::2 dst-ip (learned) override-connected
-        2001:db8:200::/64             2001:db8:2::2 dst-ip (learned) ecmp
-        2001:db8:200::/64             2001:db8:2::2 dst-ip (learned) override-connected
+        2001:db8:200::/64             2001:db8:1::2 dst-ip (learned, connected) ecmp
+        2001:db8:200::/64             2001:db8:1::2 dst-ip (learned, connected) override-connected
+        2001:db8:200::/64             2001:db8:2::2 dst-ip (learned, connected) ecmp
+        2001:db8:200::/64             2001:db8:2::2 dst-ip (learned, connected) override-connected
 ])
 
 OVN_CLEANUP_IC([az1], [az2])
@@ -3162,13 +3162,13 @@ check ovn-ic-nbctl --wait=sb sync
 AT_CHECK([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep dst-ip | sort] , [0], [dnl
                 0.0.0.0/0              192.168.1.11 dst-ip
               10.0.0.0/24              192.168.1.10 dst-ip
-           192.168.2.0/24             169.254.100.2 dst-ip (learned)
+           192.168.2.0/24             169.254.100.2 dst-ip (learned, connected)
 ])
 
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list lr12 | grep dst-ip | sort], [0], [dnl
                 0.0.0.0/0              192.168.2.11 dst-ip
               10.0.0.0/24              192.168.2.10 dst-ip
-           192.168.1.0/24             169.254.100.1 dst-ip (learned)
+           192.168.1.0/24             169.254.100.1 dst-ip (learned, connected)
 ])
 
 OVN_CLEANUP_IC([az1], [az2])
@@ -4378,14 +4378,14 @@ check ovn-ic-nbctl --wait=sb sync
 
 # Test direct routes from lr12 were learned to lr11
 OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr11 | grep 192.168 |
-             grep learned | awk '{print $1, $2, $5}' | sort ], [0], [dnl
+             grep learned | awk '{print $1, $2, $6}' | sort ], [0], [dnl
 192.168.0.0/24 169.254.101.2 ecmp
 192.168.0.0/24 169.254.102.2 ecmp
 ])
 
 # Test direct routes from lr22 were learned to lr21
 OVS_WAIT_FOR_OUTPUT([ovn_as az1 ovn-nbctl lr-route-list lr21 | grep 192.168 |
-             grep learned | awk '{print $1, $2, $5}' | sort ], [0], [dnl
+             grep learned | awk '{print $1, $2, $6}' | sort ], [0], [dnl
 192.168.1.0/24 169.254.101.2 ecmp
 192.168.1.0/24 169.254.102.2 ecmp
 ])
@@ -6086,7 +6086,7 @@ external_ids        : {}
 OVS_WAIT_FOR_OUTPUT([ovn-nbctl lr-route-list lr1], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-            172.31.0.0/24             169.254.100.2 dst-ip (learned)
+            172.31.0.0/24             169.254.100.2 dst-ip (learned, connected)
 ])
 
 OVN_CLEANUP_IC([az1])
@@ -7271,39 +7271,39 @@ check ovn-ic-nbctl --wait=sb sync
 AT_CHECK([ovn_as az1 ovn-nbctl lr-route-list rt1], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-            172.31.2.0/24             169.254.100.2 dst-ip (learned) ecmp
-            172.31.2.0/24            169.254.100.34 dst-ip (learned) ecmp
-            172.31.3.0/24             169.254.100.2 dst-ip (learned) ecmp
-            172.31.3.0/24            169.254.100.34 dst-ip (learned) ecmp
+            172.31.2.0/24             169.254.100.2 dst-ip (learned, connected) ecmp
+            172.31.2.0/24            169.254.100.34 dst-ip (learned, connected) ecmp
+            172.31.3.0/24             169.254.100.2 dst-ip (learned, connected) ecmp
+            172.31.3.0/24            169.254.100.34 dst-ip (learned, connected) ecmp
 
 Route Table table1:
-            172.31.0.0/24             169.254.100.2 dst-ip (learned) override-connected
-            172.31.1.0/24             169.254.100.2 dst-ip (learned) override-connected
-            172.31.2.0/24             169.254.100.2 dst-ip (learned) override-connected
-            172.31.3.0/24             169.254.100.2 dst-ip (learned) override-connected
+            172.31.0.0/24             169.254.100.2 dst-ip (learned, static) override-connected
+            172.31.1.0/24             169.254.100.2 dst-ip (learned, static) override-connected
+            172.31.2.0/24             169.254.100.2 dst-ip (learned, connected) override-connected
+            172.31.3.0/24             169.254.100.2 dst-ip (learned, connected) override-connected
 
 Route Table table2:
-            172.31.2.0/24            169.254.100.34 dst-ip (learned) override-connected
-            172.31.3.0/24            169.254.100.34 dst-ip (learned) override-connected
+            172.31.2.0/24            169.254.100.34 dst-ip (learned, connected) override-connected
+            172.31.3.0/24            169.254.100.34 dst-ip (learned, connected) override-connected
 ])
 
 AT_CHECK([ovn_as az2 ovn-nbctl lr-route-list rt1], [0], [dnl
 IPv4 Routes
 Route Table <main>:
-            172.31.0.0/24             169.254.100.1 dst-ip (learned) ecmp
-            172.31.0.0/24            169.254.100.33 dst-ip (learned) ecmp
-            172.31.1.0/24             169.254.100.1 dst-ip (learned) ecmp
-            172.31.1.0/24            169.254.100.33 dst-ip (learned) ecmp
+            172.31.0.0/24             169.254.100.1 dst-ip (learned, connected) ecmp
+            172.31.0.0/24            169.254.100.33 dst-ip (learned, connected) ecmp
+            172.31.1.0/24             169.254.100.1 dst-ip (learned, connected) ecmp
+            172.31.1.0/24            169.254.100.33 dst-ip (learned, connected) ecmp
 
 Route Table table1:
             172.31.0.0/24                172.31.2.4 dst-ip override-connected
-            172.31.0.0/24             169.254.100.1 dst-ip (learned) override-connected
+            172.31.0.0/24             169.254.100.1 dst-ip (learned, connected) override-connected
             172.31.1.0/24                172.31.3.4 dst-ip override-connected
-            172.31.1.0/24             169.254.100.1 dst-ip (learned) override-connected
+            172.31.1.0/24             169.254.100.1 dst-ip (learned, connected) override-connected
 
 Route Table table2:
-            172.31.0.0/24            169.254.100.33 dst-ip (learned) override-connected
-            172.31.1.0/24            169.254.100.33 dst-ip (learned) override-connected
+            172.31.0.0/24            169.254.100.33 dst-ip (learned, connected) override-connected
+            172.31.1.0/24            169.254.100.33 dst-ip (learned, connected) override-connected
 ])
 
 AZF1="az1/az1_flow.txt"
