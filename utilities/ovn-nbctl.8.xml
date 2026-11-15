@@ -1697,6 +1697,46 @@
         specified <var>lb</var> will be listed.
       </dd>
 
+      <dt>[<code>--may-exist</code>] <code>lb-hc-add</code> <var>lb</var>
+          <var>vip</var>:<var>port</var>
+          [<var>key</var>=<var>value</var>]...</dt>
+      <dd>
+        <p>
+          Adds a health check for <var>vip</var>:<var>port</var> of
+          <var>lb</var>, creating a row in the
+          <code>Load_Balancer_Health_Check</code> table.  The VIP must already
+          be part of <var>lb</var> and must have a port; IPv6 VIPs are written
+          as <code>[</code><var>ip</var><code>]:</code><var>port</var>.
+          Optional <var>key</var>=<var>value</var> pairs set the health check
+          options <code>interval</code>, <code>timeout</code>,
+          <code>success_count</code> and <code>failure_count</code>, each an
+          integer from 1 to 2147483.  Template and SCTP load balancers do not
+          support health checks.
+        </p>
+        <p>
+          It is an error if a health check for the VIP already exists, unless
+          <code>--may-exist</code> is specified, in which case its options are
+          replaced.  Each backend also needs an entry in the load balancer's
+          <code>ip_port_mappings</code> column to be monitored; backends
+          without one are not used once the VIP has a health check.
+        </p>
+      </dd>
+
+      <dt>[<code>--if-exists</code>] <code>lb-hc-del</code> <var>lb</var>
+          [<var>vip</var>:<var>port</var>]</dt>
+      <dd>
+        Removes the health check of <var>vip</var>:<var>port</var> from
+        <var>lb</var>, or all of its health checks if no VIP is given.  The
+        VIP does not need to be part of <var>lb</var> anymore.  It is an
+        error if <var>lb</var> or the health check does not exist, unless
+        <code>--if-exists</code> is specified.
+      </dd>
+
+      <dt><code>lb-hc-list</code> <var>lb</var></dt>
+      <dd>
+        Lists the health checks of <var>lb</var> with their options.
+      </dd>
+
       <dt>[<code>--may-exist</code>] <code>ls-lb-add</code> <var>switch</var> <var>lb</var></dt>
       <dd>
         Adds the specified <var>lb</var> to <var>switch</var>.

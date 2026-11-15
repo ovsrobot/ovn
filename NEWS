@@ -27,6 +27,8 @@ Post v26.09.0
      instead of being ignored.  Such ports are useful to connect a transit
      router to a transit switch.  Accordingly, "ovn-ic-nbctl trp-add" no
      longer requires a trailing network or chassis argument.
+   - Added new ovn-nbctl commands "lb-hc-add", "lb-hc-del" and "lb-hc-list"
+     to manage load balancer health checks.
    - Dynamic Routing:
      * Remove the "other_config:dynamic-routing-arp-prefer-local"
        option from Logical Switches.  EVPN-learned MAC bindings are

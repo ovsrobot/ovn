@@ -1442,6 +1442,151 @@ UUID                                    LB                  PROTO      VIP      
 
 dnl ---------------------------------------------------------------------
 
+OVN_NBCTL_TEST([ovn_nbctl_lb_hc], [LB health checks], [
+AT_CHECK([ovn-nbctl lb-add lb0 30.0.0.10:80 192.168.10.10:80,192.168.10.20:80])
+AT_CHECK([ovn-nbctl lb-add lb0 30.0.0.20:443 192.168.10.10:443])
+AT_CHECK([ovn-nbctl lb-add lb0 30.0.0.30 192.168.10.10])
+AT_CHECK([ovn-nbctl lb-add lb6 [[2001:db8::10]]:80 [[2001:db8::1]]:80])
+
+dnl Errors.
+AT_CHECK([ovn-nbctl lb-hc-add lbx 30.0.0.10:80], [1], [],
+[ovn-nbctl: lbx: load balancer name not found
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.99:80], [1], [],
+[ovn-nbctl: vip 30.0.0.99:80 is not part of the load balancer.
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.30], [1], [],
+[ovn-nbctl: 30.0.0.30: health checks need a VIP with a port.
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80 foo=1], [1], [],
+[ovn-nbctl: foo=1: options must be interval, timeout, success_count or failure_count with an integer value from 1 to 2147483 (KEY=VALUE).
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80 interval=0], [1], [],
+[ovn-nbctl: interval=0: options must be interval, timeout, success_count or failure_count with an integer value from 1 to 2147483 (KEY=VALUE).
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80 interval], [1], [],
+[ovn-nbctl: interval: options must be interval, timeout, success_count or failure_count with an integer value from 1 to 2147483 (KEY=VALUE).
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80 interval=5x], [1], [],
+[ovn-nbctl: interval=5x: options must be interval, timeout, success_count or failure_count with an integer value from 1 to 2147483 (KEY=VALUE).
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80 interval=2147484], [1], [],
+[ovn-nbctl: interval=2147484: options must be interval, timeout, success_count or failure_count with an integer value from 1 to 2147483 (KEY=VALUE).
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80 timeout=3000000000], [1], [],
+[ovn-nbctl: timeout=3000000000: options must be interval, timeout, success_count or failure_count with an integer value from 1 to 2147483 (KEY=VALUE).
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80 ==interval=5], [1], [],
+[ovn-nbctl: ==interval=5: options must be interval, timeout, success_count or failure_count with an integer value from 1 to 2147483 (KEY=VALUE).
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80 "interval= 5"], [1], [],
+[ovn-nbctl: interval= 5: options must be interval, timeout, success_count or failure_count with an integer value from 1 to 2147483 (KEY=VALUE).
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80 interval=+5], [1], [],
+[ovn-nbctl: interval=+5: options must be interval, timeout, success_count or failure_count with an integer value from 1 to 2147483 (KEY=VALUE).
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80 interval=5 interval=9], [1], [],
+[ovn-nbctl: interval=9: option interval is given more than once.
+])
+AT_CHECK([ovn-nbctl lb-add lbs 30.0.0.40:80 192.168.10.10:80 sctp])
+AT_CHECK([ovn-nbctl lb-hc-add lbs 30.0.0.40:80], [1], [],
+[ovn-nbctl: lbs: SCTP load balancers do not support health checks.
+])
+
+dnl Add, duplicates and --may-exist.
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80 interval=5 failure_count=3])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.20:443])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80], [1], [],
+[ovn-nbctl: lb0: a health check for vip 30.0.0.10:80 already exists.
+])
+AT_CHECK([ovn-nbctl lb-hc-list lb0 | uuidfilt], [0], [dnl
+UUID                                  VIP            OPTIONS
+<0>  30.0.0.10:80   failure_count=3 interval=5
+<1>  30.0.0.20:443  -
+])
+AT_CHECK([ovn-nbctl --may-exist lb-hc-add lb0 30.0.0.10:80 timeout=2])
+AT_CHECK([ovn-nbctl --bare --columns=vip,options find load_balancer_health_check vip='"30.0.0.10:80"'], [0], [dnl
+30.0.0.10:80
+timeout=2
+])
+AT_CHECK([ovn-nbctl --bare --columns=_uuid list load_balancer_health_check | grep -c .], [0], [2
+])
+
+dnl IPv6 VIP.
+AT_CHECK([ovn-nbctl lb-hc-add lb6 [[2001:db8::10]]:80 interval=1])
+AT_CHECK([ovn-nbctl lb-hc-list lb6 | uuidfilt], [0], [dnl
+UUID                                  VIP                OPTIONS
+<0>  [[2001:db8::10]]:80  interval=1
+])
+
+dnl Delete one, then all.
+AT_CHECK([ovn-nbctl lb-hc-del lb0 30.0.0.20:443])
+AT_CHECK([ovn-nbctl lb-hc-del lb0 30.0.0.20:443], [1], [],
+[ovn-nbctl: lb0: no health check for vip 30.0.0.20:443.
+])
+AT_CHECK([ovn-nbctl --if-exists lb-hc-del lb0 30.0.0.20:443])
+AT_CHECK([ovn-nbctl --if-exists lb-hc-del lbx])
+AT_CHECK([ovn-nbctl lb-hc-list lb0 | uuidfilt], [0], [dnl
+UUID                                  VIP           OPTIONS
+<0>  30.0.0.10:80  timeout=2
+])
+AT_CHECK([ovn-nbctl lb-hc-del lb0])
+AT_CHECK([ovn-nbctl lb-hc-del lb6])
+AT_CHECK([ovn-nbctl lb-hc-list lb0])
+AT_CHECK([ovn-nbctl list load_balancer_health_check])
+
+dnl Option values are stored normalized.
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80 interval=05])
+AT_CHECK([ovn-nbctl --bare --columns=options list load_balancer_health_check], [0], [dnl
+interval=5
+])
+
+dnl Several commands in one invocation see each other's changes.
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.20:443 -- lb-hc-add lb0 30.0.0.20:443], [1], [],
+[ovn-nbctl: lb0: a health check for vip 30.0.0.20:443 already exists.
+])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.20:443 -- --may-exist lb-hc-add lb0 30.0.0.20:443 interval=3])
+AT_CHECK([ovn-nbctl lb-hc-list lb0 | uuidfilt], [0], [dnl
+UUID                                  VIP            OPTIONS
+<0>  30.0.0.10:80   interval=5
+<1>  30.0.0.20:443  interval=3
+])
+AT_CHECK([ovn-nbctl lb-hc-del lb0 30.0.0.20:443 -- lb-hc-del lb0 30.0.0.20:443], [1], [],
+[ovn-nbctl: lb0: no health check for vip 30.0.0.20:443.
+])
+AT_CHECK([ovn-nbctl lb-hc-del lb0 30.0.0.20:443 -- lb-hc-del lb0])
+AT_CHECK([ovn-nbctl list load_balancer_health_check])
+
+dnl A health check can be removed after its VIP is gone.
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.20:443])
+AT_CHECK([ovn-nbctl lb-del lb0 30.0.0.20:443])
+AT_CHECK([ovn-nbctl lb-hc-del lb0 30.0.0.20:443])
+AT_CHECK([ovn-nbctl list load_balancer_health_check])
+
+dnl A malformed VIP is an error even with --if-exists.
+AT_CHECK([ovn-nbctl -vsocket_util:off --if-exists lb-hc-del lb0 30.0.0.1a:80], [1], [],
+[ovn-nbctl: 30.0.0.1a:80: should be an IP address (or an IP address and a port number with : as a separator).
+])
+AT_CHECK([ovn-nbctl -vsocket_util:off --if-exists lb-hc-del lbx 30.0.0.1a:80], [1], [],
+[ovn-nbctl: 30.0.0.1a:80: should be an IP address (or an IP address and a port number with : as a separator).
+])
+
+dnl A health check shared by two load balancers can be removed from one.
+AT_CHECK([ovn-nbctl lb-add lb1 30.0.0.10:80 192.168.10.10:80])
+AT_CHECK([ovn-nbctl lb-hc-add lb0 30.0.0.10:80])
+hc=$(ovn-nbctl --bare --columns=_uuid list load_balancer_health_check)
+AT_CHECK([ovn-nbctl add load_balancer lb1 health_check $hc])
+AT_CHECK([ovn-nbctl lb-hc-del lb0 30.0.0.10:80])
+AT_CHECK([ovn-nbctl lb-hc-list lb1 | uuidfilt], [0], [dnl
+UUID                                  VIP           OPTIONS
+<0>  30.0.0.10:80  -
+])
+AT_CHECK([ovn-nbctl lb-hc-del lb1])
+AT_CHECK([ovn-nbctl list load_balancer_health_check])
+])
+
+dnl ---------------------------------------------------------------------
+
 OVN_NBCTL_TEST([ovn_nbctl_lbs_ipv6], [LBs IPv6], [
 dnl A bunch of commands that should fail
 AT_CHECK([ovn-nbctl -vsocket_util:off lb-add lb0 [[ae0f::10]]:80a [[fd0f::10]]:80,[[fd0f::20]]:80 tcp], [1], [],

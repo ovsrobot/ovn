@@ -14,6 +14,7 @@
 
 #include <config.h>
 
+#include <ctype.h>
 #include <getopt.h>
 #include <inttypes.h>
 #include <stdlib.h>
@@ -505,6 +506,16 @@ LB commands:\n\
   lb-del LB [VIP]           remove a load-balancer or just the VIP from\n\
                             the load balancer\n\
   lb-list [LB]              print load-balancers\n\
+"
+    "  [--may-exist]\n"
+    "  lb-hc-add LB VIP:PORT [KEY=VALUE]...\n"
+    "                            add a health check for VIP of LB (KEY is\n"
+    "                            interval, timeout, success_count or\n"
+    "                            failure_count)\n"
+    "  [--if-exists]\n"
+    "  lb-hc-del LB [VIP:PORT]   remove health checks from LB\n"
+    "  lb-hc-list LB             print health checks of LB\n"
+"\
   [--may-exist]\n\
   lr-lb-add ROUTER LB       add a load-balancer to ROUTER\n\
   [--if-exists]\n\
@@ -4035,6 +4046,284 @@ nbctl_lb_list(struct ctl_context *ctx)
     } else if (ctx->argc == 2) {
         lb_info_list_all(ctx, ctx->argv[1], true);
     }
+}
+
+/* Load Balancer Health Check Functions. */
+
+/* ovn-controller multiplies "interval" and "timeout" (seconds) by 1000 into
+ * an int, so keep every health check option within that range. */
+#define LB_HC_OPTION_MAX (INT_MAX / 1000)
+
+/* Normalizes 'vip' ("IP:PORT" or "[IPv6]:PORT") the same way as "lb-add"
+ * and checks that it has a port.  On success stores the normalized VIP in
+ * 'normalized' and returns NULL. */
+static char * OVS_WARN_UNUSED_RESULT
+lb_health_check_normalize_vip(const char *vip, struct ds *normalized)
+{
+    struct ovn_lb_vip lb_vip;
+    char *error = ovn_lb_vip_init(&lb_vip, vip, "", false, AF_INET);
+    if (error) {
+        ovn_lb_vip_destroy(&lb_vip);
+        return error;
+    }
+    if (!lb_vip.port_str) {
+        ovn_lb_vip_destroy(&lb_vip);
+        return xasprintf("%s: health checks need a VIP with a port.", vip);
+    }
+    ovn_lb_vip_format(&lb_vip, normalized, false);
+    ovn_lb_vip_destroy(&lb_vip);
+    return NULL;
+}
+
+static const struct nbrec_load_balancer_health_check *
+lb_health_check_find(const struct nbrec_load_balancer *lb, const char *vip)
+{
+    for (size_t i = 0; i < lb->n_health_check; i++) {
+        if (!strcmp(lb->health_check[i]->vip, vip)) {
+            return lb->health_check[i];
+        }
+    }
+    return NULL;
+}
+
+/* Health checks are added and removed by rewriting the whole column rather
+ * than with update_*_addvalue/delvalue(), so that later commands in the same
+ * ovn-nbctl invocation see the change. */
+static void
+lb_health_check_set(const struct nbrec_load_balancer *lb,
+                    const struct nbrec_load_balancer_health_check *add,
+                    const struct nbrec_load_balancer_health_check *del)
+{
+    struct nbrec_load_balancer_health_check **hcs =
+        xmalloc((lb->n_health_check + 1) * sizeof *hcs);
+    size_t n = 0;
+
+    for (size_t i = 0; i < lb->n_health_check; i++) {
+        if (lb->health_check[i] != del) {
+            hcs[n++] = lb->health_check[i];
+        }
+    }
+    if (add) {
+        hcs[n++] = CONST_CAST(struct nbrec_load_balancer_health_check *, add);
+    }
+    nbrec_load_balancer_set_health_check(lb, hcs, n);
+    free(hcs);
+}
+
+static void
+nbctl_pre_lb_health_check(struct ctl_context *ctx)
+{
+    ovsdb_idl_add_column(ctx->idl, &nbrec_load_balancer_col_name);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_load_balancer_col_vips);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_load_balancer_col_options);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_load_balancer_col_protocol);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_load_balancer_col_health_check);
+    ovsdb_idl_add_column(ctx->idl, &nbrec_load_balancer_health_check_col_vip);
+    ovsdb_idl_add_column(ctx->idl,
+                         &nbrec_load_balancer_health_check_col_options);
+}
+
+static void
+nbctl_lb_health_check_add(struct ctl_context *ctx)
+{
+    static const char *valid_options[] = {
+        "interval", "timeout", "success_count", "failure_count",
+    };
+    bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
+    const struct nbrec_load_balancer *lb = NULL;
+    struct ds vip = DS_EMPTY_INITIALIZER;
+    struct smap options = SMAP_INITIALIZER(&options);
+
+    char *error = lb_by_name_or_uuid(ctx, ctx->argv[1], true, &lb);
+    if (error) {
+        ctx->error = error;
+        goto out;
+    }
+
+    /* The checks below rely on these columns. */
+    nbrec_load_balancer_verify_options(lb);
+    nbrec_load_balancer_verify_protocol(lb);
+    nbrec_load_balancer_verify_vips(lb);
+
+    if (smap_get_bool(&lb->options, "template", false)) {
+        ctl_error(ctx, "%s: template load balancers do not support health "
+                  "checks.", ctx->argv[1]);
+        goto out;
+    }
+    if (nullable_string_is_equal(lb->protocol, "sctp")) {
+        ctl_error(ctx, "%s: SCTP load balancers do not support health "
+                  "checks.", ctx->argv[1]);
+        goto out;
+    }
+
+    error = lb_health_check_normalize_vip(ctx->argv[2], &vip);
+    if (error) {
+        ctx->error = error;
+        goto out;
+    }
+    if (!smap_get(&lb->vips, ds_cstr(&vip))) {
+        ctl_error(ctx, "vip %s is not part of the load balancer.",
+                  ds_cstr(&vip));
+        goto out;
+    }
+
+    for (int i = 3; i < ctx->argc; i++) {
+        char *key = xstrdup(ctx->argv[i]);
+        char *value = strchr(key, '=');
+        if (value) {
+            *value++ = '\0';
+        }
+        char *arg = key;
+
+        bool valid_key = false;
+        for (size_t j = 0; j < ARRAY_SIZE(valid_options); j++) {
+            valid_key |= !strcmp(key, valid_options[j]);
+        }
+        if (valid_key && smap_get(&options, key)) {
+            ctl_error(ctx, "%s: option %s is given more than once.",
+                      ctx->argv[i], key);
+            free(arg);
+            goto out;
+        }
+        /* str_to_int() accepts leading white space and a sign. */
+        int n;
+        if (!valid_key || !value || !isdigit((unsigned char) *value)
+            || !str_to_int(value, 10, &n)
+            || n <= 0 || n > LB_HC_OPTION_MAX) {
+            ctl_error(ctx, "%s: options must be interval, timeout, "
+                      "success_count or failure_count with an integer "
+                      "value from 1 to %d (KEY=VALUE).", ctx->argv[i],
+                      LB_HC_OPTION_MAX);
+            free(arg);
+            goto out;
+        }
+        smap_replace_nocopy(&options, key, xasprintf("%d", n));
+        free(arg);
+    }
+
+    nbrec_load_balancer_verify_health_check(lb);
+    const struct nbrec_load_balancer_health_check *hc =
+        lb_health_check_find(lb, ds_cstr(&vip));
+    if (hc) {
+        if (!may_exist) {
+            ctl_error(ctx, "%s: a health check for vip %s already exists.",
+                      ctx->argv[1], ds_cstr(&vip));
+            goto out;
+        }
+        nbrec_load_balancer_health_check_set_options(hc, &options);
+        goto out;
+    }
+
+    hc = nbrec_load_balancer_health_check_insert(ctx->txn);
+    nbrec_load_balancer_health_check_set_vip(hc, ds_cstr(&vip));
+    nbrec_load_balancer_health_check_set_options(hc, &options);
+    lb_health_check_set(lb, hc, NULL);
+
+out:
+    smap_destroy(&options);
+    ds_destroy(&vip);
+}
+
+static void
+nbctl_lb_health_check_del(struct ctl_context *ctx)
+{
+    bool must_exist = !shash_find(&ctx->options, "--if-exists");
+    const struct nbrec_load_balancer *lb = NULL;
+    struct ds vip = DS_EMPTY_INITIALIZER;
+    char *error;
+
+    /* The VIP may already be gone from 'vips' (e.g. after "lb-del LB VIP"),
+     * so only normalize it and look for the health check itself.  Do it
+     * first, so that a malformed VIP is an error even with --if-exists. */
+    if (ctx->argc == 3) {
+        error = lb_health_check_normalize_vip(ctx->argv[2], &vip);
+        if (error) {
+            ctx->error = error;
+            goto out;
+        }
+    }
+
+    error = lb_by_name_or_uuid(ctx, ctx->argv[1], must_exist, &lb);
+    if (error) {
+        ctx->error = error;
+        goto out;
+    }
+    if (!lb) {
+        goto out;
+    }
+
+    /* Health check rows are not root rows, so dropping the reference is
+     * enough: the database removes them once no load balancer refers to
+     * them, and keeps them while another one still does. */
+    nbrec_load_balancer_verify_health_check(lb);
+    if (ctx->argc == 2) {
+        nbrec_load_balancer_set_health_check(lb, NULL, 0);
+        goto out;
+    }
+
+    const struct nbrec_load_balancer_health_check *hc =
+        lb_health_check_find(lb, ds_cstr(&vip));
+    if (hc) {
+        lb_health_check_set(lb, NULL, hc);
+    } else if (must_exist) {
+        ctl_error(ctx, "%s: no health check for vip %s.", ctx->argv[1],
+                  ds_cstr(&vip));
+    }
+out:
+    ds_destroy(&vip);
+}
+
+static int
+lb_health_check_cmp(const void *a_, const void *b_)
+{
+    const struct nbrec_load_balancer_health_check *const *a = a_;
+    const struct nbrec_load_balancer_health_check *const *b = b_;
+
+    return strcmp((*a)->vip, (*b)->vip);
+}
+
+static void
+nbctl_lb_health_check_list(struct ctl_context *ctx)
+{
+    const struct nbrec_load_balancer *lb = NULL;
+
+    char *error = lb_by_name_or_uuid(ctx, ctx->argv[1], true, &lb);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+    if (!lb->n_health_check) {
+        return;
+    }
+
+    const struct nbrec_load_balancer_health_check **hcs =
+        xmemdup(lb->health_check, lb->n_health_check * sizeof *hcs);
+    qsort(hcs, lb->n_health_check, sizeof *hcs, lb_health_check_cmp);
+
+    int vip_width = strlen("VIP");
+    for (size_t i = 0; i < lb->n_health_check; i++) {
+        vip_width = MAX(vip_width, strlen(hcs[i]->vip));
+    }
+
+    ds_put_format(&ctx->output, "%-36s  %-*s  OPTIONS\n", "UUID",
+                  vip_width, "VIP");
+    for (size_t i = 0; i < lb->n_health_check; i++) {
+        ds_put_format(&ctx->output, UUID_FMT"  %-*s  ",
+                      UUID_ARGS(&hcs[i]->header_.uuid),
+                      vip_width, hcs[i]->vip);
+
+        const struct smap_node **nodes = smap_sort(&hcs[i]->options);
+        for (size_t j = 0; j < smap_count(&hcs[i]->options); j++) {
+            ds_put_format(&ctx->output, "%s%s=%s", j ? " " : "",
+                          nodes[j]->key, nodes[j]->value);
+        }
+        if (smap_is_empty(&hcs[i]->options)) {
+            ds_put_char(&ctx->output, '-');
+        }
+        free(nodes);
+        ds_put_char(&ctx->output, '\n');
+    }
+    free(hcs);
 }
 
 static void
@@ -9517,6 +9806,13 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "lb-del", 1, 2, "LB [VIP]", nbctl_pre_lb_del, nbctl_lb_del, NULL,
         "--if-exists", RW },
     { "lb-list", 0, 1, "[LB]", nbctl_pre_lb_list, nbctl_lb_list, NULL, "", RO },
+    { "lb-hc-add", 2, INT_MAX, "LB VIP:PORT [KEY=VALUE]...",
+      nbctl_pre_lb_health_check, nbctl_lb_health_check_add, NULL,
+      "--may-exist", RW },
+    { "lb-hc-del", 1, 2, "LB [VIP:PORT]", nbctl_pre_lb_health_check,
+      nbctl_lb_health_check_del, NULL, "--if-exists", RW },
+    { "lb-hc-list", 1, 1, "LB", nbctl_pre_lb_health_check,
+      nbctl_lb_health_check_list, NULL, "", RO },
     { "lr-lb-add", 2, 2, "ROUTER LB", nbctl_pre_lr_lb_add,
       nbctl_lr_lb_add, NULL, "--may-exist", RW },
     { "lr-lb-del", 1, 2, "ROUTER [LB]", nbctl_pre_lr_lb_del,
