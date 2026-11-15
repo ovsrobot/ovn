@@ -16217,6 +16217,11 @@ build_arp_resolve_flows_for_lsp(
          * connects) and if the address in question is reachable from the
          * router port, add an ARP/ND entry in that router's pipeline. */
 
+        /* Remote ports (OVN-IC transit switches) represent router ports in
+         * other AZs.  Treat them as neighbor routers: skip the static
+         * ARP/ND entry when the local router has dynamic_neigh_routers. */
+        bool is_remote = lsp_is_remote(op->nbsp);
+
         for (size_t i = 0; i < op->n_lsp_addrs; i++) {
             const char *ea_s = op->lsp_addrs[i].ea_s;
             for (size_t j = 0; j < op->lsp_addrs[i].n_ipv4_addrs; j++) {
@@ -16227,6 +16232,12 @@ build_arp_resolve_flows_for_lsp(
                      * 'peer'. */
                     struct ovn_port *peer = ovn_port_get_peer(lr_ports, rp);
                     if (!peer || !peer->nbrp) {
+                        continue;
+                    }
+
+                    if (is_remote && peer->od->nbr &&
+                        smap_get_bool(&peer->od->nbr->options,
+                                      "dynamic_neigh_routers", false)) {
                         continue;
                     }
 
@@ -16265,6 +16276,12 @@ build_arp_resolve_flows_for_lsp(
                      * 'peer'. */
                     struct ovn_port *peer = ovn_port_get_peer(lr_ports, rp);
                     if (!peer || !peer->nbrp) {
+                        continue;
+                    }
+
+                    if (is_remote && peer->od->nbr &&
+                        smap_get_bool(&peer->od->nbr->options,
+                                      "dynamic_neigh_routers", false)) {
                         continue;
                     }
 

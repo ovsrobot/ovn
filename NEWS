@@ -62,6 +62,10 @@ Post v26.09.0
      table at startup; it defers its kernel route updates until the initial
      dump of the advertised routes of the local route-exchange datapaths is
      complete.
+   - The Logical_Router "options:dynamic_neigh_routers" option now also
+     applies to logical switch ports of type "remote" (e.g. ports on
+     OVN-IC transit switches), so no static ARP/ND mappings are created
+     for their addresses.
 
 OVN v26.09.0 - xxx xx xxxx
 --------------------------

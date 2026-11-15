@@ -25837,3 +25837,55 @@ AT_CHECK([ovn-sbctl lflow-list lr0 | grep "lr_in_policy[[^_]]" | ovn_strip_lflow
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([dynamic_neigh_routers skips ARP resolve for remote LSPs])
+ovn_start
+
+dnl lr0 is connected to a transit switch "ts" that has a remote LSP
+dnl (router port in another AZ) and a regular VIF.
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-ts 00:00:00:00:00:01 169.254.100.1/24 fd00::1/64
+check ovn-nbctl ls-add ts
+check ovn-nbctl lsp-add-router-port ts ts-lr0 lr0-ts
+check ovn-nbctl lsp-add ts remote1 \
+    -- lsp-set-type remote1 remote \
+    -- lsp-set-addresses remote1 "00:00:00:00:00:02 169.254.100.2 fd00::2"
+check ovn-nbctl lsp-add ts vif1 \
+    -- lsp-set-addresses vif1 "00:00:00:00:00:03 169.254.100.3 fd00::3"
+check ovn-nbctl --wait=sb sync
+
+dnl Without the option, static entries exist for both ports.
+AT_CHECK([ovn-sbctl lflow-list lr0 | grep lr_in_arp_resolve | \
+          grep priority=100 | grep -E '::[[23]]|169\.254\.100\.[[23]]' | \
+          ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-ts" && reg0 == 169.254.100.2), action=(eth.dst = 00:00:00:00:00:02; next;)
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-ts" && reg0 == 169.254.100.3), action=(eth.dst = 00:00:00:00:00:03; next;)
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-ts" && xxreg0 == fd00::2), action=(eth.dst = 00:00:00:00:00:02; next;)
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-ts" && xxreg0 == fd00::3), action=(eth.dst = 00:00:00:00:00:03; next;)
+])
+
+dnl With dynamic_neigh_routers, the remote LSP entries go away but the
+dnl regular VIF entries are kept.
+check ovn-nbctl --wait=sb set logical_router lr0 options:dynamic_neigh_routers=true
+AT_CHECK([ovn-sbctl lflow-list lr0 | grep lr_in_arp_resolve | \
+          grep priority=100 | grep -E '::[[23]]|169\.254\.100\.[[23]]' | \
+          ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-ts" && reg0 == 169.254.100.3), action=(eth.dst = 00:00:00:00:00:03; next;)
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-ts" && xxreg0 == fd00::3), action=(eth.dst = 00:00:00:00:00:03; next;)
+])
+
+dnl Disabling the option brings the remote LSP entries back.
+check ovn-nbctl --wait=sb set logical_router lr0 options:dynamic_neigh_routers=false
+AT_CHECK([ovn-sbctl lflow-list lr0 | grep lr_in_arp_resolve | \
+          grep priority=100 | grep -E '::[[23]]|169\.254\.100\.[[23]]' | \
+          ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-ts" && reg0 == 169.254.100.2), action=(eth.dst = 00:00:00:00:00:02; next;)
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-ts" && reg0 == 169.254.100.3), action=(eth.dst = 00:00:00:00:00:03; next;)
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-ts" && xxreg0 == fd00::2), action=(eth.dst = 00:00:00:00:00:02; next;)
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-ts" && xxreg0 == fd00::3), action=(eth.dst = 00:00:00:00:00:03; next;)
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])

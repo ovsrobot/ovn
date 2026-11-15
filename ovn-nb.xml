@@ -3452,6 +3452,13 @@ or
           <var>dynamic_neigh_routers</var> to <code>true</code> will prevent
           the automatic creation of these logical flows.
         </p>
+        <p>
+          This also applies to logical switch ports of type
+          <code>remote</code> (e.g. ports on OVN-IC transit switches that
+          represent router ports in other availability zones): no static
+          mappings are created for their addresses, and they are resolved
+          by dynamic ARP/ND instead.
+        </p>
       </column>
       <column name="options" key="always_learn_from_arp_request" type='{"type": "boolean"}'>
         <p>
