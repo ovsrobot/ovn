@@ -7477,7 +7477,12 @@ print_route(const struct nbrec_logical_router_static_route *route,
     }
 
     if (smap_get(&route->external_ids, "ic-learned-route")) {
-        ds_put_format(s, " (learned)");
+        const char *origin = smap_get(&route->options, "origin");
+        if (origin) {
+            ds_put_format(s, " (learned, %s)", origin);
+        } else {
+            ds_put_cstr(s, " (learned)");
+        }
     }
 
     if (ecmp) {
