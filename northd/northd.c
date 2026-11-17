@@ -11571,7 +11571,11 @@ build_lswitch_dhcp_and_dns_defaults(struct ovn_datapath *od,
 
 /* Logical switch ingress table 22 and 23: DNS lookup and response
 * priority 100 flows.
-*/
+*
+* Packets entering the logical switch through a router port come from
+* outside of the switch (e.g. from the internet through a NAT'ed address) and
+* must not be handed to ovn-controller: see
+* build_lswitch_dns_lookup_skip_router_port(). */
 static void
 build_lswitch_dns_lookup_and_response(struct ovn_datapath *od,
                                       struct lflow_table *lflows,
@@ -11599,6 +11603,25 @@ build_lswitch_dns_lookup_and_response(struct ovn_datapath *od,
                   "flags.loopback = 1; output;";
     ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 100,
                   dns_match, dns_action, lflow_ref);
+}
+
+/* Table 22: DNS lookup, priority 200 flow that skips the lookup for the
+ * packets entering the logical switch through a router port, so that
+ * unsolicited DNS traffic coming from the routed side never reaches
+ * ovn-controller, and is subject to the ACLs like any other UDP traffic. */
+static void
+build_lswitch_dns_lookup_skip_router_port(struct ovn_port *op,
+                                          struct lflow_table *lflows,
+                                          struct ds *match)
+{
+    ovs_assert(op->nbsp);
+    if (!lsp_is_router(op->nbsp) || !ls_has_dns_records(op->od->nbs)) {
+        return;
+    }
+    ds_clear(match);
+    ds_put_format(match, "inport == %s", op->json_key);
+    ovn_lflow_add(lflows, op->od, S_SWITCH_IN_DNS_LOOKUP, 200,
+                  ds_cstr(match), "next;", op->lflow_ref);
 }
 
 /* Table 24: External port. Drop ARP request for router ips from
@@ -20460,6 +20483,7 @@ build_lswitch_and_lrouter_iterate_by_lsp(struct ovn_port *op,
     build_lswitch_arp_nd_responder_known_ips(op, lflows, ls_ports,
                                              meter_groups, actions, match);
     build_lswitch_dhcp_options_and_response(op, lflows, meter_groups);
+    build_lswitch_dns_lookup_skip_router_port(op, lflows, match);
     build_lswitch_external_port(op, lflows);
     build_lswitch_icmp_packet_toobig_admin_flows(op, lflows, match, actions);
     build_lswitch_ip_unicast_lookup(op, lflows, actions,
