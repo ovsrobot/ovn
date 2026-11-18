@@ -3870,19 +3870,19 @@ based on the configuration in the OVN Northbound database.
 **Egress Table 3: SNAT on Gateway Routers**
 
 - If the Gateway router in the OVN Northbound database has been configured to
-  force SNAT a packet (that has been previously DNATted) to *B*, a priority-100
+  force SNAT a packet (that has been previously DNATted) to *B*, a priority-135
   flow matches ``flags.force_snat_for_dnat == 1 && ip`` with an action
   ``ct_snat(B);``.
 
 - If a load balancer configured to skip snat has been applied to the Gateway
-  router pipeline, a priority-120 flow matches ``flags.skip_snat_for_lb == 1 &&
+  router pipeline, a priority-155 flow matches ``flags.skip_snat_for_lb == 1 &&
   ip`` with an action ``next;``.
 
 - If the Gateway router in the OVN Northbound database has been configured to
   force SNAT a packet (that has been previously load-balanced) using router IP
   (i.e ``options``:lb_force_snat_ip=router_ip), then for each logical router
   port *P* attached to the Gateway router, and for each network configured for
-  this port, a priority-110 flow matches ``flags.force_snat_for_lb == 1`` &&
+  this port, a priority-145 flow matches ``flags.force_snat_for_lb == 1`` &&
   ``ip4`` && ``flags.network_id == N`` && ``outport == P``, where *N* is the
   network index, with an action ``ct_snat(R);`` where *R* is the IP configured
   on the router port. A similar flow is created for IPv6, with ``ip6`` instead
@@ -3894,7 +3894,7 @@ based on the configuration in the OVN Northbound database.
   networks configured, the lexicographically first IP will be considered for
   SNAT for networks 17 and up.
 
-- A priority-105 flow matches the old behavior for if northd is upgraded before
+- A priority-140 flow matches the old behavior for if northd is upgraded before
   controller and ``flags.network_id`` is not recognized. It is only added if
   there's at least one network configured (excluding LLA for IPv6). It matches
   on: ``flags.force_snat_for_lb == 1`` && ``ip4`` && ``outport == P``, with
@@ -3903,7 +3903,7 @@ based on the configuration in the OVN Northbound database.
 
 - If the Gateway router in the OVN Northbound database has been configured to
   force SNAT a packet (that has been previously load-balanced) to *B*, a
-  priority-100 flow matches ``flags.force_snat_for_lb == 1 && ip`` with an
+  priority-135 flow matches ``flags.force_snat_for_lb == 1 && ip`` with an
   action ``ct_snat(B);``.
 
 - For each configuration in the OVN Northbound database, that asks to change the
@@ -3911,7 +3911,9 @@ based on the configuration in the OVN Northbound database.
   source IP address of a packet that belongs to network *A* to *B*, a flow
   matches ``ip && ip4.src == A && (!ct.trk || !ct.rpl)`` with an action
   ``ct_snat(B);``.  The priority of the flow is calculated based on the mask of
-  *A*, with matches having larger masks getting higher priorities. If the NAT
+  *A*, with matches having larger masks getting higher priorities, at most
+  134.  The flows above that match on the force and skip SNAT flags have higher
+  priorities, so they take precedence regardless of the mask of *A*. If the NAT
   rule is of type dnat_and_snat and has ``stateless=true`` in the options, then
   the action would be ``ip4/6.src=(B)``.
 

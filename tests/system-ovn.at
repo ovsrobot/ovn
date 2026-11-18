@@ -2909,6 +2909,149 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([load balancing with SNAT flags and an IPv6 /128 SNAT entry])
+AT_KEYWORDS([ovnlb])
+
+CHECK_CONNTRACK()
+CHECK_CONNTRACK_NAT()
+ovn_start
+OVS_TRAFFIC_VSWITCHD_START()
+ADD_BR([br-int])
+
+# Set external-ids in br-int needed for ovn-controller.
+check ovs-vsctl \
+        -- set Open_vSwitch . external-ids:system-id=hv1 \
+        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+        -- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+        -- set Open_vSwitch . external-ids:ovn-encap-ip=169.0.0.1 \
+        -- set bridge br-int fail-mode=secure other-config:disable-in-band=true
+
+# Start ovn-controller.
+start_daemon ovn-controller
+
+# Logical network:
+#
+#    foo -- R1 -- join -- R2 -- alice
+#
+# R2 is a gateway router with a load balancer whose backend sits on "alice".
+# It also has an SNAT entry for the client's /128.  The lr_out_snat priority
+# of that entry is 129, so it competes with the flows that consume the skip
+# and force SNAT flags for the load balanced traffic.
+
+check_uuid ovn-nbctl create Logical_Router name=R1
+check_uuid ovn-nbctl create Logical_Router name=R2 options:chassis=hv1
+
+check ovn-nbctl ls-add foo
+check ovn-nbctl ls-add alice
+check ovn-nbctl ls-add join
+
+# Connect foo to R1.
+check ovn-nbctl lrp-add R1 foo 00:00:01:01:02:03 fd11::1/64
+check ovn-nbctl lsp-add foo rp-foo -- set Logical_Switch_Port rp-foo \
+    type=router options:router-port=foo addresses=\"00:00:01:01:02:03\"
+
+# Connect alice to R2.
+check ovn-nbctl lrp-add R2 alice 00:00:02:01:02:03 fd72::1/64
+check ovn-nbctl lsp-add alice rp-alice -- set Logical_Switch_Port rp-alice \
+    type=router options:router-port=alice addresses=\"00:00:02:01:02:03\"
+
+# Connect R1 to join.
+check ovn-nbctl lrp-add R1 R1_join 00:00:04:01:02:03 fd20::1/64
+check ovn-nbctl lsp-add join r1-join -- set Logical_Switch_Port r1-join \
+    type=router options:router-port=R1_join addresses='"00:00:04:01:02:03"'
+
+# Connect R2 to join.
+check ovn-nbctl lrp-add R2 R2_join 00:00:04:01:02:04 fd20::2/64
+check ovn-nbctl lsp-add join r2-join -- set Logical_Switch_Port r2-join \
+    type=router options:router-port=R2_join addresses='"00:00:04:01:02:04"'
+
+# Static routes.
+check ovn-nbctl lr-route-add R1 fd30::/64 fd20::2
+check ovn-nbctl lr-route-add R1 fd72::/64 fd20::2
+check ovn-nbctl lr-route-add R2 fd11::/64 fd20::1
+
+# Logical port 'foo1' in switch 'foo'.  This is the client.
+ADD_NAMESPACES(foo1)
+ADD_VETH(foo1, foo1, br-int, "fd11::2/64", "f0:00:00:01:02:03", \
+         "fd11::1")
+check ovn-nbctl lsp-add foo foo1 \
+-- lsp-set-addresses foo1 "f0:00:00:01:02:03 fd11::2"
+
+# Logical port 'alice1' in switch 'alice'.  This is the backend.
+ADD_NAMESPACES(alice1)
+ADD_VETH(alice1, alice1, br-int, "fd72::2/64", "f0:00:00:01:02:04", \
+         "fd72::1")
+check ovn-nbctl lsp-add alice alice1 \
+-- lsp-set-addresses alice1 "f0:00:00:01:02:04 fd72::2"
+
+uuid=`ovn-nbctl create load_balancer vips:'"[[fd30::1]]:8000"'='"@<:@fd72::2@:>@:80"'`
+check ovn-nbctl set logical_router R2 load_balancer=$uuid
+
+check ovn-nbctl lr-nat-add R2 snat fd30::99 fd11::2
+
+check ovn-nbctl set load_balancer $uuid options:skip_snat=true
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_UNTIL([ovs-ofctl -O OpenFlow13 dump-groups br-int | \
+grep 'nat(dst=\[[fd72::2\]]:80)'])
+
+# Start a webserver on the backend.
+OVS_START_L7([alice1], [http6])
+
+dnl With skip_snat the load balanced traffic must not be SNATed, in
+dnl particular not by the /128 SNAT entry.
+check ovs-appctl dpctl/flush-conntrack
+NS_CHECK_EXEC([foo1], [wget http://[[fd30::1]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget-skip.log])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd30::1) | grep -v fe80 | \
+          sed -e 's/zone=[[0-9]]*/zone=<cleared>/' -e 's/mark=[[0-9]]*/mark=<cleared>/'], [0], [dnl
+tcp,orig=(src=fd11::2,dst=fd30::1,sport=<cleared>,dport=<cleared>),reply=(src=fd72::2,dst=fd11::2,sport=<cleared>,dport=<cleared>),zone=<cleared>,mark=<cleared>,protoinfo=(state=<cleared>)
+])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep -c "fd30::99"], [1], [0
+])
+
+dnl With lb_force_snat_ip=router_ip the load balanced traffic must be SNATed
+dnl to the IP of the router port it leaves through, not by the /128 entry.
+check ovn-nbctl remove load_balancer $uuid options skip_snat
+check ovn-nbctl --wait=hv set logical_router R2 options:lb_force_snat_ip=router_ip
+
+check ovs-appctl dpctl/flush-conntrack
+NS_CHECK_EXEC([foo1], [wget http://[[fd30::1]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget-router-ip.log])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd72::1) | grep -v fe80 | \
+          sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
+tcp,orig=(src=fd11::2,dst=fd72::2,sport=<cleared>,dport=<cleared>),reply=(src=fd72::2,dst=fd72::1,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep -c "fd30::99"], [1], [0
+])
+
+dnl Same with an explicit lb_force_snat_ip address.
+check ovn-nbctl --wait=hv set logical_router R2 options:lb_force_snat_ip=fd30::98
+
+check ovs-appctl dpctl/flush-conntrack
+NS_CHECK_EXEC([foo1], [wget http://[[fd30::1]]:8000 -t 5 -T 1 --retry-connrefused -v -o wget-force-ip.log])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(fd30::98) | grep -v fe80 | \
+          sed -e 's/zone=[[0-9]]*/zone=<cleared>/'], [0], [dnl
+tcp,orig=(src=fd11::2,dst=fd72::2,sport=<cleared>,dport=<cleared>),reply=(src=fd72::2,dst=fd30::98,sport=<cleared>,dport=<cleared>),zone=<cleared>,protoinfo=(state=<cleared>)
+])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep -c "fd30::99"], [1], [0
+])
+
+OVN_CLEANUP_CONTROLLER([hv1])
+
+OVN_CLEANUP_NORTHD
+
+as
+OVS_TRAFFIC_VSWITCHD_STOP(["/failed to query port patch-.*/d
+/Failed to acquire.*/d
+/connection dropped.*/d"])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([load balancing in gateway router - IPv6])
 AT_KEYWORDS([ovnlb])
 

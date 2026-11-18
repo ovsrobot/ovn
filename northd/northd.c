@@ -14224,6 +14224,36 @@ build_lrouter_allow_vip_traffic_template(struct lflow_table *lflows,
  * fixed ordering relative to the NAT flows must apply the same offset. */
 #define NAT_PRIORITY_DGP_OFFSET 128
 
+/* Highest lr_out_snat priority of a NAT flow without a custom match, before
+ * NAT_PRIORITY_DGP_OFFSET is applied: prefix_len + 1, plus at most 5 for the
+ * dnat_and_snat CT zone flow. */
+#define NAT_PRIORITY_NO_MATCH_MAX (MAX_PREFIX_LEN + 1 + 5)
+
+/* The flows that consume flags.force_snat_for_dnat, flags.force_snat_for_lb
+ * and flags.skip_snat_for_lb must take precedence over every NAT flow
+ * without a custom match, regardless of the prefix length of its
+ * logical_ip.  Otherwise an IPv6 SNAT entry with a long enough prefix is hit
+ * first and the flag is ignored. */
+#define NAT_PRIORITY_SNAT_FLAGS_BASE (NAT_PRIORITY_NO_MATCH_MAX + 1)
+
+/* Returns the lr_out_snat priority of a flow that consumes one of the force
+ * or skip SNAT flags.  'offset' orders these flows among themselves:
+ *
+ *   0: force SNAT to a configured address.
+ *   5: force SNAT to the router port address, compatibility flow.
+ *  10: force SNAT to the router port address, per network.
+ *  20: skip SNAT. */
+static uint16_t
+lrouter_snat_flags_get_priority(const struct ovn_datapath *od,
+                                uint16_t offset)
+{
+    uint16_t priority = NAT_PRIORITY_SNAT_FLAGS_BASE + offset;
+    if (!od->is_gw_router && !vector_is_empty(&od->l3dgw_ports)) {
+        priority += NAT_PRIORITY_DGP_OFFSET;
+    }
+    return priority;
+}
+
 static void
 build_lrouter_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
                            struct lflow_table *lflows,
@@ -14276,10 +14306,7 @@ build_lrouter_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
         DYNAMIC_BITMAP_FOR_EACH_1 (index, &lb_dps->nb_lr_map) {
             struct ovn_datapath *od = sparse_array_get(&lr_datapaths->dps,
                                                        index);
-            uint16_t prio = 120;
-            if (!od->is_gw_router && !vector_is_empty(&od->l3dgw_ports)) {
-                prio += NAT_PRIORITY_DGP_OFFSET;
-            }
+            uint16_t prio = lrouter_snat_flags_get_priority(od, 20);
             ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, prio,
                           "flags.skip_snat_for_lb == 1 && ip", "next;",
                           lb_dps->lflow_ref);
@@ -14385,6 +14412,11 @@ lrouter_dnat_and_snat_is_stateless(const struct ovn_nat *nat)
 }
 
 #define NAT_PRIORITY_MATCH_OFFSET 300
+
+/* The SNAT flag consumers must stay below the NAT flows with a custom match,
+ * also on routers with distributed gateway ports. */
+BUILD_ASSERT_DECL(NAT_PRIORITY_SNAT_FLAGS_BASE + 20 +
+                  NAT_PRIORITY_DGP_OFFSET < NAT_PRIORITY_MATCH_OFFSET);
 
 static inline uint16_t
 lrouter_nat_get_priority(const struct ovn_datapath *od,
@@ -14784,24 +14816,17 @@ build_lrouter_force_snat_flows(struct lflow_table *lflows,
     ds_clear(&match);
     ds_put_format(&match, "flags.force_snat_for_%s == 1 && ip%s",
                   context, ip_version);
-    uint16_t snat_prio = 100;
     if (l3dgw_port) {
         /* Distributed router: force SNAT is applied on the chassis
          * where the gateway port is resident, consistent with how
-         * regular SNAT entries are handled for such routers.
-         *
-         * The NAT flows of such a router are shifted up by
-         * NAT_PRIORITY_DGP_OFFSET, so shift this flow as well to keep the
-         * same ordering it has on a gateway router.  Without the shift
-         * even a plain subnet SNAT entry would outrank it and the forced
-         * SNAT would never be applied. */
+         * regular SNAT entries are handled for such routers. */
         ds_put_format(&match, " && outport == %s && is_chassis_resident("
                       "\"%s\")", l3dgw_port->json_key,
                       l3dgw_port->cr_port->key);
-        snat_prio += NAT_PRIORITY_DGP_OFFSET;
     }
     ds_put_format(&actions, "ct_snat(%s);", ip_addr);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, snat_prio,
+    ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT,
+                  lrouter_snat_flags_get_priority(od, 0),
                   ds_cstr(&match), ds_cstr(&actions),
                   lflow_ref);
 
@@ -14940,7 +14965,8 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
                       "outport == %s", network_id, op->json_key);
         ds_put_format(actions, "ct_snat(%s);",
                       op->lrp_networks.ipv4_addrs[network_id].addr_s);
-        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 110,
+        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT,
+                      lrouter_snat_flags_get_priority(op->od, 10),
                       ds_cstr(match), ds_cstr(actions),
                       lflow_ref);
     }
@@ -14980,7 +15006,8 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
                       "outport == %s", network_id, op->json_key);
         ds_put_format(actions, "ct_snat(%s);",
                       op->lrp_networks.ipv6_addrs[network_id].addr_s);
-        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 110,
+        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT,
+                      lrouter_snat_flags_get_priority(op->od, 10),
                       ds_cstr(match), ds_cstr(actions),
                       lflow_ref);
     }
@@ -14994,7 +15021,8 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
                       "outport == %s", op->json_key);
         ds_put_format(actions, "ct_snat(%s);",
                       op->lrp_networks.ipv4_addrs[0].addr_s);
-        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 105,
+        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT,
+                      lrouter_snat_flags_get_priority(op->od, 5),
                       ds_cstr(match), ds_cstr(actions), lflow_ref);
     }
 
@@ -15007,7 +15035,8 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
                       "outport == %s", op->json_key);
         ds_put_format(actions, "ct_snat(%s);",
                       op->lrp_networks.ipv6_addrs[0].addr_s);
-        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 105,
+        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT,
+                      lrouter_snat_flags_get_priority(op->od, 5),
                       ds_cstr(match), ds_cstr(actions), lflow_ref);
     }
 }

@@ -5204,9 +5204,9 @@ AT_CHECK([grep "lr_in_dnat" lr0flows | ovn_strip_lflows], [0], [dnl
 
 AT_CHECK([grep "lr_out_snat" lr0flows | ovn_strip_lflows], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
-  table=??(lr_out_snat        ), priority=100  , match=(flags.force_snat_for_lb == 1 && ip4), action=(ct_snat(20.0.0.4);)
-  table=??(lr_out_snat        ), priority=100  , match=(flags.force_snat_for_lb == 1 && ip6), action=(ct_snat(aef0::4);)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=135  , match=(flags.force_snat_for_lb == 1 && ip4), action=(ct_snat(20.0.0.4);)
+  table=??(lr_out_snat        ), priority=135  , match=(flags.force_snat_for_lb == 1 && ip6), action=(ct_snat(aef0::4);)
 ])
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | ovn_strip_lflows], [0], [dnl
@@ -5255,13 +5255,13 @@ AT_CHECK([grep "lr_in_dnat" lr0flows | ovn_strip_lflows], [0], [dnl
 
 AT_CHECK([grep "lr_out_snat" lr0flows | ovn_strip_lflows], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.100);)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw1"), action=(ct_snat(20.0.0.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.100);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw1"), action=(ct_snat(20.0.0.1);)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.100);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw1"), action=(ct_snat(20.0.0.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.100);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw1"), action=(ct_snat(20.0.0.1);)
 ])
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | ovn_strip_lflows], [0], [dnl
@@ -5323,15 +5323,15 @@ AT_CHECK([grep "lr_in_dnat" lr0flows | ovn_strip_lflows], [0], [dnl
 
 AT_CHECK([grep "lr_out_snat" lr0flows | ovn_strip_lflows], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.100);)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw1"), action=(ct_snat(20.0.0.1);)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-sw1"), action=(ct_snat(bef0::1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.100);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw1"), action=(ct_snat(20.0.0.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip6 && outport == "lr0-sw1"), action=(ct_snat(bef0::1);)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.100);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw1"), action=(ct_snat(20.0.0.1);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-sw1"), action=(ct_snat(bef0::1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.100);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw1"), action=(ct_snat(20.0.0.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip6 && outport == "lr0-sw1"), action=(ct_snat(bef0::1);)
 ])
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | ovn_strip_lflows], [0], [dnl
@@ -5372,7 +5372,7 @@ AT_CHECK([grep "lr_in_dnat" lr0flows | grep skip_snat_for_lb | ovn_strip_lflows]
 ])
 
 AT_CHECK([grep "lr_out_snat" lr0flows | grep skip_snat_for_lb | ovn_strip_lflows], [0], [dnl
-  table=??(lr_out_snat        ), priority=120  , match=(flags.skip_snat_for_lb == 1 && ip), action=(next;)
+  table=??(lr_out_snat        ), priority=155  , match=(flags.skip_snat_for_lb == 1 && ip), action=(next;)
 ])
 
 AT_CHECK([grep "lr_out_undnat" lr0flows | ovn_strip_lflows], [0], [dnl
@@ -5444,8 +5444,8 @@ AT_CHECK([grep "lr_out_snat" lr0flows | ovn_strip_lflows], [0], [dnl
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
   table=??(lr_out_snat        ), priority=153  , match=(ip && ip4.dst == 10.0.0.0/24 && inport == "lr0-public" && is_chassis_resident("cr-lr0-public") && (!ct.trk || !ct.rpl)), action=(ct_snat;)
   table=??(lr_out_snat        ), priority=153  , match=(ip && ip4.src == 10.0.0.0/24 && outport == "lr0-public" && is_chassis_resident("cr-lr0-public") && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.100);)
-  table=??(lr_out_snat        ), priority=228  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public" && is_chassis_resident("cr-lr0-public")), action=(ct_snat(172.168.0.4);)
-  table=??(lr_out_snat        ), priority=228  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-public" && is_chassis_resident("cr-lr0-public")), action=(ct_snat(aef0::4);)
+  table=??(lr_out_snat        ), priority=263  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public" && is_chassis_resident("cr-lr0-public")), action=(ct_snat(172.168.0.4);)
+  table=??(lr_out_snat        ), priority=263  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-public" && is_chassis_resident("cr-lr0-public")), action=(ct_snat(aef0::4);)
 ])
 
 # The producer and the consumer must both be present: the load balancer
@@ -5475,7 +5475,7 @@ AT_CHECK([grep "lr_out_undnat" lr0flows | ovn_strip_lflows], [0], [dnl
 ])
 
 AT_CHECK([grep "lr_out_snat" lr0flows | grep skip_snat | ovn_strip_lflows], [0], [dnl
-  table=??(lr_out_snat        ), priority=248  , match=(flags.skip_snat_for_lb == 1 && ip), action=(next;)
+  table=??(lr_out_snat        ), priority=283  , match=(flags.skip_snat_for_lb == 1 && ip), action=(next;)
 ])
 
 check ovn-nbctl --wait=sb remove load_balancer lb1 options skip_snat
@@ -5487,6 +5487,91 @@ ovn-sbctl dump-flows lr0 > lr0flows
 AT_CAPTURE_FILE([lr0flows])
 
 AT_CHECK([grep "lr_out_snat" lr0flows | grep force_snat_for_lb | ovn_strip_lflows], [0], [dnl
+])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Load Balancers and SNAT flags with an IPv6 /128 SNAT entry])
+ovn_start
+
+# The lr_out_snat priority of a NAT entry without a custom match is
+# prefix_len + 1, so an IPv6 /128 entry gets 129 on a gateway router and 257
+# on a router with a distributed gateway port.  The flows that consume the
+# force and skip SNAT flags must still be hit first.
+
+# Gateway router.
+check ovn-nbctl ls-add sw0
+check ovn-nbctl ls-add public0
+check ovn-nbctl lr-add lr0 -- set logical_router lr0 options:chassis=ch1
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24 aef0::1/64
+check ovn-nbctl lsp-add-router-port sw0 sw0-lr0 lr0-sw0
+check ovn-nbctl lrp-add lr0 lr0-public 00:00:20:20:12:13 172.168.0.100/24 def0::10/64
+check ovn-nbctl lsp-add-router-port public0 public0-lr0 lr0-public
+check ovn-nbctl lb-add lb0 aef0::100 aef0::2
+check ovn-nbctl lr-lb-add lr0 lb0
+check ovn-nbctl lr-nat-add lr0 snat def0::100 aef0::2
+
+# Router with a distributed gateway port.
+check ovn-nbctl ls-add sw1
+check ovn-nbctl ls-add public1
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lr1-sw1 00:00:00:00:ff:02 10.0.1.1/24 aef1::1/64
+check ovn-nbctl lsp-add-router-port sw1 sw1-lr1 lr1-sw1
+check ovn-nbctl lrp-add lr1 lr1-public 00:00:20:20:12:14 172.168.1.100/24 def1::10/64
+check ovn-nbctl lsp-add-router-port public1 public1-lr1 lr1-public
+check ovn-nbctl lrp-set-gateway-chassis lr1-public ch1
+check ovn-nbctl lb-add lb1 aef1::100 aef1::2
+check ovn-nbctl lr-lb-add lr1 lb1
+check ovn-nbctl lr-nat-add lr1 snat def1::100 aef1::2
+
+check ovn-nbctl set logical_router lr0 options:lb_force_snat_ip=def0::4 \
+    options:dnat_force_snat_ip=def0::5
+check ovn-nbctl set logical_router lr1 options:lb_force_snat_ip=def1::4
+check ovn-nbctl set load_balancer lb0 options:skip_snat=true
+check ovn-nbctl set load_balancer lb1 options:skip_snat=true
+check ovn-nbctl --wait=sb sync
+
+ovn-sbctl dump-flows lr0 > lr0flows
+AT_CAPTURE_FILE([lr0flows])
+ovn-sbctl dump-flows lr1 > lr1flows
+AT_CAPTURE_FILE([lr1flows])
+
+AT_CHECK([grep "lr_out_snat" lr0flows | ovn_strip_lflows], [0], [dnl
+  table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
+  table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=129  , match=(ip && ip6.src == aef0::2 && (!ct.trk || !ct.rpl)), action=(ct_snat(def0::100);)
+  table=??(lr_out_snat        ), priority=135  , match=(flags.force_snat_for_dnat == 1 && ip6), action=(ct_snat(def0::5);)
+  table=??(lr_out_snat        ), priority=135  , match=(flags.force_snat_for_lb == 1 && ip6), action=(ct_snat(def0::4);)
+  table=??(lr_out_snat        ), priority=155  , match=(flags.skip_snat_for_lb == 1 && ip), action=(next;)
+])
+
+AT_CHECK([grep "lr_out_snat" lr1flows | ovn_strip_lflows], [0], [dnl
+  table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
+  table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=257  , match=(ip && ip6.dst == aef1::2 && inport == "lr1-public" && is_chassis_resident("cr-lr1-public") && (!ct.trk || !ct.rpl)), action=(ct_snat;)
+  table=??(lr_out_snat        ), priority=257  , match=(ip && ip6.src == aef1::2 && outport == "lr1-public" && is_chassis_resident("cr-lr1-public") && (!ct.trk || !ct.rpl)), action=(ct_snat(def1::100);)
+  table=??(lr_out_snat        ), priority=263  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr1-public" && is_chassis_resident("cr-lr1-public")), action=(ct_snat(def1::4);)
+  table=??(lr_out_snat        ), priority=283  , match=(flags.skip_snat_for_lb == 1 && ip), action=(next;)
+])
+
+# lb_force_snat_ip=router_ip is only supported on gateway routers.
+check ovn-nbctl --wait=sb set logical_router lr0 options:lb_force_snat_ip=router_ip
+
+ovn-sbctl dump-flows lr0 > lr0flows
+AT_CAPTURE_FILE([lr0flows])
+
+AT_CHECK([grep "lr_out_snat" lr0flows | grep force_snat_for_lb | ovn_strip_lflows], [0], [dnl
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.100);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-public"), action=(ct_snat(def0::10);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-sw0"), action=(ct_snat(aef0::1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.100);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip6 && outport == "lr0-public"), action=(ct_snat(def0::10);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip6 && outport == "lr0-sw0"), action=(ct_snat(aef0::1);)
 ])
 
 OVN_CLEANUP_NORTHD
@@ -7342,11 +7427,11 @@ AT_CHECK([grep "lr_out_post_undnat" lr0flows | ovn_strip_lflows], [0], [dnl
 
 AT_CHECK([grep "lr_out_snat" lr0flows | ovn_strip_lflows], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
   table=??(lr_out_snat        ), priority=25   , match=(ip && ip4.src == 10.0.0.0/24 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.10);)
   table=??(lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.10 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.30);)
   table=??(lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.3 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.20);)
@@ -7411,11 +7496,11 @@ AT_CHECK([grep "lr_out_post_undnat" lr0flows | ovn_strip_lflows], [0], [dnl
 
 AT_CHECK([grep "lr_out_snat" lr0flows | ovn_strip_lflows], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
   table=??(lr_out_snat        ), priority=25   , match=(ip && ip4.src == 10.0.0.0/24 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.10);)
   table=??(lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.10 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.30);)
   table=??(lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.3 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.20);)
@@ -7492,15 +7577,15 @@ AT_CHECK([grep "lr_out_post_undnat" lr0flows | ovn_strip_lflows], [0], [dnl
 
 AT_CHECK([grep "lr_out_snat" lr0flows | ovn_strip_lflows], [0], [dnl
   table=??(lr_out_snat        ), priority=0    , match=(1), action=(next;)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-public"), action=(ct_snat(def0::10);)
-  table=??(lr_out_snat        ), priority=105  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-sw0"), action=(ct_snat(aef0::1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip6 && outport == "lr0-public"), action=(ct_snat(def0::10);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip6 && outport == "lr0-sw0"), action=(ct_snat(aef0::1);)
   table=??(lr_out_snat        ), priority=120  , match=(nd_ns), action=(next;)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-public"), action=(ct_snat(def0::10);)
+  table=??(lr_out_snat        ), priority=140  , match=(flags.force_snat_for_lb == 1 && ip6 && outport == "lr0-sw0"), action=(ct_snat(aef0::1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.10);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lr0-sw0"), action=(ct_snat(10.0.0.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip6 && outport == "lr0-public"), action=(ct_snat(def0::10);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip6 && outport == "lr0-sw0"), action=(ct_snat(aef0::1);)
   table=??(lr_out_snat        ), priority=25   , match=(ip && ip4.src == 10.0.0.0/24 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.10);)
   table=??(lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.10 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.30);)
   table=??(lr_out_snat        ), priority=33   , match=(ip && ip4.src == 10.0.0.3 && (!ct.trk || !ct.rpl)), action=(ct_snat(172.168.0.20);)
@@ -17390,7 +17475,7 @@ check_snat_flows() {
     AT_CAPTURE_FILE([snatflows])
     for family in 4 6; do
         AT_CHECK([grep lr_in_unsnat snatflows | grep "inport == \"$2\"" | grep -q "ip$family.dst"], [$3])
-        for priority in 105 110; do
+        for priority in 140 145; do
             AT_CHECK([grep lr_out_snat snatflows | grep "priority=$priority " | grep "outport == \"$2\"" | grep -q "&& ip$family"], [$3])
         done
     done
@@ -21050,40 +21135,40 @@ AT_CHECK([grep -E flags.network_id lrflows | ovn_strip_lflows], [0], [dnl
   table=??(lr_in_network_id   ), priority=110  , match=(outport == "lrp-server" && ip6 && xxreg0 == ff01::d/128), action=(flags.network_id = 11; next;)
   table=??(lr_in_network_id   ), priority=110  , match=(outport == "lrp-server" && ip6 && xxreg0 == ff01::e/128), action=(flags.network_id = 12; next;)
   table=??(lr_in_network_id   ), priority=110  , match=(outport == "lrp-server" && ip6 && xxreg0 == ff01::f/128), action=(flags.network_id = 13; next;)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lrp-client"), action=(ct_snat(1.1.1.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lrp-server"), action=(ct_snat(1.1.2.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip6 && outport == "lrp-client"), action=(ct_snat(ff01::1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::2);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 1 && ip4 && outport == "lrp-server"), action=(ct_snat(1.2.1.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 1 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::3);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 10 && ip4 && outport == "lrp-server"), action=(ct_snat(6.6.1.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 10 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::c);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 11 && ip4 && outport == "lrp-server"), action=(ct_snat(6.6.6.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 11 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::d);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 12 && ip4 && outport == "lrp-server"), action=(ct_snat(6.7.1.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 12 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::e);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 13 && ip4 && outport == "lrp-server"), action=(ct_snat(6.8.1.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 13 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::f);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 14 && ip4 && outport == "lrp-server"), action=(ct_snat(6.9.1.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 14 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::a1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 15 && ip4 && outport == "lrp-server"), action=(ct_snat(7.2.1.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 15 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::a2);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 2 && ip4 && outport == "lrp-server"), action=(ct_snat(1.2.2.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 2 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::4);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 3 && ip4 && outport == "lrp-server"), action=(ct_snat(3.3.3.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 3 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::5);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 4 && ip4 && outport == "lrp-server"), action=(ct_snat(4.4.4.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 4 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::6);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 5 && ip4 && outport == "lrp-server"), action=(ct_snat(5.5.5.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 5 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::7);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 6 && ip4 && outport == "lrp-server"), action=(ct_snat(6.2.1.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 6 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::8);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 7 && ip4 && outport == "lrp-server"), action=(ct_snat(6.3.1.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 7 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::9);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 8 && ip4 && outport == "lrp-server"), action=(ct_snat(6.4.1.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 8 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::a);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 9 && ip4 && outport == "lrp-server"), action=(ct_snat(6.5.1.1);)
-  table=??(lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 9 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::b);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lrp-client"), action=(ct_snat(1.1.1.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip4 && outport == "lrp-server"), action=(ct_snat(1.1.2.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip6 && outport == "lrp-client"), action=(ct_snat(ff01::1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 0 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::2);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 1 && ip4 && outport == "lrp-server"), action=(ct_snat(1.2.1.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 1 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::3);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 10 && ip4 && outport == "lrp-server"), action=(ct_snat(6.6.1.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 10 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::c);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 11 && ip4 && outport == "lrp-server"), action=(ct_snat(6.6.6.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 11 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::d);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 12 && ip4 && outport == "lrp-server"), action=(ct_snat(6.7.1.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 12 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::e);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 13 && ip4 && outport == "lrp-server"), action=(ct_snat(6.8.1.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 13 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::f);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 14 && ip4 && outport == "lrp-server"), action=(ct_snat(6.9.1.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 14 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::a1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 15 && ip4 && outport == "lrp-server"), action=(ct_snat(7.2.1.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 15 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::a2);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 2 && ip4 && outport == "lrp-server"), action=(ct_snat(1.2.2.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 2 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::4);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 3 && ip4 && outport == "lrp-server"), action=(ct_snat(3.3.3.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 3 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::5);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 4 && ip4 && outport == "lrp-server"), action=(ct_snat(4.4.4.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 4 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::6);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 5 && ip4 && outport == "lrp-server"), action=(ct_snat(5.5.5.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 5 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::7);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 6 && ip4 && outport == "lrp-server"), action=(ct_snat(6.2.1.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 6 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::8);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 7 && ip4 && outport == "lrp-server"), action=(ct_snat(6.3.1.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 7 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::9);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 8 && ip4 && outport == "lrp-server"), action=(ct_snat(6.4.1.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 8 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::a);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 9 && ip4 && outport == "lrp-server"), action=(ct_snat(6.5.1.1);)
+  table=??(lr_out_snat        ), priority=145  , match=(flags.force_snat_for_lb == 1 && flags.network_id == 9 && ip6 && outport == "lrp-server"), action=(ct_snat(ff01::b);)
 ])
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
@@ -21103,13 +21188,13 @@ check ovn-nbctl --wait=sb sync
 
 ovn-sbctl dump-flows lr0 > lrflows
 AT_CAPTURE_FILE([lrflows])
-AT_CHECK([! ovn_strip_lflows < lrflows | grep priority=105 | grep -q "flags.force_snat_for_lb == 1"], [0], [], [ignore])
+AT_CHECK([! ovn_strip_lflows < lrflows | grep priority=140 | grep -q "flags.force_snat_for_lb == 1"], [0], [], [ignore])
 
 check ovn-nbctl lrp-del lrp0 -- lrp-add lr0 lrp0 02:00:00:00:00:01 4242::4242/64
 check ovn-nbctl --wait=sb sync
 ovn-sbctl dump-flows lr0 > lrflows
 AT_CAPTURE_FILE([lrflows])
-AT_CHECK([ovn_strip_lflows < lrflows | grep priority=105 | grep -c "flags.force_snat_for_lb == 1"], [0], [dnl
+AT_CHECK([ovn_strip_lflows < lrflows | grep priority=140 | grep -c "flags.force_snat_for_lb == 1"], [0], [dnl
 1
 ])
 
