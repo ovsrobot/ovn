@@ -16268,6 +16268,55 @@ build_lrouter_routing_protocol_redirect(
                   lflow_ref);
 }
 
+/* Returns true if the logical router port 'op' should drop packets whose
+ * next hop belongs to one of its networks but could not be resolved,
+ * instead of sending an ARP/ND request for them.  This is the case when
+ * the router has options:neigh_resolve_known_only=true and the switch the
+ * port is connected to only has neighbors known to OVN, i.e., every valid
+ * next hop has a static ARP/ND entry built from the switch ports'
+ * addresses. */
+static bool
+lrp_neigh_resolve_known_only(const struct ovn_port *op)
+{
+    if (!op->nbrp || !op->od->nbr
+        || !smap_get_bool(&op->od->nbr->options,
+                          "neigh_resolve_known_only", false)) {
+        return false;
+    }
+
+    if (!op->peer || !op->peer->od || !op->peer->od->nbs) {
+        return false;
+    }
+
+    const struct ovn_datapath *ls = op->peer->od;
+
+    /* Addresses outside the switch ports are legitimate when the switch
+     * has "unknown" addresses, is connected to a physical network or a
+     * VTEP gateway, or is a transit switch whose neighbors are routers
+     * in other availability zones. */
+    if (ls->has_unknown || ls_has_localnet_port(ls) || ls->has_vtep_lports
+        || smap_get(&ls->nbs->other_config, "interconn-ts")) {
+        return false;
+    }
+
+    /* Other routers on the same switch might need dynamic resolution
+     * (e.g., with dynamic_neigh_routers). */
+    if (vector_len(&ls->router_ports) > 1) {
+        return false;
+    }
+
+    /* Virtual IPs are resolved dynamically, as the owner of the IP can
+     * change. */
+    const struct ovn_port *lsp;
+    HMAP_FOR_EACH (lsp, dp_node, &ls->ports) {
+        if (lsp->nbsp && !strcmp(lsp->nbsp->type, "virtual")) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 /* This function adds ARP resolve flows related to a LSP. */
 static void
 build_arp_resolve_flows_for_lsp(
@@ -16768,6 +16817,69 @@ build_lr_gateway_redirect_flows_for_nats(
             ds_destroy(&match_ext);
         }
     }
+}
+
+/* Local router ingress table ARP_REQUEST: drop packets whose next hop is in
+ * one of the networks of router port 'op' but was not resolved, neither
+ * statically nor through a MAC_Binding, if the port only resolves known
+ * neighbors (see lrp_neigh_resolve_known_only()).  This avoids punting
+ * every such packet to ovn-controller to generate an ARP/ND request that
+ * nobody will answer, e.g., for VMs that were deleted. */
+static void
+build_arp_request_flows_for_lrp(const struct ovn_port *op,
+                                struct lflow_table *lflows,
+                                struct ds *match,
+                                struct lflow_ref *lflow_ref)
+{
+    ovs_assert(op->nbrp);
+
+    if (!lrp_neigh_resolve_known_only(op)) {
+        return;
+    }
+
+    /* For distributed gateway ports, lr_in_gw_redirect may have already
+     * changed the outport to the chassis-redirect port. */
+    struct ds outport = DS_EMPTY_INITIALIZER;
+    if (op->cr_port) {
+        ds_put_format(&outport, "{%s, %s}", op->json_key,
+                      op->cr_port->json_key);
+    } else {
+        ds_put_cstr(&outport, op->json_key);
+    }
+
+    for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+        const struct ipv4_netaddr *addr = &op->lrp_networks.ipv4_addrs[i];
+
+        ds_clear(match);
+        ds_put_format(match, "eth.dst == 00:00:00:00:00:00 && "
+                      REGBIT_NEXTHOP_IS_IPV4" == 1 && outport == %s && "
+                      REG_NEXT_HOP_IPV4" == %s/%u",
+                      ds_cstr(&outport), addr->network_s, addr->plen);
+        ovn_lflow_add(lflows, op->od, S_ROUTER_IN_ARP_REQUEST, 105,
+                      ds_cstr(match), debug_drop_action(), lflow_ref,
+                      WITH_HINT(&op->nbrp->header_));
+    }
+
+    for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
+        const struct ipv6_netaddr *addr = &op->lrp_networks.ipv6_addrs[i];
+
+        /* Link-local addresses of the switch ports are not known. */
+        struct in6_addr network = addr->network;
+        if (in6_is_lla(&network)) {
+            continue;
+        }
+
+        ds_clear(match);
+        ds_put_format(match, "eth.dst == 00:00:00:00:00:00 && "
+                      REGBIT_NEXTHOP_IS_IPV4" == 0 && outport == %s && "
+                      REG_NEXT_HOP_IPV6" == %s/%u",
+                      ds_cstr(&outport), addr->network_s, addr->plen);
+        ovn_lflow_add(lflows, op->od, S_ROUTER_IN_ARP_REQUEST, 105,
+                      ds_cstr(match), debug_drop_action(), lflow_ref,
+                      WITH_HINT(&op->nbrp->header_));
+    }
+
+    ds_destroy(&outport);
 }
 
 /* Local router ingress table ARP_REQUEST: ARP request.
@@ -20521,6 +20633,8 @@ build_lswitch_and_lrouter_iterate_by_lrp(struct ovn_port *op,
                                        op->lflow_ref);
     build_arp_resolve_flows_for_lrp(op, lsi->lflows,
                                     &lsi->match, &lsi->actions, op->lflow_ref);
+    build_arp_request_flows_for_lrp(op, lsi->lflows, &lsi->match,
+                                    op->lflow_ref);
     build_egress_delivery_flows_for_lrouter_port(op, lsi->lflows, &lsi->match,
                                                  &lsi->actions,
                                                  op->lflow_ref);

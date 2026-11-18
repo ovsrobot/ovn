@@ -26191,3 +26191,92 @@ AT_CHECK([grep "lr_out_undnat" lr0flows | ovn_strip_lflows | sort], [0], [dnl
 OVN_CLEANUP_NORTHD
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Logical router option neigh_resolve_known_only])
+ovn_start
+
+dnl lr0 is connected to a tenant switch "sw0" and to a transit switch "ts".
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:30:01 \
+    192.168.30.1/24 2001:db8:30::1/64
+check ovn-nbctl ls-add sw0
+check ovn-nbctl lsp-add-router-port sw0 sw0-lr0 lr0-sw0
+check ovn-nbctl lsp-add sw0 vif1 \
+    -- lsp-set-addresses vif1 "00:00:00:00:30:02 192.168.30.2 2001:db8:30::2"
+
+check ovn-nbctl lrp-add lr0 lr0-ts 00:00:00:00:11:03 169.254.11.3/24
+check ovn-nbctl ls-add ts \
+    -- set logical_switch ts other_config:interconn-ts=ts
+check ovn-nbctl lsp-add-router-port ts ts-lr0 lr0-ts
+check ovn-nbctl lsp-add ts remote1 \
+    -- lsp-set-type remote1 remote \
+    -- lsp-set-addresses remote1 "00:00:00:00:11:02 169.254.11.2"
+check ovn-nbctl --wait=sb sync
+
+check_drop_flows() {
+    ovn-sbctl lflow-list lr0 > lr0flows
+    AT_CAPTURE_FILE([lr0flows])
+    grep lr_in_arp_request lr0flows | grep priority=105 | ovn_strip_lflows
+}
+
+dnl Without the option, unresolved next hops are always ARP'ed for.
+AT_CHECK([check_drop_flows], [0], [])
+
+check ovn-nbctl --wait=sb set logical_router lr0 \
+    options:neigh_resolve_known_only=true
+
+dnl Drop flows are added for the tenant switch networks only, not for the
+dnl transit switch nor for the IPv6 link-local network.
+AT_CHECK([check_drop_flows], [0], [dnl
+  table=??(lr_in_arp_request  ), priority=105  , match=(eth.dst == 00:00:00:00:00:00 && reg9[[9]] == 0 && outport == "lr0-sw0" && xxreg0 == 2001:db8:30::/64), action=(drop;)
+  table=??(lr_in_arp_request  ), priority=105  , match=(eth.dst == 00:00:00:00:00:00 && reg9[[9]] == 1 && outport == "lr0-sw0" && reg0 == 192.168.30.0/24), action=(drop;)
+])
+
+dnl Known neighbors still have static entries.
+AT_CHECK([grep lr_in_arp_resolve lr0flows | grep priority=100 | ovn_strip_lflows], [0], [dnl
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 192.168.30.2), action=(eth.dst = 00:00:00:00:30:02; next;)
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && xxreg0 == 2001:db8:30::2), action=(eth.dst = 00:00:00:00:30:02; next;)
+  table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-ts" && reg0 == 169.254.11.2), action=(eth.dst = 00:00:00:00:11:02; next;)
+])
+
+dnl Adding a port with unknown addresses disables the option for the switch.
+check ovn-nbctl --wait=sb lsp-add sw0 vif2 -- lsp-set-addresses vif2 unknown
+AT_CHECK([check_drop_flows], [0], [])
+check ovn-nbctl --wait=sb lsp-del vif2
+AT_CHECK([check_drop_flows | grep -c drop], [0], [2
+])
+
+dnl Same for a localnet port.
+check ovn-nbctl --wait=sb lsp-add-localnet-port sw0 ln0 phys
+AT_CHECK([check_drop_flows], [0], [])
+check ovn-nbctl --wait=sb lsp-del ln0
+AT_CHECK([check_drop_flows | grep -c drop], [0], [2
+])
+
+dnl Same for a virtual port.
+check ovn-nbctl --wait=sb lsp-add sw0 vip \
+    -- lsp-set-type vip virtual \
+    -- lsp-set-options vip virtual-ip=192.168.30.100 virtual-parents=vif1
+AT_CHECK([check_drop_flows], [0], [])
+check ovn-nbctl --wait=sb lsp-del vip
+AT_CHECK([check_drop_flows | grep -c drop], [0], [2
+])
+
+dnl Same if another router is connected to the switch.
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lr1-sw0 00:00:00:00:30:fe 192.168.30.254/24
+check ovn-nbctl --wait=sb lsp-add-router-port sw0 sw0-lr1 lr1-sw0
+AT_CHECK([check_drop_flows], [0], [])
+check ovn-nbctl --wait=sb lsp-del sw0-lr1
+AT_CHECK([check_drop_flows | grep -c drop], [0], [2
+])
+
+dnl Disabling the option removes the drop flows.
+check ovn-nbctl --wait=sb set logical_router lr0 \
+    options:neigh_resolve_known_only=false
+AT_CHECK([check_drop_flows], [0], [])
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])

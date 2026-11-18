@@ -3501,6 +3501,40 @@ or
           the automatic creation of these logical flows.
         </p>
       </column>
+      <column name="options" key="neigh_resolve_known_only"
+              type='{"type": "boolean"}'>
+        <p>
+          If set to <code>true</code>, for each router port connected to a
+          logical switch whose neighbors are all known to OVN, the router
+          drops packets whose next hop is in one of the port's
+          <ref column="networks" table="Logical_Router_Port"/> but could
+          not be resolved, neither by a static mapping built from the
+          switch ports' addresses nor by a dynamically learned MAC binding,
+          instead of sending an ARP/ND request for them.  This avoids
+          punting to <code>ovn-controller</code> every packet sent to an
+          address that is not in use anymore, e.g., the IP of a deleted
+          VM, which would only generate ARP/ND requests that nobody
+          answers.  It is <code>false</code> by default.
+        </p>
+
+        <p>
+          Since only the addresses configured in the
+          <ref column="addresses" table="Logical_Switch_Port"/> column of
+          the switch ports are known, other addresses used by the VMs or
+          containers (e.g., secondary IPs or IPv6 addresses assigned by
+          SLAAC that are not configured in the port) become unreachable
+          from the router.  IPv6 link-local addresses are not affected.
+        </p>
+
+        <p>
+          The option is ignored for router ports connected to a logical
+          switch that is an OVN-IC transit switch, that has more than one
+          router port, or that has ports with <code>unknown</code>
+          addresses, or of type <code>localnet</code>, <code>vtep</code>
+          or <code>virtual</code>, as neighbors not known to OVN are
+          expected there.
+        </p>
+      </column>
       <column name="options" key="always_learn_from_arp_request" type='{"type": "boolean"}'>
         <p>
           This option controls the behavior when handling IPv4 ARP requests or

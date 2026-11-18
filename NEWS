@@ -77,6 +77,10 @@ Post v26.09.0
      the replies from the backends of its load balancers.  The CMS must make
      sure that the replies re-enter the router on the chassis that load
      balanced the request.  See ovn-nb(5).
+   - Added a new Logical_Router "options:neigh_resolve_known_only" option
+     to drop, instead of punting to ovn-controller to generate ARP/ND
+     requests, packets whose next hop is in a connected subnet but is not
+     a known neighbor, e.g., the IP of a deleted VM.
 
 OVN v26.09.0 - xxx xx xxxx
 --------------------------
