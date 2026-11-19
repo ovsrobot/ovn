@@ -811,7 +811,9 @@
     <column name="dns_records">
       This column defines the DNS records to be used for resolving internal
       DNS queries within the logical switch by the native DNS resolver.
-      Please see the <ref table="DNS"/> table.
+      Please see the <ref table="DNS"/> table.  The native DNS resolver can
+      be disabled for the logical switch, without removing its DNS records,
+      with <ref column="other_config" key="dns_lookup"/>.
     </column>
 
     <column name="forwarding_groups">
@@ -1200,6 +1202,20 @@
         However setting this to false also means that garps are no longer
         forwarded to all routers and therefor the mac bindings of the routers
         are no longer updated.
+      </column>
+
+      <column name="other_config" key="dns_lookup"
+          type='{"type": "boolean"}'>
+        Determines whether the DNS queries of the logical switch are looked up
+        in its <ref column="dns_records"/> (default) or not.  If set to
+        <code>false</code>, <code>ovn-northd</code> does not add the DNS
+        logical flows to the logical switch: its DNS queries are not sent to
+        <code>ovn-controller</code> and are forwarded to their destination
+        like any other traffic, including the ones for a name that is in the
+        <ref column="dns_records"/>.  The <ref column="dns_records"/> are
+        not changed, so this option allows to turn the native DNS resolver
+        off, and back on, for a logical switch whose DNS records are written
+        by another entity.
       </column>
     </group>
 

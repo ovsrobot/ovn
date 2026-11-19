@@ -7136,6 +7136,18 @@ ls_has_dns_records(const struct nbrec_logical_switch *nbs)
     return false;
 }
 
+/*
+ * Returns true if the DNS queries of the logical switch have to be looked up
+ * in its DNS records, i.e. the logical switch is configured with DNS records
+ * and the CMS did not disable the lookup with other_config:dns_lookup.
+ */
+static bool
+ls_needs_dns_lookup(const struct nbrec_logical_switch *nbs)
+{
+    return smap_get_bool(&nbs->other_config, "dns_lookup", true)
+           && ls_has_dns_records(nbs);
+}
+
 static bool
 build_empty_lb_event_flow(struct ovn_lb_vip *lb_vip,
                           const struct ovn_northd_lb *lb,
@@ -8802,9 +8814,10 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
     }
 
     /* Add a 34000 priority flow to advance the DNS reply from ovn-controller,
-     * if the CMS has configured DNS records for the datapath.
+     * if the CMS has configured DNS records for the datapath and did not
+     * disable the DNS lookup.
      */
-    if (ls_has_dns_records(od->nbs)) {
+    if (ls_needs_dns_lookup(od->nbs)) {
         const char *dns_actions =
             has_stateful ? REGBIT_ACL_VERDICT_ALLOW" = 1; "
                            "ct_commit; next;"
@@ -11579,7 +11592,7 @@ build_lswitch_dns_lookup_and_response(struct ovn_datapath *od,
                                       struct lflow_ref *lflow_ref)
 {
     ovs_assert(od->nbs);
-    if (!ls_has_dns_records(od->nbs)) {
+    if (!ls_needs_dns_lookup(od->nbs)) {
         return;
     }
     ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_LOOKUP, 100,

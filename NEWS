@@ -77,6 +77,10 @@ Post v26.09.0
      the replies from the backends of its load balancers.  The CMS must make
      sure that the replies re-enter the router on the chassis that load
      balanced the request.  See ovn-nb(5).
+   - Added a new logical switch option "other_config:dns_lookup".  If set to
+     false, ovn-northd does not add the DNS lookup and response flows to the
+     logical switch even if it has DNS records, so that its DNS queries are
+     not intercepted by OVN.
 
 OVN v26.09.0 - xxx xx xxxx
 --------------------------

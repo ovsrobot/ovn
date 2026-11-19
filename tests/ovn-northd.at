@@ -13162,6 +13162,74 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Logical switch other_config:dns_lookup])
+ovn_start
+
+check ovn-nbctl ls-add sw0
+check ovn-nbctl ls-add sw1
+dns_uuid=$(ovn-nbctl create DNS records={})
+check ovn-nbctl set DNS $dns_uuid records:vm1.ovn.org="10.0.0.4"
+check ovn-nbctl set Logical_Switch sw0 dns_records="$dns_uuid"
+check ovn-nbctl set Logical_Switch sw1 dns_records="$dns_uuid"
+check ovn-nbctl --wait=sb sync
+
+dns_flows() {
+    ovn-sbctl dump-flows $1 | grep -e ls_in_dns_lookup -e ls_in_dns_response \
+        -e 'udp.src == 53' | ovn_strip_lflows
+}
+
+check_dns_flows_present() {
+    AT_CHECK([dns_flows $1], [0], [dnl
+  table=??(ls_in_dns_lookup   ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_dns_lookup   ), priority=100  , match=(udp.dst == 53), action=(reg0[[4]] = dns_lookup(); next;)
+  table=??(ls_in_dns_response ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_dns_response ), priority=100  , match=(udp.dst == 53 && reg0[[4]]), action=(eth.dst <-> eth.src; ip4.src <-> ip4.dst; udp.dst = udp.src; udp.src = 53; outport = inport; flags.loopback = 1; output;)
+  table=??(ls_in_dns_response ), priority=100  , match=(udp.dst == 53 && reg0[[4]]), action=(eth.dst <-> eth.src; ip6.src <-> ip6.dst; udp.dst = udp.src; udp.src = 53; outport = inport; flags.loopback = 1; output;)
+  table=??(ls_out_acl_eval    ), priority=34000, match=(flags.from_ctrl && udp.src == 53), action=(reg8[[16]] = 1; next;)
+])
+}
+
+check_dns_flows_absent() {
+    AT_CHECK([dns_flows $1], [0], [dnl
+  table=??(ls_in_dns_lookup   ), priority=0    , match=(1), action=(next;)
+  table=??(ls_in_dns_response ), priority=0    , match=(1), action=(next;)
+])
+}
+
+AS_BOX([By default a switch with DNS records looks up DNS queries])
+check_dns_flows_present sw0
+check_dns_flows_present sw1
+
+AS_BOX([dns_lookup=false removes the DNS flows of that switch only])
+check ovn-nbctl --wait=sb set Logical_Switch sw0 other_config:dns_lookup=false
+check_dns_flows_absent sw0
+check_dns_flows_present sw1
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([The DNS records are still synced to the SB])
+sb_dns_uuid=$(fetch_column sb:DNS _uuid)
+AT_CHECK([ovn-sbctl get DNS $sb_dns_uuid records:vm1.ovn.org], [0], [dnl
+"10.0.0.4"
+])
+
+AS_BOX([dns_lookup=true restores the DNS flows])
+check ovn-nbctl --wait=sb set Logical_Switch sw0 other_config:dns_lookup=true
+check_dns_flows_present sw0
+check_dns_flows_present sw1
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+AS_BOX([Removing the key restores the DNS flows])
+check ovn-nbctl --wait=sb set Logical_Switch sw0 other_config:dns_lookup=false
+check_dns_flows_absent sw0
+check ovn-nbctl --wait=sb remove Logical_Switch sw0 other_config dns_lookup
+check_dns_flows_present sw0
+CHECK_NO_CHANGE_AFTER_RECOMPUTE
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([ACL/Meter incremental processing - no northd recompute])
 ovn_start
 
