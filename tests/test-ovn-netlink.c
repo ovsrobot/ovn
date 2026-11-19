@@ -293,19 +293,60 @@ neighbor_script_reset(int32_t if_index, int error)
     nl_script.error = error;
 }
 
-static void
-test_neighbor_exchange_retry(struct ovs_cmdl_context *ctx OVS_UNUSED)
+static bool
+has_static_arp(const struct hmap *arps, uint32_t vni, uint8_t last)
 {
+    struct in6_addr ip = in6_addr_mapped_ipv4(htonl(0xc0000200 | last));
+    struct eth_addr mac = ETH_ADDR_C(02,00,00,00,00,00);
+    mac.ea[5] = last;
+    struct evpn_static_entry *entry;
+    HMAP_FOR_EACH (entry, hmap_node, arps) {
+        if (entry->vni == vni && ipv6_addr_equals(&entry->ip, &ip)
+            && eth_addr_equals(entry->mac, mac)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void
+test_neighbor_exchange_snapshot(struct ovs_cmdl_context *ctx)
+{
+    bool check_retry = !strcmp(ctx->argv[1], "retry");
+    bool replace_link = !strcmp(ctx->argv[1], "replace");
+    bool rename_link = !strcmp(ctx->argv[1], "rename");
+    bool write_error = !strcmp(ctx->argv[1], "write-error");
+    ovs_assert(check_retry || replace_link || rename_link || write_error
+               || !strcmp(ctx->argv[1], "retention"));
+    ovs_assert(ctx->argc == (replace_link ? 3 : 2));
     struct neighbor_interface_monitor first = {
         .family = NEIGH_AF_INET,
-        .if_name = "lo",
-        .type = NEIGH_IFACE_LOOPBACK,
+        .if_name = "dump-br1",
+        .type = NEIGH_IFACE_BRIDGE,
+        .vni = 101,
         .announced_neighbors = HMAP_INITIALIZER(&first.announced_neighbors),
+    };
+    struct neighbor_interface_monitor second = {
+        .family = NEIGH_AF_INET,
+        .if_name = "dump-br2",
+        .type = NEIGH_IFACE_BRIDGE,
+        .vni = 102,
+        .announced_neighbors = HMAP_INITIALIZER(&second.announced_neighbors),
     };
     struct vector interfaces =
         VECTOR_EMPTY_INITIALIZER(struct neighbor_interface_monitor *);
     struct neighbor_interface_monitor *mon = &first;
     vector_push(&interfaces, &mon);
+    if (check_retry) {
+        /* The retry case only needs one dump target. */
+        ovs_strlcpy(first.if_name, "lo", sizeof first.if_name);
+        first.type = NEIGH_IFACE_LOOPBACK;
+    } else {
+        mon = &second;
+        vector_push(&interfaces, &mon);
+    }
+
+    struct hmap snapshots = HMAP_INITIALIZER(&snapshots);
     struct hmap arps = HMAP_INITIALIZER(&arps);
     struct hmap fdbs = HMAP_INITIALIZER(&fdbs);
     struct hmap vteps = HMAP_INITIALIZER(&vteps);
@@ -315,6 +356,7 @@ test_neighbor_exchange_retry(struct ovs_cmdl_context *ctx OVS_UNUSED)
     };
     struct neighbor_exchange_ctx_out output = {
         .neighbor_table_watches = &watches,
+        .snapshots = &snapshots,
         .static_arps = &arps,
         .static_fdbs = &fdbs,
         .remote_vteps = &vteps,
@@ -322,39 +364,133 @@ test_neighbor_exchange_retry(struct ovs_cmdl_context *ctx OVS_UNUSED)
 
     int32_t if_index = if_nametoindex(first.if_name);
     ovs_assert(if_index);
-    neighbor_script_reset(if_index, EIO);
+    if (check_retry) {
+        neighbor_script_reset(if_index, EIO);
 
-    long long int now = time_msec();
-    poll_wakeup_at = 0;
+        long long int now = time_msec();
+        poll_wakeup_at = 0;
+        neighbor_exchange_run(&input, &output);
+        ovs_assert(nl_script.started && nl_script.finished);
+        long long int retry_at = poll_wakeup_at;
+        ovs_assert(retry_at >= now + 1000 && retry_at <= time_msec() + 1000);
+        poll_wakeup_at = 0;
+        ovs_assert(!neighbor_exchange_retry_due());
+        ovs_assert(poll_wakeup_at == retry_at);
+        long long int deadline = time_msec() + 3000;
+        while (!neighbor_exchange_retry_due() && time_msec() < deadline) {
+            poll_timer_wait_until(deadline);
+            poll_block();
+        }
+        ovs_assert(neighbor_exchange_retry_due());
+
+        neighbor_script_reset(if_index, 0);
+        neighbor_exchange_run(&input, &output);
+        ovs_assert(nl_script.started && nl_script.finished);
+        ovs_assert(!neighbor_exchange_retry_due());
+        goto cleanup;
+    }
+
+    /* The second interface uses the real Netlink transport. */
+    neighbor_script_reset(if_index, 0);
+    neighbor_dump_add(AF_INET, if_index, NUD_NOARP, NTF_EXT_LEARNED, 0,
+                      ETH_ADDR_LEN, 1);
     neighbor_exchange_run(&input, &output);
     ovs_assert(nl_script.started && nl_script.finished);
-    long long int retry_at = poll_wakeup_at;
-    ovs_assert(retry_at >= now + 1000 && retry_at <= time_msec() + 1000);
-    poll_wakeup_at = 0;
-    ovs_assert(!neighbor_exchange_retry_due());
-    ovs_assert(poll_wakeup_at == retry_at);
-    long long int deadline = time_msec() + 3000;
-    while (!neighbor_exchange_retry_due() && time_msec() < deadline) {
-        poll_timer_wait_until(deadline);
-        poll_block();
-    }
-    ovs_assert(neighbor_exchange_retry_due());
+    ovs_assert(hmap_count(&arps) == 2
+               && has_static_arp(&arps, 101, 1)
+               && has_static_arp(&arps, 102, 2));
 
+    if (rename_link) {
+        /* Rename a down bridge to a name outside the watch set. */
+        ovs_assert(!system("ip link set dump-br1 name dump-renamed"));
+        ovs_assert(if_nametoindex("dump-renamed") == (uint32_t) if_index);
+        bool changed = host_if_monitor_run();
+        neighbor_script_reset(if_index, EIO);
+        neighbor_exchange_run(&input, &output);
+        ovs_assert(hmap_count(&arps) == 1
+                   && has_static_arp(&arps, 102, 2));
+        ovs_assert(changed && !nl_script.started
+                   && vector_len(&watches) == 1);
+        goto cleanup;
+    }
+
+    if (replace_link) {
+        /* Consume the deletion and creation in a single monitor run. */
+        ovs_assert(!system(ctx->argv[2]));
+        ovs_assert(host_if_monitor_run());
+        ovs_assert(if_nametoindex(first.if_name) == (uint32_t) if_index);
+    }
+
+    if (write_error) {
+        /* A successful dump replaces the cache even when a delete fails. */
+        neighbor_script_reset(if_index, 0);
+        nl_script.transact_error = EIO;
+        neighbor_dump_add(AF_INET, if_index, NUD_NOARP, NTF_EXT_LEARNED, 0,
+                          ETH_ADDR_LEN, 3);
+        neighbor_dump_add(AF_INET, if_index, NUD_NOARP, 0, 0, ETH_ADDR_LEN, 4);
+        poll_wakeup_at = 0;
+        neighbor_exchange_run(&input, &output);
+        ovs_assert(nl_script.started && nl_script.finished);
+        ovs_assert(nl_script.deletes == 1 && !nl_script.adds);
+        ovs_assert(poll_wakeup_at > 0 && !neighbor_exchange_retry_due());
+        ovs_assert(hmap_count(&arps) == 2
+                   && has_static_arp(&arps, 101, 3)
+                   && has_static_arp(&arps, 102, 2));
+    }
+
+    /* The healthy interface still refreshes.  The partial dump must not
+     * publish its observation or write to the kernel. */
+    second.vni = 104;
+    neighbor_script_reset(if_index, EIO);
+    neighbor_dump_add(AF_INET, if_index, NUD_NOARP, NTF_EXT_LEARNED, 0,
+                      ETH_ADDR_LEN, 5);
+    neighbor_exchange_run(&input, &output);
+    ovs_assert(nl_script.started && nl_script.finished);
+    ovs_assert(!nl_script.deletes && !nl_script.adds);
+    ovs_assert(hmap_count(&arps) == (replace_link ? 1 : 2)
+               && has_static_arp(&arps, 104, 2));
+    if (!replace_link) {
+        ovs_assert(has_static_arp(&arps, 101, write_error ? 3 : 1));
+    }
+    ovs_assert(vector_len(&watches) == 2);
+
+    /* Scope changes discard the old snapshot even during failure. */
+    first.vni = 103;
+    neighbor_script_reset(if_index, EIO);
+    neighbor_exchange_run(&input, &output);
+    ovs_assert(nl_script.started && nl_script.finished);
+    ovs_assert(hmap_count(&arps) == 1
+               && has_static_arp(&arps, 104, 2));
+
+    /* Recovery publishes fresh data.  A complete empty dump withdraws it. */
+    first.vni = 101;
+    neighbor_script_reset(if_index, 0);
+    neighbor_dump_add(AF_INET, if_index, NUD_NOARP, NTF_EXT_LEARNED, 0,
+                      ETH_ADDR_LEN, 3);
+    neighbor_exchange_run(&input, &output);
+    ovs_assert(hmap_count(&arps) == 2
+               && has_static_arp(&arps, 101, 3)
+               && has_static_arp(&arps, 104, 2));
     neighbor_script_reset(if_index, 0);
     neighbor_exchange_run(&input, &output);
     ovs_assert(nl_script.started && nl_script.finished);
+    ovs_assert(hmap_count(&arps) == 1
+               && has_static_arp(&arps, 104, 2));
     ovs_assert(!neighbor_exchange_retry_due());
 
+cleanup:
     neighbor_script_reset(0, 0);
     vector_clear(&interfaces);
     neighbor_exchange_run(&input, &output);
-    ovs_assert(vector_is_empty(&watches));
+    ovs_assert(hmap_is_empty(&snapshots) && vector_is_empty(&watches));
+    hmap_destroy(&snapshots);
     hmap_destroy(&arps);
     hmap_destroy(&fdbs);
     hmap_destroy(&vteps);
     vector_destroy(&watches);
     vector_destroy(&interfaces);
     hmap_destroy(&first.announced_neighbors);
+    hmap_destroy(&second.announced_neighbors);
 }
 
 /* A failed dump must not be reported as successful synchronization. */
@@ -545,7 +681,7 @@ test_host_if_monitor(struct ovs_cmdl_context *ctx)
         exit(rc);
     }
     ovs_assert(host_if_monitor_run() == expect_notify);
-    printf("%"PRId32"\n", host_if_monitor_ifname_toindex(if_name));
+    printf("%"PRId32"\n", host_if_monitor_get_link(if_name).if_index);
     sset_destroy(&if_names);
 }
 
@@ -896,8 +1032,8 @@ test_ovn_netlink(int argc, char *argv[])
 {
     set_program_name(argv[0]);
     static const struct ovs_cmdl_command commands[] = {
-        {"neighbor-exchange-retry", NULL, 0, 0,
-         test_neighbor_exchange_retry, OVS_RO},
+        {"neighbor-exchange-snapshot", NULL, 1, 2,
+         test_neighbor_exchange_snapshot, OVS_RO},
         {"neighbor-dump-script", NULL, 1, 1,
          test_neighbor_dump_script, OVS_RO},
         {"neighbor-sync-error", NULL, 0, 0, test_neighbor_sync_error, OVS_RO},

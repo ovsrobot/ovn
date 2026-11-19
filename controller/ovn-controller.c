@@ -7059,6 +7059,7 @@ nexthop_exchange_update(struct ed_type_nexthop_exchange *nhe_data,
 }
 
 struct ed_type_neighbor_exchange {
+    struct hmap snapshots;
     /* Contains 'struct evpn_remote_vtep'. */
     struct hmap remote_vteps;
     /* Contains 'struct evpn_static_entry', remote FDB entries learned through
@@ -7075,6 +7076,7 @@ en_neighbor_exchange_init(struct engine_node *node OVS_UNUSED,
 {
     struct ed_type_neighbor_exchange *data = xmalloc(sizeof *data);
     *data = (struct ed_type_neighbor_exchange) {
+        .snapshots = HMAP_INITIALIZER(&data->snapshots),
         .remote_vteps = HMAP_INITIALIZER(&data->remote_vteps),
         .static_fdbs = HMAP_INITIALIZER(&data->static_fdbs),
         .static_arps = HMAP_INITIALIZER(&data->static_arps),
@@ -7087,6 +7089,8 @@ static void
 en_neighbor_exchange_cleanup(void *data_)
 {
     struct ed_type_neighbor_exchange *data = data_;
+    neighbor_exchange_snapshots_clear(&data->snapshots);
+    hmap_destroy(&data->snapshots);
     evpn_remote_vteps_clear(&data->remote_vteps);
     evpn_static_entries_clear(&data->static_fdbs);
     evpn_static_entries_clear(&data->static_arps);
@@ -7111,6 +7115,7 @@ en_neighbor_exchange_run(struct engine_node *node, void *data_)
     };
     struct neighbor_exchange_ctx_out n_ctx_out = {
         .neighbor_table_watches = &nt_notify->watches,
+        .snapshots = &data->snapshots,
         .remote_vteps = &data->remote_vteps,
         .static_fdbs = &data->static_fdbs,
         .static_arps = &data->static_arps,
