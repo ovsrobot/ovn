@@ -7106,11 +7106,6 @@ en_neighbor_exchange_run(struct engine_node *node, void *data_)
     struct ed_type_nexthop_exchange *nhe_data =
         engine_get_input_data("nexthop_exchange", node);
 
-    evpn_remote_vteps_clear(&data->remote_vteps);
-    evpn_static_entries_clear(&data->static_fdbs);
-    evpn_static_entries_clear(&data->static_arps);
-    vector_clear(&nt_notify->watches);
-
     struct neighbor_exchange_ctx_in n_ctx_in = {
         .monitored_interfaces = &neighbor_data->monitored_interfaces,
     };
@@ -8925,7 +8920,7 @@ main(int argc, char *argv[])
                     struct ed_type_neighbor_exchange_status *neigh_res =
                         engine_get_internal_data(&en_neighbor_exchange_status);
                     neigh_res->netlink_trigger_run =
-                        !!neighbor_exchange_status_run();
+                        neighbor_exchange_retry_due();
 
                     stopwatch_start(CONTROLLER_LOOP_STOPWATCH_NAME,
                                     time_msec());
